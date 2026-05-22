@@ -1,0 +1,88 @@
+﻿Analyzing dashboard_page.dart...                                
+
+   info - Statements in an if should be enclosed in a block - lib\staff_pages\dashboard_page.dart:100:7 - curly_braces_in_flow_control_structures
+   info - Statements in an if should be enclosed in a block - lib\staff_pages\dashboard_page.dart:269:17 - curly_braces_in_flow_control_structures
+   info - Statements in an if should be enclosed in a block - lib\staff_pages\dashboard_page.dart:271:17 - curly_braces_in_flow_control_structures
+   info - Unnecessary use of 'toList' in a spread - lib\staff_pages\dashboard_page.dart:304:16 - unnecessary_to_list_in_spreads
+warning - The declaration '_showAllItemsSheet' isn't referenced - lib\staff_pages\dashboard_page.dart:415:8 - unused_element
+  error - The method '_sheetStockForItem' isn't defined for the type '_DashboardPageState' - lib\staff_pages\dashboard_page.dart:487:57 - undefined_method
+  error - Too many positional arguments: 0 expected, but 1 found - lib\staff_pages\dashboard_page.dart:539:13 - extra_positional_arguments_could_be_named
+  error - Undefined name 'Name' - lib\staff_pages\dashboard_page.dart:539:13 - undefined_identifier
+  error - Undefined name 'item' - lib\staff_pages\dashboard_page.dart:539:20 - undefined_identifier
+  error - Expected to find ')' - lib\staff_pages\dashboard_page.dart:539:50 - expected_token
+warning - Dead code - lib\staff_pages\dashboard_page.dart:540:5 - dead_code
+  error - Undefined name 'item' - lib\staff_pages\dashboard_page.dart:540:25 - undefined_identifier
+  error - Undefined name 'itemName' - lib\staff_pages\dashboard_page.dart:541:59 - undefined_identifier
+  error - Undefined name 'itemName' - lib\staff_pages\dashboard_page.dart:546:26 - undefined_identifier
+  error - The returned type 'int' isn't returnable from a 'Widget' function, as required by the closure's context - lib\staff_pages\dashboard_page.dart:547:18 - return_of_invalid_type_from_closure
+  error - The returned type 'int' isn't returnable from a 'Widget' function, as required by the closure's context - lib\staff_pages\dashboard_page.dart:554:37 - return_of_invalid_type_from_closure
+  error - Undefined name 'savedItem' - lib\staff_pages\dashboard_page.dart:554:70 - undefined_identifier
+  error - Undefined name 'savedItem' - lib\staff_pages\dashboard_page.dart:555:30 - undefined_identifier
+  error - Undefined name 'categoryName' - lib\staff_pages\dashboard_page.dart:556:26 - undefined_identifier
+  error - The returned type 'int' isn't returnable from a 'Widget' function, as required by the closure's context - lib\staff_pages\dashboard_page.dart:557:18 - return_of_invalid_type_from_closure
+  error - Undefined name 'savedItem' - lib\staff_pages\dashboard_page.dart:557:18 - undefined_identifier
+  error - Undefined name 'savedItem' - lib\staff_pages\dashboard_page.dart:558:17 - undefined_identifier
+  error - Undefined name 'savedItem' - lib\staff_pages\dashboard_page.dart:559:30 - undefined_identifier
+  error - Expected to find ';' - lib\staff_pages\dashboard_page.dart:562:5 - expected_token
+  error - Expected to find ')' - lib\staff_pages\dashboard_page.dart:563:5 - expected_token
+  error - A value of type 'int' can't be returned from the method '_showAllItemsSheet' because it has a return type of 'void' - lib\staff_pages\dashboard_page.dart:563:12 - return_of_invalid_type
+  error - Undefined name 'item' - lib\staff_pages\dashboard_page.dart:563:12 - undefined_identifier
+  error - Undefined name 'item' - lib\staff_pages\dashboard_page.dart:564:12 - undefined_identifier
+warning - Dead code - lib\staff_pages\dashboard_page.dart:565:11 - dead_code
+  error - Undefined name 'item' - lib\staff_pages\dashboard_page.dart:565:24 - undefined_identifier
+warning - Unnecessary cast - lib\staff_pages\dashboard_page.dart:650:32 - unnecessary_cast
+   info - Don't use 'BuildContext's across async gaps, guarded by an unrelated 'mounted' check - lib\staff_pages\dashboard_page.dart:681:34 - use_build_context_synchronously
+   info - Don't use 'BuildContext's across async gaps, guarded by an unrelated 'mounted' check - lib\staff_pages\dashboard_page.dart:682:42 - use_build_context_synchronously
+   info - Don't use 'BuildContext's across async gaps, guarded by an unrelated 'mounted' check - lib\staff_pages\dashboard_page.dart:688:42 - use_build_context_synchronously
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\staff_pages\dashboard_page.dart:791:33 - deprecated_member_use
+   info - Unnecessary use of multiple underscores - lib\staff_pages\dashboard_page.dart:857:33 - unnecessary_underscores
+   info - Unnecessary use of multiple underscores - lib\staff_pages\dashboard_page.dart:857:37 - unnecessary_underscores
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\staff_pages\dashboard_page.dart:958:30 - deprecated_member_use
+   info - Unnecessary use of multiple underscores - lib\staff_pages\dashboard_page.dart:969:29 - unnecessary_underscores
+   info - Unnecessary use of multiple underscores - lib\staff_pages\dashboard_page.dart:969:33 - unnecessary_underscores
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\staff_pages\dashboard_page.dart:1049:31 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\staff_pages\dashboard_page.dart:1051:50 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\staff_pages\dashboard_page.dart:1054:35 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\staff_pages\dashboard_page.dart:1097:33 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\staff_pages\dashboard_page.dart:1099:35 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\staff_pages\dashboard_page.dart:1104:37 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\staff_pages\dashboard_page.dart:1236:45 - deprecated_member_use
+   info - Unnecessary use of multiple underscores - lib\staff_pages\dashboard_page.dart:1249:27 - unnecessary_underscores
+   info - Unnecessary use of multiple underscores - lib\staff_pages\dashboard_page.dart:1249:31 - unnecessary_underscores
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\staff_pages\dashboard_page.dart:1271:24 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\staff_pages\dashboard_page.dart:1273:43 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\staff_pages\dashboard_page.dart:1305:29 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\staff_pages\dashboard_page.dart:1307:48 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\staff_pages\dashboard_page.dart:1329:33 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\staff_pages\dashboard_page.dart:1393:35 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\staff_pages\dashboard_page.dart:1429:45 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\staff_pages\dashboard_page.dart:1457:47 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\staff_pages\dashboard_page.dart:1517:55 - deprecated_member_use
+   info - Unnecessary use of multiple underscores - lib\staff_pages\dashboard_page.dart:1550:27 - unnecessary_underscores
+   info - Unnecessary use of multiple underscores - lib\staff_pages\dashboard_page.dart:1550:31 - unnecessary_underscores
+   info - Unnecessary use of multiple underscores - lib\staff_pages\dashboard_page.dart:1556:25 - unnecessary_underscores
+   info - Unnecessary use of multiple underscores - lib\staff_pages\dashboard_page.dart:1556:29 - unnecessary_underscores
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\staff_pages\dashboard_page.dart:1579:62 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\staff_pages\dashboard_page.dart:1678:41 - deprecated_member_use
+   info - Unnecessary use of multiple underscores - lib\staff_pages\dashboard_page.dart:1713:39 - unnecessary_underscores
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\staff_pages\dashboard_page.dart:1734:53 - deprecated_member_use
+   info - Unnecessary use of multiple underscores - lib\staff_pages\dashboard_page.dart:1773:45 - unnecessary_underscores
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\staff_pages\dashboard_page.dart:1860:32 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\staff_pages\dashboard_page.dart:1875:30 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\staff_pages\dashboard_page.dart:1876:30 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\staff_pages\dashboard_page.dart:1903:39 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\staff_pages\dashboard_page.dart:2144:34 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\staff_pages\dashboard_page.dart:2183:43 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\staff_pages\dashboard_page.dart:2341:51 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\staff_pages\dashboard_page.dart:2439:24 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\staff_pages\dashboard_page.dart:2441:43 - deprecated_member_use
+   info - 'withOpacity' is deprecated and shouldn't be used. Use .withValues() to avoid precision loss - lib\staff_pages\dashboard_page.dart:2460:30 - deprecated_member_use
+
+flutter : 77 issues found. (ran in 8.2s)
+At line:1 char:38
++ ... tracking" ; flutter analyze lib/Staff_pages/dashboard_page.dart --no- ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (77 issues found. (ran in 8.2s):St 
+   ring) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 

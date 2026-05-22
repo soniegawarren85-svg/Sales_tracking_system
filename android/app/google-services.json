@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "736393182026",
+    "project_id": "sales-tracking-d8667",
+    "storage_bucket": "sales-tracking-d8667.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:736393182026:android:aac08f9a59c73d122adfb3",
+        "android_client_info": {
+          "package_name": "com.example.sales_tracking"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCZJkwSrjCBF6_S7Su1L6AUUaj2xEQ8UB4"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
