@@ -33,6 +33,8 @@ class _OrderConfirmationResult {
   final double change;
   final String salesId;
   final String discountProofId;
+  final String paymentMode;
+  final String gcashTransactionId;
 
   const _OrderConfirmationResult({
     required this.totalDue,
@@ -40,6 +42,8 @@ class _OrderConfirmationResult {
     required this.change,
     required this.salesId,
     required this.discountProofId,
+    required this.paymentMode,
+    required this.gcashTransactionId,
   });
 }
 
@@ -115,11 +119,7 @@ class _DailyStockPageState extends State<DailyStockPage>
     _rootSalesInventoryStream = FirebaseFirestore.instance
         .collection('sales_inventory')
         .snapshots();
-    if (_currentUserId != null) {
-      _loadCashierToolsPreference(_currentUserId!);
-      _loadStaffInventoryIds(_currentUserId!);
-      _subscribeToPendingOrders(_currentUserId!);
-    }
+    _initStaffIdentity();
     InventoryService().initialize().then((_) {
       if (!mounted) return;
       setState(() {
@@ -689,13 +689,15 @@ class _DailyStockPageState extends State<DailyStockPage>
             'itemId': variantId,
             'variant': variantName,
             'price': _parsePrice(itemData['price']),
+            'category': data['category']?.toString() ?? '',
+            'categoryId':
+                data['categoryId']?.toString() ??
+                data['sourceInventoryId']?.toString() ??
+                '',
             'flavor': itemData['flavor']?.toString() ?? variantName,
             'stock': effectiveStock,
             'startingStock': startingStockValue,
-            'imageUrl':
-                itemData['imageUrl']?.toString() ??
-                data['imageUrl']?.toString() ??
-                '',
+            'imageUrl': itemData['imageUrl']?.toString() ?? '',
             'categoryImageUrl': data['imageUrl']?.toString() ?? '',
             'reducedQuantity': _parseInt(itemData['reducedQuantity']),
             'variantSlot': savedVariantSlot,
@@ -3744,8 +3746,10 @@ class _DailyStockPageState extends State<DailyStockPage>
     double change,
     String salesId,
     List<Map<String, dynamic>> orderItems,
-    String discountProofId,
-  ) async {
+    String discountProofId, {
+    String paymentMode = 'Cash',
+    String gcashTransactionId = '',
+  }) async {
     try {
       final receiptEntries = _validCartEntries(orderItems);
       final receiptItems = receiptEntries.map<Map<String, dynamic>>((entry) {
@@ -3772,7 +3776,8 @@ class _DailyStockPageState extends State<DailyStockPage>
           : (_pwdDiscount ? 'PWD' : 'None');
 
       final drawerId = _drawerIdForOrder(orderItems);
-      if (_currentUserId != null && drawerId.isNotEmpty) {
+      final isCashPayment = paymentMode.toLowerCase() == 'cash';
+      if (_currentUserId != null && drawerId.isNotEmpty && isCashPayment) {
         final drawerRef = FirebaseFirestore.instance
             .collection('staff_cash_drawer')
             .doc(drawerId);
@@ -3924,6 +3929,7 @@ class _DailyStockPageState extends State<DailyStockPage>
               }
 
               final itemsList = data['items'] as List<dynamic>? ?? [];
+              var matchedStockItem = false;
               final updatedItems = itemsList.map((itemData) {
                 if (itemData is Map<String, dynamic>) {
                   final savedVariant = itemData['name']?.toString() ?? '';
@@ -3940,6 +3946,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                               savedVariantAlt == (variantName ?? '')));
 
                   if (matchesVariant) {
+                    matchedStockItem = true;
                     // Update the stock for this variant.
                     // If 'stock' field is missing, use 'startingStock' as the base.
                     int currentStock;
@@ -3974,6 +3981,32 @@ class _DailyStockPageState extends State<DailyStockPage>
                 }
                 return itemData;
               }).toList();
+
+              if (!matchedStockItem) {
+                final currentStock = _stockForItem(item, variantIndex);
+                final updatedStock = max(0, currentStock - qtyRemoved);
+                updatedItems.add({
+                  'id': item['itemId']?.toString().isNotEmpty == true
+                      ? item['itemId']
+                      : (item['id'] ?? ''),
+                  'name': variantName ?? itemName,
+                  'price': item['price'] ?? 0,
+                  'startingStock': item['startingStock'] ?? currentStock,
+                  'stock': updatedStock,
+                  'expirationDate': item['expirationDate'] ?? '',
+                  'imageUrl': item['imageUrl'] ?? '',
+                });
+                if (updatedStock == 0) {
+                  unawaited(
+                    _notifyAdminOutOfStock(
+                      itemName: itemName,
+                      variantName: variantName ?? '',
+                      sourceInventoryId: sourceInventoryId,
+                      staffInventoryDocId: doc.id,
+                    ),
+                  );
+                }
+              }
 
               await doc.reference.update({'items': updatedItems});
             }
@@ -4105,6 +4138,9 @@ class _DailyStockPageState extends State<DailyStockPage>
           'total': orderTotal,
           'paidAmount': paidAmount,
           'change': change,
+          'paymentMode': paymentMode,
+          'gcashTransactionId': gcashTransactionId.trim(),
+          'cashDrawerDelta': isCashPayment ? paidAmount - change : 0.0,
           'items': receiptEntries.map((entry) {
             final item = orderItems.firstWhere(
               (element) => _cartKey(element) == entry.key,
@@ -4759,6 +4795,12 @@ class _DailyStockPageState extends State<DailyStockPage>
                 final discountProofId =
                     data['discountProofId']?.toString().trim() ?? '';
                 final salesId = data['salesId']?.toString() ?? 'N/A';
+                final paymentMode =
+                    data['paymentMode']?.toString().trim().isNotEmpty == true
+                    ? data['paymentMode'].toString()
+                    : 'Cash';
+                final gcashTransactionId =
+                    data['gcashTransactionId']?.toString().trim() ?? '';
                 final transactionType = data['type']?.toString() ?? 'sale';
                 final isRefund =
                     transactionType == 'refund' ||
@@ -4953,6 +4995,33 @@ class _DailyStockPageState extends State<DailyStockPage>
                       const Divider(color: _AppColors.border, height: 8),
                       const SizedBox(height: 8),
                       // Totals
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text(
+                            'Mode of Payment:',
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: _AppColors.textSoft,
+                            ),
+                          ),
+                          Flexible(
+                            child: Text(
+                              paymentMode == 'GCash' &&
+                                      gcashTransactionId.isNotEmpty
+                                  ? 'GCash - $gcashTransactionId'
+                                  : paymentMode,
+                              textAlign: TextAlign.right,
+                              style: const TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                                color: _AppColors.textMid,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
@@ -5837,9 +5906,11 @@ class _DailyStockPageState extends State<DailyStockPage>
     final validCartEntries = _validCartEntries(orderItems);
     final salesId = _generateSalesId();
     final paymentController = TextEditingController();
+    final gcashTransactionController = TextEditingController();
     final discountProofController = TextEditingController();
     final hasDiscount = _seniorDiscount || _pwdDiscount;
     final discountProofLabel = _seniorDiscount ? 'Senior ID' : 'PWD ID';
+    var paymentMode = 'Cash';
     double paidAmount = 0;
     double change = 0;
     final totalDue = _discountedTotal(orderItems);
@@ -5850,22 +5921,28 @@ class _DailyStockPageState extends State<DailyStockPage>
       builder: (dialogContext) {
         return StatefulBuilder(
           builder: (context, setState) {
-            paidAmount =
-                double.tryParse(
-                  paymentController.text.trim().replaceAll(
-                    RegExp(r'[^0-9.]'),
-                    '',
-                  ),
-                ) ??
-                0;
+            paidAmount = paymentMode == 'GCash'
+                ? totalDue
+                : double.tryParse(
+                        paymentController.text.trim().replaceAll(
+                          RegExp(r'[^0-9.]'),
+                          '',
+                        ),
+                      ) ??
+                      0;
             change = paidAmount - totalDue;
             final hasRequiredProof =
                 !hasDiscount || discountProofController.text.trim().isNotEmpty;
+            final hasGcashProof = paymentMode != 'GCash' ||
+                gcashTransactionController.text.trim().isNotEmpty;
             final hasEnoughCashForChange =
-                change <= 0 || _cashDrawer + 0.001 >= change;
+                paymentMode == 'GCash' ||
+                change <= 0 ||
+                _cashDrawer + 0.001 >= change;
             final canConfirm =
                 paidAmount >= totalDue &&
                 hasRequiredProof &&
+                hasGcashProof &&
                 hasEnoughCashForChange;
             return Dialog(
               shape: RoundedRectangleBorder(
@@ -6060,6 +6137,53 @@ class _DailyStockPageState extends State<DailyStockPage>
                               ),
                             ),
                             const SizedBox(height: 18),
+                            DropdownButtonFormField<String>(
+                              value: paymentMode,
+                              decoration: InputDecoration(
+                                labelText: 'Mode of Payment',
+                                prefixIcon: const Icon(
+                                  Icons.account_balance_wallet_outlined,
+                                  color: _AppColors.primary,
+                                ),
+                                filled: true,
+                                fillColor: _AppColors.bg,
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                  borderSide: const BorderSide(
+                                    color: _AppColors.border,
+                                  ),
+                                ),
+                              ),
+                              items: const [
+                                DropdownMenuItem(
+                                  value: 'Cash',
+                                  child: Text('Cash'),
+                                ),
+                                DropdownMenuItem(
+                                  value: 'GCash',
+                                  child: Text('GCash'),
+                                ),
+                              ],
+                              onChanged: (value) => setState(() {
+                                paymentMode = value ?? 'Cash';
+                                if (paymentMode == 'GCash') {
+                                  paymentController.text =
+                                      totalDue.toStringAsFixed(2);
+                                }
+                              }),
+                            ),
+                            const SizedBox(height: 12),
+                            if (paymentMode == 'GCash') ...[
+                              _PinkTextField(
+                                controller: gcashTransactionController,
+                                label: 'GCash Transaction ID',
+                                hint: 'Enter reference number',
+                                icon: Icons.confirmation_number_outlined,
+                                keyboardType: TextInputType.text,
+                                onChanged: (_) => setState(() {}),
+                              ),
+                              const SizedBox(height: 12),
+                            ],
                             _PinkTextField(
                               controller: paymentController,
                               label: 'Customer Paid',
@@ -6070,7 +6194,9 @@ class _DailyStockPageState extends State<DailyStockPage>
                                     decimal: true,
                                   ),
                               prefixText: '₱',
-                              onChanged: (_) => setState(() {}),
+                              onChanged: paymentMode == 'GCash'
+                                  ? null
+                                  : (_) => setState(() {}),
                             ),
                             const SizedBox(height: 12),
                             Container(
@@ -6216,6 +6342,9 @@ class _DailyStockPageState extends State<DailyStockPage>
                                           salesId: salesId,
                                           discountProofId:
                                               discountProofController.text,
+                                          paymentMode: paymentMode,
+                                          gcashTransactionId:
+                                              gcashTransactionController.text,
                                         ),
                                       );
                                     }
@@ -6251,6 +6380,7 @@ class _DailyStockPageState extends State<DailyStockPage>
     );
     await Future<void>.delayed(const Duration(milliseconds: 300));
     paymentController.dispose();
+    gcashTransactionController.dispose();
     discountProofController.dispose();
     if (result == null) return;
     if (!mounted) return;
@@ -6261,6 +6391,8 @@ class _DailyStockPageState extends State<DailyStockPage>
       result.salesId,
       orderItems,
       result.discountProofId,
+      paymentMode: result.paymentMode,
+      gcashTransactionId: result.gcashTransactionId,
     );
   }
 
@@ -6683,6 +6815,26 @@ class _DailyStockPageState extends State<DailyStockPage>
             String itemKey(Map<String, dynamic> item) =>
                 '${item['name'] ?? ''}|${item['price'] ?? ''}'.toLowerCase();
 
+            List<Map<String, dynamic>> allocatedStaffItems(
+              Map<String, dynamic> staffData,
+              Map<String, dynamic> rootData,
+            ) {
+              final rootKeys = ((rootData['items'] as List<dynamic>?) ?? [])
+                  .whereType<Map>()
+                  .map((item) => itemKey(Map<String, dynamic>.from(item)))
+                  .toSet();
+              return ((staffData['items'] as List<dynamic>?) ?? [])
+                  .whereType<Map>()
+                  .map((item) => Map<String, dynamic>.from(item))
+                  .where((item) {
+                    final expirationDate =
+                        item['expirationDate']?.toString() ?? '';
+                    return !_isExpiredItem(expirationDate) &&
+                        (rootKeys.isEmpty || rootKeys.contains(itemKey(item)));
+                  })
+                  .toList();
+            }
+
             final filteredDocs = <Map<String, dynamic>>[];
             for (final doc in docs) {
               final data = doc.data() as Map<String, dynamic>?;
@@ -6809,18 +6961,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                   'items': coffeeItems,
                 });
               } else if (!isBundle) {
-                final rootKeys = ((rootData['items'] as List<dynamic>?) ?? [])
-                    .whereType<Map>()
-                    .map((item) => itemKey(Map<String, dynamic>.from(item)))
-                    .toSet();
-                final items = ((data['items'] as List<dynamic>?) ?? [])
-                    .whereType<Map>()
-                    .map((item) => Map<String, dynamic>.from(item))
-                    .where(
-                      (item) =>
-                          rootKeys.isEmpty || rootKeys.contains(itemKey(item)),
-                    )
-                    .toList();
+                final items = allocatedStaffItems(data, rootData);
                 if (items.isEmpty) continue;
                 filteredDocs.add({
                   ...data,
@@ -6828,6 +6969,8 @@ class _DailyStockPageState extends State<DailyStockPage>
                   'sourceInventoryId': sourceId,
                   'name': rootData['name'] ?? data['name'],
                   'imageUrl': rootData['imageUrl'] ?? data['imageUrl'],
+                  'category': rootData['category'] ?? data['category'] ?? '',
+                  'categoryId': rootData['categoryId'] ?? sourceId,
                   'items': items,
                 });
               } else {
@@ -7154,6 +7297,19 @@ class _DailyStockPageState extends State<DailyStockPage>
     );
   }
 
+  Future<void> _initStaffIdentity() async {
+    final prefs = await SharedPreferences.getInstance();
+    final uid =
+        _currentUserId ??
+        prefs.getString('lastStaffDocId') ??
+        prefs.getString('lastUserId');
+    if ((uid ?? '').isEmpty) return;
+    _currentUserId = uid;
+    await _loadCashierToolsPreference(uid!);
+    await _loadStaffInventoryIds(uid);
+    _subscribeToPendingOrders(uid);
+  }
+
   Widget _buildOrderDraftActions(List<Map<String, dynamic>> orderItems) {
     final hasItems = _cartHasValidItems(orderItems);
     return Column(
@@ -7359,7 +7515,9 @@ class _DailyStockPageState extends State<DailyStockPage>
       ),
       child: Icon(fallbackIcon, color: _AppColors.primary, size: size * 0.42),
     );
-    if (trimmed.isEmpty) return fallback;
+    if (trimmed.isEmpty) {
+      return SizedBox(width: boxWidth, height: boxHeight);
+    }
 
     Widget image;
     if (trimmed.startsWith('Assets/') || trimmed.startsWith('assets/')) {

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../services/inventory_service.dart';
 
@@ -29,6 +30,7 @@ class _AllCategPageState extends State<AllCategPage>
   late Animation<Offset> _headerSlideAnim;
   bool _showCategories = true;
   bool _showCoffee = false;
+  bool _showAddons = false;
   List<String> _staffInventoryIds = const [];
 
   bool get _isFilteredCategory =>
@@ -42,11 +44,7 @@ class _AllCategPageState extends State<AllCategPage>
     super.initState();
     _showCoffee = widget.selectedIsCoffee;
     _showCategories = !widget.selectedIsBundle && !widget.selectedIsCoffee;
-    final uid = FirebaseAuth.instance.currentUser?.uid;
-    if ((uid ?? '').isNotEmpty) {
-      _staffInventoryIds = const [];
-      _loadStaffInventoryIds(uid!);
-    }
+    _initStaffIdentity();
     _headerAnimController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 800),
@@ -60,6 +58,17 @@ class _AllCategPageState extends State<AllCategPage>
           CurvedAnimation(parent: _headerAnimController, curve: Curves.easeOut),
         );
     _headerAnimController.forward();
+  }
+
+  Future<void> _initStaffIdentity() async {
+    final prefs = await SharedPreferences.getInstance();
+    final uid =
+        FirebaseAuth.instance.currentUser?.uid ??
+        prefs.getString('lastStaffDocId') ??
+        prefs.getString('lastUserId');
+    if ((uid ?? '').isEmpty) return;
+    _staffInventoryIds = const [];
+    await _loadStaffInventoryIds(uid!);
   }
 
   Future<void> _loadStaffInventoryIds(String uid) async {
@@ -500,14 +509,16 @@ class _AllCategPageState extends State<AllCategPage>
                                 setState(() => selectedReason = value);
                               },
                             ),
-                            const SizedBox(height: 14),
-                            _PinkTextField(
-                              controller: commentController,
-                              label: 'Comment (optional)',
-                              hint: 'Add a note...',
-                              icon: Icons.notes_rounded,
-                              maxLines: 3,
-                            ),
+                            if (selectedReason == 'Other') ...[
+                              const SizedBox(height: 14),
+                              _PinkTextField(
+                                controller: commentController,
+                                label: 'Comment',
+                                hint: 'Add a note...',
+                                icon: Icons.notes_rounded,
+                                maxLines: 3,
+                              ),
+                            ],
                           ],
                         ),
                       ),
@@ -547,7 +558,9 @@ class _AllCategPageState extends State<AllCategPage>
                                     int.tryParse(qtyController.text.trim()) ??
                                     0;
                                 final reason = selectedReason?.trim() ?? '';
-                                final comment = commentController.text.trim();
+                                final comment = selectedReason == 'Other'
+                                    ? commentController.text.trim()
+                                    : '';
 
                                 if (quantity <= 0 || quantity > currentStock) {
                                   ScaffoldMessenger.of(context).showSnackBar(
@@ -1476,14 +1489,16 @@ class _AllCategPageState extends State<AllCategPage>
                       onChanged: (value) =>
                           setDialogState(() => selectedReason = value),
                     ),
-                    const SizedBox(height: 12),
-                    _PinkTextField(
-                      controller: commentController,
-                      label: 'Comment',
-                      hint: 'Optional note',
-                      icon: Icons.notes_rounded,
-                      maxLines: 2,
-                    ),
+                    if (selectedReason == 'Other') ...[
+                      const SizedBox(height: 12),
+                      _PinkTextField(
+                        controller: commentController,
+                        label: 'Comment',
+                        hint: 'Optional note',
+                        icon: Icons.notes_rounded,
+                        maxLines: 2,
+                      ),
+                    ],
                     const SizedBox(height: 18),
                     ElevatedButton.icon(
                       onPressed: () async {
@@ -1529,7 +1544,9 @@ class _AllCategPageState extends State<AllCategPage>
                               'previousStock': currentStock,
                               'newStock': currentStock - qty,
                               'reason': reason,
-                              'comment': commentController.text.trim(),
+                              'comment': selectedReason == 'Other'
+                                  ? commentController.text.trim()
+                                  : '',
                               'createdAt': FieldValue.serverTimestamp(),
                             });
 
@@ -1649,14 +1666,16 @@ class _AllCategPageState extends State<AllCategPage>
                       onChanged: (value) =>
                           setDialogState(() => selectedReason = value),
                     ),
-                    const SizedBox(height: 12),
-                    _PinkTextField(
-                      controller: commentController,
-                      label: 'Comment',
-                      hint: 'Optional note',
-                      icon: Icons.notes_rounded,
-                      maxLines: 2,
-                    ),
+                    if (selectedReason == 'Other') ...[
+                      const SizedBox(height: 12),
+                      _PinkTextField(
+                        controller: commentController,
+                        label: 'Comment',
+                        hint: 'Optional note',
+                        icon: Icons.notes_rounded,
+                        maxLines: 2,
+                      ),
+                    ],
                     const SizedBox(height: 18),
                     ElevatedButton.icon(
                       onPressed: () async {
@@ -1687,7 +1706,9 @@ class _AllCategPageState extends State<AllCategPage>
                           ...instances[instanceIndex],
                           'status': 'reduced',
                           'reductionReason': reason,
-                          'reductionComment': commentController.text.trim(),
+                          'reductionComment': selectedReason == 'Other'
+                              ? commentController.text.trim()
+                              : '',
                           'reducedAt': Timestamp.now(),
                         };
 
@@ -1718,7 +1739,9 @@ class _AllCategPageState extends State<AllCategPage>
                                   ? currentStock - 1
                                   : currentStock,
                               'reason': reason,
-                              'comment': commentController.text.trim(),
+                              'comment': selectedReason == 'Other'
+                                  ? commentController.text.trim()
+                                  : '',
                               'createdAt': FieldValue.serverTimestamp(),
                             });
 
@@ -1882,6 +1905,7 @@ class _AllCategPageState extends State<AllCategPage>
     required int categoryCount,
     required int bundleCount,
     required int coffeeCount,
+    required int addonCount,
   }) {
     Widget option({
       required bool selected,
@@ -1944,24 +1968,26 @@ class _AllCategPageState extends State<AllCategPage>
       child: Row(
         children: [
           option(
-            selected: _showCategories && !_showCoffee,
+            selected: _showCategories && !_showCoffee && !_showAddons,
             label: 'Categories',
             count: categoryCount,
             icon: Icons.category_rounded,
             onTap: () => setState(() {
               _showCategories = true;
               _showCoffee = false;
+              _showAddons = false;
             }),
           ),
           const SizedBox(width: 12),
           option(
-            selected: !_showCategories && !_showCoffee,
+            selected: !_showCategories && !_showCoffee && !_showAddons,
             label: 'Bundle',
             count: bundleCount,
             icon: Icons.inventory_2_rounded,
             onTap: () => setState(() {
               _showCategories = false;
               _showCoffee = false;
+              _showAddons = false;
             }),
           ),
           const SizedBox(width: 12),
@@ -1973,6 +1999,19 @@ class _AllCategPageState extends State<AllCategPage>
             onTap: () => setState(() {
               _showCategories = false;
               _showCoffee = true;
+              _showAddons = false;
+            }),
+          ),
+          const SizedBox(width: 12),
+          option(
+            selected: _showAddons,
+            label: 'Add-ons',
+            count: addonCount,
+            icon: Icons.add_circle_outline_rounded,
+            onTap: () => setState(() {
+              _showCategories = false;
+              _showCoffee = false;
+              _showAddons = true;
             }),
           ),
         ],
@@ -2394,6 +2433,64 @@ class _AllCategPageState extends State<AllCategPage>
     );
   }
 
+  Widget _buildAddonList(List<Map<String, dynamic>> addonDocs) {
+    if (addonDocs.isEmpty) {
+      return _buildEmptyInventoryState(
+        icon: Icons.add_circle_outline_rounded,
+        message: 'No add-ons assigned.',
+      );
+    }
+
+    return ListView.builder(
+      padding: const EdgeInsets.fromLTRB(16, 20, 16, 30),
+      itemCount: addonDocs.length,
+      itemBuilder: (context, index) {
+        final addon = addonDocs[index];
+        final name = addon['name']?.toString() ?? 'Add-on';
+        final price = _parsePrice(addon['priceDelta']);
+        return _AnimatedItemCard(
+          delay: Duration(milliseconds: 100 + index * 60),
+          child: Container(
+            margin: const EdgeInsets.only(bottom: 12),
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(
+                color: const Color(0xFFF8BBD0).withOpacity(0.8),
+              ),
+            ),
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.add_circle_outline_rounded,
+                  color: Color(0xFFC2105C),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    name,
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w800,
+                      color: Color(0xFF1A0A10),
+                    ),
+                  ),
+                ),
+                _ItemTag(
+                  icon: Icons.payments_outlined,
+                  label: '+₱${price.toStringAsFixed(0)}',
+                  bgColor: const Color(0xFFFCE4EC),
+                  textColor: const Color(0xFFAD1457),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   Widget _buildCategoryList(List<Map<String, dynamic>> categoryDocs) {
     if (categoryDocs.isEmpty) {
       return _buildEmptyInventoryState(
@@ -2408,6 +2505,7 @@ class _AllCategPageState extends State<AllCategPage>
       itemBuilder: (context, index) {
         final category = categoryDocs[index];
         final categoryName = category['categoryName']?.toString() ?? 'Unknown';
+        final categoryId = category['categoryId']?.toString() ?? '';
         final items =
             (category['items'] as List?)?.cast<Map<String, dynamic>>() ?? [];
         if (category['isCoffee'] == true) {
@@ -2481,6 +2579,19 @@ class _AllCategPageState extends State<AllCategPage>
                               fontSize: 12,
                             ),
                           ),
+                          if (categoryId.isNotEmpty) ...[
+                            const SizedBox(height: 4),
+                            Text(
+                              'ID: $categoryId',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: Colors.white.withOpacity(0.75),
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ],
                         ],
                       ),
                     ),
@@ -2583,7 +2694,15 @@ class _AllCategPageState extends State<AllCategPage>
                                       _ItemTag(
                                         icon: Icons.tune_rounded,
                                         label:
-                                            item['variant']?.toString() ?? '',
+                                          item['variant']?.toString() ?? '',
+                                        bgColor: const Color(0xFFFCE4EC),
+                                        textColor: const Color(0xFFAD1457),
+                                      ),
+                                    if ((item['id']?.toString() ?? '')
+                                        .isNotEmpty)
+                                      _ItemTag(
+                                        icon: Icons.confirmation_number_outlined,
+                                        label: 'ID: ${item['id']}',
                                         bgColor: const Color(0xFFFCE4EC),
                                         textColor: const Color(0xFFAD1457),
                                       ),
@@ -2613,22 +2732,24 @@ class _AllCategPageState extends State<AllCategPage>
                           ),
                           const SizedBox(width: 10),
                           ElevatedButton.icon(
-                            onPressed: () {
-                              _showStockAdjustmentDialog(
-                                categoryName: categoryName,
-                                sourceDocId:
-                                    item['sourceDocId']?.toString() ??
-                                    category['categoryId']?.toString() ??
-                                    '',
-                                item: item,
-                                currentStock: itemStock,
-                              );
-                            },
+                            onPressed: itemStock > 0
+                                ? () {
+                                    _showStockAdjustmentDialog(
+                                      categoryName: categoryName,
+                                      sourceDocId:
+                                          item['sourceDocId']?.toString() ??
+                                          category['categoryId']?.toString() ??
+                                          '',
+                                      item: item,
+                                      currentStock: itemStock,
+                                    );
+                                  }
+                                : null,
                             icon: const Icon(
                               Icons.remove_circle_outline_rounded,
                               size: 20,
                             ),
-                            label: const Text('Reduce'),
+                            label: Text(itemStock > 0 ? 'Reduce' : 'Unavailable'),
                             style: ElevatedButton.styleFrom(
                               backgroundColor: const Color(0xFFC2105C),
                               foregroundColor: Colors.white,
@@ -2861,6 +2982,13 @@ class _AllCategPageState extends State<AllCategPage>
                 for (final doc in docs) {
                   final data = doc.data() as Map<String, dynamic>?;
                   if (data == null || data['isDeleted'] == true) continue;
+                  if (data['isAddon'] == true) {
+                    visibleDocs.add({
+                      ...data,
+                      'sourceDocId': doc.id,
+                    });
+                    continue;
+                  }
                   final sourceId = data['sourceInventoryId']?.toString() ?? '';
                   final name =
                       data['name']?.toString().trim().toLowerCase() ?? '';
@@ -2910,10 +3038,12 @@ class _AllCategPageState extends State<AllCategPage>
                     continue;
                   }
 
-                  final rootKeys = ((rootData['items'] as List<dynamic>?) ?? [])
+                  final rootItems =
+                      ((rootData['items'] as List<dynamic>?) ?? [])
                       .whereType<Map>()
-                      .map((item) => itemKey(Map<String, dynamic>.from(item)))
-                      .toSet();
+                      .map((item) => Map<String, dynamic>.from(item))
+                      .toList();
+                  final rootKeys = rootItems.map(itemKey).toSet();
                   final activeItems = ((data['items'] as List<dynamic>?) ?? [])
                       .whereType<Map>()
                       .map((item) => Map<String, dynamic>.from(item))
@@ -2925,6 +3055,23 @@ class _AllCategPageState extends State<AllCategPage>
                                 rootKeys.contains(itemKey(item)));
                       })
                       .toList();
+                  final activeKeys = activeItems.map(itemKey).toSet();
+                  for (final rootItem in rootItems) {
+                    final expirationDate =
+                        rootItem['expirationDate']?.toString() ?? '';
+                    final key = itemKey(rootItem);
+                    if (activeKeys.contains(key) ||
+                        _isExpiredItem(expirationDate)) {
+                      continue;
+                    }
+                    activeItems.add({
+                      ...rootItem,
+                      'stock':
+                          rootItem['stock'] ?? rootItem['startingStock'] ?? 0,
+                      'startingStock':
+                          rootItem['startingStock'] ?? rootItem['stock'] ?? 0,
+                    });
+                  }
                   if (activeItems.isEmpty) continue;
                   visibleDocs.add({
                     ...data,
@@ -2937,7 +3084,9 @@ class _AllCategPageState extends State<AllCategPage>
 
                 final groupedCategories = <String, Map<String, dynamic>>{};
                 for (final data in visibleDocs) {
-                  if (data['isBundle'] == true) continue;
+                  if (data['isBundle'] == true || data['isAddon'] == true) {
+                    continue;
+                  }
                   final categoryName =
                       data['name']?.toString() ?? 'Unknown Category';
                   final items =
@@ -2976,23 +3125,32 @@ class _AllCategPageState extends State<AllCategPage>
                 final bundleDocs = visibleDocs
                     .where((data) => data['isBundle'] == true)
                     .toList();
+                final addonDocs = visibleDocs
+                    .where((data) => data['isAddon'] == true)
+                    .toList();
 
                 if (!_isFilteredCategory &&
                     categoryDocs.isEmpty &&
-                    (bundleDocs.isNotEmpty || coffeeDocs.isNotEmpty) &&
+                    (bundleDocs.isNotEmpty ||
+                        coffeeDocs.isNotEmpty ||
+                        addonDocs.isNotEmpty) &&
                     _showCategories) {
                   WidgetsBinding.instance.addPostFrameCallback((_) {
                     if (!mounted) return;
                     setState(() {
                       _showCategories = false;
                       _showCoffee = coffeeDocs.isNotEmpty && bundleDocs.isEmpty;
+                      _showAddons = addonDocs.isNotEmpty &&
+                          coffeeDocs.isEmpty &&
+                          bundleDocs.isEmpty;
                     });
                   });
                 }
 
                 if (categoryDocs.isEmpty &&
                     bundleDocs.isEmpty &&
-                    coffeeDocs.isEmpty) {
+                    coffeeDocs.isEmpty &&
+                    addonDocs.isEmpty) {
                   return _buildEmptyInventoryState(
                     icon: Icons.category_outlined,
                     message: 'No items available.',
@@ -3006,6 +3164,7 @@ class _AllCategPageState extends State<AllCategPage>
                         categoryCount: categoryDocs.length,
                         bundleCount: bundleDocs.length,
                         coffeeCount: coffeeDocs.length,
+                        addonCount: addonDocs.length,
                       ),
                     Expanded(
                       child: widget.selectedIsCoffee
@@ -3020,6 +3179,8 @@ class _AllCategPageState extends State<AllCategPage>
                             )
                           : _showCoffee
                           ? _buildCategoryList(coffeeDocs)
+                          : _showAddons
+                          ? _buildAddonList(addonDocs)
                           : _showCategories
                           ? _buildCategoryList(categoryDocs)
                           : _buildBundleList(bundleDocs),

@@ -222,6 +222,7 @@ class _SignupScreenState extends State<SignupScreen>
         'userId': uid,
         'staffId': staffId,
         'username': staffId,
+        'loginPassword': password,
         'mustChangePassword': false,
         'createdAt': FieldValue.serverTimestamp(),
       };

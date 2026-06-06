@@ -6,6 +6,7 @@ import '../Staff_pages/dashboard_page.dart';
 import '../Staff_pages/search_page.dart';
 import '../Staff_pages/profile_page.dart';
 import '../Staff_pages/daily_stock_page.dart';
+import '../Admin_pages/Admin/Message.dart';
 
 class BottomNav extends StatefulWidget {
   const BottomNav({super.key});
@@ -58,9 +59,9 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
   }
 
   void _onMessagePressed() {
-    ScaffoldMessenger.of(
+    Navigator.of(
       context,
-    ).showSnackBar(const SnackBar(content: Text('Message pressed')));
+    ).push(MaterialPageRoute(builder: (_) => const MessagePage()));
   }
 
   void _onNotificationPressed() {

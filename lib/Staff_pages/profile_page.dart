@@ -30,6 +30,7 @@ class _ProfilePageState extends State<ProfilePage>
   static const Color _cardBg = Color(0xFFFFF4F8);
   static const Color _border = Color(0xFFF8BBD0);
   static const Color _textSoft = Color(0xFF8B496B);
+  String? _staffDocId;
   // ────────────────────────────────────────────────────────────────
 
   @override
@@ -45,6 +46,17 @@ class _ProfilePageState extends State<ProfilePage>
       end: Offset.zero,
     ).animate(CurvedAnimation(parent: _animController, curve: Curves.easeOut));
     _animController.forward();
+    _loadStaffDocId();
+  }
+
+  Future<void> _loadStaffDocId() async {
+    final prefs = await SharedPreferences.getInstance();
+    final uid =
+        FirebaseAuth.instance.currentUser?.uid ??
+        prefs.getString('lastStaffDocId') ??
+        prefs.getString('lastUserId');
+    if (!mounted) return;
+    setState(() => _staffDocId = uid);
   }
 
   @override
@@ -360,12 +372,13 @@ class _ProfilePageState extends State<ProfilePage>
   // ─── HEADER ──────────────────────────────────────────────────────────────
   Widget _buildHeader() {
     final currentUser = FirebaseAuth.instance.currentUser;
-    if (currentUser == null) return _buildHeaderError();
+    final uid = currentUser?.uid ?? _staffDocId;
+    if (uid == null || uid.isEmpty) return _buildHeaderError();
 
     return StreamBuilder<DocumentSnapshot>(
       stream: FirebaseFirestore.instance
           .collection('staff_requests')
-          .doc(currentUser.uid)
+          .doc(uid)
           .snapshots(),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
@@ -536,7 +549,7 @@ class _ProfilePageState extends State<ProfilePage>
                     StreamBuilder<DocumentSnapshot>(
                       stream: FirebaseFirestore.instance
                           .collection('staff_budget')
-                          .doc(currentUser.uid)
+                          .doc(uid)
                           .snapshots(),
                       builder: (context, budgetSnapshot) {
                         final data =
@@ -784,14 +797,15 @@ class _ProfilePageState extends State<ProfilePage>
   // ─── INFO CARD ────────────────────────────────────────────────────────────
   Widget _buildInfoCard() {
     final currentUser = FirebaseAuth.instance.currentUser;
-    if (currentUser == null) return const SizedBox.shrink();
+    final uid = currentUser?.uid ?? _staffDocId;
+    if (uid == null || uid.isEmpty) return const SizedBox.shrink();
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: StreamBuilder<DocumentSnapshot>(
         stream: FirebaseFirestore.instance
             .collection('staff_requests')
-            .doc(currentUser.uid)
+            .doc(uid)
             .snapshots(),
         builder: (context, snapshot) {
           if (!snapshot.hasData || !snapshot.data!.exists) {

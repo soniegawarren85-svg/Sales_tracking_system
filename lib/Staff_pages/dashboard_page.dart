@@ -6,9 +6,12 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../services/inventory_service.dart';
+import '../services/cash_drawer_service.dart';
 import 'AllCateg.dart';
+import 'daily_stock_page.dart';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Helpers
@@ -116,15 +119,12 @@ class _DashboardPageState extends State<DashboardPage>
   List inventoryEntries = [];
   String _inventoryView = 'categories';
   List<String> _staffInventoryIds = const [];
+  String? _staffDocId;
 
   @override
   void initState() {
     super.initState();
-    final uid = FirebaseAuth.instance.currentUser?.uid;
-    if ((uid ?? '').isNotEmpty) {
-      _staffInventoryIds = const [];
-      _loadStaffInventoryIds(uid!);
-    }
+    _initStaffIdentity();
     InventoryService().addListener(_onInventoryChanged);
 
     InventoryService().initialize().then((_) => InventoryService().refreshFromCloud()).then((_) {
@@ -133,6 +133,18 @@ class _DashboardPageState extends State<DashboardPage>
         inventoryEntries = InventoryService().currentUserEntries;
       });
     });
+  }
+
+  Future<void> _initStaffIdentity() async {
+    final prefs = await SharedPreferences.getInstance();
+    final uid =
+        FirebaseAuth.instance.currentUser?.uid ??
+        prefs.getString('lastStaffDocId') ??
+        prefs.getString('lastUserId');
+    if ((uid ?? '').isEmpty) return;
+    if (mounted) setState(() => _staffDocId = uid);
+    _staffInventoryIds = const [];
+    await _loadStaffInventoryIds(uid!);
   }
 
   @override
@@ -191,12 +203,27 @@ class _DashboardPageState extends State<DashboardPage>
         : query.where('staffId', whereIn: ids).snapshots();
   }
 
+  Stream<QuerySnapshot<Map<String, dynamic>>> _receiptStream() {
+    final id = _staffDocId?.trim() ?? '';
+    final query = FirebaseFirestore.instance.collection('completed_sales');
+    if (id.isEmpty) {
+      return query.where('userId', isEqualTo: '__missing_staff__').snapshots();
+    }
+    return query.where('userId', isEqualTo: id).snapshots();
+  }
+
   void _showHistory() {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => _HistorySheet(inventoryEntries: inventoryEntries),
+      builder: (_) => _HistorySheet(receiptStream: _receiptStream()),
+    );
+  }
+
+  void _openRefundFlow() {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const DailyStockPage()),
     );
   }
 
@@ -220,6 +247,7 @@ class _DashboardPageState extends State<DashboardPage>
               onMessage: widget.onMessage,
               onNotification: widget.onNotification,
               drawerIds: _staffInventoryIds,
+              staffDocId: _staffDocId,
             ),
           ),
         ),
@@ -251,7 +279,13 @@ class _DashboardPageState extends State<DashboardPage>
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 _SectionLabel(title: 'Performance'),
-                _HistoryButton(onTap: _showHistory),
+                Row(
+                  children: [
+                    _RefundButton(onTap: _openRefundFlow),
+                    const SizedBox(width: 8),
+                    _HistoryButton(onTap: _showHistory),
+                  ],
+                ),
               ],
             ),
           ),
@@ -335,7 +369,7 @@ class _DashboardPageState extends State<DashboardPage>
                   .whereType<Map>()
                   .map((item) => itemKey(Map<String, dynamic>.from(item)))
                   .toSet();
-              final staffItems = ((staffData['items'] as List<dynamic>?) ?? [])
+              return ((staffData['items'] as List<dynamic>?) ?? [])
                   .whereType<Map>()
                   .map((item) => Map<String, dynamic>.from(item))
                   .where((item) {
@@ -345,7 +379,6 @@ class _DashboardPageState extends State<DashboardPage>
                         (rootKeys.isEmpty || rootKeys.contains(itemKey(item)));
                   })
                   .toList();
-              return staffItems;
             }
 
             final inventoryDocs = <Map<String, dynamic>>[];
@@ -410,7 +443,9 @@ class _DashboardPageState extends State<DashboardPage>
                       true)
                   ? data['sourceInventoryId'].toString()
                   : (data['staffDocId']?.toString() ?? name);
-              final uniqueKey = data['isBundle'] == true
+              final uniqueKey = data['isCoffee'] == true
+                  ? 'coffee:$sourceId'
+                  : data['isBundle'] == true
                   ? 'bundle:$sourceId'
                   : 'category:$sourceId';
               final items =
@@ -422,7 +457,7 @@ class _DashboardPageState extends State<DashboardPage>
                 return !_isExpiredInventoryItem(expirationDate);
               }).toList();
 
-              if (activeVariants.isEmpty) continue;
+              if (activeVariants.isEmpty && data['isCoffee'] != true) continue;
 
               // Keep source inventory IDs separate even when categories share a name.
               if (!uniqueItems.containsKey(uniqueKey)) {
@@ -705,54 +740,51 @@ class _DashboardPageState extends State<DashboardPage>
 
   // ── Performance data ───────────────────────────────────────────────────────
   Widget _buildPerformanceData() {
-    if (inventoryEntries.isEmpty) {
-      return const _EmptyState(
-        icon: Icons.bar_chart_rounded,
-        label: 'No performance data yet.',
-        sublabel: 'Start recording sales to see results here.',
-      );
-    }
-
-    final sorted = [...inventoryEntries];
-    bool isCoffeePerformanceEntry(
-      List<Map<String, dynamic>> items,
-      String title,
-    ) {
-      final titleLower = title.toLowerCase();
-      return titleLower.contains('coffee') ||
-          titleLower.contains('smoothie') ||
-          titleLower.contains('latte') ||
-          titleLower.contains('espresso') ||
-          items.any((item) {
-            return item['isCoffee'] == true ||
-                (item['coffeeId']?.toString().trim().isNotEmpty ?? false) ||
-                (item['coffeeSize']?.toString().trim().isNotEmpty ?? false) ||
-                (item['addonName']?.toString().trim().isNotEmpty ?? false);
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: _receiptStream(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Padding(
+            padding: EdgeInsets.all(28),
+            child: Center(child: CircularProgressIndicator(color: _C.primary)),
+          );
+        }
+        final now = DateTime.now();
+        final today = DateTime(now.year, now.month, now.day);
+        final tomorrow = today.add(const Duration(days: 1));
+        final receipts = (snapshot.data?.docs ?? []).where((doc) {
+          final data = doc.data();
+          final timestamp = data['timestamp'];
+          if (timestamp is! Timestamp) return false;
+          final dt = timestamp.toDate();
+          final status = data['status']?.toString().toLowerCase() ?? '';
+          final type = data['type']?.toString().toLowerCase() ?? '';
+          return !dt.isBefore(today) &&
+              dt.isBefore(tomorrow) &&
+              status != 'refund' &&
+              type != 'refund';
+        }).toList()
+          ..sort((a, b) {
+            final at = a.data()['timestamp'] as Timestamp?;
+            final bt = b.data()['timestamp'] as Timestamp?;
+            return (bt?.millisecondsSinceEpoch ?? 0)
+                .compareTo(at?.millisecondsSinceEpoch ?? 0);
           });
-    }
 
-    sorted.sort((a, b) {
-      final nameA = a is Map ? (a['item']?.toString() ?? '') : a.safeItem;
-      final nameB = b is Map ? (b['item']?.toString() ?? '') : b.safeItem;
-      final itemsA = a is Map
-          ? (a['items'] as List?)?.cast<Map<String, dynamic>>() ?? []
-          : a.safeItems;
-      final itemsB = b is Map
-          ? (b['items'] as List?)?.cast<Map<String, dynamic>>() ?? []
-          : b.safeItems;
-      final salesOnlyA = isCoffeePerformanceEntry(itemsA, nameA);
-      final salesOnlyB = isCoffeePerformanceEntry(itemsB, nameB);
-      if (!salesOnlyA && salesOnlyB) return -1;
-      if (salesOnlyA && !salesOnlyB) return 1;
-      final isCardA = nameA.toLowerCase().contains('cardboard sales');
-      final isCardB = nameB.toLowerCase().contains('cardboard sales');
-      if (isCardA && !isCardB) return -1;
-      if (!isCardA && isCardB) return 1;
-      return nameA.toLowerCase().compareTo(nameB.toLowerCase());
-    });
+        if (receipts.isEmpty) {
+          return const _EmptyState(
+            icon: Icons.receipt_long_rounded,
+            label: 'No receipts today.',
+            sublabel: 'Confirmed orders will appear here.',
+          );
+        }
 
-    return Column(
-      children: sorted.map((inv) => _PerformanceCard(inv: inv)).toList(),
+        return Column(
+          children: receipts
+              .map((doc) => _ReceiptCard(data: doc.data(), compact: false))
+              .toList(),
+        );
+      },
     );
   }
 }
@@ -898,6 +930,219 @@ class _HistoryButton extends StatelessWidget {
   }
 }
 
+class _RefundButton extends StatelessWidget {
+  final VoidCallback onTap;
+  const _RefundButton({required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: const Color(0xFFE65100).withOpacity(0.35)),
+        ),
+        child: const Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.assignment_return_rounded,
+                color: Color(0xFFE65100), size: 16),
+            SizedBox(width: 6),
+            Text(
+              'Refund',
+              style: TextStyle(
+                color: Color(0xFFE65100),
+                fontSize: 13,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ReceiptCard extends StatelessWidget {
+  final Map<String, dynamic> data;
+  final bool compact;
+  const _ReceiptCard({required this.data, this.compact = false});
+
+  double _money(dynamic value) {
+    if (value is num) return value.toDouble();
+    return double.tryParse(value?.toString() ?? '') ?? 0.0;
+  }
+
+  int _qty(dynamic value) {
+    if (value is num) return value.toInt();
+    return int.tryParse(value?.toString() ?? '') ?? 0;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final salesId = data['salesId']?.toString() ?? 'Receipt';
+    final timestamp = data['timestamp'] is Timestamp
+        ? (data['timestamp'] as Timestamp).toDate()
+        : DateTime.now();
+    final paymentMode = data['paymentMode']?.toString() ?? 'Cash';
+    final gcashId = data['gcashTransactionId']?.toString().trim() ?? '';
+    final total = _money(data['total']);
+    final paid = _money(data['paidAmount']);
+    final change = _money(data['change']);
+    final items = (data['items'] as List<dynamic>? ?? [])
+        .whereType<Map>()
+        .map((item) => Map<String, dynamic>.from(item))
+        .toList();
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 14),
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(18),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.pink.withOpacity(0.08),
+              blurRadius: 14,
+              offset: const Offset(0, 5),
+            ),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
+              decoration: const BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [Color(0xFFC2105C), Color(0xFFF48FB1)],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+                borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.receipt_long_rounded,
+                      color: Colors.white, size: 20),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      salesId,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w900,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  Text(
+                    _formatDateTime(timestamp),
+                    style: const TextStyle(
+                      color: Colors.white70,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                children: [
+                  ...items.map((item) {
+                    final name = item['variant']?.toString().isNotEmpty == true
+                        ? '${item['name']} (${item['variant']})'
+                        : item['name']?.toString() ?? 'Item';
+                    final qty = _qty(item['quantity']);
+                    final price = _money(item['price']);
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              '${qty}x $name',
+                              style: const TextStyle(
+                                color: _C.primaryDark,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                          Text(
+                            '₱${(price * qty).toStringAsFixed(2)}',
+                            style: const TextStyle(
+                              color: _C.primaryDark,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  }),
+                  const Divider(height: 18),
+                  _ReceiptLine('Mode of Payment',
+                      paymentMode == 'GCash' && gcashId.isNotEmpty
+                          ? 'GCash - $gcashId'
+                          : paymentMode),
+                  if (!compact) _ReceiptLine('Customer Paid',
+                      '₱${paid.toStringAsFixed(2)}'),
+                  if (!compact) _ReceiptLine('Change',
+                      '₱${change.toStringAsFixed(2)}'),
+                  _ReceiptLine('Total', '₱${total.toStringAsFixed(2)}',
+                      strong: true),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ReceiptLine extends StatelessWidget {
+  final String label;
+  final String value;
+  final bool strong;
+  const _ReceiptLine(this.label, this.value, {this.strong = false});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 6),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              label,
+              style: TextStyle(
+                color: Colors.pink.shade400,
+                fontSize: strong ? 14 : 12,
+                fontWeight: strong ? FontWeight.w900 : FontWeight.w700,
+              ),
+            ),
+          ),
+          Text(
+            value,
+            style: TextStyle(
+              color: strong ? Colors.green.shade700 : _C.primaryDark,
+              fontSize: strong ? 16 : 12,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // HEADER WIDGET  (upgraded — keeps all existing pictures)
 // ═══════════════════════════════════════════════════════════════════════════
@@ -906,10 +1151,12 @@ class _Header extends StatelessWidget {
   final VoidCallback onMessage;
   final VoidCallback? onNotification;
   final List<String> drawerIds;
+  final String? staffDocId;
   const _Header({
     required this.onMessage,
     this.onNotification,
     required this.drawerIds,
+    this.staffDocId,
   });
 
   Stream<QuerySnapshot<Map<String, dynamic>>> _cashDrawerStream() {
@@ -932,13 +1179,14 @@ class _Header extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final user = FirebaseAuth.instance.currentUser;
+    final uid = user?.uid ?? staffDocId;
 
     return StreamBuilder<DocumentSnapshot>(
-      stream: user == null
+      stream: uid == null || uid.isEmpty
           ? const Stream.empty()
           : FirebaseFirestore.instance
                 .collection('staff_requests')
-                .doc(user.uid)
+                .doc(uid)
                 .snapshots(),
       builder: (context, snapshot) {
         final data = snapshot.data?.data() as Map<String, dynamic>? ?? {};
@@ -1021,19 +1269,42 @@ class _Header extends StatelessWidget {
                         // Notification + Message buttons
                         Row(
                           children: [
-                            _NotificationButton(
-                              onTap:
-                                  onNotification ??
-                                  () {
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      const SnackBar(
-                                        content: Text('No notifications yet.'),
-                                      ),
-                                    );
-                                  },
-                            ),
-                            const SizedBox(width: 12),
-                            _MessageButton(onTap: onMessage),
+                            if ((uid ?? '').isEmpty)
+                              _MessageButton(onTap: onMessage)
+                            else
+                              StreamBuilder<
+                                QuerySnapshot<Map<String, dynamic>>
+                              >(
+                                stream: FirebaseFirestore.instance
+                                    .collection('messages')
+                                    .where(
+                                      'participantIds',
+                                      arrayContains: uid,
+                                    )
+                                    .snapshots(),
+                                builder: (context, snapshot) {
+                                  var unread = 0;
+                                  for (final doc in snapshot.data?.docs ??
+                                      <QueryDocumentSnapshot<
+                                        Map<String, dynamic>
+                                      >>[]) {
+                                    final unreadBy = doc.data()['unreadBy'];
+                                    if (unreadBy is Map) {
+                                      final value = unreadBy[uid];
+                                      unread += value is num
+                                          ? value.toInt()
+                                          : int.tryParse(
+                                                  value?.toString() ?? '',
+                                                ) ??
+                                                0;
+                                    }
+                                  }
+                                  return _MessageButton(
+                                    onTap: onMessage,
+                                    badgeCount: unread,
+                                  );
+                                },
+                              ),
                           ],
                         ),
                       ],
@@ -1048,11 +1319,18 @@ class _Header extends StatelessWidget {
                         final cashDrawerBalance =
                             cashDrawerSnapshot.data?.docs.fold<double>(
                               0.0,
-                              (sum, doc) =>
-                                  sum +
-                                  ((doc.data()['balance'] as num?)
-                                          ?.toDouble() ??
-                                      0.0),
+                              (sum, doc) {
+                                final data = doc.data();
+                                Future.microtask(
+                                  () => CashDrawerService.zeroIfPast24Hours(
+                                    doc.id,
+                                    data,
+                                  ),
+                                );
+                                return sum +
+                                    ((data['balance'] as num?)?.toDouble() ??
+                                        0.0);
+                              },
                             ) ??
                             0.0;
                         return _StaffProfileCard(
@@ -1181,8 +1459,8 @@ class _NotificationButton extends StatelessWidget {
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        width: 46,
-        height: 46,
+        width: 40,
+        height: 40,
         decoration: BoxDecoration(
           color: Colors.white.withOpacity(0.14),
           borderRadius: BorderRadius.circular(14),
@@ -1198,7 +1476,7 @@ class _NotificationButton extends StatelessWidget {
         child: const Icon(
           Icons.notifications_none_rounded,
           color: Colors.white,
-          size: 22,
+          size: 19,
         ),
       ),
     );
@@ -1208,32 +1486,63 @@ class _NotificationButton extends StatelessWidget {
 // ── Message button ────────────────────────────────────────────────────────────
 class _MessageButton extends StatelessWidget {
   final VoidCallback onTap;
-  const _MessageButton({required this.onTap});
+  final int badgeCount;
+  const _MessageButton({required this.onTap, this.badgeCount = 0});
 
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
       onTap: onTap,
-      child: Container(
-        width: 46,
-        height: 46,
-        decoration: BoxDecoration(
-          color: Colors.white.withOpacity(0.14),
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: Colors.white.withOpacity(0.28), width: 1.5),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.15),
-              blurRadius: 10,
-              offset: const Offset(0, 4),
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.14),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(
+                color: Colors.white.withOpacity(0.28),
+                width: 1.5,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.15),
+                  blurRadius: 10,
+                  offset: const Offset(0, 4),
+                ),
+              ],
             ),
-          ],
-        ),
-        child: const Icon(
-          Icons.mail_outline_rounded,
-          color: Colors.white,
-          size: 22,
-        ),
+            child: const Icon(
+              Icons.mail_outline_rounded,
+              color: Colors.white,
+              size: 19,
+            ),
+          ),
+          if (badgeCount > 0)
+            Positioned(
+              right: -4,
+              top: -5,
+              child: Container(
+                constraints: const BoxConstraints(minWidth: 18, minHeight: 18),
+                padding: const EdgeInsets.symmetric(horizontal: 5),
+                alignment: Alignment.center,
+                decoration: const BoxDecoration(
+                  color: Colors.redAccent,
+                  borderRadius: BorderRadius.all(Radius.circular(999)),
+                ),
+                child: Text(
+                  badgeCount > 99 ? '99+' : '$badgeCount',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }
@@ -1941,8 +2250,8 @@ class _ItemStatusBadge extends StatelessWidget {
 // ═══════════════════════════════════════════════════════════════════════════
 
 class _HistorySheet extends StatefulWidget {
-  final List inventoryEntries;
-  const _HistorySheet({required this.inventoryEntries});
+  final Stream<QuerySnapshot<Map<String, dynamic>>> receiptStream;
+  const _HistorySheet({required this.receiptStream});
 
   @override
   State<_HistorySheet> createState() => _HistorySheetState();
@@ -1951,34 +2260,30 @@ class _HistorySheet extends StatefulWidget {
 class _HistorySheetState extends State<_HistorySheet> {
   String _selectedDate = '';
 
-  Map<String, List<dynamic>> _groupByDate() {
-    final Map<String, List<dynamic>> grouped = {};
-    for (final inv in widget.inventoryEntries) {
-      DateTime dt;
-      try {
-        dt = inv is Map
-            ? (inv['timestamp']?.toDate() ?? DateTime.now()).toLocal()
-            : inv.timestamp.toLocal();
-      } catch (_) {
-        dt = DateTime.now();
-      }
-      grouped.putIfAbsent(_formatDate(dt), () => []).add(inv);
+  Map<String, List<Map<String, dynamic>>> _groupByDate(
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
+  ) {
+    final grouped = <String, List<Map<String, dynamic>>>{};
+    for (final doc in docs) {
+      final data = doc.data();
+      final timestamp = data['timestamp'];
+      if (timestamp is! Timestamp) continue;
+      final dt = timestamp.toDate().toLocal();
+      grouped.putIfAbsent(_formatDate(dt), () => []).add(data);
+    }
+    for (final values in grouped.values) {
+      values.sort((a, b) {
+        final at = a['timestamp'] as Timestamp?;
+        final bt = b['timestamp'] as Timestamp?;
+        return (bt?.millisecondsSinceEpoch ?? 0)
+            .compareTo(at?.millisecondsSinceEpoch ?? 0);
+      });
     }
     return grouped;
   }
 
   @override
-  void initState() {
-    super.initState();
-    final grouped = _groupByDate();
-    if (grouped.isNotEmpty) _selectedDate = grouped.keys.first;
-  }
-
-  @override
   Widget build(BuildContext context) {
-    final grouped = _groupByDate();
-    final dates = grouped.keys.toList();
-
     return DraggableScrollableSheet(
       initialChildSize: 0.88,
       minChildSize: 0.5,
@@ -2055,93 +2360,194 @@ class _HistorySheetState extends State<_HistorySheet> {
               ),
             ),
 
-            // Date chips
-            SizedBox(
-              height: 40,
-              child: ListView.separated(
-                scrollDirection: Axis.horizontal,
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                itemCount: dates.length,
-                separatorBuilder: (_, __) => const SizedBox(width: 8),
-                itemBuilder: (_, i) {
-                  final d = dates[i];
-                  final selected = d == _selectedDate;
-                  return GestureDetector(
-                    onTap: () => setState(() => _selectedDate = d),
-                    child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 200),
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 8,
-                      ),
-                      decoration: BoxDecoration(
-                        color: selected ? _C.primary : Colors.white,
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(
-                          color: selected ? _C.primary : Colors.pink.shade200,
-                        ),
-                        boxShadow: selected
-                            ? [
-                                BoxShadow(
-                                  color: _C.primary.withOpacity(0.3),
-                                  blurRadius: 8,
-                                  offset: const Offset(0, 3),
-                                ),
-                              ]
-                            : [],
-                      ),
+            Expanded(
+              child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                stream: widget.receiptStream,
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return const Center(
+                      child: CircularProgressIndicator(color: _C.primary),
+                    );
+                  }
+                  final grouped = _groupByDate(snapshot.data?.docs ?? []);
+                  final dates = grouped.keys.toList()
+                    ..sort((a, b) => b.compareTo(a));
+                  if (_selectedDate.isEmpty && dates.isNotEmpty) {
+                    _selectedDate = dates.first;
+                  }
+                  final receipts = grouped[_selectedDate] ?? [];
+                  double gcashTotal = 0;
+                  double cashTotal = 0;
+                  for (final receipt in receipts) {
+                    final total = (receipt['total'] as num?)?.toDouble() ?? 0;
+                    final mode = receipt['paymentMode']?.toString() ?? 'Cash';
+                    if (mode == 'GCash') {
+                      gcashTotal += total;
+                    } else {
+                      cashTotal += total;
+                    }
+                  }
+
+                  if (grouped.isEmpty) {
+                    return Center(
                       child: Text(
-                        d,
+                        'No receipt history yet.',
                         style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                          color: selected ? Colors.white : Colors.pink.shade600,
+                          color: Colors.pink.shade400,
+                          fontSize: 15,
                         ),
                       ),
-                    ),
+                    );
+                  }
+
+                  return Column(
+                    children: [
+                      SizedBox(
+                        height: 40,
+                        child: ListView.separated(
+                          scrollDirection: Axis.horizontal,
+                          padding: const EdgeInsets.symmetric(horizontal: 16),
+                          itemCount: dates.length,
+                          separatorBuilder: (_, __) =>
+                              const SizedBox(width: 8),
+                          itemBuilder: (_, i) {
+                            final d = dates[i];
+                            final selected = d == _selectedDate;
+                            return GestureDetector(
+                              onTap: () => setState(() => _selectedDate = d),
+                              child: AnimatedContainer(
+                                duration: const Duration(milliseconds: 200),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 16,
+                                  vertical: 8,
+                                ),
+                                decoration: BoxDecoration(
+                                  color:
+                                      selected ? _C.primary : Colors.white,
+                                  borderRadius: BorderRadius.circular(20),
+                                  border: Border.all(
+                                    color: selected
+                                        ? _C.primary
+                                        : Colors.pink.shade200,
+                                  ),
+                                ),
+                                child: Text(
+                                  d,
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w700,
+                                    color: selected
+                                        ? Colors.white
+                                        : Colors.pink.shade600,
+                                  ),
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: _HistoryPaymentChip(
+                                label: 'Cash',
+                                value: cashTotal,
+                                color: Colors.green.shade700,
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: _HistoryPaymentChip(
+                                label: 'GCash',
+                                value: gcashTotal,
+                                color: Colors.blue.shade700,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const Divider(
+                        height: 1,
+                        thickness: 1,
+                        color: Color(0xFFEDD9C8),
+                      ),
+                      Expanded(
+                        child: receipts.isEmpty
+                            ? Center(
+                                child: Text(
+                                  'No receipt record',
+                                  style: TextStyle(
+                                    color: Colors.pink.shade400,
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              )
+                            : ListView(
+                                controller: scrollController,
+                                padding:
+                                    const EdgeInsets.fromLTRB(16, 16, 16, 40),
+                                children: receipts
+                                    .map((data) => _ReceiptCard(
+                                          data: data,
+                                          compact: true,
+                                        ))
+                                    .toList(),
+                              ),
+                      ),
+                    ],
                   );
                 },
               ),
             ),
-
-            const SizedBox(height: 16),
-            const Divider(height: 1, thickness: 1, color: Color(0xFFEDD9C8)),
-
-            Expanded(
-              child: grouped.isEmpty
-                  ? Center(
-                      child: Text(
-                        'No history available.',
-                        style: TextStyle(
-                          color: Colors.pink.shade400,
-                          fontSize: 15,
-                        ),
-                      ),
-                    )
-                  : (grouped[_selectedDate]?.isEmpty ?? true)
-                  ? Center(
-                      child: Text(
-                        'No history record',
-                        style: TextStyle(
-                          color: Colors.pink.shade400,
-                          fontSize: 15,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    )
-                  : ListView.separated(
-                      controller: scrollController,
-                      padding: const EdgeInsets.fromLTRB(16, 16, 16, 40),
-                      itemCount: grouped[_selectedDate]?.length ?? 0,
-                      separatorBuilder: (_, __) => const SizedBox(height: 10),
-                      itemBuilder: (_, i) {
-                        final inv = grouped[_selectedDate]![i];
-                        return _HistoryEntryCard(inv: inv);
-                      },
-                    ),
-            ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _HistoryPaymentChip extends StatelessWidget {
+  final String label;
+  final double value;
+  final Color color;
+  const _HistoryPaymentChip({
+    required this.label,
+    required this.value,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: color.withOpacity(0.18)),
+      ),
+      child: Row(
+        children: [
+          Text(
+            label,
+            style: TextStyle(
+              color: color,
+              fontWeight: FontWeight.w800,
+              fontSize: 12,
+            ),
+          ),
+          const Spacer(),
+          Text(
+            '₱${value.toStringAsFixed(2)}',
+            style: TextStyle(
+              color: color,
+              fontWeight: FontWeight.w900,
+              fontSize: 13,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -2898,7 +3304,7 @@ class _PerformanceCard extends StatelessWidget {
                         totalSoldValue > 0) ...[
                       if (!salesOnly) ...[
                         _SummaryRow(
-                          label: 'Total Starting',
+                          label: 'Total Stock',
                           value: '$totalStart',
                           valueColor: Colors.blue.shade700,
                         ),

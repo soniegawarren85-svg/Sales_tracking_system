@@ -3533,7 +3533,7 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final List<Map<String, dynamic>> bundles = [];
   bool _isSaving = false;
-  int _selectedTabIndex = 1;
+  int _selectedTabIndex = 0;
   late List<Map<String, dynamic>> _inventory;
 
   // ── Animations
@@ -3690,6 +3690,11 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
     return int.tryParse(value?.toString() ?? '') ?? 0;
   }
 
+  String? _bundleDataUrl(Uint8List bytes) {
+    final dataUrl = 'data:image/jpeg;base64,${base64Encode(bytes)}';
+    return dataUrl.length <= 700000 ? dataUrl : null;
+  }
+
   Future<String?> _uploadBundleImage() async {
     final bytes = bundleImageBytes;
     if (bytes == null || bytes.isEmpty) return null;
@@ -3700,11 +3705,11 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
       );
       final snapshotUpload = await imageRef
           .putData(bytes, SettableMetadata(contentType: 'image/jpeg'))
-          .timeout(const Duration(seconds: 90));
+          .timeout(const Duration(seconds: 3));
       return snapshotUpload.ref.getDownloadURL();
     } catch (e) {
       debugPrint('Bundle image upload failed: $e');
-      return null;
+      return _bundleDataUrl(bytes);
     }
   }
 
@@ -3760,6 +3765,33 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
         }).toList(),
       };
     });
+  }
+
+  Widget _bundleImagePreview(String? imageUrl) {
+    final url = imageUrl?.trim() ?? '';
+    if (url.isEmpty) return const SizedBox.shrink();
+    Widget image;
+    if (url.startsWith('data:image/')) {
+      final commaIndex = url.indexOf(',');
+      Uint8List? bytes;
+      if (commaIndex != -1) {
+        try {
+          bytes = base64Decode(url.substring(commaIndex + 1));
+        } catch (_) {}
+      }
+      image = bytes == null
+          ? const SizedBox.shrink()
+          : Image.memory(bytes, fit: BoxFit.cover);
+    } else {
+      image = Image.network(url, fit: BoxFit.cover);
+    }
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(16),
+        child: AspectRatio(aspectRatio: 16 / 9, child: image),
+      ),
+    );
   }
 
   String _generateBundleId() {
@@ -4646,9 +4678,11 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
                             ),
                           ],
                         ),
-                        const SizedBox(height: 18),
+                        if (_selectedTabIndex == 1)
+                          const SizedBox(height: 18),
                         // ── TAB SWITCHER ─────────────────────────────────────
-                        Container(
+                        if (_selectedTabIndex == 1)
+                          Container(
                           padding: const EdgeInsets.all(5),
                           decoration: BoxDecoration(
                             color: Colors.white.withOpacity(0.15),
@@ -4682,7 +4716,22 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
             child: FadeTransition(
               opacity: _bodyFade,
               child: _selectedTabIndex == 0
-                  ? _buildBundlesTab()
+                  ? Stack(
+                      children: [
+                        _buildBundlesTab(),
+                        Positioned(
+                          right: 20,
+                          bottom: 24,
+                          child: FloatingActionButton(
+                            heroTag: 'bulk_bundle_add',
+                            backgroundColor: PinkTheme.primary,
+                            foregroundColor: Colors.white,
+                            onPressed: () => _switchTab(1),
+                            child: const Icon(Icons.add_rounded, size: 32),
+                          ),
+                        ),
+                      ],
+                    )
                   : _buildBuildTab(),
             ),
           ),
@@ -4882,41 +4931,16 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Row(
-                                children: [
-                                  Expanded(
-                                    child: Text(
-                                      bundle['name']?.toString() ?? '',
-                                      style: const TextStyle(
-                                        fontSize: 16,
-                                        fontWeight: FontWeight.w800,
-                                        color: Colors.white,
-                                        letterSpacing: -0.2,
-                                      ),
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                  ),
-                                  if (bundleCount > 1)
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 10,
-                                        vertical: 4,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        color: Colors.white.withOpacity(0.18),
-                                        borderRadius: BorderRadius.circular(14),
-                                      ),
-                                      child: Text(
-                                        'x$bundleCount',
-                                        style: const TextStyle(
-                                          fontSize: 12,
-                                          fontWeight: FontWeight.w700,
-                                          color: Colors.white,
-                                        ),
-                                      ),
-                                    ),
-                                ],
+                              Text(
+                                bundle['name']?.toString() ?? '',
+                                style: const TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w800,
+                                  color: Colors.white,
+                                  letterSpacing: -0.2,
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
                               ),
                               const SizedBox(height: 2),
                               Text(
@@ -4945,9 +4969,30 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
                         Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
+                            if (bundleCount > 1) ...[
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 10,
+                                  vertical: 6,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withOpacity(0.18),
+                                  borderRadius: BorderRadius.circular(14),
+                                ),
+                                child: Text(
+                                  'x$bundleCount',
+                                  style: const TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w800,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                            ],
                             Container(
                               padding: const EdgeInsets.symmetric(
-                                horizontal: 12,
+                                horizontal: 14,
                                 vertical: 6,
                               ),
                               decoration: BoxDecoration(
@@ -4967,15 +5012,15 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
                             GestureDetector(
                               onTap: () => _confirmDeleteBundle(bundle),
                               child: Container(
-                                padding: const EdgeInsets.all(9),
+                                padding: const EdgeInsets.all(8),
                                 decoration: BoxDecoration(
                                   color: Colors.white.withOpacity(0.18),
                                   borderRadius: BorderRadius.circular(14),
                                 ),
                                 child: const Icon(
-                                  Icons.delete_outline_rounded,
+                                  Icons.close_rounded,
                                   color: Colors.white,
-                                  size: 18,
+                                  size: 20,
                                 ),
                               ),
                             ),
@@ -4984,6 +5029,7 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
                       ],
                     ),
                   ),
+                  _bundleImagePreview(bundle['imageUrl']?.toString()),
                   // Items chips
                   if (itemCount > 0)
                     Padding(

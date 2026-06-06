@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../bones/bottom_nav.dart';
 import '../../../Admin_pages/Admin/Dashboard.dart';
+import 'forgot_password.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -135,6 +136,54 @@ class _LoginScreenState extends State<LoginScreen>
   bool _isEmergencyAdminLogin(String username, String password) {
     return _normalizeUsername(username) == _emergencyAdminId &&
         password == _emergencyAdminPassword;
+  }
+
+  bool _storedPasswordMatches(Map<String, dynamic> data, String password) {
+    final possibleFields = [
+      data['password'],
+      data['loginPassword'],
+      data['plainPassword'],
+      data['temporaryPassword'],
+      data['defaultPassword'],
+      data['Password'],
+      data['LoginPassword'],
+      data['TemporaryPassword'],
+    ];
+    return possibleFields.any((value) {
+      final stored = value?.toString() ?? '';
+      return stored.isNotEmpty && stored == password;
+    });
+  }
+
+  Future<void> _signInWithFirestoreAccount(
+    QueryDocumentSnapshot<Map<String, dynamic>> accountDoc,
+  ) async {
+    final data = accountDoc.data();
+    final role = (data['role'] as String?)?.trim().toLowerCase() ?? 'staff';
+    final isAdmin = role == 'admin';
+    final publicId =
+        (data[isAdmin ? 'adminId' : 'staffId'] as String?) ??
+        (data['username'] as String?) ??
+        accountDoc.id;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('lastRole', isAdmin ? 'admin' : 'staff');
+    await prefs.setString('lastUserId', accountDoc.id);
+    await prefs.setString('lastStaffDocId', accountDoc.id);
+    await prefs.setString('lastStaffPublicId', publicId);
+    if (isAdmin) await prefs.setString('adminId', publicId);
+    await accountDoc.reference.update({
+      'lastLoginAt': FieldValue.serverTimestamp(),
+      'isOnline': true,
+    });
+    _showMessage('Welcome back!');
+    Future.microtask(() {
+      if (!mounted) return;
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(
+          builder: (_) => isAdmin ? const AdminDashboard() : const BottomNav(),
+        ),
+      );
+    });
   }
 
   Future<void> _signInEmergencyAdmin() async {
@@ -422,6 +471,22 @@ class _LoginScreenState extends State<LoginScreen>
       }
 
       if (signedInDoc == null || credential == null) {
+        QueryDocumentSnapshot<Map<String, dynamic>>? fallbackDoc;
+        for (final doc in accountDocs) {
+          final data = doc.data();
+          final rawStatus = (data['status'] as String? ?? '')
+              .trim()
+              .toLowerCase();
+          final status = rawStatus.isEmpty ? 'accepted' : rawStatus;
+          if (status == 'accepted' && _storedPasswordMatches(data, password)) {
+            fallbackDoc = doc;
+            break;
+          }
+        }
+        if (fallbackDoc != null) {
+          await _signInWithFirestoreAccount(fallbackDoc);
+          return;
+        }
         if (lastAuthError != null) throw lastAuthError;
         _showMessage(
           'This account has no email linked. Please contact admin.',
@@ -793,8 +858,10 @@ class _LoginScreenState extends State<LoginScreen>
         Align(
           alignment: Alignment.centerRight,
           child: TextButton(
-            onPressed: () =>
-                _showMessage('Forgot password flow not implemented.'),
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const ForgotPasswordScreen()),
+            ),
             style: TextButton.styleFrom(
               padding: EdgeInsets.zero,
               minimumSize: Size.zero,

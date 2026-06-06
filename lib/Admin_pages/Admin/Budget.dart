@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/services.dart';
+import '../../services/cash_drawer_service.dart';
 
 // ── Color Palette ─────────────────────────────────────────────────
 const kPrimary = Color(0xFFE91E63);
@@ -329,6 +330,7 @@ class _BudgetPageState extends State<BudgetPage>
     String targetName,
     double budget, {
     bool isBranch = false,
+    bool replaceDailyOpening = false,
   }) async {
     if (targetId.trim().isEmpty) {
       _showSnack('Missing target ID', Colors.red.shade600);
@@ -336,14 +338,21 @@ class _BudgetPageState extends State<BudgetPage>
     }
     try {
       final now = DateTime.now();
+      final dateKey =
+          '${now.year.toString().padLeft(4, '0')}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
       final budgetRef = _firestore.collection('staff_budget').doc(targetId);
       final existingBudgetSnapshot = await budgetRef.get();
+      final lastBudgetDate =
+          existingBudgetSnapshot.data()?['budgetDate']?.toString() ?? '';
       final previousAllocation = existingBudgetSnapshot.exists
           ? (existingBudgetSnapshot.data()?['allocatedBudget'] as num?)
                     ?.toDouble() ??
                 0.0
           : 0.0;
-      final newAllocation = previousAllocation + budget;
+      final sameBudgetDay = lastBudgetDate == dateKey;
+      final newAllocation = replaceDailyOpening
+          ? budget
+          : (sameBudgetDay ? previousAllocation + budget : budget);
 
       // Update current allocation total
       await budgetRef.set({
@@ -353,10 +362,11 @@ class _BudgetPageState extends State<BudgetPage>
         if (isBranch) 'branchName': targetName,
         'targetType': isBranch ? 'branch' : 'staff',
         'allocatedBudget': newAllocation,
+        'budgetDate': dateKey,
         'updatedAt': now,
       }, SetOptions(merge: true));
 
-      // Add the additional budget amount to the cash drawer balance
+      // Add to today's drawer or replace today's opening balance.
       final cashDrawerRef = _firestore
           .collection('staff_cash_drawer')
           .doc(targetId);
@@ -365,8 +375,17 @@ class _BudgetPageState extends State<BudgetPage>
         final currentBalance = cashDrawerSnapshot.exists
             ? (cashDrawerSnapshot.data()?['balance'] as num?)?.toDouble() ?? 0.0
             : 0.0;
+        final drawerDate =
+            cashDrawerSnapshot.data()?['drawerDate']?.toString() ?? '';
+        final sameDrawerDay = drawerDate == dateKey;
+        final nextBalance = replaceDailyOpening
+            ? budget
+            : (sameDrawerDay ? currentBalance + budget : budget);
         transaction.set(cashDrawerRef, {
-          'balance': currentBalance + budget,
+          'balance': nextBalance,
+          'openingCash': replaceDailyOpening ? budget : nextBalance,
+          'dailyOpeningCash': replaceDailyOpening ? budget : nextBalance,
+          'drawerDate': dateKey,
           'updatedAt': now,
           'staffId': targetId,
           if (isBranch) 'branchId': targetId,
@@ -384,7 +403,7 @@ class _BudgetPageState extends State<BudgetPage>
         'targetType': isBranch ? 'branch' : 'staff',
         'amount': budget,
         'createdAt': Timestamp.fromDate(now),
-        'type': 'allocation',
+        'type': replaceDailyOpening ? 'set_daily_cash_drawer' : 'allocation',
       });
 
       if (!mounted) return;
@@ -392,7 +411,12 @@ class _BudgetPageState extends State<BudgetPage>
         _currentAllocations[targetId] = newAllocation;
         _budgetControllers[targetId]?.clear();
       });
-      _showSnack('Budget updated for $targetName', Colors.green.shade600);
+      _showSnack(
+        replaceDailyOpening
+            ? 'Daily cash drawer set for $targetName'
+            : 'Budget updated for $targetName',
+        Colors.green.shade600,
+      );
     } catch (e) {
       if (!mounted) return;
       _showSnack('Error saving budget: $e', Colors.red.shade600);
@@ -517,6 +541,10 @@ class _BudgetPageState extends State<BudgetPage>
 
     if (data['isCoffee'] == true) {
       return '$safeName - Coffee';
+    }
+
+    if (data['isAddon'] == true) {
+      return '$safeName - Add-on';
     }
 
     if (data['isBundle'] == true) {
@@ -1060,8 +1088,9 @@ class _BudgetPageState extends State<BudgetPage>
                                     const SizedBox(width: 10),
                                     Expanded(
                                       child: _AssignModeButton(
-                                        selected:
-                                            !showCategories && !showCoffee,
+                                        selected: !showCategories &&
+                                            !showCoffee &&
+                                            !showAddons,
                                         icon: Icons.inventory_2_rounded,
                                         label: 'Bundle (${bundleDocs.length})',
                                         onTap: () => setDialogState(() {
@@ -1337,7 +1366,9 @@ class _BudgetPageState extends State<BudgetPage>
     Set<String> coffeeProductIds = const {},
     Set<String> addonIds = const {},
   }) async {
-    final selected = quantities.entries.where((entry) => entry.value > 0);
+    final selected = quantities.entries
+        .where((entry) => entry.value > 0)
+        .toList();
     if (selected.isEmpty && coffeeProductIds.isEmpty && addonIds.isEmpty) {
       _showSnack(
         'Select coffee, add-ons, or enter at least one quantity',
@@ -1433,6 +1464,28 @@ class _BudgetPageState extends State<BudgetPage>
           'sourceCollection': 'coffee_products',
           'addonOptions': coffeeAddonOptions[coffeeId] ?? const [],
           'isCoffee': true,
+          'isBundle': false,
+          'isDeleted': false,
+          'assignedAt': FieldValue.serverTimestamp(),
+          'updatedAt': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+      }
+
+      for (final addon in selectedAddonOptions) {
+        final addonId = addon['id']?.toString() ?? '';
+        if (addonId.isEmpty) continue;
+        final staffRef = _firestore
+            .collection('staff_inventory')
+            .doc(_staffInventoryDocId(staffId, 'addon_$addonId'));
+        transaction.set(staffRef, {
+          'staffId': staffId,
+          'staffName': staffName,
+          'sourceInventoryId': addonId,
+          'sourceCollection': 'coffee_addons',
+          'name': addon['name'] ?? 'Add-on',
+          'priceDelta': addon['priceDelta'] ?? 0,
+          'isAddon': true,
+          'isCoffee': false,
           'isBundle': false,
           'isDeleted': false,
           'assignedAt': FieldValue.serverTimestamp(),
@@ -4054,6 +4107,12 @@ class _BudgetPageState extends State<BudgetPage>
                     if (snapshot.hasData && snapshot.data!.exists) {
                       final data =
                           snapshot.data!.data() as Map<String, dynamic>;
+                      Future.microtask(
+                        () => CashDrawerService.zeroIfPast24Hours(
+                          branchId,
+                          data,
+                        ),
+                      );
                       cashBalance = (data['balance'] as num?)?.toDouble() ?? 0;
                     }
                     return Container(
@@ -4119,43 +4178,96 @@ class _BudgetPageState extends State<BudgetPage>
             ),
           ),
           const SizedBox(height: 10),
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton.icon(
-              onPressed: () {
-                if (!enabled) {
-                  _showSnack(
-                    'Assign staff to this branch first.',
-                    Colors.orange.shade700,
-                  );
-                  return;
-                }
-                final budgetText = controller.text.trim();
-                if (budgetText.isEmpty) {
-                  _showSnack(
-                    'Please enter an allocation amount',
-                    Colors.orange.shade700,
-                  );
-                  return;
-                }
-                final budget = double.tryParse(budgetText);
-                if (budget == null || budget < 0) {
-                  _showSnack('Invalid allocation amount', Colors.red.shade600);
-                  return;
-                }
-                _saveBudget(branchId, branchName, budget, isBranch: true);
-              },
-              icon: const Icon(Icons.send_rounded),
-              label: const Text('Send Allocation'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: kBannerTop,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 13),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(14),
+          Row(
+            children: [
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: () {
+                    if (!enabled) {
+                      _showSnack(
+                        'Assign staff to this branch first.',
+                        Colors.orange.shade700,
+                      );
+                      return;
+                    }
+                    final budgetText = controller.text.trim();
+                    if (budgetText.isEmpty) {
+                      _showSnack(
+                        'Please enter an allocation amount',
+                        Colors.orange.shade700,
+                      );
+                      return;
+                    }
+                    final budget = double.tryParse(budgetText);
+                    if (budget == null || budget < 0) {
+                      _showSnack(
+                        'Invalid allocation amount',
+                        Colors.red.shade600,
+                      );
+                      return;
+                    }
+                    _saveBudget(branchId, branchName, budget, isBranch: true);
+                  },
+                  icon: const Icon(Icons.add_rounded),
+                  label: const Text('Add Cash'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: kBannerTop,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 13),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                  ),
                 ),
               ),
-            ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () {
+                    if (!enabled) {
+                      _showSnack(
+                        'Assign staff to this branch first.',
+                        Colors.orange.shade700,
+                      );
+                      return;
+                    }
+                    final budgetText = controller.text.trim();
+                    if (budgetText.isEmpty) {
+                      _showSnack(
+                        'Please enter an allocation amount',
+                        Colors.orange.shade700,
+                      );
+                      return;
+                    }
+                    final budget = double.tryParse(budgetText);
+                    if (budget == null || budget < 0) {
+                      _showSnack(
+                        'Invalid allocation amount',
+                        Colors.red.shade600,
+                      );
+                      return;
+                    }
+                    _saveBudget(
+                      branchId,
+                      branchName,
+                      budget,
+                      isBranch: true,
+                      replaceDailyOpening: true,
+                    );
+                  },
+                  icon: const Icon(Icons.edit_rounded),
+                  label: const Text('Set Daily'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: kBannerTop,
+                    side: const BorderSide(color: kBannerTop),
+                    padding: const EdgeInsets.symmetric(vertical: 13),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -5388,7 +5500,7 @@ class _BudgetPageState extends State<BudgetPage>
                         ),
                         SizedBox(width: 8),
                         Text(
-                          'Save Allocation',
+                          'Add Cash',
                           style: TextStyle(
                             fontSize: 14,
                             fontWeight: FontWeight.w700,
@@ -5397,6 +5509,47 @@ class _BudgetPageState extends State<BudgetPage>
                           ),
                         ),
                       ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                OutlinedButton.icon(
+                  onPressed: () {
+                    final budgetText = controller.text.trim();
+                    if (budgetText.isEmpty) {
+                      _showSnack(
+                        'Please enter a budget amount',
+                        Colors.orange.shade700,
+                      );
+                      return;
+                    }
+                    try {
+                      final budget = double.parse(budgetText);
+                      if (budget < 0) {
+                        _showSnack(
+                          'Budget cannot be negative',
+                          Colors.red.shade600,
+                        );
+                        return;
+                      }
+                      _saveBudget(
+                        staffId,
+                        staffName,
+                        budget,
+                        replaceDailyOpening: true,
+                      );
+                    } catch (_) {
+                      _showSnack('Invalid budget amount', Colors.red.shade600);
+                    }
+                  },
+                  icon: const Icon(Icons.edit_rounded),
+                  label: const Text('Set Daily Cash'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: kBannerTop,
+                    side: const BorderSide(color: kBannerTop),
+                    minimumSize: const Size(double.infinity, 46),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
                     ),
                   ),
                 ),
@@ -5459,7 +5612,7 @@ class _BudgetPageState extends State<BudgetPage>
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         const Text(
-                          'Assigned Starting Stock',
+                          'Assigned Stock',
                           style: TextStyle(
                             fontSize: 11,
                             color: Color(0xFF9E9E9E),

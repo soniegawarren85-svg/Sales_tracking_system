@@ -229,6 +229,7 @@ class SettingsPage extends StatelessWidget {
                     subtitle: "Update your credentials",
                     iconColor: const Color(0xFF8E24AA),
                     iconBg: const Color(0xFFF3E5F5),
+                    onTap: () => _showChangePassword(context),
                   ),
                   _settingItem(
                     icon: Icons.notifications_rounded,
@@ -236,6 +237,7 @@ class SettingsPage extends StatelessWidget {
                     subtitle: "Manage alerts & sounds",
                     iconColor: const Color(0xFFE91E63),
                     iconBg: const Color(0xFFFCE4EC),
+                    onTap: () => _showNotificationSettings(context),
                   ),
                   _settingItem(
                     icon: Icons.dark_mode_rounded,
@@ -243,6 +245,7 @@ class SettingsPage extends StatelessWidget {
                     subtitle: "Toggle dark appearance",
                     iconColor: const Color(0xFF3949AB),
                     iconBg: const Color(0xFFE8EAF6),
+                    onTap: () => _showDarkMode(context),
                   ),
 
                   const SizedBox(height: 6),
@@ -255,6 +258,11 @@ class SettingsPage extends StatelessWidget {
                     subtitle: "Data and permissions",
                     iconColor: const Color(0xFF00897B),
                     iconBg: const Color(0xFFE0F2F1),
+                    onTap: () => _showInfoDialog(
+                      context,
+                      'Privacy & Security',
+                      'Your account data is stored in Firebase. Keep your login details private and sign out on shared devices.',
+                    ),
                   ),
 
                   const SizedBox(height: 6),
@@ -267,6 +275,11 @@ class SettingsPage extends StatelessWidget {
                     subtitle: "Version & licenses",
                     iconColor: const Color(0xFF1E88E5),
                     iconBg: const Color(0xFFE3F2FD),
+                    onTap: () => _showInfoDialog(
+                      context,
+                      'About App',
+                      'Sales Tracker v1.0.0\nInventory, sales, staff allocation, notifications, coffee menu, and reports.',
+                    ),
                   ),
                   _settingItem(
                     icon: Icons.help_rounded,
@@ -274,6 +287,11 @@ class SettingsPage extends StatelessWidget {
                     subtitle: "FAQs and contact us",
                     iconColor: const Color(0xFFFF6F00),
                     iconBg: const Color(0xFFFFF8E1),
+                    onTap: () => _showInfoDialog(
+                      context,
+                      'Help & Support',
+                      'For login, password, inventory, cash drawer, or order issues, contact the system administrator.',
+                    ),
                   ),
 
                   const SizedBox(height: 28),
@@ -316,6 +334,156 @@ class SettingsPage extends StatelessWidget {
     return fullName.isEmpty ? 'Admin User' : fullName;
   }
 
+  static Future<void> _showChangePassword(BuildContext context) async {
+    final current = TextEditingController();
+    final next = TextEditingController();
+    final confirm = TextEditingController();
+    await showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Change Password'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: current,
+              obscureText: true,
+              decoration: const InputDecoration(labelText: 'Current password'),
+            ),
+            TextField(
+              controller: next,
+              obscureText: true,
+              decoration: const InputDecoration(labelText: 'New password'),
+            ),
+            TextField(
+              controller: confirm,
+              obscureText: true,
+              decoration: const InputDecoration(labelText: 'Confirm password'),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              final user = FirebaseAuth.instance.currentUser;
+              if (next.text.length < 6 || next.text != confirm.text) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Check the new password.')),
+                );
+                return;
+              }
+              if (user?.email == null) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('This admin account has no Firebase email.'),
+                  ),
+                );
+                return;
+              }
+              try {
+                final credential = EmailAuthProvider.credential(
+                  email: user!.email!,
+                  password: current.text,
+                );
+                await user.reauthenticateWithCredential(credential);
+                await user.updatePassword(next.text);
+                if (context.mounted) Navigator.pop(context);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Password updated.')),
+                );
+              } catch (e) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Unable to update password: $e')),
+                );
+              }
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    current.dispose();
+    next.dispose();
+    confirm.dispose();
+  }
+
+  static void _showNotificationSettings(BuildContext context) {
+    final alerts = {
+      'Reports': true,
+      'Low Stock': true,
+      'Expired Items': true,
+      'Refunds': true,
+      'Cash Drawer': true,
+    };
+    showDialog(
+      context: context,
+      builder: (_) => StatefulBuilder(
+        builder: (context, setState) => AlertDialog(
+          title: const Text('Manage Alerts'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: alerts.keys.map((key) {
+              return SwitchListTile(
+                value: alerts[key]!,
+                title: Text(key),
+                activeColor: const Color(0xFFE91E63),
+                onChanged: (value) async {
+                  setState(() => alerts[key] = value);
+                  final prefs = await SharedPreferences.getInstance();
+                  await prefs.setBool('admin_alert_$key', value);
+                },
+              );
+            }).toList(),
+          ),
+        ),
+      ),
+    );
+  }
+
+  static void _showDarkMode(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Dark Mode'),
+        content: const Text('Dark mode preference is saved for this device.'),
+        actions: [
+          Switch(
+            value: false,
+            onChanged: (value) async {
+              final prefs = await SharedPreferences.getInstance();
+              await prefs.setBool('admin_dark_mode', value);
+              if (context.mounted) Navigator.pop(context);
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  static void _showInfoDialog(
+    BuildContext context,
+    String title,
+    String message,
+  ) {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Text(title),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+  }
+
   /// ===== SECTION LABEL =====
   static Widget _sectionLabel(String label) {
     return Padding(
@@ -339,6 +507,7 @@ class SettingsPage extends StatelessWidget {
     required String subtitle,
     required Color iconColor,
     required Color iconBg,
+    VoidCallback? onTap,
   }) {
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 5),
@@ -357,7 +526,7 @@ class SettingsPage extends StatelessWidget {
         color: Colors.transparent,
         child: InkWell(
           borderRadius: BorderRadius.circular(20),
-          onTap: () {},
+          onTap: onTap,
           splashColor: iconColor.withOpacity(0.07),
           highlightColor: iconColor.withOpacity(0.04),
           child: Padding(

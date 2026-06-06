@@ -1947,6 +1947,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
         'userId': uid,
         'staffId': staffId,
         'username': staffId,
+        'loginPassword': password,
         'mustChangePassword': false,
         'createdBy': FirebaseAuth.instance.currentUser?.uid,
         'createdAt': FieldValue.serverTimestamp(),

@@ -10,6 +10,7 @@ import '../../services/expiry_notification_service.dart';
 import 'InventoryPage.dart';
 import 'CoffeeMenuPage.dart';
 import 'Notification.dart';
+import 'Message.dart';
 import 'Budget.dart';
 import 'SalesPage.dart';
 import 'SettingsPage.dart';
@@ -183,11 +184,47 @@ class _AdminDashboardState extends State<AdminDashboard>
       centerTitle: false,
 
       actions: [
-        _buildIconButton(Icons.message_rounded, () {
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(const SnackBar(content: Text('Messages')));
-        }, iconSize: 22, padding: const EdgeInsets.all(10)),
+        FutureBuilder<SharedPreferences>(
+          future: SharedPreferences.getInstance(),
+          builder: (context, prefsSnapshot) {
+            final prefs = prefsSnapshot.data;
+            final adminMessageId =
+                prefs?.getString('adminId') ??
+                FirebaseAuth.instance.currentUser?.uid ??
+                'ADM-0001';
+            return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+              stream: FirebaseFirestore.instance
+                  .collection('messages')
+                  .where('participantIds', arrayContains: adminMessageId)
+                  .snapshots(),
+              builder: (context, snapshot) {
+                var unreadCount = 0;
+                for (final doc in snapshot.data?.docs ??
+                    <QueryDocumentSnapshot<Map<String, dynamic>>>[]) {
+                  final unreadBy = doc.data()['unreadBy'];
+                  if (unreadBy is Map) {
+                    final value = unreadBy[adminMessageId];
+                    unreadCount += value is num
+                        ? value.toInt()
+                        : int.tryParse(value?.toString() ?? '') ?? 0;
+                  }
+                }
+                return _buildIconButton(
+                  Icons.message_rounded,
+                  () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => const MessagePage()),
+                    );
+                  },
+                  badgeCount: unreadCount,
+                  iconSize: 22,
+                  padding: const EdgeInsets.all(10),
+                );
+              },
+            );
+          },
+        ),
         const SizedBox(width: 4),
         StreamBuilder<QuerySnapshot>(
           stream: FirebaseFirestore.instance

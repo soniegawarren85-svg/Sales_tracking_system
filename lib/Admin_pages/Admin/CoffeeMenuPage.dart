@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -201,8 +202,8 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
           .timeout(const Duration(seconds: 90));
       return upload.ref.getDownloadURL();
     } catch (e) {
-      _showSnack('Image upload failed: $e', isError: true);
-      return null;
+      debugPrint('Coffee image upload failed, using local data URL: $e');
+      return 'data:image/jpeg;base64,${base64Encode(bytes)}';
     }
   }
 
@@ -253,7 +254,12 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
 
     setState(() => _savingProduct = true);
     try {
-      final imageUrl = await _uploadCoffeeImage(_coffeeImageBytes);
+      final imageUrl = await _uploadCoffeeImage(_coffeeImageBytes).timeout(
+        const Duration(seconds: 18),
+        onTimeout: () => _coffeeImageBytes == null
+            ? null
+            : 'data:image/jpeg;base64,${base64Encode(_coffeeImageBytes!)}',
+      );
       final coffeeId = await _firestore.runTransaction<String>((
         transaction,
       ) async {
@@ -1089,6 +1095,11 @@ class _ProductCardState extends State<_ProductCard>
                                 Icons.coffee_rounded,
                                 color: Colors.white,
                                 size: 24,
+                              )
+                            : imageUrl.startsWith('data:image/')
+                            ? Image.memory(
+                                base64Decode(imageUrl.split(',').last),
+                                fit: BoxFit.cover,
                               )
                             : Image.network(
                                 imageUrl,

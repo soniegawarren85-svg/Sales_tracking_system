@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'AllCateg.dart';
 import '../screens/staff_page.dart';
 import '../services/inventory_service.dart';
@@ -95,7 +96,11 @@ class _AnalyticsPageState extends State<AnalyticsPage>
 
     List<String> assignedInventoryNames = [];
     try {
-      final userId = FirebaseAuth.instance.currentUser?.uid;
+      final prefs = await SharedPreferences.getInstance();
+      final userId =
+          FirebaseAuth.instance.currentUser?.uid ??
+          prefs.getString('lastStaffDocId') ??
+          prefs.getString('lastUserId');
       if (userId == null) {
         _allItems = [];
         _filtered = [];
