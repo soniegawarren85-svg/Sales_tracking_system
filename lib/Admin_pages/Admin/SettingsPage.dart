@@ -430,7 +430,7 @@ class SettingsPage extends StatelessWidget {
               return SwitchListTile(
                 value: alerts[key]!,
                 title: Text(key),
-                activeColor: const Color(0xFFE91E63),
+                activeThumbColor: const Color(0xFFE91E63),
                 onChanged: (value) async {
                   setState(() => alerts[key] = value);
                   final prefs = await SharedPreferences.getInstance();

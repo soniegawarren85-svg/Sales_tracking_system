@@ -484,7 +484,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
         if (hasAdminStarting) {
           _forceRemainingMode = true;
           _adminStartingStock = [
-            if (adminStarting.length > 0) adminStarting[0] else 0,
+            if (adminStarting.isNotEmpty) adminStarting[0] else 0,
             if (adminStarting.length > 1) adminStarting[1] else 0,
             if (adminStarting.length > 2) adminStarting[2] else 0,
           ];
@@ -524,7 +524,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
 
           // Store suggested remaining for display
           _suggestedRemainingStock = [
-            if (suggestedQtys.length > 0) suggestedQtys[0] else 0,
+            if (suggestedQtys.isNotEmpty) suggestedQtys[0] else 0,
             if (suggestedQtys.length > 1) suggestedQtys[1] else 0,
             if (suggestedQtys.length > 2) suggestedQtys[2] else 0,
           ];
@@ -848,8 +848,12 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
   @override
   void dispose() {
     _fadeCtrl.dispose();
-    for (var ctrl in itemControllers) ctrl.dispose();
-    for (var focus in itemFocusNodes) focus.dispose();
+    for (var ctrl in itemControllers) {
+      ctrl.dispose();
+    }
+    for (var focus in itemFocusNodes) {
+      focus.dispose();
+    }
     super.dispose();
   }
 
@@ -1013,7 +1017,9 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
       _showSnack('Inventory saved successfully');
     }
 
-    for (var ctrl in itemControllers) ctrl.clear();
+    for (var ctrl in itemControllers) {
+      ctrl.clear();
+    }
     if (!_isRemainingMode) Navigator.of(context).pop();
   }
 
@@ -1141,8 +1147,8 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
 
   Route _buildSummaryRoute(Widget page) {
     return PageRouteBuilder(
-      pageBuilder: (_, __, ___) => page,
-      transitionsBuilder: (_, animation, __, child) {
+      pageBuilder: (_, _, _) => page,
+      transitionsBuilder: (_, animation, _, child) {
         final tween = Tween(
           begin: const Offset(0, 1),
           end: Offset.zero,

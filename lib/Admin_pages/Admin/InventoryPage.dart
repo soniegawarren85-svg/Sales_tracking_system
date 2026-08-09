@@ -213,7 +213,7 @@ class _InventoryPageState extends State<InventoryPage>
         .get();
 
     for (final doc in snapshot.docs) {
-      final data = doc.data() as Map<String, dynamic>;
+      final data = doc.data();
       final existingIds = ((data['itemIds'] as List<dynamic>?) ?? [])
           .map((e) => e?.toString() ?? '')
           .where((e) => e.isNotEmpty)
@@ -416,10 +416,10 @@ class _InventoryPageState extends State<InventoryPage>
       final metadata = SettableMetadata(contentType: contentType);
       final snapshotUpload = await imageRef
           .putData(bytes, metadata)
-          .timeout(const Duration(seconds: 3));
+          .timeout(const Duration(seconds: 30));
       return snapshotUpload.ref
           .getDownloadURL()
-          .timeout(const Duration(seconds: 3));
+          .timeout(const Duration(seconds: 30));
     } catch (uploadError) {
       final contentType = _imageContentType(bytes, pickedMimeType);
       final dataUrl = _imageDataUrl(bytes, contentType);
@@ -554,16 +554,22 @@ class _InventoryPageState extends State<InventoryPage>
   }
 
   Future<void> pickImage() async {
-    final picked = await picker.pickImage(
-      source: ImageSource.gallery,
-      maxWidth: 320,
-      maxHeight: 320,
-      imageQuality: 40,
-    );
-    if (picked != null) {
-      final bytes = await picked.readAsBytes();
-      debugPrint('Picked image size: ${bytes.length} bytes (compressed)');
-      setState(() => selectedImageBytes = bytes);
+    try {
+      final picked = await picker.pickImage(
+        source: ImageSource.gallery,
+        maxWidth: 1024,
+        maxHeight: 1024,
+        imageQuality: 70,
+      );
+      if (picked != null) {
+        final bytes = await picked.readAsBytes();
+        debugPrint('Picked image size: ${bytes.length} bytes (compressed)');
+        if (!mounted) return;
+        setState(() => selectedImageBytes = bytes);
+      }
+    } catch (e) {
+      debugPrint('Image pick failed: $e');
+      if (mounted) _showErrorSnack('Unable to select image. Please try again.');
     }
   }
 
@@ -664,7 +670,7 @@ class _InventoryPageState extends State<InventoryPage>
         child = Image.asset(
           url,
           fit: BoxFit.cover,
-          errorBuilder: (_, __, ___) => const Icon(
+          errorBuilder: (_, _, _) => const Icon(
             Icons.image_rounded,
             color: PinkTheme.primary,
             size: 22,
@@ -674,7 +680,7 @@ class _InventoryPageState extends State<InventoryPage>
         child = Image.network(
           url,
           fit: BoxFit.cover,
-          errorBuilder: (_, __, ___) => const Icon(
+          errorBuilder: (_, _, _) => const Icon(
             Icons.image_rounded,
             color: PinkTheme.primary,
             size: 22,
@@ -1071,18 +1077,27 @@ class _InventoryPageState extends State<InventoryPage>
                                 : 'Picture selected',
                             imageBytes: itemImageBytes,
                             onTap: () async {
-                              final picked = await picker.pickImage(
-                                source: ImageSource.gallery,
-                                maxWidth: 320,
-                                maxHeight: 320,
-                                imageQuality: 40,
-                              );
-                              if (picked == null) return;
-                              final bytes = await picked.readAsBytes();
-                              setModalState(() {
-                                itemImageBytes = bytes;
-                                itemImageMimeType = picked.mimeType;
-                              });
+                              try {
+                                final picked = await picker.pickImage(
+                                  source: ImageSource.gallery,
+                                  maxWidth: 1024,
+                                  maxHeight: 1024,
+                                  imageQuality: 70,
+                                );
+                                if (picked == null) return;
+                                final bytes = await picked.readAsBytes();
+                                setModalState(() {
+                                  itemImageBytes = bytes;
+                                  itemImageMimeType = picked.mimeType;
+                                });
+                              } catch (e) {
+                                debugPrint('Variant image pick failed: $e');
+                                if (mounted) {
+                                  _showErrorSnack(
+                                    'Unable to select image. Please try again.',
+                                  );
+                                }
+                              }
                             },
                             onRemove: itemImageBytes == null
                                 ? null
@@ -1117,10 +1132,8 @@ class _InventoryPageState extends State<InventoryPage>
                                     'expirationDate': itemExpirationController
                                         .text
                                         .trim(),
-                                    if (itemImageBytes != null)
-                                      'image': itemImageBytes,
-                                    if (itemImageMimeType != null)
-                                      'imageMimeType': itemImageMimeType,
+                                    'image': ?itemImageBytes,
+                                    'imageMimeType': ?itemImageMimeType,
                                   });
                                   itemNameController.clear();
                                   itemPriceController.clear();
@@ -1456,8 +1469,9 @@ class _InventoryPageState extends State<InventoryPage>
                                           if (mounted) Navigator.pop(context);
                                         } catch (e) {
                                           debugPrint('Save error in modal: $e');
-                                          if (mounted)
+                                          if (mounted) {
                                             _showErrorSnack('Save failed: $e');
+                                          }
                                           try {
                                             setModalState(
                                               () => isSaving = false,
@@ -1690,18 +1704,27 @@ class _InventoryPageState extends State<InventoryPage>
                             : 'Picture selected',
                         imageBytes: addImageBytes,
                         onTap: () async {
-                          final picked = await picker.pickImage(
-                            source: ImageSource.gallery,
-                            maxWidth: 320,
-                            maxHeight: 320,
-                            imageQuality: 40,
-                          );
-                          if (picked == null) return;
-                          final bytes = await picked.readAsBytes();
-                          setState(() {
-                            addImageBytes = bytes;
-                            addImageMimeType = picked.mimeType;
-                          });
+                          try {
+                            final picked = await picker.pickImage(
+                              source: ImageSource.gallery,
+                              maxWidth: 1024,
+                              maxHeight: 1024,
+                              imageQuality: 70,
+                            );
+                            if (picked == null) return;
+                            final bytes = await picked.readAsBytes();
+                            setState(() {
+                              addImageBytes = bytes;
+                              addImageMimeType = picked.mimeType;
+                            });
+                          } catch (e) {
+                            debugPrint('Variant image pick failed: $e');
+                            if (mounted) {
+                              _showErrorSnack(
+                                'Unable to select image. Please try again.',
+                              );
+                            }
+                          }
                         },
                         onRemove: addImageBytes == null
                             ? null
@@ -2876,7 +2899,7 @@ class _InventoryPageState extends State<InventoryPage>
     return Image.network(
       imageUrl,
       fit: BoxFit.cover,
-      errorBuilder: (_, __, ___) => _imagePlaceholder(),
+      errorBuilder: (_, _, _) => _imagePlaceholder(),
       loadingBuilder: (_, child, progress) {
         if (progress == null) return child;
         return Center(
@@ -3068,8 +3091,9 @@ class _InventoryPageState extends State<InventoryPage>
                                           ),
                                         ),
                                       );
-                                      if (saved == true && mounted)
+                                      if (saved == true && mounted) {
                                         setState(() {});
+                                      }
                                     }
                                   },
                                   child: Container(
@@ -3143,8 +3167,9 @@ class _InventoryPageState extends State<InventoryPage>
                                             const RemovedInventoryPage(),
                                       ),
                                     );
-                                    if (restored == true && mounted)
+                                    if (restored == true && mounted) {
                                       setState(() {});
+                                    }
                                   },
                                   child: Container(
                                     padding: const EdgeInsets.symmetric(
@@ -3428,14 +3453,17 @@ class _InventoryPageState extends State<InventoryPage>
       final snapshot = await _firestore.collection('sales_inventory').get();
       List<Map<String, dynamic>> inventory = [];
       for (var doc in snapshot.docs) {
-        if (doc.data().containsKey('isDeleted') && doc['isDeleted'] == true)
+        if (doc.data().containsKey('isDeleted') && doc['isDeleted'] == true) {
           continue;
-        if (doc.data().containsKey('isBundle') && doc['isBundle'] == true)
+        }
+        if (doc.data().containsKey('isBundle') && doc['isBundle'] == true) {
           continue;
+        }
         if (doc.data().containsKey('bundleId') &&
             doc['bundleId'] != null &&
-            doc['bundleId'].toString().isNotEmpty)
+            doc['bundleId'].toString().isNotEmpty) {
           continue;
+        }
         final data = doc.data();
         final filteredItems = ((data['items'] as List<dynamic>?) ?? [])
             .where((e) {
@@ -3705,7 +3733,7 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
       );
       final snapshotUpload = await imageRef
           .putData(bytes, SettableMetadata(contentType: 'image/jpeg'))
-          .timeout(const Duration(seconds: 3));
+          .timeout(const Duration(seconds: 30));
       return snapshotUpload.ref.getDownloadURL();
     } catch (e) {
       debugPrint('Bundle image upload failed: $e');
@@ -3714,16 +3742,21 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
   }
 
   Future<void> _pickBundleImage() async {
-    final picked = await _bundlePicker.pickImage(
-      source: ImageSource.gallery,
-      maxWidth: 800,
-      maxHeight: 800,
-      imageQuality: 70,
-    );
-    if (picked == null) return;
-    final bytes = await picked.readAsBytes();
-    if (!mounted) return;
-    setState(() => bundleImageBytes = bytes);
+    try {
+      final picked = await _bundlePicker.pickImage(
+        source: ImageSource.gallery,
+        maxWidth: 1024,
+        maxHeight: 1024,
+        imageQuality: 70,
+      );
+      if (picked == null) return;
+      final bytes = await picked.readAsBytes();
+      if (!mounted) return;
+      setState(() => bundleImageBytes = bytes);
+    } catch (e) {
+      debugPrint('Bundle image pick failed: $e');
+      if (mounted) _showErrorSnack('Unable to select image. Please try again.');
+    }
   }
 
   String _bundleInstanceId(String bundleId, int index) {
@@ -3892,7 +3925,7 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
           );
           if (totalQtyNeeded > availableQty) {
             _showErrorSnack(
-              'Not enough \"${variant['name']}\" in inventory.\nNeed: $totalQtyNeeded, Available: $availableQty',
+              'Not enough "${variant['name']}" in inventory.\nNeed: $totalQtyNeeded, Available: $availableQty',
             );
             if (mounted) setState(() => _isSaving = false);
             return;
@@ -4335,7 +4368,7 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
                       : ListView.separated(
                           padding: const EdgeInsets.all(16),
                           itemCount: bundleInstances.length,
-                          separatorBuilder: (_, __) =>
+                          separatorBuilder: (_, _) =>
                               const SizedBox(height: 12),
                           itemBuilder: (context, index) {
                             final instance = bundleInstances[index];
@@ -5758,7 +5791,7 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
                         ),
                       ),
                     );
-                  }).toList(),
+                  }),
                 const SizedBox(height: 8),
               ],
             ),
@@ -6044,8 +6077,9 @@ class _RemovedInventoryPageState extends State<RemovedInventoryPage>
           if (rawItem is! Map) continue;
           final entry = Map<String, dynamic>.from(rawItem);
           final removedAt = entry['removedAt'] as Timestamp?;
-          if (removedAt != null && removedAt.toDate().isBefore(cutoff))
+          if (removedAt != null && removedAt.toDate().isBefore(cutoff)) {
             continue;
+          }
           freshRemovedItems.add(entry);
           if (!isDeleted) {
             _removedVariants.add({

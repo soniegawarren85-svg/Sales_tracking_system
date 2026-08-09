@@ -276,7 +276,7 @@ class _AdminDashboardState extends State<AdminDashboard>
         child: Image.asset(
           kShopLogoAsset,
           fit: BoxFit.cover,
-          errorBuilder: (_, __, ___) => Container(
+          errorBuilder: (_, _, _) => Container(
             color: Colors.white,
             child: const Icon(Icons.cake_rounded, color: kLightBrown, size: 20),
           ),
@@ -300,7 +300,7 @@ class _AdminDashboardState extends State<AdminDashboard>
             Image.asset(
               'Assets/Image/Bg.jpg',
               fit: BoxFit.cover,
-              errorBuilder: (_, __, ___) => Container(color: kDeepBrown),
+              errorBuilder: (_, _, _) => Container(color: kDeepBrown),
             ),
             Container(
               decoration: const BoxDecoration(
@@ -381,7 +381,7 @@ class _AdminDashboardState extends State<AdminDashboard>
         child: Image.asset(
           kShopLogoAsset,
           fit: BoxFit.cover,
-          errorBuilder: (_, __, ___) => Container(
+          errorBuilder: (_, _, _) => Container(
             color: Colors.white,
             child: const Icon(Icons.cake_rounded, color: kLightBrown, size: 34),
           ),
@@ -496,7 +496,7 @@ class _AdminDashboardState extends State<AdminDashboard>
                   width: 52,
                   height: 52,
                   fit: BoxFit.cover,
-                  errorBuilder: (_, __, ___) => Container(
+                  errorBuilder: (_, _, _) => Container(
                     width: 52,
                     height: 52,
                     color: Colors.white.withOpacity(0.25),

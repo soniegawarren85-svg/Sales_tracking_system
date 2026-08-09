@@ -43,6 +43,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
   void initState() {
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
+    _tabController.addListener(_handleStaffTabChanged);
 
     // Header animation
     _headerAnimController = AnimationController(
@@ -88,6 +89,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
 
   @override
   void dispose() {
+    _tabController.removeListener(_handleStaffTabChanged);
     _tabController.dispose();
     _firstNameController.dispose();
     _middleNameController.dispose();
@@ -104,6 +106,12 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
     super.dispose();
   }
 
+  void _handleStaffTabChanged() {
+    if (!_tabController.indexIsChanging && mounted) {
+      setState(() {});
+    }
+  }
+
   void _toggleAdminPanel() {
     setState(() {
       _showAdminPanel = !_showAdminPanel;
@@ -118,6 +126,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      resizeToAvoidBottomInset: true,
       backgroundColor: const Color(0xFFFDF6F9),
       body: Stack(
         children: [
@@ -150,80 +159,78 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
           // ── Main Staff Content ──
           Column(
             children: [
-              SlideTransition(
-                position: _headerSlide,
-                child: FadeTransition(
-                  opacity: _headerFade,
+              FadeTransition(
+                opacity: _headerFade,
+                child: SlideTransition(
+                  position: _headerSlide,
                   child: _buildHeader(context),
                 ),
               ),
-              const SizedBox(height: 16),
-              FadeTransition(
-                opacity: _buttonFade,
-                child: ScaleTransition(
-                  scale: _buttonScale,
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
+                child: FadeTransition(
+                  opacity: _buttonFade,
+                  child: ScaleTransition(
+                    scale: _buttonScale,
                     child: _buildStaffManagementButton(context),
                   ),
                 ),
               ),
-              const SizedBox(height: 14),
+              StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                stream: _staffStream,
+                builder: (context, snapshot) {
+                  final docs = snapshot.data?.docs ?? [];
+                  final pendingCount = docs
+                      .map((doc) => StaffApplicant.fromDoc(doc))
+                      .where(
+                        (a) =>
+                            a.status == 'pending' &&
+                            a.role.toLowerCase() == 'staff',
+                      )
+                      .length;
+                  return _buildTabBar(pendingCount: pendingCount);
+                },
+              ),
+              const SizedBox(height: 10),
               Expanded(
-                child: Column(
-                  children: [
-                    StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                      stream: _staffStream,
-                      builder: (context, snapshot) {
-                        final docs = snapshot.data?.docs ?? [];
-                        final pendingCount = docs
-                            .map((doc) => StaffApplicant.fromDoc(doc))
-                            .where(
-                              (a) =>
-                                  a.status == 'pending' &&
-                                  a.role.toLowerCase() == 'staff',
-                            )
-                            .length;
-                        return _buildTabBar(pendingCount: pendingCount);
-                      },
-                    ),
-                    const SizedBox(height: 10),
-                    Expanded(
-                      child: TabBarView(
-                        controller: _tabController,
-                        children: [
-                          _buildPendingTab(const []),
-                          StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                            stream: _staffStream,
-                            builder: (context, snapshot) {
-                              if (snapshot.connectionState ==
-                                      ConnectionState.waiting &&
-                                  !snapshot.hasData) {
-                                return const Center(
-                                  child: CircularProgressIndicator(
-                                    color: Color(0xFFF48FB1),
-                                    strokeWidth: 2.5,
-                                  ),
-                                );
-                              }
+                child: _tabController.index == 0
+                    ? SingleChildScrollView(
+                        keyboardDismissBehavior:
+                            ScrollViewKeyboardDismissBehavior.onDrag,
+                        padding: EdgeInsets.fromLTRB(
+                          16,
+                          0,
+                          16,
+                          24 + MediaQuery.of(context).viewInsets.bottom,
+                        ),
+                        child: _buildCreateStaffForm(),
+                      )
+                    : StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                        stream: _staffStream,
+                        builder: (context, snapshot) {
+                          if (snapshot.connectionState ==
+                                  ConnectionState.waiting &&
+                              !snapshot.hasData) {
+                            return const Center(
+                              child: CircularProgressIndicator(
+                                color: Color(0xFFF48FB1),
+                                strokeWidth: 2.5,
+                              ),
+                            );
+                          }
 
-                              final docs = snapshot.data?.docs ?? [];
-                              final accepted = docs
-                                  .map((doc) => StaffApplicant.fromDoc(doc))
-                                  .where(
-                                    (a) =>
-                                        a.status == 'accepted' &&
-                                        a.role.toLowerCase() == 'staff',
-                                  )
-                                  .toList();
-                              return _buildAcceptedTab(accepted);
-                            },
-                          ),
-                        ],
+                          final docs = snapshot.data?.docs ?? [];
+                          final accepted = docs
+                              .map((doc) => StaffApplicant.fromDoc(doc))
+                              .where(
+                                (a) =>
+                                    a.status == 'accepted' &&
+                                    a.role.toLowerCase() == 'staff',
+                              )
+                              .toList();
+                          return _buildAcceptedTab(accepted);
+                        },
                       ),
-                    ),
-                  ],
-                ),
               ),
             ],
           ),
@@ -1200,6 +1207,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
           labelStyle: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
           unselectedLabelStyle:
               const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+          onTap: (_) => setState(() {}),
           tabs: [
             Tab(
               child: Row(
@@ -1375,13 +1383,22 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
     TextInputType keyboardType = TextInputType.text,
     String? Function(String?)? validator,
   }) {
+    final effectiveMaxLines = obscureText ? 1 : maxLines;
+    final effectiveKeyboardType =
+        effectiveMaxLines > 1 && keyboardType == TextInputType.text
+            ? TextInputType.multiline
+            : keyboardType;
+
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
       child: TextFormField(
+        key: PageStorageKey<String>('staff_create_field_$label'),
         controller: controller,
         obscureText: obscureText,
-        maxLines: obscureText ? 1 : maxLines,
-        keyboardType: keyboardType,
+        maxLines: effectiveMaxLines,
+        keyboardType: effectiveKeyboardType,
+        textInputAction:
+            effectiveMaxLines > 1 ? TextInputAction.newline : TextInputAction.next,
         validator: validator ??
             (value) {
               if (requiredField && (value?.trim().isEmpty ?? true)) {
@@ -2021,8 +2038,8 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
       barrierDismissible: true,
       barrierLabel: '',
       transitionDuration: const Duration(milliseconds: 350),
-      pageBuilder: (_, __, ___) => const SizedBox.shrink(),
-      transitionBuilder: (context, animation, _, __) {
+      pageBuilder: (_, _, _) => const SizedBox.shrink(),
+      transitionBuilder: (context, animation, _, _) {
         final curved =
             CurvedAnimation(parent: animation, curve: Curves.easeOutBack);
         return ScaleTransition(
@@ -2446,7 +2463,7 @@ class _AnimatedCountCardState extends State<_AnimatedCountCard>
             const SizedBox(height: 8),
             AnimatedBuilder(
               animation: _countAnim,
-              builder: (_, __) => Text(
+              builder: (_, _) => Text(
                 '${_countAnim.value}',
                 style: const TextStyle(
                   color: Colors.white,
@@ -2866,6 +2883,233 @@ class _AnimatedAdminCardState extends State<_AnimatedAdminCard>
 // ═══════════════════════════════════════════════════════════════
 // ─── MODELS ───────────────────────────────────────────────────
 // ═══════════════════════════════════════════════════════════════
+class _StaffSectionHeaderDelegate extends SliverPersistentHeaderDelegate {
+  final double topPadding;
+  final double minExtentHeight;
+  final double maxExtentHeight;
+  final VoidCallback onBack;
+
+  const _StaffSectionHeaderDelegate({
+    required this.topPadding,
+    required this.minExtentHeight,
+    required this.maxExtentHeight,
+    required this.onBack,
+  });
+
+  @override
+  double get minExtent => minExtentHeight;
+
+  @override
+  double get maxExtent => maxExtentHeight;
+
+  @override
+  Widget build(
+    BuildContext context,
+    double shrinkOffset,
+    bool overlapsContent,
+  ) {
+    final progress =
+        (shrinkOffset / (maxExtent - minExtent)).clamp(0.0, 1.0).toDouble();
+    final expandedOpacity = (1.0 - progress).clamp(0.0, 1.0).toDouble();
+    final radius = 36.0 - (18.0 * progress);
+
+    return Container(
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          colors: [Color(0xFFFF80AB), Color(0xFFF06292), Color(0xFFE91E8C)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.only(
+          bottomLeft: Radius.circular(radius),
+          bottomRight: Radius.circular(radius),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFFE91E63).withOpacity(0.22),
+            blurRadius: 22,
+            offset: const Offset(0, 10),
+          ),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.only(
+          bottomLeft: Radius.circular(radius),
+          bottomRight: Radius.circular(radius),
+        ),
+        child: Stack(
+          children: [
+            Positioned(
+              top: -35,
+              right: -28,
+              child: Container(
+                width: 180,
+                height: 180,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: Colors.white.withOpacity(0.10 * expandedOpacity),
+                ),
+              ),
+            ),
+            Positioned(
+              bottom: -45,
+              right: 62,
+              child: Container(
+                width: 125,
+                height: 125,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: Colors.white.withOpacity(0.07 * expandedOpacity),
+                ),
+              ),
+            ),
+            Padding(
+              padding: EdgeInsets.fromLTRB(18, topPadding + 10, 18, 12),
+              child: Row(
+                children: [
+                  GestureDetector(
+                    onTap: onBack,
+                    child: Container(
+                      width: 42,
+                      height: 42,
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.20),
+                        borderRadius: BorderRadius.circular(13),
+                        border: Border.all(
+                          color: Colors.white.withOpacity(0.35),
+                          width: 1,
+                        ),
+                      ),
+                      child: const Icon(
+                        Icons.arrow_back_ios_new_rounded,
+                        color: Colors.white,
+                        size: 17,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Stack(
+                      alignment: Alignment.centerLeft,
+                      children: [
+                        Opacity(
+                          opacity: progress,
+                          child: const Text(
+                            'Staff Section',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 20,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                        ),
+                        Opacity(
+                          opacity: expandedOpacity,
+                          child: Transform.translate(
+                            offset: Offset(0, 32 * progress),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 12,
+                                    vertical: 5,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white.withOpacity(0.20),
+                                    borderRadius: BorderRadius.circular(20),
+                                  ),
+                                  child: const Text(
+                                    'MANAGEMENT',
+                                    style: TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.w700,
+                                      letterSpacing: 2.0,
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(height: 10),
+                                const Text(
+                                  'Staff Section',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 32,
+                                    fontWeight: FontWeight.w900,
+                                    height: 1.05,
+                                  ),
+                                ),
+                                const SizedBox(height: 7),
+                                Text(
+                                  'Create and manage staff accounts',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    color: Colors.white.withOpacity(0.82),
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w400,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  @override
+  bool shouldRebuild(covariant _StaffSectionHeaderDelegate oldDelegate) {
+    return topPadding != oldDelegate.topPadding ||
+        minExtentHeight != oldDelegate.minExtentHeight ||
+        maxExtentHeight != oldDelegate.maxExtentHeight ||
+        onBack != oldDelegate.onBack;
+  }
+}
+
+class _StaffTabHeaderDelegate extends SliverPersistentHeaderDelegate {
+  final Widget child;
+
+  const _StaffTabHeaderDelegate({required this.child});
+
+  @override
+  double get minExtent => 58;
+
+  @override
+  double get maxExtent => 58;
+
+  @override
+  Widget build(
+    BuildContext context,
+    double shrinkOffset,
+    bool overlapsContent,
+  ) {
+    return Container(
+      color: const Color(0xFFFDF6F9),
+      alignment: Alignment.center,
+      child: child,
+    );
+  }
+
+  @override
+  bool shouldRebuild(covariant _StaffTabHeaderDelegate oldDelegate) {
+    return child != oldDelegate.child;
+  }
+}
+
 class StaffApplicant {
   final String id;
   final String role;

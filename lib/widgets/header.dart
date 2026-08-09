@@ -2,7 +2,7 @@
 
 class Header extends StatelessWidget {
   final VoidCallback? onMessage;
-  const Header({Key? key, this.onMessage}) : super(key: key);
+  const Header({super.key, this.onMessage});
 
   @override
   Widget build(BuildContext context) {

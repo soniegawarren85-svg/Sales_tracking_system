@@ -631,7 +631,7 @@ class _SignupScreenState extends State<SignupScreen>
                 child: Image.asset(
                   'Assets/Image/ob.jpg',
                   fit: BoxFit.cover,
-                  errorBuilder: (_, __, ___) => const Center(
+                  errorBuilder: (_, _, _) => const Center(
                     child: Icon(
                       Icons.cake_rounded,
                       color: Colors.white,

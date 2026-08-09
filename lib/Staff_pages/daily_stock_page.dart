@@ -4,12 +4,15 @@ import 'dart:math';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/inventory.dart';
 import '../services/inventory_service.dart';
+import '../services/local_database_sync_service.dart';
+import '../widgets/top_notification.dart';
 
 // ─── Theme Constants ─────────────────────────────────────────────────────────
 class _AppColors {
@@ -25,7 +28,28 @@ class _AppColors {
   static const divider = Color(0xFFF1CDE0);
 }
 
-const double _staffBottomNavReserve = 24;
+const double _staffBottomNavReserve = 56;
+
+class _CachedDoc {
+  final String id;
+  final Map<String, dynamic> _data;
+
+  const _CachedDoc(this.id, this._data);
+
+  factory _CachedDoc.fromFirestore(
+    QueryDocumentSnapshot<Map<String, dynamic>> doc,
+  ) {
+    return _CachedDoc(doc.id, doc.data());
+  }
+
+  factory _CachedDoc.fromMap(Map<String, dynamic> map) {
+    final id = map['_localDocId']?.toString() ?? map['id']?.toString() ?? '';
+    final data = Map<String, dynamic>.from(map)..remove('_localDocId');
+    return _CachedDoc(id, data);
+  }
+
+  Map<String, dynamic> data() => _data;
+}
 
 class _OrderConfirmationResult {
   final double totalDue;
@@ -60,7 +84,9 @@ bool _isExpiredItem(String expirationDate) {
 }
 
 class DailyStockPage extends StatefulWidget {
-  const DailyStockPage({super.key});
+  final bool openRefundOnStart;
+
+  const DailyStockPage({super.key, this.openRefundOnStart = false});
 
   @override
   State<DailyStockPage> createState() => _DailyStockPageState();
@@ -71,13 +97,18 @@ class _DailyStockPageState extends State<DailyStockPage>
   List<Inventory> entries = [];
   late TextEditingController _budgetRequestController;
   late TextEditingController _orderSearchController;
-  late final Stream<QuerySnapshot> _rootSalesInventoryStream;
-  Stream<QuerySnapshot>? _staffInventoryStreamCache;
+  late final Stream<QuerySnapshot<Map<String, dynamic>>>
+  _rootSalesInventoryStream;
+  Stream<QuerySnapshot<Map<String, dynamic>>>? _staffInventoryStreamCache;
   StreamSubscription? _pendingOrdersSubscription;
   Map<String, int> _cart = {};
   final Map<String, Map<String, dynamic>> _cartItemLookup = {};
   final Map<String, TextEditingController> _qtyControllers = {};
   List<String> _staffInventoryIds = const [];
+  List<_CachedDoc> _cachedStaffInventoryDocs = const [];
+  List<_CachedDoc> _cachedSalesInventoryDocs = const [];
+  List<_CachedDoc> _cachedStaffRequestDocs = const [];
+  List<_CachedDoc> _cachedBranchDocs = const [];
   bool _seniorDiscount = false;
   bool _pwdDiscount = false;
   bool _showBundleView = false;
@@ -90,6 +121,7 @@ class _DailyStockPageState extends State<DailyStockPage>
   double _approvedBudget = 0.0;
   double _cashDrawer = 0.0;
   bool _hasPendingOrders = false;
+  bool _openedInitialRefund = false;
   int _pendingOrderCount = 0;
   String? _currentUserId;
   String _staffPublicId = '';
@@ -98,6 +130,7 @@ class _DailyStockPageState extends State<DailyStockPage>
   Timer? _dailyReportTimer;
   StreamSubscription? _budgetSubscription;
   StreamSubscription? _cashDrawerSubscription;
+  bool _tabletOrientationLocked = false;
 
   // ─── Animation Controllers ──────────────────────────────────────────────
   late AnimationController _headerAnimCtrl;
@@ -119,6 +152,7 @@ class _DailyStockPageState extends State<DailyStockPage>
     _rootSalesInventoryStream = FirebaseFirestore.instance
         .collection('sales_inventory')
         .snapshots();
+    _loadLocalOrderCache();
     _initStaffIdentity();
     InventoryService().initialize().then((_) {
       if (!mounted) return;
@@ -175,6 +209,59 @@ class _DailyStockPageState extends State<DailyStockPage>
     });
   }
 
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final shortestSide = MediaQuery.sizeOf(context).shortestSide;
+    final canLockOrientation =
+        !kIsWeb &&
+        (defaultTargetPlatform == TargetPlatform.android ||
+            defaultTargetPlatform == TargetPlatform.iOS);
+    if (!canLockOrientation && _tabletOrientationLocked) {
+      _tabletOrientationLocked = false;
+      SystemChrome.setPreferredOrientations(DeviceOrientation.values);
+    }
+    if (canLockOrientation &&
+        shortestSide >= 600 &&
+        !_tabletOrientationLocked) {
+      _tabletOrientationLocked = true;
+      SystemChrome.setPreferredOrientations(const [
+        DeviceOrientation.landscapeLeft,
+        DeviceOrientation.landscapeRight,
+      ]);
+    }
+  }
+
+  Future<void> _loadLocalOrderCache() async {
+    try {
+      final service = LocalDatabaseSyncService();
+      final staffInventory = await service.getCachedCollection(
+        'staff_inventory',
+      );
+      final salesInventory = await service.getCachedCollection(
+        'sales_inventory',
+      );
+      final staffRequests = await service.getCachedCollection('staff_requests');
+      final branches = await service.getCachedCollection('branches');
+      if (!mounted) return;
+      setState(() {
+        _cachedStaffInventoryDocs = staffInventory
+            .map(_CachedDoc.fromMap)
+            .toList();
+        _cachedSalesInventoryDocs = salesInventory
+            .map(_CachedDoc.fromMap)
+            .toList();
+        _cachedStaffRequestDocs = staffRequests
+            .map(_CachedDoc.fromMap)
+            .toList();
+        _cachedBranchDocs = branches.map(_CachedDoc.fromMap).toList();
+        _staffInventoryStreamCache = null;
+      });
+    } catch (e) {
+      debugPrint('Local order cache load failed: $e');
+    }
+  }
+
   Future<void> _loadStaffInventoryIds(String uid) async {
     final ids = <String>{};
     try {
@@ -216,6 +303,10 @@ class _DailyStockPageState extends State<DailyStockPage>
       }
     } catch (_) {}
 
+    if (ids.isEmpty) {
+      ids.addAll(await _staffInventoryIdsFromCache(uid));
+    }
+
     if (!mounted) return;
     setState(() {
       _staffInventoryIds = ids.toList();
@@ -225,6 +316,61 @@ class _DailyStockPageState extends State<DailyStockPage>
     _subscribeToCashDrawer(uid);
     _runAutomaticDailyReportCheck(uid);
     _scheduleNextDailyReportCheck();
+  }
+
+  Future<Set<String>> _staffInventoryIdsFromCache(String uid) async {
+    var staffRequests = _cachedStaffRequestDocs;
+    var branches = _cachedBranchDocs;
+    var staffInventory = _cachedStaffInventoryDocs;
+    if (staffRequests.isEmpty || branches.isEmpty || staffInventory.isEmpty) {
+      final service = LocalDatabaseSyncService();
+      staffRequests = (await service.getCachedCollection(
+        'staff_requests',
+      )).map(_CachedDoc.fromMap).toList();
+      branches = (await service.getCachedCollection(
+        'branches',
+      )).map(_CachedDoc.fromMap).toList();
+      staffInventory = (await service.getCachedCollection(
+        'staff_inventory',
+      )).map(_CachedDoc.fromMap).toList();
+    }
+
+    final ids = <String>{};
+    Map<String, dynamic>? staffData;
+    for (final doc in staffRequests) {
+      final data = doc.data();
+      final matchesDoc = doc.id == uid;
+      final matchesUid =
+          data['uid']?.toString() == uid || data['userId']?.toString() == uid;
+      if (matchesDoc || matchesUid) {
+        staffData = data;
+        break;
+      }
+    }
+
+    final publicStaffId = staffData?['staffId']?.toString().trim() ?? '';
+    final branchIds = (staffData?['branchIds'] as List<dynamic>? ?? [])
+        .map((id) => id.toString().trim())
+        .where((id) => id.isNotEmpty);
+    ids.addAll(branchIds);
+
+    for (final doc in branches) {
+      final data = doc.data();
+      final staffIds = data['staffIds'];
+      if (staffIds is! List) continue;
+      final normalized = staffIds.map((id) => id.toString().trim()).toSet();
+      if (normalized.contains(uid) ||
+          (publicStaffId.isNotEmpty && normalized.contains(publicStaffId))) {
+        ids.add(doc.id);
+      }
+    }
+
+    for (final doc in staffInventory) {
+      final data = doc.data();
+      final staffId = data['staffId']?.toString().trim() ?? '';
+      if (staffId.isNotEmpty) ids.add(staffId);
+    }
+    return ids;
   }
 
   Future<void> _loadCashierToolsPreference(String uid) async {
@@ -244,7 +390,7 @@ class _DailyStockPageState extends State<DailyStockPage>
     await prefs.setBool('daily_stock_tools_collapsed_$uid', collapsed);
   }
 
-  Stream<QuerySnapshot> _staffInventoryStream() {
+  Stream<QuerySnapshot<Map<String, dynamic>>> _staffInventoryStream() {
     if (_staffInventoryStreamCache != null) {
       return _staffInventoryStreamCache!;
     }
@@ -283,6 +429,9 @@ class _DailyStockPageState extends State<DailyStockPage>
     _headerAnimCtrl.dispose();
     _budgetCardAnimCtrl.dispose();
     _pulseAnimCtrl.dispose();
+    if (_tabletOrientationLocked) {
+      SystemChrome.setPreferredOrientations(DeviceOrientation.values);
+    }
     super.dispose();
   }
 
@@ -543,6 +692,35 @@ class _DailyStockPageState extends State<DailyStockPage>
     }
   }
 
+  bool _sameOrderItemSnapshot(
+    List<Map<String, dynamic>> previous,
+    List<Map<String, dynamic>> next,
+  ) {
+    if (previous.length != next.length) return false;
+    for (var i = 0; i < previous.length; i++) {
+      final previousItem = previous[i];
+      final nextItem = next[i];
+      if (_cartKey(previousItem) != _cartKey(nextItem) ||
+          previousItem['stock']?.toString() != nextItem['stock']?.toString() ||
+          previousItem['price']?.toString() != nextItem['price']?.toString()) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  void _cacheLatestOrderItems(List<Map<String, dynamic>> orderItems) {
+    final changed = !_sameOrderItemSnapshot(_latestOrderItems, orderItems);
+    _latestOrderItems = orderItems;
+    _rememberOrderItems(orderItems);
+
+    if (changed && _isTabletLandscape(context)) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) setState(() {});
+      });
+    }
+  }
+
   String _groupKeyForItem(Map<String, dynamic> item) {
     final savedKey = item['groupKey']?.toString() ?? '';
     if (savedKey.isNotEmpty) return savedKey;
@@ -620,9 +798,8 @@ class _DailyStockPageState extends State<DailyStockPage>
       final isBundle = data['isBundle'] == true;
 
       if (isBundle) {
-        final int bundleStock = data['bundleCount'] is num
-            ? (data['bundleCount'] as num).toInt()
-            : int.tryParse(data['bundleCount']?.toString() ?? '') ?? 0;
+        if (_hasExpiredBundleItem(data)) continue;
+        final int bundleStock = _availableBundleStock(data);
         if (bundleStock <= 0) continue;
 
         final groupKey = sourceId.isEmpty ? name : '$sourceId|$name';
@@ -929,11 +1106,18 @@ class _DailyStockPageState extends State<DailyStockPage>
                 .toList();
 
             return Dialog(
+              insetPadding: const EdgeInsets.symmetric(
+                horizontal: 20,
+                vertical: 24,
+              ),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(28),
               ),
               backgroundColor: Colors.transparent,
               child: Container(
+                constraints: BoxConstraints(
+                  maxHeight: MediaQuery.of(context).size.height * 0.86,
+                ),
                 decoration: BoxDecoration(
                   color: Colors.white,
                   borderRadius: BorderRadius.circular(28),
@@ -1008,77 +1192,39 @@ class _DailyStockPageState extends State<DailyStockPage>
                         ],
                       ),
                     ),
-                    Padding(
-                      padding: const EdgeInsets.all(22),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Wrap(
-                            spacing: 8,
-                            runSpacing: 8,
-                            children: [
-                              _MiniTag(
-                                label: 'Size: $selectedSize',
-                                bgColor: _AppColors.primary.withOpacity(0.10),
-                                textColor: _AppColors.primary,
-                              ),
-                              _MiniTag(
-                                label:
-                                    'Base ₱${_parsePrice(chosen['basePrice']).toStringAsFixed(0)}',
-                                bgColor: const Color(0xFFE8F5E9),
-                                textColor: const Color(0xFF2E7D32),
-                              ),
-                              if (_parsePrice(chosen['sizePriceDelta']) > 0)
+                    Flexible(
+                      child: SingleChildScrollView(
+                        padding: const EdgeInsets.all(22),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Wrap(
+                              spacing: 8,
+                              runSpacing: 8,
+                              children: [
+                                _MiniTag(
+                                  label: 'Size: $selectedSize',
+                                  bgColor: _AppColors.primary.withOpacity(0.10),
+                                  textColor: _AppColors.primary,
+                                ),
                                 _MiniTag(
                                   label:
-                                      '+₱${_parsePrice(chosen['sizePriceDelta']).toStringAsFixed(0)} size',
-                                  bgColor: const Color(0xFFFFF3E0),
-                                  textColor: const Color(0xFFE65100),
+                                      'Base ₱${_parsePrice(chosen['basePrice']).toStringAsFixed(0)}',
+                                  bgColor: const Color(0xFFE8F5E9),
+                                  textColor: const Color(0xFF2E7D32),
                                 ),
-                            ],
-                          ),
-                          const SizedBox(height: 18),
-                          const Text(
-                            'Size',
-                            style: TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w800,
-                              color: _AppColors.textMid,
+                                if (_parsePrice(chosen['sizePriceDelta']) > 0)
+                                  _MiniTag(
+                                    label:
+                                        '+₱${_parsePrice(chosen['sizePriceDelta']).toStringAsFixed(0)} size',
+                                    bgColor: const Color(0xFFFFF3E0),
+                                    textColor: const Color(0xFFE65100),
+                                  ),
+                              ],
                             ),
-                          ),
-                          const SizedBox(height: 10),
-                          Wrap(
-                            spacing: 8,
-                            runSpacing: 8,
-                            children: sizeGroups.keys.map((sizeName) {
-                              final isSelected = selectedSize == sizeName;
-                              return ChoiceChip(
-                                selected: isSelected,
-                                onSelected: (_) => setDialogState(() {
-                                  selectedSize = sizeName;
-                                  selectedAddon = '';
-                                }),
-                                label: Text(sizeName),
-                                labelStyle: TextStyle(
-                                  color: isSelected
-                                      ? Colors.white
-                                      : _AppColors.primary,
-                                  fontWeight: FontWeight.w800,
-                                ),
-                                selectedColor: _AppColors.primary,
-                                backgroundColor: _AppColors.cardBg,
-                                side: BorderSide(
-                                  color: isSelected
-                                      ? _AppColors.primary
-                                      : _AppColors.border,
-                                ),
-                              );
-                            }).toList(),
-                          ),
-                          const SizedBox(height: 18),
-                          if (addonOptions.isNotEmpty) ...[
+                            const SizedBox(height: 18),
                             const Text(
-                              'Add-ons',
+                              'Size',
                               style: TextStyle(
                                 fontSize: 14,
                                 fontWeight: FontWeight.w800,
@@ -1089,37 +1235,119 @@ class _DailyStockPageState extends State<DailyStockPage>
                             Wrap(
                               spacing: 8,
                               runSpacing: 8,
-                              children: [
-                                ...addonOptions.map((addonName) {
-                                  final addonVariant = activeSizeVariants
-                                      .firstWhere(
-                                        (variant) =>
-                                            (variant['addonName']?.toString() ??
-                                                '') ==
-                                            addonName,
-                                        orElse: () => activeSizeVariants.first,
-                                      );
-                                  final addonPrice = _parsePrice(
-                                    addonVariant['addonPriceDelta'],
-                                  );
-                                  final isSelected = selectedAddon == addonName;
+                              children: sizeGroups.keys.map((sizeName) {
+                                final isSelected = selectedSize == sizeName;
+                                return ChoiceChip(
+                                  selected: isSelected,
+                                  onSelected: (_) => setDialogState(() {
+                                    selectedSize = sizeName;
+                                    selectedAddon = '';
+                                  }),
+                                  label: Text(sizeName),
+                                  labelStyle: TextStyle(
+                                    color: isSelected
+                                        ? Colors.white
+                                        : _AppColors.primary,
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                  selectedColor: _AppColors.primary,
+                                  backgroundColor: _AppColors.cardBg,
+                                  side: BorderSide(
+                                    color: isSelected
+                                        ? _AppColors.primary
+                                        : _AppColors.border,
+                                  ),
+                                );
+                              }).toList(),
+                            ),
+                            const SizedBox(height: 18),
+                            if (addonOptions.isNotEmpty) ...[
+                              const Text(
+                                'Add-ons',
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w800,
+                                  color: _AppColors.textMid,
+                                ),
+                              ),
+                              const SizedBox(height: 10),
+                              Wrap(
+                                spacing: 8,
+                                runSpacing: 8,
+                                children: [
+                                  ...addonOptions.map((addonName) {
+                                    final addonVariant = activeSizeVariants
+                                        .firstWhere(
+                                          (variant) =>
+                                              (variant['addonName']
+                                                      ?.toString() ??
+                                                  '') ==
+                                              addonName,
+                                          orElse: () =>
+                                              activeSizeVariants.first,
+                                        );
+                                    final addonPrice = _parsePrice(
+                                      addonVariant['addonPriceDelta'],
+                                    );
+                                    final isSelected =
+                                        selectedAddon == addonName;
+                                    return ChoiceChip(
+                                      selected: isSelected,
+                                      onSelected: (_) => setDialogState(
+                                        () => selectedAddon = isSelected
+                                            ? ''
+                                            : addonName,
+                                      ),
+                                      label: Text(
+                                        addonPrice > 0
+                                            ? '$addonName (+₱${addonPrice.toStringAsFixed(0)})'
+                                            : addonName,
+                                      ),
+                                      labelStyle: TextStyle(
+                                        color: isSelected
+                                            ? Colors.white
+                                            : _AppColors.primary,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                      selectedColor: _AppColors.primary,
+                                      backgroundColor: _AppColors.cardBg,
+                                      side: BorderSide(
+                                        color: isSelected
+                                            ? _AppColors.primary
+                                            : _AppColors.border,
+                                      ),
+                                    );
+                                  }),
+                                ],
+                              ),
+                              const SizedBox(height: 18),
+                            ],
+                            const Text(
+                              'Sugar Level',
+                              style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w800,
+                                color: _AppColors.textMid,
+                              ),
+                            ),
+                            const SizedBox(height: 10),
+                            Wrap(
+                              spacing: 8,
+                              runSpacing: 8,
+                              children: ['0%', '25%', '50%', '75%', '100%'].map(
+                                (sugar) {
+                                  final isSelected = selectedSugar == sugar;
                                   return ChoiceChip(
                                     selected: isSelected,
                                     onSelected: (_) => setDialogState(
-                                      () => selectedAddon = isSelected
-                                          ? ''
-                                          : addonName,
+                                      () => selectedSugar = sugar,
                                     ),
-                                    label: Text(
-                                      addonPrice > 0
-                                          ? '$addonName (+₱${addonPrice.toStringAsFixed(0)})'
-                                          : addonName,
-                                    ),
+                                    label: Text(sugar),
                                     labelStyle: TextStyle(
                                       color: isSelected
                                           ? Colors.white
                                           : _AppColors.primary,
-                                      fontWeight: FontWeight.w700,
+                                      fontWeight: FontWeight.w800,
                                     ),
                                     selectedColor: _AppColors.primary,
                                     backgroundColor: _AppColors.cardBg,
@@ -1129,133 +1357,97 @@ class _DailyStockPageState extends State<DailyStockPage>
                                           : _AppColors.border,
                                     ),
                                   );
-                                }),
-                              ],
+                                },
+                              ).toList(),
                             ),
                             const SizedBox(height: 18),
-                          ],
-                          const Text(
-                            'Sugar Level',
-                            style: TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w800,
-                              color: _AppColors.textMid,
-                            ),
-                          ),
-                          const SizedBox(height: 10),
-                          Wrap(
-                            spacing: 8,
-                            runSpacing: 8,
-                            children: ['0%', '25%', '50%', '75%', '100%'].map((
-                              sugar,
-                            ) {
-                              final isSelected = selectedSugar == sugar;
-                              return ChoiceChip(
-                                selected: isSelected,
-                                onSelected: (_) =>
-                                    setDialogState(() => selectedSugar = sugar),
-                                label: Text(sugar),
-                                labelStyle: TextStyle(
-                                  color: isSelected
-                                      ? Colors.white
-                                      : _AppColors.primary,
-                                  fontWeight: FontWeight.w800,
+                            Row(
+                              children: [
+                                const Text(
+                                  'Quantity',
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w800,
+                                    color: _AppColors.textMid,
+                                  ),
                                 ),
-                                selectedColor: _AppColors.primary,
-                                backgroundColor: _AppColors.cardBg,
-                                side: BorderSide(
-                                  color: isSelected
-                                      ? _AppColors.primary
-                                      : _AppColors.border,
-                                ),
-                              );
-                            }).toList(),
-                          ),
-                          const SizedBox(height: 18),
-                          Row(
-                            children: [
-                              const Text(
-                                'Quantity',
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.w800,
-                                  color: _AppColors.textMid,
-                                ),
-                              ),
-                              const Spacer(),
-                              Container(
-                                decoration: BoxDecoration(
-                                  color: _AppColors.cardBg,
-                                  borderRadius: BorderRadius.circular(14),
-                                  border: Border.all(color: _AppColors.border),
-                                ),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    _StepperButton(
-                                      icon: Icons.remove_rounded,
-                                      onPressed: quantity > 1
-                                          ? () => setDialogState(
-                                              () => quantity -= 1,
-                                            )
-                                          : null,
+                                const Spacer(),
+                                Container(
+                                  decoration: BoxDecoration(
+                                    color: _AppColors.cardBg,
+                                    borderRadius: BorderRadius.circular(14),
+                                    border: Border.all(
+                                      color: _AppColors.border,
                                     ),
-                                    SizedBox(
-                                      width: 48,
-                                      child: Center(
-                                        child: Text(
-                                          '$quantity',
-                                          style: const TextStyle(
-                                            fontSize: 15,
-                                            fontWeight: FontWeight.w800,
-                                            color: _AppColors.primary,
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      _StepperButton(
+                                        icon: Icons.remove_rounded,
+                                        onPressed: quantity > 1
+                                            ? () => setDialogState(
+                                                () => quantity -= 1,
+                                              )
+                                            : null,
+                                      ),
+                                      SizedBox(
+                                        width: 48,
+                                        child: Center(
+                                          child: Text(
+                                            '$quantity',
+                                            style: const TextStyle(
+                                              fontSize: 15,
+                                              fontWeight: FontWeight.w800,
+                                              color: _AppColors.primary,
+                                            ),
                                           ),
                                         ),
                                       ),
-                                    ),
-                                    _StepperButton(
-                                      icon: Icons.add_rounded,
-                                      onPressed: () =>
-                                          setDialogState(() => quantity += 1),
-                                      isAdd: true,
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 20),
-                          Container(
-                            width: double.infinity,
-                            padding: const EdgeInsets.all(14),
-                            decoration: BoxDecoration(
-                              color: _AppColors.primary.withOpacity(0.08),
-                              borderRadius: BorderRadius.circular(16),
-                            ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  'Selected: ${chosen['variant'] ?? selectedSize}',
-                                  style: const TextStyle(
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w700,
-                                    color: _AppColors.textSoft,
-                                  ),
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  '₱${totalPrice.toStringAsFixed(2)}',
-                                  style: const TextStyle(
-                                    fontSize: 22,
-                                    fontWeight: FontWeight.w900,
-                                    color: _AppColors.primary,
+                                      _StepperButton(
+                                        icon: Icons.add_rounded,
+                                        onPressed: () =>
+                                            setDialogState(() => quantity += 1),
+                                        isAdd: true,
+                                      ),
+                                    ],
                                   ),
                                 ),
                               ],
                             ),
-                          ),
-                        ],
+                            const SizedBox(height: 20),
+                            Container(
+                              width: double.infinity,
+                              padding: const EdgeInsets.all(14),
+                              decoration: BoxDecoration(
+                                color: _AppColors.primary.withOpacity(0.08),
+                                borderRadius: BorderRadius.circular(16),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Selected: ${chosen['variant'] ?? selectedSize}',
+                                    style: const TextStyle(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w700,
+                                      color: _AppColors.textSoft,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    '₱${totalPrice.toStringAsFixed(2)}',
+                                    style: const TextStyle(
+                                      fontSize: 22,
+                                      fontWeight: FontWeight.w900,
+                                      color: _AppColors.primary,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                     Padding(
@@ -2583,36 +2775,13 @@ class _DailyStockPageState extends State<DailyStockPage>
   }
 
   void _showStyledSnackBar(String message, {bool isError = false}) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        behavior: SnackBarBehavior.floating,
-        backgroundColor: isError
-            ? const Color(0xFFB71C1C)
-            : _AppColors.primaryDark,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-        margin: const EdgeInsets.all(16),
-        content: Row(
-          children: [
-            Icon(
-              isError
-                  ? Icons.error_outline_rounded
-                  : Icons.check_circle_outline_rounded,
-              color: Colors.white,
-              size: 18,
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Text(
-                message,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
+    showTopNotification(
+      context,
+      message,
+      isError: isError,
+      backgroundColor: isError
+          ? const Color(0xFFB71C1C)
+          : _AppColors.primaryDark,
     );
   }
 
@@ -3777,416 +3946,482 @@ class _DailyStockPageState extends State<DailyStockPage>
 
       final drawerId = _drawerIdForOrder(orderItems);
       final isCashPayment = paymentMode.toLowerCase() == 'cash';
-      if (_currentUserId != null && drawerId.isNotEmpty && isCashPayment) {
-        final drawerRef = FirebaseFirestore.instance
-            .collection('staff_cash_drawer')
-            .doc(drawerId);
-
-        await FirebaseFirestore.instance.runTransaction((transaction) async {
-          final drawerSnapshot = await transaction.get(drawerRef);
-          final currentBalance = drawerSnapshot.exists
-              ? (drawerSnapshot.data()?['balance'] as num?)?.toDouble() ?? 0.0
-              : 0.0;
-          if (change > 0 && currentBalance + 0.001 < change) {
-            throw Exception(
-              'Cash drawer is not enough for ₱${change.toStringAsFixed(2)} change.',
-            );
-          }
-          final newCashBalance = currentBalance + paidAmount - change;
-          transaction.set(drawerRef, {
-            'balance': newCashBalance,
-            'updatedAt': DateTime.now(),
-            'staffId': drawerId,
-            'branchId': drawerId,
-            'handledByStaffId': _currentUserId,
-          }, SetOptions(merge: true));
-        });
-
-        // Update inventory stock for each sold item
-        final Map<String, Map<String, dynamic>> itemVariantQtys = {};
-
-        for (final entry in _validCartEntries(orderItems)) {
+      final completedSalePayload = {
+        'userId': _currentUserId,
+        if (drawerId.isNotEmpty) 'branchId': drawerId,
+        'salesId': salesId,
+        'subtotal': subtotal,
+        'discount': discountAmount,
+        'discountType': discountType,
+        'discountProofId': discountProofId.trim(),
+        'total': orderTotal,
+        'paidAmount': paidAmount,
+        'change': change,
+        'paymentMode': paymentMode,
+        'gcashTransactionId': gcashTransactionId.trim(),
+        'cashDrawerDelta': isCashPayment ? paidAmount - change : 0.0,
+        'items': receiptEntries.map((entry) {
           final item = orderItems.firstWhere(
             (element) => _cartKey(element) == entry.key,
             orElse: () => {},
           );
-          if (item.isEmpty) continue;
+          return {
+            'name': item['name'],
+            'variant': item['variant'],
+            'price': item['price'],
+            'quantity': entry.value,
+            'category': item['category'] ?? '',
+            'isBundle': item['isBundle'] == true,
+            'isCoffee': item['isCoffee'] == true,
+            'coffeeSize': item['coffeeSize'] ?? '',
+            'coffeeId': item['coffeeId'] ?? '',
+            'basePrice': item['basePrice'] ?? 0,
+            'sizePriceDelta': item['sizePriceDelta'] ?? 0,
+            'addonName': item['addonName'] ?? '',
+            'addonPriceDelta': item['addonPriceDelta'] ?? 0,
+            'sourceInventoryId': item['sourceInventoryId'] ?? '',
+          };
+        }).toList(),
+        'timestamp': DateTime.now(),
+        'status': 'completed',
+      };
 
-          final itemName = item['name'] as String?;
-          final variantName = item['variant'] as String?;
-          final sourceInventoryId = item['sourceInventoryId']?.toString() ?? '';
-          final staffInventoryDocId =
-              item['staffInventoryDocId']?.toString() ?? '';
-          final qtyRemoved = entry.value;
+      await LocalDatabaseSyncService().recordCompletedSale(
+        completedSalePayload,
+      );
 
-          if (itemName != null && itemName.isNotEmpty) {
-            final remainingKey = sourceInventoryId.isNotEmpty
-                ? sourceInventoryId
-                : itemName;
-            final variantIndex = item['variantSlot'] is num
-                ? (item['variantSlot'] as num).toInt()
-                : orderItems.indexWhere((e) {
-                    return e['name'] == itemName &&
-                        e['variant'] == variantName &&
-                        (e['sourceInventoryId']?.toString() ?? '') ==
-                            sourceInventoryId;
-                  });
-            final tracker = itemVariantQtys.putIfAbsent(
-              remainingKey,
-              () => {
-                'itemName': itemName,
-                'sourceInventoryId': sourceInventoryId,
-                'variants': <int, int>{},
-                'starting': <int, int>{},
-                'remaining': <int, int>{},
-                'items': <int, Map<String, dynamic>>{},
-              },
-            );
-            final variants = tracker['variants'] as Map<int, int>;
-            if (variantIndex >= 0) {
-              variants[variantIndex] =
-                  (variants[variantIndex] ?? 0) + qtyRemoved;
-              final startingBySlot = tracker['starting'] as Map<int, int>;
-              final remainingBySlot = tracker['remaining'] as Map<int, int>;
-              final itemBySlot =
-                  tracker['items'] as Map<int, Map<String, dynamic>>;
-              final currentStock = _parseInt(item['stock']);
-              final startingStock = _parseInt(
-                item['startingStock'],
-                fallback: currentStock,
-              );
-              startingBySlot[variantIndex] = max(
-                startingBySlot[variantIndex] ?? 0,
-                startingStock,
-              );
-              remainingBySlot[variantIndex] = max(
-                0,
-                (remainingBySlot[variantIndex] ?? currentStock) - qtyRemoved,
-              );
-              itemBySlot[variantIndex] = {
-                'id': item['itemId'] ?? item['id'] ?? '',
-                'name': (variantName?.isNotEmpty ?? false)
-                    ? variantName
-                    : itemName,
-                'variant': variantName ?? '',
-                'price': item['price'] ?? 0,
-                'quantity': startingStock,
-                'reducedQuantity': _parseInt(item['reducedQuantity']),
-                'isBundle': item['isBundle'] == true,
-                'isCoffee': item['isCoffee'] == true,
-                'coffeeId': item['coffeeId'] ?? '',
-                'coffeeSize': item['coffeeSize'] ?? '',
-                'addonName': item['addonName'] ?? '',
-                'sugarLevel': item['sugarLevel'] ?? '',
-              };
-            }
+      if (mounted) {
+        setState(() {
+          if (isCashPayment) {
+            _cashDrawer = max(0, _cashDrawer + paidAmount - change);
+          }
+          _cart.clear();
+          _showCartReview = false;
+          _selectedGroupName = null;
+          _seniorDiscount = false;
+          _pwdDiscount = false;
+          for (final controller in _qtyControllers.values) {
+            controller.clear();
+          }
+        });
+      }
 
-            final stockDocs = <DocumentSnapshot<Map<String, dynamic>>>[];
-            if (staffInventoryDocId.isNotEmpty) {
-              final stockDoc = await FirebaseFirestore.instance
-                  .collection('staff_inventory')
-                  .doc(staffInventoryDocId)
-                  .get();
-              if (stockDoc.exists) stockDocs.add(stockDoc);
-            }
-            if (stockDocs.isEmpty) {
-              var staffQuery = FirebaseFirestore.instance
-                  .collection('staff_inventory')
-                  .where('staffId', isEqualTo: _currentUserId)
-                  .where('name', isEqualTo: itemName);
-              if (sourceInventoryId.isNotEmpty) {
-                staffQuery = staffQuery.where(
-                  'sourceInventoryId',
-                  isEqualTo: sourceInventoryId,
-                );
+      unawaited(
+        Future<void>(() async {
+          try {
+            if (_currentUserId != null && drawerId.isNotEmpty) {
+              final drawerRef = FirebaseFirestore.instance
+                  .collection('staff_cash_drawer')
+                  .doc(drawerId);
+
+              if (isCashPayment) {
+                await FirebaseFirestore.instance.runTransaction((
+                  transaction,
+                ) async {
+                  final drawerSnapshot = await transaction.get(drawerRef);
+                  final currentBalance = drawerSnapshot.exists
+                      ? (drawerSnapshot.data()?['balance'] as num?)
+                                ?.toDouble() ??
+                            0.0
+                      : 0.0;
+                  if (change > 0 && currentBalance + 0.001 < change) {
+                    throw Exception(
+                      'Cash drawer is not enough for ₱${change.toStringAsFixed(2)} change.',
+                    );
+                  }
+                  final newCashBalance = currentBalance + paidAmount - change;
+                  transaction.set(drawerRef, {
+                    'balance': newCashBalance,
+                    'updatedAt': DateTime.now(),
+                    'staffId': drawerId,
+                    'branchId': drawerId,
+                    'handledByStaffId': _currentUserId,
+                  }, SetOptions(merge: true));
+                });
+              } else {
+                await FirebaseFirestore.instance.runTransaction((
+                  transaction,
+                ) async {
+                  final drawerSnapshot = await transaction.get(drawerRef);
+                  final currentGcashBalance = drawerSnapshot.exists
+                      ? (drawerSnapshot.data()?['gcashBalance'] as num?)
+                                ?.toDouble() ??
+                            0.0
+                      : 0.0;
+                  transaction.set(drawerRef, {
+                    'gcashBalance': currentGcashBalance + orderTotal,
+                    'lastGcashTransactionId': gcashTransactionId.trim(),
+                    'updatedAt': DateTime.now(),
+                    'staffId': drawerId,
+                    'branchId': drawerId,
+                    'handledByStaffId': _currentUserId,
+                  }, SetOptions(merge: true));
+                });
               }
-              final querySnapshot = await staffQuery.get();
-              stockDocs.addAll(querySnapshot.docs);
-            }
 
-            for (final doc in stockDocs) {
-              final data = doc.data() as Map<String, dynamic>?;
-              if (data == null) continue;
+              // Update inventory stock for each sold item
+              final Map<String, Map<String, dynamic>> itemVariantQtys = {};
 
-              if (data['isBundle'] == true) {
-                final int currentBundleCount = data['bundleCount'] is num
-                    ? (data['bundleCount'] as num).toInt()
-                    : int.tryParse(data['bundleCount']?.toString() ?? '') ?? 0;
-                final updatedBundleCount = max(
-                  0,
-                  currentBundleCount - qtyRemoved,
+              for (final entry in _validCartEntries(orderItems)) {
+                final item = orderItems.firstWhere(
+                  (element) => _cartKey(element) == entry.key,
+                  orElse: () => {},
                 );
-                await doc.reference.update({'bundleCount': updatedBundleCount});
-                if (updatedBundleCount == 0) {
-                  await _notifyAdminOutOfStock(
-                    itemName: itemName,
-                    variantName: '',
-                    sourceInventoryId: sourceInventoryId,
-                    staffInventoryDocId: doc.id,
+                if (item.isEmpty) continue;
+
+                final itemName = item['name'] as String?;
+                final variantName = item['variant'] as String?;
+                final sourceInventoryId =
+                    item['sourceInventoryId']?.toString() ?? '';
+                final staffInventoryDocId =
+                    item['staffInventoryDocId']?.toString() ?? '';
+                final qtyRemoved = entry.value;
+
+                if (itemName != null && itemName.isNotEmpty) {
+                  final remainingKey = sourceInventoryId.isNotEmpty
+                      ? sourceInventoryId
+                      : itemName;
+                  final variantIndex = item['variantSlot'] is num
+                      ? (item['variantSlot'] as num).toInt()
+                      : orderItems.indexWhere((e) {
+                          return e['name'] == itemName &&
+                              e['variant'] == variantName &&
+                              (e['sourceInventoryId']?.toString() ?? '') ==
+                                  sourceInventoryId;
+                        });
+                  final tracker = itemVariantQtys.putIfAbsent(
+                    remainingKey,
+                    () => {
+                      'itemName': itemName,
+                      'sourceInventoryId': sourceInventoryId,
+                      'variants': <int, int>{},
+                      'starting': <int, int>{},
+                      'remaining': <int, int>{},
+                      'items': <int, Map<String, dynamic>>{},
+                    },
                   );
-                }
-                continue;
-              }
+                  final variants = tracker['variants'] as Map<int, int>;
+                  if (variantIndex >= 0) {
+                    variants[variantIndex] =
+                        (variants[variantIndex] ?? 0) + qtyRemoved;
+                    final startingBySlot = tracker['starting'] as Map<int, int>;
+                    final remainingBySlot =
+                        tracker['remaining'] as Map<int, int>;
+                    final itemBySlot =
+                        tracker['items'] as Map<int, Map<String, dynamic>>;
+                    final currentStock = _parseInt(item['stock']);
+                    final startingStock = _parseInt(
+                      item['startingStock'],
+                      fallback: currentStock,
+                    );
+                    startingBySlot[variantIndex] = max(
+                      startingBySlot[variantIndex] ?? 0,
+                      startingStock,
+                    );
+                    remainingBySlot[variantIndex] = max(
+                      0,
+                      (remainingBySlot[variantIndex] ?? currentStock) -
+                          qtyRemoved,
+                    );
+                    itemBySlot[variantIndex] = {
+                      'id': item['itemId'] ?? item['id'] ?? '',
+                      'name': (variantName?.isNotEmpty ?? false)
+                          ? variantName
+                          : itemName,
+                      'variant': variantName ?? '',
+                      'price': item['price'] ?? 0,
+                      'quantity': startingStock,
+                      'reducedQuantity': _parseInt(item['reducedQuantity']),
+                      'isBundle': item['isBundle'] == true,
+                      'isCoffee': item['isCoffee'] == true,
+                      'coffeeId': item['coffeeId'] ?? '',
+                      'coffeeSize': item['coffeeSize'] ?? '',
+                      'addonName': item['addonName'] ?? '',
+                      'sugarLevel': item['sugarLevel'] ?? '',
+                    };
+                  }
 
-              final itemsList = data['items'] as List<dynamic>? ?? [];
-              var matchedStockItem = false;
-              final updatedItems = itemsList.map((itemData) {
-                if (itemData is Map<String, dynamic>) {
-                  final savedVariant = itemData['name']?.toString() ?? '';
-                  final savedVariantAlt = itemData['variant']?.toString() ?? '';
-                  final savedId = itemData['id']?.toString() ?? '';
-                  final wantedId =
-                      item['itemId']?.toString() ??
-                      item['id']?.toString() ??
-                      '';
-                  final matchesVariant =
-                      (wantedId.isNotEmpty && savedId == wantedId) ||
-                      (wantedId.isEmpty &&
-                          (savedVariant == (variantName ?? '') ||
-                              savedVariantAlt == (variantName ?? '')));
-
-                  if (matchesVariant) {
-                    matchedStockItem = true;
-                    // Update the stock for this variant.
-                    // If 'stock' field is missing, use 'startingStock' as the base.
-                    int currentStock;
-                    if (itemData.containsKey('stock') &&
-                        itemData['stock'] != null) {
-                      currentStock = itemData['stock'] is num
-                          ? (itemData['stock'] as num).toInt()
-                          : int.tryParse(itemData['stock']?.toString() ?? '') ??
-                                0;
-                    } else {
-                      currentStock = itemData['startingStock'] is num
-                          ? (itemData['startingStock'] as num).toInt()
-                          : int.tryParse(
-                                  itemData['startingStock']?.toString() ?? '',
-                                ) ??
-                                0;
-                    }
-
-                    final updatedStock = max(0, currentStock - qtyRemoved);
-                    if (updatedStock == 0) {
-                      unawaited(
-                        _notifyAdminOutOfStock(
-                          itemName: itemName,
-                          variantName: variantName ?? '',
-                          sourceInventoryId: sourceInventoryId,
-                          staffInventoryDocId: doc.id,
-                        ),
+                  final stockDocs = <DocumentSnapshot<Map<String, dynamic>>>[];
+                  if (staffInventoryDocId.isNotEmpty) {
+                    final stockDoc = await FirebaseFirestore.instance
+                        .collection('staff_inventory')
+                        .doc(staffInventoryDocId)
+                        .get();
+                    if (stockDoc.exists) stockDocs.add(stockDoc);
+                  }
+                  if (stockDocs.isEmpty) {
+                    var staffQuery = FirebaseFirestore.instance
+                        .collection('staff_inventory')
+                        .where('staffId', isEqualTo: _currentUserId)
+                        .where('name', isEqualTo: itemName);
+                    if (sourceInventoryId.isNotEmpty) {
+                      staffQuery = staffQuery.where(
+                        'sourceInventoryId',
+                        isEqualTo: sourceInventoryId,
                       );
                     }
-                    return {...itemData, 'stock': updatedStock};
+                    final querySnapshot = await staffQuery.get();
+                    stockDocs.addAll(querySnapshot.docs);
                   }
-                }
-                return itemData;
-              }).toList();
 
-              if (!matchedStockItem) {
-                final currentStock = _stockForItem(item, variantIndex);
-                final updatedStock = max(0, currentStock - qtyRemoved);
-                updatedItems.add({
-                  'id': item['itemId']?.toString().isNotEmpty == true
-                      ? item['itemId']
-                      : (item['id'] ?? ''),
-                  'name': variantName ?? itemName,
-                  'price': item['price'] ?? 0,
-                  'startingStock': item['startingStock'] ?? currentStock,
-                  'stock': updatedStock,
-                  'expirationDate': item['expirationDate'] ?? '',
-                  'imageUrl': item['imageUrl'] ?? '',
-                });
-                if (updatedStock == 0) {
-                  unawaited(
-                    _notifyAdminOutOfStock(
-                      itemName: itemName,
-                      variantName: variantName ?? '',
-                      sourceInventoryId: sourceInventoryId,
-                      staffInventoryDocId: doc.id,
-                    ),
+                  for (final doc in stockDocs) {
+                    final data = doc.data() as Map<String, dynamic>?;
+                    if (data == null) continue;
+
+                    if (data['isBundle'] == true) {
+                      final int currentBundleCount = data['bundleCount'] is num
+                          ? (data['bundleCount'] as num).toInt()
+                          : int.tryParse(
+                                  data['bundleCount']?.toString() ?? '',
+                                ) ??
+                                0;
+                      final updatedBundleCount = max(
+                        0,
+                        currentBundleCount - qtyRemoved,
+                      );
+                      var remainingToMarkSold = qtyRemoved;
+                      final updatedBundleInstances =
+                          _bundleInstancesFromData(data).map((instance) {
+                            if (remainingToMarkSold <= 0) return instance;
+                            final status =
+                                instance['status']?.toString().toLowerCase() ??
+                                'available';
+                            if (status != 'available') return instance;
+                            remainingToMarkSold--;
+                            return {
+                              ...instance,
+                              'status': 'sold',
+                              'soldAt': Timestamp.now(),
+                              'salesId': salesId,
+                            };
+                          }).toList();
+                      await doc.reference.update({
+                        'bundleCount': updatedBundleCount,
+                        'bundleInstances': updatedBundleInstances,
+                        'updatedAt': FieldValue.serverTimestamp(),
+                      });
+                      if (updatedBundleCount == 0) {
+                        await _notifyAdminOutOfStock(
+                          itemName: itemName,
+                          variantName: '',
+                          sourceInventoryId: sourceInventoryId,
+                          staffInventoryDocId: doc.id,
+                        );
+                      }
+                      continue;
+                    }
+
+                    final itemsList = data['items'] as List<dynamic>? ?? [];
+                    var matchedStockItem = false;
+                    final updatedItems = itemsList.map((itemData) {
+                      if (itemData is Map<String, dynamic>) {
+                        final savedVariant = itemData['name']?.toString() ?? '';
+                        final savedVariantAlt =
+                            itemData['variant']?.toString() ?? '';
+                        final savedId = itemData['id']?.toString() ?? '';
+                        final wantedId =
+                            item['itemId']?.toString() ??
+                            item['id']?.toString() ??
+                            '';
+                        final matchesVariant =
+                            (wantedId.isNotEmpty && savedId == wantedId) ||
+                            (wantedId.isEmpty &&
+                                (savedVariant == (variantName ?? '') ||
+                                    savedVariantAlt == (variantName ?? '')));
+
+                        if (matchesVariant) {
+                          matchedStockItem = true;
+                          // Update the stock for this variant.
+                          // If 'stock' field is missing, use 'startingStock' as the base.
+                          int currentStock;
+                          if (itemData.containsKey('stock') &&
+                              itemData['stock'] != null) {
+                            currentStock = itemData['stock'] is num
+                                ? (itemData['stock'] as num).toInt()
+                                : int.tryParse(
+                                        itemData['stock']?.toString() ?? '',
+                                      ) ??
+                                      0;
+                          } else {
+                            currentStock = itemData['startingStock'] is num
+                                ? (itemData['startingStock'] as num).toInt()
+                                : int.tryParse(
+                                        itemData['startingStock']?.toString() ??
+                                            '',
+                                      ) ??
+                                      0;
+                          }
+
+                          final updatedStock = max(
+                            0,
+                            currentStock - qtyRemoved,
+                          );
+                          if (updatedStock == 0) {
+                            unawaited(
+                              _notifyAdminOutOfStock(
+                                itemName: itemName,
+                                variantName: variantName ?? '',
+                                sourceInventoryId: sourceInventoryId,
+                                staffInventoryDocId: doc.id,
+                              ),
+                            );
+                          }
+                          return {...itemData, 'stock': updatedStock};
+                        }
+                      }
+                      return itemData;
+                    }).toList();
+
+                    if (!matchedStockItem) {
+                      final currentStock = _stockForItem(item, variantIndex);
+                      final updatedStock = max(0, currentStock - qtyRemoved);
+                      updatedItems.add({
+                        'id': item['itemId']?.toString().isNotEmpty == true
+                            ? item['itemId']
+                            : (item['id'] ?? ''),
+                        'name': variantName ?? itemName,
+                        'price': item['price'] ?? 0,
+                        'startingStock': item['startingStock'] ?? currentStock,
+                        'stock': updatedStock,
+                        'expirationDate': item['expirationDate'] ?? '',
+                        'imageUrl': item['imageUrl'] ?? '',
+                      });
+                      if (updatedStock == 0) {
+                        unawaited(
+                          _notifyAdminOutOfStock(
+                            itemName: itemName,
+                            variantName: variantName ?? '',
+                            sourceInventoryId: sourceInventoryId,
+                            staffInventoryDocId: doc.id,
+                          ),
+                        );
+                      }
+                    }
+
+                    await doc.reference.update({'items': updatedItems});
+                  }
+
+                  final trackedBundleItemName =
+                      (variantName != null && variantName.isNotEmpty)
+                      ? variantName
+                      : itemName;
+                  await _consumeBundleTrackedStock(
+                    itemName: trackedBundleItemName,
+                    quantity: qtyRemoved,
                   );
                 }
               }
 
-              await doc.reference.update({'items': updatedItems});
-            }
+              // Update remaining stock in InventoryService for each item sold
+              for (final itemEntry in itemVariantQtys.values) {
+                final itemName = itemEntry['itemName']?.toString() ?? '';
+                final sourceInventoryId =
+                    itemEntry['sourceInventoryId']?.toString() ?? '';
+                final variantQtys = itemEntry['variants'] as Map<int, int>;
+                final startingBySlot = itemEntry['starting'] as Map<int, int>;
+                final remainingBySlot = itemEntry['remaining'] as Map<int, int>;
+                final itemBySlot =
+                    itemEntry['items'] as Map<int, Map<String, dynamic>>;
 
-            final trackedBundleItemName =
-                (variantName != null && variantName.isNotEmpty)
-                ? variantName
-                : itemName;
-            await _consumeBundleTrackedStock(
-              itemName: trackedBundleItemName,
-              quantity: qtyRemoved,
-            );
-          }
-        }
+                int qtyA = 0, qtyB = 0, qtyC = 0;
 
-        // Update remaining stock in InventoryService for each item sold
-        for (final itemEntry in itemVariantQtys.values) {
-          final itemName = itemEntry['itemName']?.toString() ?? '';
-          final sourceInventoryId =
-              itemEntry['sourceInventoryId']?.toString() ?? '';
-          final variantQtys = itemEntry['variants'] as Map<int, int>;
-          final startingBySlot = itemEntry['starting'] as Map<int, int>;
-          final remainingBySlot = itemEntry['remaining'] as Map<int, int>;
-          final itemBySlot =
-              itemEntry['items'] as Map<int, Map<String, dynamic>>;
+                // Map variant indices to A, B, C positions
+                for (final variantEntry in variantQtys.entries) {
+                  final variantIndex = variantEntry.key;
+                  final qty = variantEntry.value;
 
-          int qtyA = 0, qtyB = 0, qtyC = 0;
+                  if (variantIndex == 0)
+                    qtyA = qty;
+                  else if (variantIndex == 1)
+                    qtyB = qty;
+                  else if (variantIndex == 2)
+                    qtyC = qty;
+                }
 
-          // Map variant indices to A, B, C positions
-          for (final variantEntry in variantQtys.entries) {
-            final variantIndex = variantEntry.key;
-            final qty = variantEntry.value;
+                // Compute revenue for this item entry after any discount allocation.
+                final itemLineTotal = itemBySlot.entries.fold<double>(0.0, (
+                  sum,
+                  variantEntry,
+                ) {
+                  final idx = variantEntry.key;
+                  final price =
+                      double.tryParse(
+                        variantEntry.value['price']?.toString() ?? '0',
+                      ) ??
+                      0.0;
+                  final qty = variantQtys[idx] ?? 0;
+                  return sum + (price * qty);
+                });
+                final double revenueShare;
+                if (subtotal > 0 && discountAmount > 0) {
+                  final discountShare =
+                      itemLineTotal / subtotal * discountAmount;
+                  revenueShare = (itemLineTotal - discountShare).clamp(
+                    0.0,
+                    double.infinity,
+                  );
+                } else {
+                  revenueShare = itemLineTotal;
+                }
 
-            if (variantIndex == 0)
-              qtyA = qty;
-            else if (variantIndex == 1)
-              qtyB = qty;
-            else if (variantIndex == 2)
-              qtyC = qty;
-          }
-
-          // Compute revenue for this item entry after any discount allocation.
-          final itemLineTotal = itemBySlot.entries.fold<double>(0.0, (
-            sum,
-            variantEntry,
-          ) {
-            final idx = variantEntry.key;
-            final price =
-                double.tryParse(
-                  variantEntry.value['price']?.toString() ?? '0',
-                ) ??
-                0.0;
-            final qty = variantQtys[idx] ?? 0;
-            return sum + (price * qty);
-          });
-          final double revenueShare;
-          if (subtotal > 0 && discountAmount > 0) {
-            final discountShare = itemLineTotal / subtotal * discountAmount;
-            revenueShare = (itemLineTotal - discountShare).clamp(
-              0.0,
-              double.infinity,
-            );
-          } else {
-            revenueShare = itemLineTotal;
-          }
-
-          // Subtract from remaining stock
-          if (qtyA > 0 || qtyB > 0 || qtyC > 0) {
-            final existing = InventoryService().getEntryForItemToday(
-              itemName,
-              sourceInventoryId: sourceInventoryId,
-            );
-            if (existing != null) {
-              InventoryService().addRemainingStockForItem(
-                itemName: itemName,
-                quantityA: remainingBySlot[0] ?? existing.safeRemainingA,
-                quantityB: remainingBySlot[1] ?? existing.safeRemainingB,
-                quantityC: remainingBySlot[2] ?? existing.safeRemainingC,
-                startingA: max(
-                  existing.safeStartingA,
-                  startingBySlot[0] ?? existing.safeStartingA,
-                ),
-                startingB: max(
-                  existing.safeStartingB,
-                  startingBySlot[1] ?? existing.safeStartingB,
-                ),
-                startingC: max(
-                  existing.safeStartingC,
-                  startingBySlot[2] ?? existing.safeStartingC,
-                ),
-                saleRevenue: revenueShare,
-                sourceInventoryId: sourceInventoryId,
-                items: existing.safeItems.isNotEmpty
-                    ? existing.safeItems
-                    : [0, 1, 2]
+                // Subtract from remaining stock
+                if (qtyA > 0 || qtyB > 0 || qtyC > 0) {
+                  final existing = InventoryService().getEntryForItemToday(
+                    itemName,
+                    sourceInventoryId: sourceInventoryId,
+                  );
+                  if (existing != null) {
+                    InventoryService().addRemainingStockForItem(
+                      itemName: itemName,
+                      quantityA: remainingBySlot[0] ?? existing.safeRemainingA,
+                      quantityB: remainingBySlot[1] ?? existing.safeRemainingB,
+                      quantityC: remainingBySlot[2] ?? existing.safeRemainingC,
+                      startingA: max(
+                        existing.safeStartingA,
+                        startingBySlot[0] ?? existing.safeStartingA,
+                      ),
+                      startingB: max(
+                        existing.safeStartingB,
+                        startingBySlot[1] ?? existing.safeStartingB,
+                      ),
+                      startingC: max(
+                        existing.safeStartingC,
+                        startingBySlot[2] ?? existing.safeStartingC,
+                      ),
+                      saleRevenue: revenueShare,
+                      sourceInventoryId: sourceInventoryId,
+                      items: existing.safeItems.isNotEmpty
+                          ? existing.safeItems
+                          : [0, 1, 2]
+                                .where((slot) => itemBySlot.containsKey(slot))
+                                .map((slot) => itemBySlot[slot]!)
+                                .toList(),
+                    );
+                  } else {
+                    InventoryService().addRemainingStockForItem(
+                      itemName: itemName,
+                      quantityA: remainingBySlot[0] ?? 0,
+                      quantityB: remainingBySlot[1] ?? 0,
+                      quantityC: remainingBySlot[2] ?? 0,
+                      startingA: startingBySlot[0] ?? 0,
+                      startingB: startingBySlot[1] ?? 0,
+                      startingC: startingBySlot[2] ?? 0,
+                      saleRevenue: revenueShare,
+                      sourceInventoryId: sourceInventoryId,
+                      items: [0, 1, 2]
                           .where((slot) => itemBySlot.containsKey(slot))
                           .map((slot) => itemBySlot[slot]!)
                           .toList(),
-              );
-            } else {
-              InventoryService().addRemainingStockForItem(
-                itemName: itemName,
-                quantityA: remainingBySlot[0] ?? 0,
-                quantityB: remainingBySlot[1] ?? 0,
-                quantityC: remainingBySlot[2] ?? 0,
-                startingA: startingBySlot[0] ?? 0,
-                startingB: startingBySlot[1] ?? 0,
-                startingC: startingBySlot[2] ?? 0,
-                saleRevenue: revenueShare,
-                sourceInventoryId: sourceInventoryId,
-                items: [0, 1, 2]
-                    .where((slot) => itemBySlot.containsKey(slot))
-                    .map((slot) => itemBySlot[slot]!)
-                    .toList(),
-              );
+                    );
+                  }
+                }
+              }
             }
+          } catch (e) {
+            debugPrint('Background order sync failed: $e');
           }
-        }
-
-        // Record the order in completed_sales (separate from inventory)
-        await FirebaseFirestore.instance.collection('completed_sales').add({
-          'userId': _currentUserId,
-          if (drawerId.isNotEmpty) 'branchId': drawerId,
-          'salesId': salesId,
-          'subtotal': subtotal,
-          'discount': discountAmount,
-          'discountType': discountType,
-          'discountProofId': discountProofId.trim(),
-          'total': orderTotal,
-          'paidAmount': paidAmount,
-          'change': change,
-          'paymentMode': paymentMode,
-          'gcashTransactionId': gcashTransactionId.trim(),
-          'cashDrawerDelta': isCashPayment ? paidAmount - change : 0.0,
-          'items': receiptEntries.map((entry) {
-            final item = orderItems.firstWhere(
-              (element) => _cartKey(element) == entry.key,
-              orElse: () => {},
-            );
-            return {
-              'name': item['name'],
-              'variant': item['variant'],
-              'price': item['price'],
-              'quantity': entry.value,
-              'category': item['category'] ?? '',
-              'isBundle': item['isBundle'] == true,
-              'isCoffee': item['isCoffee'] == true,
-              'coffeeSize': item['coffeeSize'] ?? '',
-              'coffeeId': item['coffeeId'] ?? '',
-              'basePrice': item['basePrice'] ?? 0,
-              'sizePriceDelta': item['sizePriceDelta'] ?? 0,
-              'addonName': item['addonName'] ?? '',
-              'addonPriceDelta': item['addonPriceDelta'] ?? 0,
-              'sourceInventoryId': item['sourceInventoryId'] ?? '',
-            };
-          }).toList(),
-          'timestamp': FieldValue.serverTimestamp(),
-          'status': 'completed',
-        });
-      }
-      if (!mounted) return;
-      // Success receipt is shown after inventory refresh.
-      setState(() {
-        _cart.clear();
-        _showCartReview = false;
-        _selectedGroupName = null;
-        _seniorDiscount = false;
-        _pwdDiscount = false;
-        for (final controller in _qtyControllers.values) {
-          controller.clear();
-        }
-      });
-
-      // Refresh inventory data to show updated stock
-      await InventoryService().initialize();
-      if (mounted) {
-        setState(() {
-          entries = InventoryService().currentUserEntries;
-        });
-      }
+        }),
+      );
       if (!mounted) return;
       await _showOrderSuccessDialog(
         salesId: salesId,
@@ -5149,100 +5384,128 @@ class _DailyStockPageState extends State<DailyStockPage>
   Future<List<Map<String, dynamic>>> _loadRefundableShelfItems(
     List<Map<String, dynamic>> fallbackItems,
   ) async {
+    final userId = FirebaseAuth.instance.currentUser?.uid;
+    if (userId == null) return [];
+
+    final activeInventoryKeys = await _loadActiveRefundInventoryKeys(userId);
+    if (activeInventoryKeys.isEmpty) return [];
+
+    final snapshot = await FirebaseFirestore.instance
+        .collection('completed_sales')
+        .orderBy('timestamp', descending: true)
+        .limit(100)
+        .get();
+    final itemsByKey = <String, Map<String, dynamic>>{};
+
+    for (final doc in snapshot.docs) {
+      final data = doc.data();
+      if (data['userId'] != userId) continue;
+      final type = data['type']?.toString().toLowerCase() ?? 'sale';
+      final status = data['status']?.toString().toLowerCase() ?? '';
+      if (type == 'refund' || status == 'refund') continue;
+
+      final rawItems = data['items'] as List<dynamic>? ?? [];
+      for (final raw in rawItems) {
+        if (raw is! Map) continue;
+        final item = Map<String, dynamic>.from(raw);
+        if (item['isBundle'] == true) continue;
+        if (!activeInventoryKeys.contains(_cartKey(item))) continue;
+        final soldQty = _parseInt(item['quantity'], fallback: 1);
+        final refundedQty = _parseInt(item['refunded']);
+        final maxRefundQty = soldQty - refundedQty;
+        if (maxRefundQty <= 0) continue;
+
+        item['stock'] = maxRefundQty;
+        item['startingStock'] = maxRefundQty;
+        item['soldQuantity'] = soldQty;
+        item['maxRefundQty'] = maxRefundQty;
+        item['salesDocId'] = doc.id;
+        item['salesId'] = data['salesId']?.toString() ?? doc.id;
+        itemsByKey.putIfAbsent(_cartKey(item), () => item);
+      }
+    }
+
+    return itemsByKey.values.toList();
+  }
+
+  Future<Set<String>> _loadActiveRefundInventoryKeys(String userId) async {
     final ids = _staffInventoryIds
         .where((id) => id.trim().isNotEmpty)
         .toSet()
         .take(10)
         .toList();
-    if (ids.isEmpty) return _knownOrderItems(fallbackItems);
-
     Query<Map<String, dynamic>> query = FirebaseFirestore.instance.collection(
       'staff_inventory',
     );
-    query = ids.length == 1
+    query = ids.isEmpty
+        ? query.where('staffId', isEqualTo: userId)
+        : ids.length == 1
         ? query.where('staffId', isEqualTo: ids.first)
         : query.where('staffId', whereIn: ids);
-    final snapshot = await query.get();
-    final docs = <Map<String, dynamic>>[];
 
+    final snapshot = await query.get();
+    final keys = <String>{};
     for (final doc in snapshot.docs) {
       final data = doc.data();
-      if (data['isDeleted'] == true || data['isBundle'] == true) continue;
-      final sourceId = data['sourceInventoryId']?.toString() ?? doc.id;
-
+      if (data['isDeleted'] == true ||
+          data['isBundle'] == true ||
+          data['isAddon'] == true) {
+        continue;
+      }
+      final sourceInventoryId =
+          data['sourceInventoryId']?.toString().trim().isNotEmpty == true
+          ? data['sourceInventoryId'].toString()
+          : doc.id;
+      final categoryName = data['name']?.toString() ?? 'Item';
       if (data['isCoffee'] == true) {
         final basePrice = _parsePrice(data['basePrice']);
-        final rawSizes = (data['sizes'] as List<dynamic>? ?? [])
+        final sizes = (data['sizes'] as List<dynamic>? ?? [])
             .whereType<Map>()
             .map((size) => Map<String, dynamic>.from(size))
             .where((size) => (size['name']?.toString().trim() ?? '').isNotEmpty)
             .toList();
-        final sizes = rawSizes.isEmpty
+        final safeSizes = sizes.isEmpty
             ? [
                 {'name': 'Regular', 'priceDelta': 0},
               ]
-            : rawSizes;
-        final addons = (data['addonOptions'] as List<dynamic>? ?? [])
-            .whereType<Map>()
-            .map((addon) => Map<String, dynamic>.from(addon))
-            .where(
-              (addon) => (addon['name']?.toString().trim() ?? '').isNotEmpty,
-            )
-            .toList();
-        final coffeeItems = <Map<String, dynamic>>[];
-        for (var sizeIndex = 0; sizeIndex < sizes.length; sizeIndex++) {
-          final size = sizes[sizeIndex];
-          final sizeName = size['name']?.toString().trim() ?? 'Regular';
-          final sizeDelta = _parsePrice(size['priceDelta']);
-          final sizePrice = basePrice + sizeDelta;
-          coffeeItems.add({
-            'id': '$sourceId|size:$sizeName|addon:none',
-            'name': data['name'] ?? 'Coffee',
-            'variant': sizeName,
-            'flavor': data['name'] ?? 'Coffee',
-            'price': sizePrice,
-            'stock': 999,
-            'startingStock': 999,
-            'isCoffee': true,
-            'coffeeSize': sizeName,
-            'addonName': '',
-            'coffeeId': data['coffeeId'] ?? '',
-            'variantSlot': sizeIndex,
-          });
-          for (final addon in addons) {
-            final addonName = addon['name']?.toString().trim() ?? '';
-            final addonDelta = _parsePrice(addon['priceDelta']);
-            coffeeItems.add({
-              'id':
-                  '$sourceId|size:$sizeName|addon:${addonName.toLowerCase().replaceAll(' ', '_')}',
-              'name': data['name'] ?? 'Coffee',
-              'variant': '$sizeName + $addonName',
-              'flavor': data['name'] ?? 'Coffee',
-              'price': sizePrice + addonDelta,
-              'stock': 999,
-              'startingStock': 999,
+            : sizes;
+        for (final size in safeSizes) {
+          final sizeName = size['name']?.toString() ?? 'Regular';
+          keys.add(
+            _cartKey({
+              'sourceInventoryId': sourceInventoryId,
+              'name': categoryName,
+              'variant': sizeName,
+              'price': basePrice + _parsePrice(size['priceDelta']),
               'isCoffee': true,
-              'coffeeSize': sizeName,
-              'addonName': addonName,
-              'coffeeId': data['coffeeId'] ?? '',
-              'variantSlot': sizeIndex,
-            });
-          }
+            }),
+          );
         }
-        docs.add({
-          ...data,
-          'staffDocId': doc.id,
-          'sourceInventoryId': sourceId,
-          'items': coffeeItems,
-        });
         continue;
       }
 
-      docs.add({...data, 'staffDocId': doc.id, 'sourceInventoryId': sourceId});
+      for (final raw in (data['items'] as List<dynamic>? ?? [])) {
+        if (raw is! Map) continue;
+        final item = Map<String, dynamic>.from(raw);
+        final expirationDate = item['expirationDate']?.toString() ?? '';
+        final stock = _parseInt(
+          item['stock'],
+          fallback: _parseInt(item['startingStock']),
+        );
+        if (_isExpiredItem(expirationDate) || stock <= 0) continue;
+        keys.add(
+          _cartKey({
+            ...item,
+            'sourceInventoryId': sourceInventoryId,
+            'name': categoryName,
+            'variant': item['name']?.toString() ?? 'Item',
+            'itemId': item['id']?.toString() ?? '',
+            'isCoffee': false,
+          }),
+        );
+      }
     }
-
-    final loadedItems = _orderItemsFromDocs(docs);
-    return loadedItems.isEmpty ? _knownOrderItems(fallbackItems) : loadedItems;
+    return keys;
   }
 
   Future<void> _showRefundDialog(List<Map<String, dynamic>> orderItems) async {
@@ -5292,8 +5555,7 @@ class _DailyStockPageState extends State<DailyStockPage>
       for (final doc in bundleSnapshot.docs) {
         final data = doc.data();
         if (data['isDeleted'] == true) continue;
-        final bundleCount = _parseInt(data['bundleCount']);
-        if (bundleCount <= 0) continue;
+        if (_hasExpiredBundleItem(data)) continue;
         final instances = _bundleInstancesFromData(data);
         for (
           var instanceIndex = 0;
@@ -5303,7 +5565,7 @@ class _DailyStockPageState extends State<DailyStockPage>
           final instance = instances[instanceIndex];
           final status =
               instance['status']?.toString().toLowerCase() ?? 'available';
-          if (status != 'available') continue;
+          if (status != 'sold' && status != 'inCategory') continue;
           final items = instance['items'] as List<dynamic>? ?? [];
           for (final item in items) {
             if (item is! Map<String, dynamic>) continue;
@@ -5425,12 +5687,18 @@ class _DailyStockPageState extends State<DailyStockPage>
                 : selectedBundleOption?['maxRefundQty'] as int? ?? 0;
 
             return Dialog(
+              insetPadding: const EdgeInsets.symmetric(
+                horizontal: 24,
+                vertical: 24,
+              ),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(24),
               ),
               backgroundColor: Colors.transparent,
               child: Container(
-                constraints: const BoxConstraints(maxHeight: 660),
+                constraints: BoxConstraints(
+                  maxHeight: MediaQuery.of(context).size.height * 0.84,
+                ),
                 padding: const EdgeInsets.all(20),
                 decoration: BoxDecoration(
                   color: Colors.white,
@@ -5737,6 +6005,50 @@ class _DailyStockPageState extends State<DailyStockPage>
     final itemName = item['name']?.toString() ?? '';
     final variantName = item['variant']?.toString() ?? '';
     final price = _parsePrice(item['price']);
+    final salesDocId = item['salesDocId']?.toString() ?? '';
+
+    if (salesDocId.isNotEmpty) {
+      final saleRef = FirebaseFirestore.instance
+          .collection('completed_sales')
+          .doc(salesDocId);
+      await FirebaseFirestore.instance.runTransaction((transaction) async {
+        final snapshot = await transaction.get(saleRef);
+        final data = snapshot.data();
+        if (data == null) return;
+
+        var itemFound = false;
+        final updatedItems = (data['items'] as List<dynamic>? ?? []).map((raw) {
+          if (raw is! Map) return raw;
+          final saleItem = Map<String, dynamic>.from(raw);
+          final saleName = saleItem['name']?.toString() ?? '';
+          final saleVariant = saleItem['variant']?.toString() ?? '';
+          final salePrice = _parsePrice(saleItem['price']);
+          final matches =
+              saleName == itemName &&
+              saleVariant == variantName &&
+              (salePrice - price).abs() < 0.01;
+          if (!matches || itemFound) return raw;
+
+          itemFound = true;
+          final soldQty = _parseInt(saleItem['quantity'], fallback: 1);
+          final currentRefunded = _parseInt(saleItem['refunded']);
+          final nextRefunded = currentRefunded + quantity;
+          if (nextRefunded > soldQty) {
+            throw Exception('Refund quantity is greater than sold quantity');
+          }
+          return {...saleItem, 'refunded': nextRefunded};
+        }).toList();
+
+        if (!itemFound) {
+          throw Exception('Sold item not found');
+        }
+
+        transaction.update(saleRef, {
+          'items': updatedItems,
+          'lastRefundedAt': FieldValue.serverTimestamp(),
+        });
+      });
+    }
 
     await _saveRefundTransaction(
       source: source,
@@ -5845,11 +6157,16 @@ class _DailyStockPageState extends State<DailyStockPage>
 
     final firestore = FirebaseFirestore.instance;
     final refundAmount = amount.abs();
+    final refundId = _generateRefundId();
     final salesRef = firestore.collection('completed_sales').doc();
     final drawerId = _activeDrawerId();
     final drawerRef = firestore
         .collection('staff_cash_drawer')
         .doc(drawerId.isNotEmpty ? drawerId : userId);
+    final currentUser = FirebaseAuth.instance.currentUser;
+    final staffName = (currentUser?.displayName?.trim().isNotEmpty == true)
+        ? currentUser!.displayName!
+        : currentUser?.email?.split('@').first ?? 'Staff';
 
     final balanceAfterRefund = await firestore.runTransaction<double>((
       transaction,
@@ -5861,7 +6178,7 @@ class _DailyStockPageState extends State<DailyStockPage>
 
       transaction.set(salesRef, {
         'userId': userId,
-        'salesId': _generateRefundId(),
+        'salesId': refundId,
         'type': 'refund',
         'source': source,
         'reason': reason,
@@ -5894,6 +6211,61 @@ class _DailyStockPageState extends State<DailyStockPage>
         _cashDrawer = balanceAfterRefund;
       });
     }
+
+    final itemCount = items.fold<int>(
+      0,
+      (sum, item) =>
+          sum + (int.tryParse(item['quantity']?.toString() ?? '') ?? 0),
+    );
+    await firestore.collection('admin_notifications').add({
+      'title': 'Refund recorded',
+      'message':
+          '$staffName refunded $itemCount item${itemCount == 1 ? '' : 's'} for ₱${refundAmount.toStringAsFixed(2)}. Cash drawer was deducted.',
+      'category': 'Refunds',
+      'type': 'refund',
+      'salesId': refundId,
+      'staffId': userId,
+      'staffName': staffName,
+      if (drawerId.isNotEmpty) 'branchId': drawerId,
+      'amount': refundAmount,
+      'itemCount': itemCount,
+      'reason': reason,
+      'source': source,
+      'isRead': false,
+      'createdAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  int _availableBundleStock(Map<String, dynamic> bundleData) {
+    final instances = _bundleInstancesFromData(bundleData);
+    if (instances.isEmpty) {
+      return _parseInt(bundleData['bundleCount']);
+    }
+    return instances.where((instance) {
+      final status =
+          instance['status']?.toString().trim().toLowerCase() ?? 'available';
+      return status == 'available';
+    }).length;
+  }
+
+  bool _hasExpiredBundleItem(Map<String, dynamic> bundleData) {
+    final rawItems = bundleData['items'] as List<dynamic>? ?? [];
+    for (final raw in rawItems) {
+      if (raw is! Map) continue;
+      final item = Map<String, dynamic>.from(raw);
+      final expirationDate = item['expirationDate']?.toString() ?? '';
+      if (_isExpiredItem(expirationDate)) return true;
+    }
+    for (final instance in _bundleInstancesFromData(bundleData)) {
+      final items = instance['items'] as List<dynamic>? ?? [];
+      for (final raw in items) {
+        if (raw is! Map) continue;
+        final item = Map<String, dynamic>.from(raw);
+        final expirationDate = item['expirationDate']?.toString() ?? '';
+        if (_isExpiredItem(expirationDate)) return true;
+      }
+    }
+    return false;
   }
 
   Future<void> _showOrderConfirmationDialog(
@@ -5933,7 +6305,8 @@ class _DailyStockPageState extends State<DailyStockPage>
             change = paidAmount - totalDue;
             final hasRequiredProof =
                 !hasDiscount || discountProofController.text.trim().isNotEmpty;
-            final hasGcashProof = paymentMode != 'GCash' ||
+            final hasGcashProof =
+                paymentMode != 'GCash' ||
                 gcashTransactionController.text.trim().isNotEmpty;
             final hasEnoughCashForChange =
                 paymentMode == 'GCash' ||
@@ -6167,8 +6540,8 @@ class _DailyStockPageState extends State<DailyStockPage>
                               onChanged: (value) => setState(() {
                                 paymentMode = value ?? 'Cash';
                                 if (paymentMode == 'GCash') {
-                                  paymentController.text =
-                                      totalDue.toStringAsFixed(2);
+                                  paymentController.text = totalDue
+                                      .toStringAsFixed(2);
                                 }
                               }),
                             ),
@@ -6497,52 +6870,63 @@ class _DailyStockPageState extends State<DailyStockPage>
       child: SlideTransition(
         position: _headerSlide,
         child: Container(
-          padding: const EdgeInsets.fromLTRB(4, 8, 4, 4),
+          padding: const EdgeInsets.fromLTRB(18, 18, 18, 18),
+          decoration: BoxDecoration(
+            gradient: const LinearGradient(
+              colors: [_AppColors.primary, _AppColors.primaryLight],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            borderRadius: BorderRadius.circular(24),
+            boxShadow: [
+              BoxShadow(
+                color: _AppColors.primary.withOpacity(0.22),
+                blurRadius: 22,
+                offset: const Offset(0, 10),
+              ),
+            ],
+          ),
           child: Row(
             children: [
               Container(
-                width: 54,
-                height: 54,
+                width: 44,
+                height: 44,
                 decoration: BoxDecoration(
-                  gradient: const LinearGradient(
-                    colors: [_AppColors.primaryDark, _AppColors.primaryLight],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                  ),
-                  borderRadius: BorderRadius.circular(18),
-                  boxShadow: [
-                    BoxShadow(
-                      color: _AppColors.primary.withOpacity(0.3),
-                      blurRadius: 14,
-                      offset: const Offset(0, 6),
-                    ),
-                  ],
+                  color: Colors.white.withOpacity(0.18),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: Colors.white.withOpacity(0.24)),
                 ),
                 child: const Icon(
-                  Icons.storefront_rounded,
+                  Icons.point_of_sale_rounded,
                   color: Colors.white,
-                  size: 28,
+                  size: 23,
                 ),
               ),
               const SizedBox(width: 14),
-              Expanded(
+              const Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text(
+                    Text(
                       'Sales Process',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         fontSize: 22,
                         fontWeight: FontWeight.w900,
-                        color: _AppColors.primary,
+                        color: Colors.white,
                         letterSpacing: 0.3,
                       ),
                     ),
+                    SizedBox(height: 3),
                     Text(
-                      _formattedToday(),
-                      style: const TextStyle(
+                      'Build and review staff orders',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
                         fontSize: 12,
-                        color: _AppColors.textSoft,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.white70,
                       ),
                     ),
                   ],
@@ -6553,25 +6937,6 @@ class _DailyStockPageState extends State<DailyStockPage>
         ),
       ),
     );
-  }
-
-  String _formattedToday() {
-    final now = DateTime.now();
-    const months = [
-      'Jan',
-      'Feb',
-      'Mar',
-      'Apr',
-      'May',
-      'Jun',
-      'Jul',
-      'Aug',
-      'Sep',
-      'Oct',
-      'Nov',
-      'Dec',
-    ];
-    return '${months[now.month - 1]} ${now.day}, ${now.year}';
   }
 
   void _showCartPreviewSheet() {
@@ -6653,21 +7018,14 @@ class _DailyStockPageState extends State<DailyStockPage>
         child: Container(
           width: double.infinity,
           decoration: BoxDecoration(
-            gradient: const LinearGradient(
-              colors: [
-                _AppColors.primaryDark,
-                _AppColors.primary,
-                _AppColors.primaryLight,
-              ],
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-            ),
-            borderRadius: BorderRadius.circular(28),
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(22),
+            border: Border.all(color: _AppColors.border),
             boxShadow: [
               BoxShadow(
-                color: _AppColors.primary.withOpacity(0.35),
-                blurRadius: 24,
-                offset: const Offset(0, 10),
+                color: _AppColors.primary.withOpacity(0.08),
+                blurRadius: 14,
+                offset: const Offset(0, 6),
               ),
             ],
           ),
@@ -6681,7 +7039,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                   height: 108,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    color: Colors.white.withOpacity(0.07),
+                    color: _AppColors.primary.withOpacity(0.05),
                   ),
                 ),
               ),
@@ -6693,7 +7051,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                   height: 124,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    color: Colors.white.withOpacity(0.05),
+                    color: _AppColors.primary.withOpacity(0.04),
                   ),
                 ),
               ),
@@ -6707,12 +7065,12 @@ class _DailyStockPageState extends State<DailyStockPage>
                         Container(
                           padding: const EdgeInsets.all(8),
                           decoration: BoxDecoration(
-                            color: Colors.white.withOpacity(0.2),
+                            color: _AppColors.primary.withOpacity(0.08),
                             borderRadius: BorderRadius.circular(12),
                           ),
                           child: const Icon(
                             Icons.account_balance_wallet_rounded,
-                            color: Colors.white,
+                            color: _AppColors.primary,
                             size: 20,
                           ),
                         ),
@@ -6721,7 +7079,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                           child: Text(
                             'Cash Drawer',
                             style: TextStyle(
-                              color: Colors.white.withOpacity(0.9),
+                              color: _AppColors.textMid,
                               fontSize: 14,
                               fontWeight: FontWeight.w700,
                             ),
@@ -6733,7 +7091,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                     Text(
                       'Available Drawer Cash',
                       style: TextStyle(
-                        color: Colors.white.withOpacity(0.7),
+                        color: _AppColors.textSoft,
                         fontSize: 12,
                         letterSpacing: 0.5,
                       ),
@@ -6744,8 +7102,8 @@ class _DailyStockPageState extends State<DailyStockPage>
                           ? '₱${_cashDrawer.toStringAsFixed(2)}'
                           : '₱0.00',
                       style: TextStyle(
-                        color: Colors.white,
-                        fontSize: _cashDrawer > 0 ? 30 : 20,
+                        color: _AppColors.primaryDark,
+                        fontSize: _cashDrawer > 0 ? 28 : 20,
                         fontWeight: FontWeight.w900,
                         letterSpacing: _cashDrawer > 0 ? -0.5 : 0,
                       ),
@@ -6762,7 +7120,8 @@ class _DailyStockPageState extends State<DailyStockPage>
 
   // ─── Build Order Section ─────────────────────────────────────────────────
   Widget _buildOrderSection() {
-    if (_showCartReview) {
+    final isTabletLandscape = _isTabletLandscape(context);
+    if (_showCartReview && !isTabletLandscape) {
       final orderItems = _knownOrderItems(_latestOrderItems);
       return _buildCashierOrderFlow(
         orderItems: orderItems,
@@ -6770,13 +7129,25 @@ class _DailyStockPageState extends State<DailyStockPage>
       );
     }
 
-    return StreamBuilder<QuerySnapshot>(
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
       stream: _staffInventoryStream(),
       builder: (context, snapshot) {
-        if (snapshot.hasError) {
+        if (snapshot.hasData) {
+          unawaited(
+            LocalDatabaseSyncService().cacheCollectionDocs(
+              'staff_inventory',
+              snapshot.data!.docs.map((doc) {
+                final data = doc.data();
+                return {...data, '_localDocId': doc.id};
+              }),
+            ),
+          );
+        }
+        if (snapshot.hasError && _cachedStaffInventoryDocs.isEmpty) {
           return _buildErrorState('Error loading order items.');
         }
-        if (snapshot.connectionState == ConnectionState.waiting) {
+        if (snapshot.connectionState == ConnectionState.waiting &&
+            _cachedStaffInventoryDocs.isEmpty) {
           return const Padding(
             padding: EdgeInsets.symmetric(vertical: 40),
             child: Center(
@@ -6785,11 +7156,33 @@ class _DailyStockPageState extends State<DailyStockPage>
           );
         }
 
-        final docs = snapshot.data?.docs ?? [];
-        return StreamBuilder<QuerySnapshot>(
+        final firestoreDocs = snapshot.data?.docs
+            .map(_CachedDoc.fromFirestore)
+            .toList();
+        final docs =
+            (firestoreDocs == null ||
+                (firestoreDocs.isEmpty && _cachedStaffInventoryDocs.isNotEmpty))
+            ? _cachedStaffInventoryDocs
+            : firestoreDocs;
+        return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
           stream: _rootSalesInventoryStream,
           builder: (context, rootSnapshot) {
-            if (rootSnapshot.connectionState == ConnectionState.waiting) {
+            if (rootSnapshot.hasData) {
+              unawaited(
+                LocalDatabaseSyncService().cacheCollectionDocs(
+                  'sales_inventory',
+                  rootSnapshot.data!.docs.map((doc) {
+                    final data = doc.data();
+                    return {...data, '_localDocId': doc.id};
+                  }),
+                ),
+              );
+            }
+            if (rootSnapshot.hasError && _cachedSalesInventoryDocs.isEmpty) {
+              return _buildErrorState('Error loading product categories.');
+            }
+            if (rootSnapshot.connectionState == ConnectionState.waiting &&
+                _cachedSalesInventoryDocs.isEmpty) {
               return const Padding(
                 padding: EdgeInsets.symmetric(vertical: 40),
                 child: Center(
@@ -6799,9 +7192,18 @@ class _DailyStockPageState extends State<DailyStockPage>
             }
             final activeRootById = <String, Map<String, dynamic>>{};
             final activeRootByName = <String, Map<String, dynamic>>{};
-            for (final rootDoc in rootSnapshot.data?.docs ?? []) {
-              final rootData = rootDoc.data() as Map<String, dynamic>?;
-              if (rootData == null || rootData['isDeleted'] == true) continue;
+            final firestoreRootDocs = rootSnapshot.data?.docs
+                .map(_CachedDoc.fromFirestore)
+                .toList();
+            final rootDocs =
+                (firestoreRootDocs == null ||
+                    (firestoreRootDocs.isEmpty &&
+                        _cachedSalesInventoryDocs.isNotEmpty))
+                ? _cachedSalesInventoryDocs
+                : firestoreRootDocs;
+            for (final rootDoc in rootDocs) {
+              final rootData = rootDoc.data();
+              if (rootData['isDeleted'] == true) continue;
               activeRootById[rootDoc.id] = rootData;
               final rootName = rootData['name']
                   ?.toString()
@@ -6837,8 +7239,8 @@ class _DailyStockPageState extends State<DailyStockPage>
 
             final filteredDocs = <Map<String, dynamic>>[];
             for (final doc in docs) {
-              final data = doc.data() as Map<String, dynamic>?;
-              if (data == null || data['isDeleted'] == true) continue;
+              final data = doc.data();
+              if (data['isDeleted'] == true) continue;
               final isBundle = data['isBundle'] == true;
               final isCoffee = data['isCoffee'] == true;
               if (_showCoffeeView) {
@@ -6974,6 +7376,8 @@ class _DailyStockPageState extends State<DailyStockPage>
                   'items': items,
                 });
               } else {
+                if (_hasExpiredBundleItem(data)) continue;
+                if (_availableBundleStock(data) <= 0) continue;
                 filteredDocs.add({
                   ...data,
                   'staffDocId': doc.id,
@@ -6985,8 +7389,7 @@ class _DailyStockPageState extends State<DailyStockPage>
             }
 
             final orderItems = _orderItemsFromDocs(filteredDocs);
-            _latestOrderItems = orderItems;
-            _rememberOrderItems(orderItems);
+            _cacheLatestOrderItems(orderItems);
 
             final groupedOrderItems = _groupOrderItemsByName(orderItems);
 
@@ -7008,28 +7411,6 @@ class _DailyStockPageState extends State<DailyStockPage>
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 // ── Section title
-                const Padding(
-                  padding: EdgeInsets.only(bottom: 14),
-                  child: Row(
-                    children: [
-                      Icon(
-                        Icons.restaurant_menu_rounded,
-                        color: _AppColors.primary,
-                        size: 20,
-                      ),
-                      SizedBox(width: 8),
-                      Text(
-                        'Order Items',
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w800,
-                          color: _AppColors.primary,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-
                 _buildInventoryModeToggle(),
                 const SizedBox(height: 12),
 
@@ -7104,38 +7485,11 @@ class _DailyStockPageState extends State<DailyStockPage>
     required Map<String, List<MapEntry<int, Map<String, dynamic>>>>
     groupedOrderItems,
   }) {
-    if (_showCartReview) {
+    final isTabletLandscape = _isTabletLandscape(context);
+    if (_showCartReview && !isTabletLandscape) {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              IconButton(
-                onPressed: () => setState(() => _showCartReview = false),
-                icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 20),
-                color: _AppColors.primary,
-                style: IconButton.styleFrom(
-                  backgroundColor: _AppColors.primary.withOpacity(0.08),
-                  fixedSize: const Size(48, 48),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 12),
-              const Expanded(
-                child: Text(
-                  'Order Review',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w900,
-                    color: _AppColors.primary,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 14),
           _buildBudgetCard(),
           const SizedBox(height: 16),
           _buildDiscountToggle(
@@ -7224,7 +7578,7 @@ class _DailyStockPageState extends State<DailyStockPage>
               ),
             ],
           ),
-          const SizedBox(height: 32),
+          SizedBox(height: isTabletLandscape ? 12 : 32),
         ],
       );
     }
@@ -7232,46 +7586,29 @@ class _DailyStockPageState extends State<DailyStockPage>
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Padding(
-          padding: const EdgeInsets.only(bottom: 14),
-          child: Row(
-            children: [
-              const Icon(
-                Icons.storefront_rounded,
-                color: _AppColors.primary,
-                size: 20,
-              ),
-              const SizedBox(width: 8),
-              const Expanded(
-                child: Text(
-                  'Order Items',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w800,
-                    color: _AppColors.primary,
+        if (_selectedGroupName != null && _showBundleView)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 14),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                onPressed: () => setState(() => _selectedGroupName = null),
+                icon: const Icon(Icons.arrow_back_rounded, size: 16),
+                label: const Text('Back'),
+                style: TextButton.styleFrom(
+                  foregroundColor: _AppColors.primary,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 8,
+                  ),
+                  backgroundColor: _AppColors.primary.withOpacity(0.08),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
                   ),
                 ),
               ),
-              if (_selectedGroupName != null && _showBundleView)
-                TextButton.icon(
-                  onPressed: () => setState(() => _selectedGroupName = null),
-                  icon: const Icon(Icons.arrow_back_rounded, size: 16),
-                  label: const Text('Back'),
-                  style: TextButton.styleFrom(
-                    foregroundColor: _AppColors.primary,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 8,
-                    ),
-                    backgroundColor: _AppColors.primary.withOpacity(0.08),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                  ),
-                ),
-            ],
+            ),
           ),
-        ),
         _buildInventoryModeToggle(),
         const SizedBox(height: 14),
         if (orderItems.isEmpty)
@@ -7282,8 +7619,279 @@ class _DailyStockPageState extends State<DailyStockPage>
           )
         else
           _buildCategoryGrid(groupedOrderItems, orderItems),
-        const SizedBox(height: 96),
+        SizedBox(height: isTabletLandscape ? 20 : 96),
       ],
+    );
+  }
+
+  bool _isTabletLandscape(BuildContext context) {
+    final size = MediaQuery.sizeOf(context);
+    final isLandscape = size.width > size.height;
+    final hasTabletCanvas =
+        size.shortestSide >= 600 || (size.width >= 900 && size.height >= 520);
+    return isLandscape && hasTabletCanvas;
+  }
+
+  Widget _buildTabletSalesBody() {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final reviewWidth = constraints.maxWidth >= 1180 ? 420.0 : 380.0;
+        return Container(
+          color: _AppColors.bg,
+          child: SafeArea(
+            bottom: false,
+            child: Padding(
+              padding: const EdgeInsets.only(bottom: _staffBottomNavReserve),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Expanded(
+                    child: Center(
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 900),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Padding(
+                              padding: const EdgeInsets.fromLTRB(
+                                20,
+                                16,
+                                20,
+                                10,
+                              ),
+                              child: _buildTabletSalesHeader(),
+                            ),
+                            Padding(
+                              padding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
+                              child: _buildOrderSearchField(),
+                            ),
+                            Expanded(
+                              child: SingleChildScrollView(
+                                padding: const EdgeInsets.fromLTRB(
+                                  20,
+                                  10,
+                                  20,
+                                  24,
+                                ),
+                                child: _buildOrderSection(),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  SizedBox(
+                    width: reviewWidth,
+                    child: _buildTabletOrderReviewPane(),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildTabletSalesHeader() {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          colors: [_AppColors.primary, _AppColors.primaryLight],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(22),
+        boxShadow: [
+          BoxShadow(
+            color: _AppColors.primary.withOpacity(0.18),
+            blurRadius: 18,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.18),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: Colors.white.withOpacity(0.24)),
+            ),
+            child: const Icon(
+              Icons.point_of_sale_rounded,
+              color: Colors.white,
+              size: 23,
+            ),
+          ),
+          const SizedBox(width: 14),
+          const Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Sales Process',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.w900,
+                    color: Colors.white,
+                    letterSpacing: 0.3,
+                  ),
+                ),
+                SizedBox(height: 3),
+                Text(
+                  'Build orders and review the ticket on the side',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.white70,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTabletOrderReviewPane() {
+    final orderItems = _knownOrderItems(_latestOrderItems);
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF7FA),
+        border: Border(
+          left: BorderSide(color: _AppColors.border.withOpacity(0.85)),
+        ),
+      ),
+      child: Stack(
+        children: [
+          SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(14, 16, 14, 132),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _buildCartReviewPanel(orderItems),
+                const SizedBox(height: 12),
+                _buildDiscountToggle(
+                  title: 'Senior Discount',
+                  subtitle: '20% off for senior citizens',
+                  value: _seniorDiscount,
+                  onChanged: (v) => setState(() {
+                    _seniorDiscount = v;
+                    if (v) _pwdDiscount = false;
+                  }),
+                  icon: Icons.elderly_rounded,
+                ),
+                const SizedBox(height: 10),
+                _buildDiscountToggle(
+                  title: 'PWD Discount',
+                  subtitle: '20% off for persons with disability',
+                  value: _pwdDiscount,
+                  onChanged: (v) => setState(() {
+                    _pwdDiscount = v;
+                    if (v) _seniorDiscount = false;
+                  }),
+                  icon: Icons.accessible_rounded,
+                ),
+                const SizedBox(height: 12),
+                _buildCashierToolsPanel(orderItems),
+              ],
+            ),
+          ),
+          Positioned(
+            left: 14,
+            right: 14,
+            bottom: 14,
+            child: _buildTabletPaymentBar(orderItems),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTabletPaymentBar(List<Map<String, dynamic>> orderItems) {
+    final hasItems = _cartHasValidItems(orderItems);
+    final total = _discountedTotal(orderItems);
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: _AppColors.border.withOpacity(0.9)),
+        boxShadow: [
+          BoxShadow(
+            color: _AppColors.primary.withOpacity(0.18),
+            blurRadius: 24,
+            offset: const Offset(0, 10),
+          ),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              const Icon(
+                Icons.payments_rounded,
+                size: 18,
+                color: _AppColors.primary,
+              ),
+              const SizedBox(width: 8),
+              const Expanded(
+                child: Text(
+                  'Payment',
+                  style: TextStyle(
+                    color: _AppColors.textMid,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+              Text(
+                '\u20B1${total.toStringAsFixed(2)}',
+                style: TextStyle(
+                  color: hasItems ? _AppColors.primary : _AppColors.textSoft,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          ElevatedButton.icon(
+            onPressed: hasItems
+                ? () => _showOrderConfirmationDialog(orderItems)
+                : null,
+            icon: const Icon(Icons.check_circle_outline_rounded, size: 20),
+            label: const Text('Confirm Order'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _AppColors.primary,
+              foregroundColor: Colors.white,
+              disabledBackgroundColor: _AppColors.border,
+              disabledForegroundColor: Colors.white.withOpacity(0.8),
+              elevation: 0,
+              padding: const EdgeInsets.symmetric(vertical: 15),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(18),
+              ),
+              textStyle: const TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -7293,6 +7901,36 @@ class _DailyStockPageState extends State<DailyStockPage>
         _buildBudgetCard(),
         const SizedBox(height: 14),
         _buildStoreActions(orderItems),
+      ],
+    );
+  }
+
+  Widget _buildOrderReviewHeader() {
+    return Row(
+      children: [
+        IconButton(
+          onPressed: () => setState(() => _showCartReview = false),
+          icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 20),
+          color: _AppColors.primary,
+          style: IconButton.styleFrom(
+            backgroundColor: _AppColors.primary.withOpacity(0.08),
+            fixedSize: const Size(48, 48),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+            ),
+          ),
+        ),
+        const SizedBox(width: 12),
+        const Expanded(
+          child: Text(
+            'Order Review',
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.w900,
+              color: _AppColors.primary,
+            ),
+          ),
+        ),
       ],
     );
   }
@@ -7308,6 +7946,12 @@ class _DailyStockPageState extends State<DailyStockPage>
     await _loadCashierToolsPreference(uid!);
     await _loadStaffInventoryIds(uid);
     _subscribeToPendingOrders(uid);
+    if (widget.openRefundOnStart && !_openedInitialRefund && mounted) {
+      _openedInitialRefund = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _showRefundDialog(_latestOrderItems);
+      });
+    }
   }
 
   Widget _buildOrderDraftActions(List<Map<String, dynamic>> orderItems) {
@@ -7516,7 +8160,7 @@ class _DailyStockPageState extends State<DailyStockPage>
       child: Icon(fallbackIcon, color: _AppColors.primary, size: size * 0.42),
     );
     if (trimmed.isEmpty) {
-      return SizedBox(width: boxWidth, height: boxHeight);
+      return fallback;
     }
 
     Widget image;
@@ -9631,33 +10275,43 @@ class _DailyStockPageState extends State<DailyStockPage>
 
   @override
   Widget build(BuildContext context) {
+    final isTabletLandscape = _isTabletLandscape(context);
     return Scaffold(
       backgroundColor: _AppColors.bg,
-      body: SafeArea(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 10),
-              child: _buildPageHeader(),
-            ),
-            if (!_showCartReview)
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
-                child: _buildOrderSearchField(),
+      body: isTabletLandscape
+          ? _buildTabletSalesBody()
+          : SafeArea(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 10),
+                    child: _showCartReview
+                        ? _buildOrderReviewHeader()
+                        : _buildPageHeader(),
+                  ),
+                  if (!_showCartReview)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+                      child: _buildOrderSearchField(),
+                    ),
+                  Expanded(
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.fromLTRB(
+                        16,
+                        10,
+                        16,
+                        24 + _staffBottomNavReserve,
+                      ),
+                      child: _buildOrderSection(),
+                    ),
+                  ),
+                  if (!_showCartReview &&
+                      (!_showBundleView || _selectedGroupName == null))
+                    _buildDockedOrderActions(),
+                ],
               ),
-            Expanded(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
-                child: _buildOrderSection(),
-              ),
             ),
-            if (!_showCartReview &&
-                (!_showBundleView || _selectedGroupName == null))
-              _buildDockedOrderActions(),
-          ],
-        ),
-      ),
     );
   }
 

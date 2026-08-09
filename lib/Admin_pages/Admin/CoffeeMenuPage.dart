@@ -178,16 +178,23 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
   }
 
   Future<void> _pickCoffeeImage() async {
-    final picked = await _imagePicker.pickImage(
-      source: ImageSource.gallery,
-      maxWidth: 900,
-      maxHeight: 900,
-      imageQuality: 75,
-    );
-    if (picked == null) return;
-    final bytes = await picked.readAsBytes();
-    if (!mounted) return;
-    setState(() => _coffeeImageBytes = bytes);
+    try {
+      final picked = await _imagePicker.pickImage(
+        source: ImageSource.gallery,
+        maxWidth: 1024,
+        maxHeight: 1024,
+        imageQuality: 75,
+      );
+      if (picked == null) return;
+      final bytes = await picked.readAsBytes();
+      if (!mounted) return;
+      setState(() => _coffeeImageBytes = bytes);
+    } catch (e) {
+      debugPrint('Coffee image pick failed: $e');
+      if (mounted) {
+        _showSnack('Unable to select image. Please try again.', isError: true);
+      }
+    }
   }
 
   Future<String?> _uploadCoffeeImage(Uint8List? bytes) async {
@@ -553,10 +560,13 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
                     price: ((data['priceDelta'] ?? 0) as num).toStringAsFixed(
                       0,
                     ),
-                    onDelete: () => doc.reference.update({
-                      'isDeleted': true,
-                      'updatedAt': FieldValue.serverTimestamp(),
-                    }),
+                    onDelete: () async {
+                      await doc.reference.update({
+                        'isDeleted': true,
+                        'updatedAt': FieldValue.serverTimestamp(),
+                      });
+                      await _markStaffInventoryDeletedBySource(doc.id);
+                    },
                   );
                 }).toList(),
               );
@@ -630,16 +640,38 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
                   doc: entry.value,
                   firestore: _firestore,
                   onEdit: () => _showEditProductDialog(entry.value),
-                  onDelete: () => entry.value.reference.update({
-                    'isDeleted': true,
-                    'updatedAt': FieldValue.serverTimestamp(),
-                  }),
+                  onDelete: () async {
+                    await entry.value.reference.update({
+                      'isDeleted': true,
+                      'updatedAt': FieldValue.serverTimestamp(),
+                    });
+                    await _markStaffInventoryDeletedBySource(entry.value.id);
+                  },
                 );
               }),
           ],
         );
       },
     );
+  }
+
+  Future<void> _markStaffInventoryDeletedBySource(String sourceId) async {
+    if (sourceId.trim().isEmpty) return;
+    final snapshot = await _firestore
+        .collection('staff_inventory')
+        .where('sourceInventoryId', isEqualTo: sourceId)
+        .get();
+    final batch = _firestore.batch();
+    for (final doc in snapshot.docs) {
+      batch.update(doc.reference, {
+        'isDeleted': true,
+        'deletedAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+    }
+    if (snapshot.docs.isNotEmpty) {
+      await batch.commit();
+    }
   }
 
   Future<void> _showEditProductDialog(
@@ -717,18 +749,28 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
                           ? ''
                           : data['imageUrl']?.toString() ?? '',
                       onPick: () async {
-                        final picked = await _imagePicker.pickImage(
-                          source: ImageSource.gallery,
-                          maxWidth: 900,
-                          maxHeight: 900,
-                          imageQuality: 75,
-                        );
-                        if (picked == null) return;
-                        final bytes = await picked.readAsBytes();
-                        setDialogState(() {
-                          editImageBytes = bytes;
-                          removeExistingImage = false;
-                        });
+                        try {
+                          final picked = await _imagePicker.pickImage(
+                            source: ImageSource.gallery,
+                            maxWidth: 1024,
+                            maxHeight: 1024,
+                            imageQuality: 75,
+                          );
+                          if (picked == null) return;
+                          final bytes = await picked.readAsBytes();
+                          setDialogState(() {
+                            editImageBytes = bytes;
+                            removeExistingImage = false;
+                          });
+                        } catch (e) {
+                          debugPrint('Coffee image pick failed: $e');
+                          if (mounted) {
+                            _showSnack(
+                              'Unable to select image. Please try again.',
+                              isError: true,
+                            );
+                          }
+                        }
                       },
                       onRemove: () => setDialogState(() {
                         editImageBytes = [];
@@ -822,7 +864,7 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
                       'name': nameController.text.trim(),
                       'basePrice': _parsePrice(priceController.text),
                       'description': descriptionController.text.trim(),
-                      if (newImageUrl != null) 'imageUrl': newImageUrl,
+                      'imageUrl': ?newImageUrl,
                       if (removeExistingImage) 'imageUrl': '',
                       'sizes': sizes,
                       'updatedAt': FieldValue.serverTimestamp(),
@@ -1104,7 +1146,7 @@ class _ProductCardState extends State<_ProductCard>
                             : Image.network(
                                 imageUrl,
                                 fit: BoxFit.cover,
-                                errorBuilder: (_, __, ___) => const Icon(
+                                errorBuilder: (_, _, _) => const Icon(
                                   Icons.coffee_rounded,
                                   color: Colors.white,
                                   size: 24,

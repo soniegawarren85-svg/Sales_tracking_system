@@ -174,9 +174,14 @@ class _AllCategPageState extends State<AllCategPage>
     return int.tryParse(value?.toString() ?? '') ?? fallback;
   }
 
-  List<Map<String, dynamic>> _coffeeItemsFromData(Map<String, dynamic> data) {
-    final basePrice = _parsePrice(data['basePrice']);
-    final sizes = (data['sizes'] as List<dynamic>? ?? [])
+  List<Map<String, dynamic>> _coffeeItemsFromData(
+    Map<String, dynamic> data, {
+    Map<String, dynamic>? rootData,
+  }) {
+    final basePrice = _parsePrice(data['basePrice'] ?? rootData?['basePrice']);
+    final sizes = ((data['sizes'] as List<dynamic>?) ??
+            (rootData?['sizes'] as List<dynamic>?) ??
+            [])
         .whereType<Map>()
         .map((size) => Map<String, dynamic>.from(size))
         .where((size) => (size['name']?.toString().trim() ?? '').isNotEmpty)
@@ -188,11 +193,13 @@ class _AllCategPageState extends State<AllCategPage>
         : sizes;
 
     final addonByName = <String, Map<String, dynamic>>{};
-    for (final addon
-        in (data['addonOptions'] as List<dynamic>? ?? []).whereType<Map>()) {
-      final name = addon['name']?.toString().trim() ?? '';
-      if (name.isEmpty) continue;
-      addonByName.putIfAbsent(name, () => Map<String, dynamic>.from(addon));
+    for (final source in [data, if (rootData != null) rootData]) {
+      for (final addon
+          in (source['addonOptions'] as List<dynamic>? ?? []).whereType<Map>()) {
+        final name = addon['name']?.toString().trim() ?? '';
+        if (name.isEmpty) continue;
+        addonByName.putIfAbsent(name, () => Map<String, dynamic>.from(addon));
+      }
     }
 
     final items = <Map<String, dynamic>>[];
@@ -291,14 +298,35 @@ class _AllCategPageState extends State<AllCategPage>
   }
 
   int _bundleStockForData(Map<String, dynamic> bundleData) {
-    final bundleCount = _parseInt(bundleData['bundleCount']);
-    if (bundleData.containsKey('bundleCount')) return bundleCount;
     final instances = _bundleInstancesFromData(bundleData);
     final availableInstances = instances.where((instance) {
-      final status = instance['status']?.toString() ?? 'available';
+      final status =
+          instance['status']?.toString().trim().toLowerCase() ?? 'available';
       return status == 'available';
     }).length;
-    return bundleCount > availableInstances ? bundleCount : availableInstances;
+    return instances.isNotEmpty
+        ? availableInstances
+        : _parseInt(bundleData['bundleCount']);
+  }
+
+  bool _hasExpiredBundleItem(Map<String, dynamic> bundleData) {
+    final rawItems = bundleData['items'] as List<dynamic>? ?? [];
+    for (final raw in rawItems) {
+      if (raw is! Map) continue;
+      final item = Map<String, dynamic>.from(raw);
+      final expirationDate = item['expirationDate']?.toString() ?? '';
+      if (_isExpiredItem(expirationDate)) return true;
+    }
+    for (final instance in _bundleInstancesFromData(bundleData)) {
+      final items = instance['items'] as List<dynamic>? ?? [];
+      for (final raw in items) {
+        if (raw is! Map) continue;
+        final item = Map<String, dynamic>.from(raw);
+        final expirationDate = item['expirationDate']?.toString() ?? '';
+        if (_isExpiredItem(expirationDate)) return true;
+      }
+    }
+    return false;
   }
 
   String _bundleStatusLabel(String status) {
@@ -471,7 +499,7 @@ class _AllCategPageState extends State<AllCategPage>
                             const SizedBox(height: 14),
                             // Styled Dropdown
                             DropdownButtonFormField<String>(
-                              value: selectedReason,
+                              initialValue: selectedReason,
                               decoration: InputDecoration(
                                 labelText: 'Reason',
                                 labelStyle: const TextStyle(
@@ -1467,7 +1495,7 @@ class _AllCategPageState extends State<AllCategPage>
                     ),
                     const SizedBox(height: 12),
                     DropdownButtonFormField<String>(
-                      value: selectedReason,
+                      initialValue: selectedReason,
                       decoration: InputDecoration(
                         labelText: 'Reason',
                         prefixIcon: const Icon(
@@ -1644,7 +1672,7 @@ class _AllCategPageState extends State<AllCategPage>
                     ),
                     const SizedBox(height: 14),
                     DropdownButtonFormField<String>(
-                      value: selectedReason,
+                      initialValue: selectedReason,
                       decoration: InputDecoration(
                         labelText: 'Reason',
                         prefixIcon: const Icon(
@@ -1919,7 +1947,7 @@ class _AllCategPageState extends State<AllCategPage>
           onTap: onTap,
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 220),
-            padding: const EdgeInsets.symmetric(vertical: 14),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 14),
             decoration: BoxDecoration(
               color: selected ? const Color(0xFFC2105C) : Colors.white,
               borderRadius: BorderRadius.circular(18),
@@ -1948,12 +1976,16 @@ class _AllCategPageState extends State<AllCategPage>
                   color: selected ? Colors.white : const Color(0xFFC2105C),
                 ),
                 const SizedBox(width: 8),
-                Text(
-                  '$label ($count)',
-                  style: TextStyle(
-                    color: selected ? Colors.white : const Color(0xFF8B0035),
-                    fontSize: 14,
-                    fontWeight: FontWeight.w900,
+                Flexible(
+                  child: Text(
+                    '$label ($count)',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: selected ? Colors.white : const Color(0xFF8B0035),
+                      fontSize: 13,
+                      fontWeight: FontWeight.w900,
+                    ),
                   ),
                 ),
               ],
@@ -1978,7 +2010,7 @@ class _AllCategPageState extends State<AllCategPage>
               _showAddons = false;
             }),
           ),
-          const SizedBox(width: 12),
+          const SizedBox(width: 8),
           option(
             selected: !_showCategories && !_showCoffee && !_showAddons,
             label: 'Bundle',
@@ -1990,7 +2022,7 @@ class _AllCategPageState extends State<AllCategPage>
               _showAddons = false;
             }),
           ),
-          const SizedBox(width: 12),
+          const SizedBox(width: 8),
           option(
             selected: _showCoffee,
             label: 'Coffee',
@@ -2002,7 +2034,7 @@ class _AllCategPageState extends State<AllCategPage>
               _showAddons = false;
             }),
           ),
-          const SizedBox(width: 12),
+          const SizedBox(width: 8),
           option(
             selected: _showAddons,
             label: 'Add-ons',
@@ -2970,8 +3002,9 @@ class _AllCategPageState extends State<AllCategPage>
                   activeRootById[rootDoc.id] = rootData;
                   final rootName =
                       rootData['name']?.toString().trim().toLowerCase() ?? '';
-                  if (rootName.isNotEmpty)
+                  if (rootName.isNotEmpty) {
                     activeRootByName[rootName] = rootData;
+                  }
                 }
 
                 String itemKey(Map<String, dynamic> item) =>
@@ -3015,13 +3048,21 @@ class _AllCategPageState extends State<AllCategPage>
                   if (rootData == null) continue;
 
                   if (isCoffee) {
-                    final coffeeItems = _coffeeItemsFromData(data);
+                    final coffeeItems = _coffeeItemsFromData(
+                      data,
+                      rootData: rootData,
+                    );
                     if (coffeeItems.isEmpty) continue;
                     visibleDocs.add({
                       ...data,
                       'name': data['name'] ?? 'Coffee',
                       'imageUrl': data['imageUrl'],
                       'items': coffeeItems,
+                      'addonOptions': coffeeItems
+                          .expand((item) => item['addons'] as List<dynamic>? ?? [])
+                          .whereType<Map>()
+                          .map((addon) => Map<String, dynamic>.from(addon))
+                          .toList(),
                       'sourceDocId': doc.id,
                       'isCoffee': true,
                     });
@@ -3029,6 +3070,8 @@ class _AllCategPageState extends State<AllCategPage>
                   }
 
                   if (data['isBundle'] == true) {
+                    if (_hasExpiredBundleItem(data)) continue;
+                    if (_bundleStockForData(data) <= 0) continue;
                     visibleDocs.add({
                       ...data,
                       'name': rootData['name'] ?? data['name'],
@@ -3055,23 +3098,6 @@ class _AllCategPageState extends State<AllCategPage>
                                 rootKeys.contains(itemKey(item)));
                       })
                       .toList();
-                  final activeKeys = activeItems.map(itemKey).toSet();
-                  for (final rootItem in rootItems) {
-                    final expirationDate =
-                        rootItem['expirationDate']?.toString() ?? '';
-                    final key = itemKey(rootItem);
-                    if (activeKeys.contains(key) ||
-                        _isExpiredItem(expirationDate)) {
-                      continue;
-                    }
-                    activeItems.add({
-                      ...rootItem,
-                      'stock':
-                          rootItem['stock'] ?? rootItem['startingStock'] ?? 0,
-                      'startingStock':
-                          rootItem['startingStock'] ?? rootItem['stock'] ?? 0,
-                    });
-                  }
                   if (activeItems.isEmpty) continue;
                   visibleDocs.add({
                     ...data,
@@ -3106,7 +3132,11 @@ class _AllCategPageState extends State<AllCategPage>
                       : data['sourceDocId']?.toString() ?? categoryName;
                   groupedCategories[categoryKey] = {
                     'categoryName': categoryName,
-                    'categoryId': data['sourceDocId'],
+                    'categoryId':
+                        data['sourceInventoryId']?.toString().trim().isNotEmpty ==
+                            true
+                        ? data['sourceInventoryId']
+                        : data['sourceDocId'],
                     'items': itemRecords,
                     'isCoffee': data['isCoffee'] == true,
                     'sourceDocId': data['sourceDocId'],
@@ -3125,9 +3155,28 @@ class _AllCategPageState extends State<AllCategPage>
                 final bundleDocs = visibleDocs
                     .where((data) => data['isBundle'] == true)
                     .toList();
-                final addonDocs = visibleDocs
-                    .where((data) => data['isAddon'] == true)
-                    .toList();
+                final addonByName = <String, Map<String, dynamic>>{};
+                for (final data in visibleDocs) {
+                  if (data['isAddon'] == true) {
+                    final name = data['name']?.toString().trim() ?? '';
+                    if (name.isEmpty) continue;
+                    addonByName.putIfAbsent(name, () => data);
+                    continue;
+                  }
+                  for (final addon
+                      in (data['addonOptions'] as List<dynamic>? ?? [])
+                          .whereType<Map>()) {
+                    final name = addon['name']?.toString().trim() ?? '';
+                    if (name.isEmpty) continue;
+                    addonByName.putIfAbsent(name, () {
+                      final addonData = Map<String, dynamic>.from(addon);
+                      addonData['isAddon'] = true;
+                      addonData['sourceDocId'] = data['sourceDocId'];
+                      return addonData;
+                    });
+                  }
+                }
+                final addonDocs = addonByName.values.toList();
 
                 if (!_isFilteredCategory &&
                     categoryDocs.isEmpty &&

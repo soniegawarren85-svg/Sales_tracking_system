@@ -266,14 +266,14 @@ class _AnalyticsPageState extends State<AnalyticsPage>
         Navigator.push(
           context,
           PageRouteBuilder(
-            pageBuilder: (_, __, ___) => AllCategPage(
+            pageBuilder: (_, _, _) => AllCategPage(
               selectedCategoryName: item,
               selectedSourceInventoryId: sourceId.isNotEmpty
                   ? sourceId
                   : coffeeDoc!.id,
               selectedIsCoffee: true,
             ),
-            transitionsBuilder: (_, animation, __, child) {
+            transitionsBuilder: (_, animation, _, child) {
               final tween = Tween(
                 begin: const Offset(1, 0),
                 end: Offset.zero,
@@ -295,9 +295,9 @@ class _AnalyticsPageState extends State<AnalyticsPage>
     Navigator.push(
       context,
       PageRouteBuilder(
-        pageBuilder: (_, __, ___) =>
+        pageBuilder: (_, _, _) =>
             StaffPage(selectedItem: item, isRemaining: isRemain),
-        transitionsBuilder: (_, animation, __, child) {
+        transitionsBuilder: (_, animation, _, child) {
           final tween = Tween(
             begin: const Offset(1, 0),
             end: Offset.zero,
@@ -322,7 +322,7 @@ class _AnalyticsPageState extends State<AnalyticsPage>
         children: [
           // ── Search Bar ────────────────────────────────────────────────────
           Padding(
-            padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
+            padding: const EdgeInsets.fromLTRB(20, 28, 20, 0),
             child: _SearchBar(
               controller: _controller,
               focusNode: _focusNode,
@@ -591,7 +591,7 @@ class _SearchBarState extends State<_SearchBar> {
       duration: const Duration(milliseconds: 200),
       decoration: BoxDecoration(
         color: _AC.white,
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: BorderRadius.circular(16),
         border: Border.all(
           color: _focused ? _AC.chocoLight : _AC.divider,
           width: _focused ? 1.8 : 1.2,
@@ -627,7 +627,7 @@ class _SearchBarState extends State<_SearchBar> {
           ),
           suffixIcon: ValueListenableBuilder<TextEditingValue>(
             valueListenable: widget.controller,
-            builder: (_, value, __) {
+            builder: (_, value, _) {
               return value.text.isEmpty
                   ? const SizedBox.shrink()
                   : GestureDetector(
@@ -650,7 +650,7 @@ class _SearchBarState extends State<_SearchBar> {
           border: InputBorder.none,
           contentPadding: const EdgeInsets.symmetric(
             horizontal: 16,
-            vertical: 18,
+            vertical: 12,
           ),
         ),
       ),

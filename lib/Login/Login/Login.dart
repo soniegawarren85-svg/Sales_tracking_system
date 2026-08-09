@@ -607,24 +607,39 @@ class _LoginScreenState extends State<LoginScreen>
 
               // ── SCROLLABLE FORM ─────────────────────────────────────
               Expanded(
-                child: SingleChildScrollView(
-                  physics: const BouncingScrollPhysics(),
-                  padding: const EdgeInsets.symmetric(horizontal: 28),
-                  child: FadeTransition(
-                    opacity: _fadeAnim,
-                    child: SlideTransition(
-                      position: _slideAnim,
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const SizedBox(height: 36),
-                          _buildWelcomeText(),
-                          const SizedBox(height: 5),
-                          _buildForm(),
-                        ],
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    final isTablet = constraints.maxWidth >= 700;
+                    final horizontalPadding = isTablet ? 40.0 : 28.0;
+                    final formMaxWidth = isTablet ? 560.0 : double.infinity;
+
+                    return SingleChildScrollView(
+                      physics: const BouncingScrollPhysics(),
+                      padding: EdgeInsets.symmetric(
+                        horizontal: horizontalPadding,
                       ),
-                    ),
-                  ),
+                      child: Center(
+                        child: ConstrainedBox(
+                          constraints: BoxConstraints(maxWidth: formMaxWidth),
+                          child: FadeTransition(
+                            opacity: _fadeAnim,
+                            child: SlideTransition(
+                              position: _slideAnim,
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  SizedBox(height: isTablet ? 28 : 36),
+                                  _buildWelcomeText(),
+                                  const SizedBox(height: 5),
+                                  _buildForm(),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    );
+                  },
                 ),
               ),
             ],
@@ -674,7 +689,7 @@ class _LoginScreenState extends State<LoginScreen>
                 child: Image.asset(
                   'Assets/Image/ob.jpg',
                   fit: BoxFit.cover,
-                  errorBuilder: (_, __, ___) => const Center(
+                  errorBuilder: (_, _, _) => const Center(
                     child: Icon(
                       Icons.cake_rounded,
                       color: Colors.white,

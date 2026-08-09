@@ -10,8 +10,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../services/inventory_service.dart';
 import '../services/cash_drawer_service.dart';
+import '../services/local_database_sync_service.dart';
 import 'AllCateg.dart';
-import 'daily_stock_page.dart';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Helpers
@@ -44,6 +44,27 @@ String _formatTime(DateTime dt) {
 
 String _formatDateTime(DateTime dt) =>
     '${_formatDate(dt)} · ${_formatTime(dt)}';
+
+class _CachedDoc {
+  final String id;
+  final Map<String, dynamic> _data;
+
+  const _CachedDoc(this.id, this._data);
+
+  factory _CachedDoc.fromFirestore(
+    QueryDocumentSnapshot<Map<String, dynamic>> doc,
+  ) {
+    return _CachedDoc(doc.id, doc.data());
+  }
+
+  factory _CachedDoc.fromMap(Map<String, dynamic> map) {
+    final id = map['_localDocId']?.toString() ?? map['id']?.toString() ?? '';
+    final data = Map<String, dynamic>.from(map)..remove('_localDocId');
+    return _CachedDoc(id, data);
+  }
+
+  Map<String, dynamic> data() => _data;
+}
 
 bool _isExpiredInventoryItem(String expirationDate) {
   try {
@@ -119,19 +140,40 @@ class _DashboardPageState extends State<DashboardPage>
   List inventoryEntries = [];
   String _inventoryView = 'categories';
   List<String> _staffInventoryIds = const [];
+  List<_CachedDoc> _cachedStaffInventoryDocs = const [];
+  List<_CachedDoc> _cachedSalesInventoryDocs = const [];
+  List<_CachedDoc> _cachedCashDrawerDocs = const [];
   String? _staffDocId;
 
   @override
   void initState() {
     super.initState();
     _initStaffIdentity();
+    _loadLocalDashboardCache();
     InventoryService().addListener(_onInventoryChanged);
 
-    InventoryService().initialize().then((_) => InventoryService().refreshFromCloud()).then((_) {
+    InventoryService().initialize().then((_) {
       if (!mounted) return;
       setState(() {
         inventoryEntries = InventoryService().currentUserEntries;
       });
+    });
+  }
+
+  Future<void> _loadLocalDashboardCache() async {
+    final service = LocalDatabaseSyncService();
+    final staffInventory = await service.getCachedCollection('staff_inventory');
+    final salesInventory = await service.getCachedCollection('sales_inventory');
+    final cashDrawer = await service.getCachedCollection('staff_cash_drawer');
+    if (!mounted) return;
+    setState(() {
+      _cachedStaffInventoryDocs = staffInventory
+          .map(_CachedDoc.fromMap)
+          .toList();
+      _cachedSalesInventoryDocs = salesInventory
+          .map(_CachedDoc.fromMap)
+          .toList();
+      _cachedCashDrawerDocs = cashDrawer.map(_CachedDoc.fromMap).toList();
     });
   }
 
@@ -154,8 +196,9 @@ class _DashboardPageState extends State<DashboardPage>
   }
 
   void _onInventoryChanged() {
-    if (mounted)
+    if (mounted) {
       setState(() => inventoryEntries = InventoryService().currentUserEntries);
+    }
   }
 
   Future<void> _loadStaffInventoryIds(String uid) async {
@@ -188,7 +231,7 @@ class _DashboardPageState extends State<DashboardPage>
     if (mounted) setState(() => _staffInventoryIds = ids.toList());
   }
 
-  Stream<QuerySnapshot> _staffInventoryStream() {
+  Stream<QuerySnapshot<Map<String, dynamic>>> _staffInventoryStream() {
     final ids = _staffInventoryIds
         .where((id) => id.trim().isNotEmpty)
         .toSet()
@@ -222,19 +265,699 @@ class _DashboardPageState extends State<DashboardPage>
   }
 
   void _openRefundFlow() {
-    Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => const DailyStockPage()),
+    _showRefundDialog();
+  }
+
+  double _parseMoney(dynamic value) {
+    if (value is num) return value.toDouble();
+    return double.tryParse(
+          value?.toString().replaceAll(RegExp(r'[^0-9.-]'), '') ?? '',
+        ) ??
+        0.0;
+  }
+
+  String _refundItemKey(Map<String, dynamic> item) =>
+      '${item['name'] ?? ''}|${item['price'] ?? ''}'.toLowerCase();
+
+  List<Map<String, dynamic>> _activeRefundItemsForData(
+    Map<String, dynamic> staffData,
+    Map<String, dynamic> rootData,
+  ) {
+    final rootItems = ((rootData['items'] as List<dynamic>?) ?? [])
+        .whereType<Map>()
+        .map((item) => Map<String, dynamic>.from(item))
+        .toList();
+    final rootKeys = rootItems.map(_refundItemKey).toSet();
+    return ((staffData['items'] as List<dynamic>?) ?? [])
+        .whereType<Map>()
+        .map((item) => Map<String, dynamic>.from(item))
+        .where((item) {
+          final expirationDate = item['expirationDate']?.toString() ?? '';
+          if (_isExpiredInventoryItem(expirationDate)) return false;
+          if (rootKeys.isEmpty) return true;
+          return rootKeys.contains(_refundItemKey(item));
+        })
+        .toList();
+  }
+
+  bool _hasExpiredRefundBundleItem(Map<String, dynamic> bundleData) {
+    final rawItems = bundleData['items'] as List<dynamic>? ?? [];
+    for (final raw in rawItems) {
+      if (raw is! Map) continue;
+      final item = Map<String, dynamic>.from(raw);
+      if (_isExpiredInventoryItem(item['expirationDate']?.toString() ?? '')) {
+        return true;
+      }
+    }
+    final instances = bundleData['bundleInstances'];
+    if (instances is! List) return false;
+    for (final rawInstance in instances.whereType<Map>()) {
+      final instance = Map<String, dynamic>.from(rawInstance);
+      final items = instance['items'] as List<dynamic>? ?? [];
+      for (final raw in items.whereType<Map>()) {
+        final item = Map<String, dynamic>.from(raw);
+        if (_isExpiredInventoryItem(item['expirationDate']?.toString() ?? '')) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  int _availableRefundBundleCount(Map<String, dynamic> bundleData) {
+    final instances = bundleData['bundleInstances'];
+    if (instances is List && instances.isNotEmpty) {
+      return instances.whereType<Map>().where((raw) {
+        final status =
+            raw['status']?.toString().trim().toLowerCase() ?? 'available';
+        return status == 'available';
+      }).length;
+    }
+    return _parseStockValue(bundleData['bundleCount']);
+  }
+
+  List<Map<String, dynamic>> _coffeeRefundOptionsFromData({
+    required QueryDocumentSnapshot<Map<String, dynamic>> doc,
+    required Map<String, dynamic> data,
+    required Map<String, dynamic> rootData,
+  }) {
+    final sourceId = data['sourceInventoryId']?.toString() ?? doc.id;
+    final categoryName = data['name']?.toString() ?? 'Coffee';
+    final basePrice = _parseMoney(data['basePrice'] ?? rootData['basePrice']);
+    final sizes =
+        ((data['sizes'] as List<dynamic>?) ??
+                (rootData['sizes'] as List<dynamic>?) ??
+                [])
+            .whereType<Map>()
+            .map((entry) => Map<String, dynamic>.from(entry))
+            .where(
+              (entry) => (entry['name']?.toString().trim() ?? '').isNotEmpty,
+            )
+            .toList();
+    final safeSizes = sizes.isEmpty
+        ? [
+            {'name': 'Regular', 'priceDelta': 0},
+          ]
+        : sizes;
+    final addonByName = <String, Map<String, dynamic>>{};
+    for (final source in [data, rootData]) {
+      for (final addon
+          in (source['addonOptions'] as List<dynamic>? ?? [])
+              .whereType<Map>()) {
+        final name = addon['name']?.toString().trim() ?? '';
+        if (name.isEmpty) continue;
+        addonByName.putIfAbsent(name, () => Map<String, dynamic>.from(addon));
+      }
+    }
+
+    final options = <Map<String, dynamic>>[];
+    for (final size in safeSizes) {
+      final sizeName = size['name']?.toString() ?? 'Regular';
+      final price = basePrice + _parseMoney(size['priceDelta']);
+      options.add({
+        'source': 'Coffee',
+        'docId': doc.id,
+        'sourceInventoryId': sourceId,
+        'name': categoryName,
+        'variant': sizeName,
+        'price': price,
+        'maxQty': 999,
+        'itemId': '$sourceId|size:$sizeName|addon:none',
+        'isBundle': false,
+        'isCoffee': true,
+      });
+      for (final addon in addonByName.values) {
+        final addonName = addon['name']?.toString().trim() ?? '';
+        if (addonName.isEmpty) continue;
+        final addonPrice = _parseMoney(addon['priceDelta']);
+        options.add({
+          'source': 'Coffee',
+          'docId': doc.id,
+          'sourceInventoryId': sourceId,
+          'name': categoryName,
+          'variant': '$sizeName + $addonName',
+          'price': price + addonPrice,
+          'maxQty': 999,
+          'itemId':
+              '$sourceId|size:$sizeName|addon:${addonName.toLowerCase().replaceAll(' ', '_')}',
+          'isBundle': false,
+          'isCoffee': true,
+        });
+      }
+    }
+    return options;
+  }
+
+  Future<List<Map<String, dynamic>>> _loadRefundOptions() async {
+    final ids = _staffInventoryIds
+        .where((id) => id.trim().isNotEmpty)
+        .toSet()
+        .take(10)
+        .toList();
+    Query<Map<String, dynamic>> query = FirebaseFirestore.instance.collection(
+      'staff_inventory',
+    );
+    if (ids.isEmpty) {
+      final uid = _staffDocId ?? FirebaseAuth.instance.currentUser?.uid ?? '';
+      query = query.where('staffId', isEqualTo: uid);
+    } else {
+      query = ids.length == 1
+          ? query.where('staffId', isEqualTo: ids.first)
+          : query.where('staffId', whereIn: ids);
+    }
+
+    final snapshot = await query.get();
+    final rootSnapshot = await FirebaseFirestore.instance
+        .collection('sales_inventory')
+        .get();
+    final activeRootById = <String, Map<String, dynamic>>{};
+    final activeRootByName = <String, Map<String, dynamic>>{};
+    for (final rootDoc in rootSnapshot.docs) {
+      final rootData = rootDoc.data();
+      if (rootData['isDeleted'] == true) continue;
+      activeRootById[rootDoc.id] = rootData;
+      final rootName = rootData['name']?.toString().trim().toLowerCase() ?? '';
+      if (rootName.isNotEmpty) activeRootByName[rootName] = rootData;
+    }
+
+    final options = <Map<String, dynamic>>[];
+    for (final doc in snapshot.docs) {
+      final data = doc.data();
+      if (data['isDeleted'] == true || data['isAddon'] == true) continue;
+      final sourceId = data['sourceInventoryId']?.toString() ?? doc.id;
+      final categoryName = data['name']?.toString() ?? 'Item';
+      final nameKey = categoryName.trim().toLowerCase();
+      final isCoffee = data['isCoffee'] == true;
+      final rootData =
+          activeRootById[sourceId] ??
+          activeRootByName[nameKey] ??
+          (isCoffee ? data : null);
+      if (rootData == null) continue;
+
+      if (data['isBundle'] == true) {
+        if (_hasExpiredRefundBundleItem(data)) continue;
+        final count = _availableRefundBundleCount(data);
+        if (count <= 0) continue;
+        options.add({
+          'source': 'Bundle',
+          'docId': doc.id,
+          'sourceInventoryId': sourceId,
+          'name': rootData['name'] ?? categoryName,
+          'variant': 'Bundle',
+          'price': _parseMoney(data['price']),
+          'maxQty': count,
+          'isBundle': true,
+          'isCoffee': false,
+        });
+        continue;
+      }
+
+      if (isCoffee) {
+        options.addAll(
+          _coffeeRefundOptionsFromData(
+            doc: doc,
+            data: data,
+            rootData: rootData,
+          ),
+        );
+        continue;
+      }
+
+      final items = _activeRefundItemsForData(data, rootData);
+      for (final item in items) {
+        final stock = _availableStockForInventoryItem(item);
+        if (stock <= 0) continue;
+        options.add({
+          'source': 'Categories',
+          'docId': doc.id,
+          'sourceInventoryId': sourceId,
+          'name': rootData['name'] ?? categoryName,
+          'variant': item['name']?.toString() ?? 'Item',
+          'price': _parseMoney(item['price']),
+          'maxQty': stock,
+          'itemId': item['id']?.toString() ?? '',
+          'isBundle': false,
+          'isCoffee': false,
+        });
+      }
+    }
+    return options;
+  }
+
+  Future<int> _soldQuantityForRefundOption(Map<String, dynamic> option) async {
+    final uid = _staffDocId ?? FirebaseAuth.instance.currentUser?.uid ?? '';
+    if (uid.isEmpty) return 0;
+    final query = FirebaseFirestore.instance
+        .collection('completed_sales')
+        .where('userId', isEqualTo: uid);
+    final snapshot = await query.get();
+    var soldTotal = 0;
+    var refundedTotal = 0;
+
+    for (final doc in snapshot.docs) {
+      final data = doc.data();
+      final items = (data['items'] as List<dynamic>? ?? [])
+          .whereType<Map>()
+          .map((item) => Map<String, dynamic>.from(item));
+      for (final item in items) {
+        final sourceInventoryId = item['sourceInventoryId']?.toString() ?? '';
+        final variant = item['variant']?.toString() ?? '';
+        final name = item['name']?.toString() ?? '';
+        final itemId =
+            item['itemId']?.toString() ?? item['id']?.toString() ?? '';
+        final optionSourceInventoryId =
+            option['sourceInventoryId']?.toString() ?? '';
+        final optionVariant = option['variant']?.toString() ?? '';
+        final optionName = option['name']?.toString() ?? '';
+        final optionItemId = option['itemId']?.toString() ?? '';
+        final itemIsBundle = item['isBundle'] == true;
+        final itemIsCoffee = item['isCoffee'] == true;
+        final optionIsBundle = option['isBundle'] == true;
+        final optionIsCoffee = option['isCoffee'] == true;
+
+        if (itemIsBundle != optionIsBundle || itemIsCoffee != optionIsCoffee) {
+          continue;
+        }
+
+        final exactSourceAndVariantMatch =
+            optionSourceInventoryId.isNotEmpty &&
+            sourceInventoryId == optionSourceInventoryId &&
+            variant == optionVariant;
+        final sourceAndNameMatch =
+            optionSourceInventoryId.isNotEmpty &&
+            sourceInventoryId == optionSourceInventoryId &&
+            name == optionName;
+        final nameAndVariantMatch =
+            name == optionName && variant == optionVariant;
+        final idMatch =
+            optionItemId.isNotEmpty &&
+            (itemId == optionItemId ||
+                itemId == '$optionSourceInventoryId|$optionItemId');
+
+        if (!(exactSourceAndVariantMatch ||
+            sourceAndNameMatch ||
+            nameAndVariantMatch ||
+            idMatch)) {
+          continue;
+        }
+
+        final qty = _parseStockValue(item['quantity']);
+        final type = data['type']?.toString().toLowerCase() ?? '';
+        if (type == 'refund' ||
+            data['status']?.toString().toLowerCase() == 'refund') {
+          refundedTotal += qty;
+        } else {
+          soldTotal += qty;
+        }
+      }
+    }
+
+    final netSold = soldTotal - refundedTotal;
+    return netSold < 0 ? 0 : netSold;
+  }
+
+  Future<void> _saveRefund({
+    required Map<String, dynamic> option,
+    required int quantity,
+    required String reason,
+  }) async {
+    final uid = _staffDocId ?? FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null || uid.isEmpty) throw Exception('User not authenticated');
+    final drawerId = _staffInventoryIds.isNotEmpty
+        ? _staffInventoryIds.first
+        : uid;
+    final amount = (_parseMoney(option['price']) * quantity).abs();
+    final firestore = FirebaseFirestore.instance;
+    final salesRef = firestore.collection('completed_sales').doc();
+    final drawerRef = firestore.collection('staff_cash_drawer').doc(drawerId);
+    final now = DateTime.now();
+    final refundId =
+        'R-${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}-${now.hour.toString().padLeft(2, '0')}${now.minute.toString().padLeft(2, '0')}-${now.millisecond.toString().padLeft(3, '0')}';
+    final currentUser = FirebaseAuth.instance.currentUser;
+    final staffName = (currentUser?.displayName?.trim().isNotEmpty == true)
+        ? currentUser!.displayName!
+        : currentUser?.email?.split('@').first ?? 'Staff';
+    final itemLabel =
+        '${option['name'] ?? 'Item'} (${option['variant'] ?? 'Refund'})';
+
+    await firestore.runTransaction((transaction) async {
+      final drawerSnapshot = await transaction.get(drawerRef);
+      final currentCash =
+          (drawerSnapshot.data()?['balance'] as num?)?.toDouble() ?? 0.0;
+      final nextCash = currentCash - amount;
+      transaction.set(salesRef, {
+        'userId': uid,
+        'branchId': drawerId,
+        'salesId': refundId,
+        'type': 'refund',
+        'source': option['source'] ?? 'Refund',
+        'reason': reason,
+        'subtotal': -amount,
+        'discount': 0.0,
+        'discountType': 'None',
+        'total': -amount,
+        'paidAmount': 0.0,
+        'change': 0.0,
+        'paymentMode': 'Cash',
+        'cashDrawerDelta': -amount,
+        'cashDrawerBalanceAfter': nextCash,
+        'items': [
+          {
+            'name': option['name'],
+            'variant': option['variant'],
+            'price': option['price'],
+            'quantity': quantity,
+            'sourceInventoryId': option['sourceInventoryId'] ?? '',
+            'itemId': option['itemId'] ?? '',
+            'isBundle': option['isBundle'] == true,
+            'isCoffee': option['isCoffee'] == true,
+          },
+        ],
+        'timestamp': FieldValue.serverTimestamp(),
+        'status': 'Refund',
+      });
+      transaction.set(drawerRef, {
+        'balance': nextCash,
+        'updatedAt': FieldValue.serverTimestamp(),
+        'staffId': drawerId,
+        'branchId': drawerId,
+        'handledByStaffId': uid,
+      }, SetOptions(merge: true));
+    });
+
+    await firestore.collection('admin_notifications').add({
+      'title': 'Refund recorded',
+      'message':
+          '$staffName refunded $quantity x $itemLabel for ₱${amount.toStringAsFixed(2)}. Cash drawer was deducted.',
+      'category': 'Refunds',
+      'type': 'refund',
+      'salesId': refundId,
+      'staffId': uid,
+      'staffName': staffName,
+      'branchId': drawerId,
+      'amount': amount,
+      'quantity': quantity,
+      'reason': reason,
+      'itemName': option['name'] ?? '',
+      'variant': option['variant'] ?? '',
+      'isRead': false,
+      'createdAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  Future<void> _showRefundDialog() async {
+    final options = await _loadRefundOptions();
+    if (!mounted) return;
+    if (options.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No refundable items found')),
+      );
+      return;
+    }
+
+    final qtyController = TextEditingController();
+    final reasonController = TextEditingController();
+    var source = options.first['source']?.toString() ?? 'Categories';
+    var selected = options.first;
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            final sourceOptions = options
+                .map((item) => item['source']?.toString() ?? 'Categories')
+                .toSet()
+                .toList();
+            final filtered = options
+                .where((item) => (item['source']?.toString() ?? '') == source)
+                .toList();
+            if (!filtered.contains(selected)) selected = filtered.first;
+            final maxQty = _parseStockValue(selected['maxQty']);
+            return Dialog(
+              insetPadding: const EdgeInsets.symmetric(
+                horizontal: 24,
+                vertical: 24,
+              ),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(28),
+              ),
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxHeight: MediaQuery.of(context).size.height * 0.84,
+                ),
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.all(24),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Row(
+                        children: [
+                          const Expanded(
+                            child: Text(
+                              'Refund Item',
+                              style: TextStyle(
+                                color: _C.primaryDark,
+                                fontSize: 24,
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                          ),
+                          IconButton(
+                            onPressed: () => Navigator.pop(dialogContext),
+                            icon: const Icon(Icons.close_rounded),
+                            color: _C.primaryDark,
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      DropdownButtonFormField<String>(
+                        initialValue: source,
+                        decoration: _refundInputDecoration(
+                          'Refund source',
+                          Icons.compare_arrows_rounded,
+                        ),
+                        items: sourceOptions
+                            .map(
+                              (value) => DropdownMenuItem(
+                                value: value,
+                                child: Text(value),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: (value) {
+                          if (value == null) return;
+                          setDialogState(() {
+                            source = value;
+                            selected = options.firstWhere(
+                              (item) => item['source'] == source,
+                            );
+                          });
+                        },
+                      ),
+                      const SizedBox(height: 12),
+                      DropdownButtonFormField<Map<String, dynamic>>(
+                        initialValue: selected,
+                        decoration: _refundInputDecoration(
+                          '$source item',
+                          Icons.category_rounded,
+                        ),
+                        items: filtered
+                            .map(
+                              (item) => DropdownMenuItem(
+                                value: item,
+                                child: Text(
+                                  '${item['name']} (${item['variant']})',
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: (value) {
+                          if (value == null) return;
+                          setDialogState(() => selected = value);
+                        },
+                      ),
+                      const SizedBox(height: 12),
+                      FutureBuilder<int>(
+                        future: _soldQuantityForRefundOption(selected),
+                        builder: (context, snapshot) {
+                          final soldQty = snapshot.data ?? 0;
+                          final maxRefundable = soldQty < maxQty
+                              ? soldQty
+                              : maxQty;
+                          return Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              if (snapshot.connectionState ==
+                                  ConnectionState.waiting)
+                                const Text(
+                                  'Checking sold quantity...',
+                                  style: TextStyle(
+                                    color: _C.primaryDark,
+                                    fontSize: 13,
+                                  ),
+                                )
+                              else if (soldQty == 0)
+                                const Text(
+                                  'No sold quantity found for this item.',
+                                  style: TextStyle(
+                                    color: Colors.red,
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                )
+                              else
+                                Text(
+                                  'Sold quantity: $soldQty • Refundable: $maxRefundable',
+                                  style: const TextStyle(
+                                    color: _C.primaryDark,
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              const SizedBox(height: 12),
+                            ],
+                          );
+                        },
+                      ),
+                      TextField(
+                        controller: qtyController,
+                        keyboardType: TextInputType.number,
+                        decoration: _refundInputDecoration(
+                          'Returned quantity',
+                          Icons.undo_rounded,
+                        ).copyWith(helperText: 'Enter returned quantity'),
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: reasonController,
+                        minLines: 2,
+                        maxLines: 4,
+                        decoration: _refundInputDecoration(
+                          'Reason',
+                          Icons.edit_note_rounded,
+                        ),
+                      ),
+                      const SizedBox(height: 18),
+                      ElevatedButton.icon(
+                        onPressed: () async {
+                          final qty = _parseStockValue(qtyController.text);
+                          final reason = reasonController.text.trim();
+                          final soldQty = await _soldQuantityForRefundOption(
+                            selected,
+                          );
+                          final maxRefundable = soldQty < maxQty
+                              ? soldQty
+                              : maxQty;
+                          if (soldQty == 0) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text(
+                                  'Cannot refund this item until it has been sold.',
+                                ),
+                              ),
+                            );
+                            return;
+                          }
+                          if (qty <= 0 || qty > maxRefundable) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text(
+                                  'Enter quantity from 1 to $maxRefundable',
+                                ),
+                              ),
+                            );
+                            return;
+                          }
+                          if (reason.isEmpty) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('Enter refund reason'),
+                              ),
+                            );
+                            return;
+                          }
+                          try {
+                            await _saveRefund(
+                              option: selected,
+                              quantity: qty,
+                              reason: reason,
+                            );
+                            if (dialogContext.mounted)
+                              Navigator.pop(dialogContext);
+                            if (!mounted) return;
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('Refund recorded')),
+                            );
+                          } catch (e) {
+                            if (!mounted) return;
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text('Refund failed: $e')),
+                            );
+                          }
+                        },
+                        icon: const Icon(Icons.assignment_return_rounded),
+                        label: const Text('Confirm Refund'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: _C.primary,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+
+    qtyController.dispose();
+    reasonController.dispose();
+  }
+
+  InputDecoration _refundInputDecoration(String label, IconData icon) {
+    return InputDecoration(
+      labelText: label,
+      prefixIcon: Icon(icon, color: _C.primary),
+      filled: true,
+      fillColor: const Color(0xFFFFF3F8),
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(16),
+        borderSide: const BorderSide(color: Color(0xFFF8BBD0)),
+      ),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(16),
+        borderSide: const BorderSide(color: Color(0xFFF8BBD0)),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(16),
+        borderSide: const BorderSide(color: _C.primary, width: 2),
+      ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
+    final screenWidth = MediaQuery.sizeOf(context).width;
+    final isTablet = screenWidth >= 700;
+    final contentMaxWidth = isTablet ? 960.0 : double.infinity;
+    final inventoryMaxWidth = isTablet ? 760.0 : double.infinity;
+    final horizontalPadding = isTablet ? 24.0 : 16.0;
+
     return CustomScrollView(
       controller: widget.scrollController,
       slivers: [
         // ── Header ────────────────────────────────────────────────────────
         SliverAppBar(
-          expandedHeight: 370,
+          expandedHeight: isTablet ? 270 : 300,
           collapsedHeight: 60,
           pinned: true,
           elevation: 0,
@@ -256,8 +979,19 @@ class _DashboardPageState extends State<DashboardPage>
         SliverToBoxAdapter(
           child: Container(
             color: _C.surface,
-            padding: const EdgeInsets.fromLTRB(20, 24, 20, 8),
-            child: _SectionLabel(title: 'Dashboard'),
+            padding: EdgeInsets.fromLTRB(
+              isTablet ? 24 : 20,
+              isTablet ? 16 : 18,
+              isTablet ? 24 : 20,
+              6,
+            ),
+            child: Align(
+              alignment: Alignment.center,
+              child: ConstrainedBox(
+                constraints: BoxConstraints(maxWidth: contentMaxWidth),
+                child: const _SectionLabel(title: 'Dashboard'),
+              ),
+            ),
           ),
         ),
 
@@ -265,8 +999,21 @@ class _DashboardPageState extends State<DashboardPage>
         SliverSafeArea(
           top: false,
           sliver: SliverPadding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-            sliver: SliverToBoxAdapter(child: _buildAdminInventoryList()),
+            padding: EdgeInsets.fromLTRB(
+              horizontalPadding,
+              4,
+              horizontalPadding,
+              0,
+            ),
+            sliver: SliverToBoxAdapter(
+              child: Align(
+                alignment: Alignment.topCenter,
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(maxWidth: inventoryMaxWidth),
+                  child: _buildAdminInventoryList(),
+                ),
+              ),
+            ),
           ),
         ),
 
@@ -274,19 +1021,37 @@ class _DashboardPageState extends State<DashboardPage>
         SliverToBoxAdapter(
           child: Container(
             color: _C.surface,
-            padding: const EdgeInsets.fromLTRB(20, 24, 20, 12),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                _SectionLabel(title: 'Performance'),
-                Row(
+            padding: EdgeInsets.fromLTRB(
+              isTablet ? 24 : 20,
+              isTablet ? 10 : 12,
+              isTablet ? 24 : 20,
+              10,
+            ),
+            child: Align(
+              alignment: Alignment.center,
+              child: ConstrainedBox(
+                constraints: BoxConstraints(maxWidth: contentMaxWidth),
+                child: Wrap(
+                  spacing: 12,
+                  runSpacing: 10,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  alignment: WrapAlignment.spaceBetween,
                   children: [
-                    _RefundButton(onTap: _openRefundFlow),
-                    const SizedBox(width: 8),
-                    _HistoryButton(onTap: _showHistory),
+                    const Padding(
+                      padding: EdgeInsets.only(right: 8),
+                      child: _SectionLabel(title: 'Performance'),
+                    ),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        _RefundButton(onTap: _openRefundFlow),
+                        _HistoryButton(onTap: _showHistory),
+                      ],
+                    ),
                   ],
                 ),
-              ],
+              ),
             ),
           ),
         ),
@@ -296,8 +1061,21 @@ class _DashboardPageState extends State<DashboardPage>
           top: false,
           bottom: true,
           sliver: SliverPadding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 120),
-            sliver: SliverToBoxAdapter(child: _buildPerformanceData()),
+            padding: EdgeInsets.fromLTRB(
+              horizontalPadding,
+              0,
+              horizontalPadding,
+              120,
+            ),
+            sliver: SliverToBoxAdapter(
+              child: Align(
+                alignment: Alignment.topCenter,
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(maxWidth: contentMaxWidth),
+                  child: _buildPerformanceData(),
+                ),
+              ),
+            ),
           ),
         ),
       ],
@@ -306,13 +1084,25 @@ class _DashboardPageState extends State<DashboardPage>
 
   // ── Admin inventory list ──────────────────────────────────────────────────
   Widget _buildAdminInventoryList() {
-    return StreamBuilder<QuerySnapshot>(
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
       stream: _staffInventoryStream(),
       builder: (context, snapshot) {
         if (snapshot.hasError) {
           return _ErrorCard(message: 'Error loading inventory');
         }
-        if (snapshot.connectionState == ConnectionState.waiting) {
+        if (snapshot.hasData) {
+          unawaited(
+            LocalDatabaseSyncService().cacheCollectionDocs(
+              'staff_inventory',
+              snapshot.data!.docs.map((doc) {
+                final data = doc.data();
+                return {...data, '_localDocId': doc.id};
+              }),
+            ),
+          );
+        }
+        if (snapshot.connectionState == ConnectionState.waiting &&
+            _cachedStaffInventoryDocs.isEmpty) {
           return const Center(
             child: Padding(
               padding: EdgeInsets.all(32),
@@ -321,7 +1111,9 @@ class _DashboardPageState extends State<DashboardPage>
           );
         }
 
-        final docs = snapshot.data?.docs ?? [];
+        final docs =
+            snapshot.data?.docs.map(_CachedDoc.fromFirestore).toList() ??
+            _cachedStaffInventoryDocs;
         if (docs.isEmpty) {
           return const _EmptyState(
             icon: Icons.inventory_2_outlined,
@@ -330,12 +1122,24 @@ class _DashboardPageState extends State<DashboardPage>
         }
 
         // ── Filter out sales transactions (status='completed') to show only inventory ──────────────────
-        return StreamBuilder<QuerySnapshot>(
+        return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
           stream: FirebaseFirestore.instance
               .collection('sales_inventory')
               .snapshots(),
           builder: (context, rootSnapshot) {
-            if (rootSnapshot.connectionState == ConnectionState.waiting) {
+            if (rootSnapshot.hasData) {
+              unawaited(
+                LocalDatabaseSyncService().cacheCollectionDocs(
+                  'sales_inventory',
+                  rootSnapshot.data!.docs.map((doc) {
+                    final data = doc.data();
+                    return {...data, '_localDocId': doc.id};
+                  }),
+                ),
+              );
+            }
+            if (rootSnapshot.connectionState == ConnectionState.waiting &&
+                _cachedSalesInventoryDocs.isEmpty) {
               return const Center(
                 child: Padding(
                   padding: EdgeInsets.all(24),
@@ -345,9 +1149,14 @@ class _DashboardPageState extends State<DashboardPage>
             }
             final activeRootById = <String, Map<String, dynamic>>{};
             final activeRootByName = <String, Map<String, dynamic>>{};
-            for (final rootDoc in rootSnapshot.data?.docs ?? []) {
-              final rootData = rootDoc.data() as Map<String, dynamic>?;
-              if (rootData == null || rootData['isDeleted'] == true) continue;
+            final rootDocs =
+                rootSnapshot.data?.docs
+                    .map(_CachedDoc.fromFirestore)
+                    .toList() ??
+                _cachedSalesInventoryDocs;
+            for (final rootDoc in rootDocs) {
+              final rootData = rootDoc.data();
+              if (rootData['isDeleted'] == true) continue;
               activeRootById[rootDoc.id] = rootData;
               final rootName = rootData['name']
                   ?.toString()
@@ -383,9 +1192,8 @@ class _DashboardPageState extends State<DashboardPage>
 
             final inventoryDocs = <Map<String, dynamic>>[];
             for (final doc in docs) {
-              final data = doc.data() as Map<String, dynamic>?;
-              if (data == null ||
-                  data['isDeleted'] == true ||
+              final data = doc.data();
+              if (data['isDeleted'] == true ||
                   data['status'] == 'completed' ||
                   data['salesId'] != null) {
                 continue;
@@ -483,7 +1291,7 @@ class _DashboardPageState extends State<DashboardPage>
             return Column(
               children: [
                 Padding(
-                  padding: const EdgeInsets.only(bottom: 18),
+                  padding: const EdgeInsets.only(bottom: 12),
                   child: SizedBox(
                     width: double.infinity,
                     child: OutlinedButton.icon(
@@ -508,7 +1316,7 @@ class _DashboardPageState extends State<DashboardPage>
                       ),
                       style: OutlinedButton.styleFrom(
                         side: const BorderSide(color: _C.primaryDark),
-                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        padding: const EdgeInsets.symmetric(vertical: 12),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(16),
                         ),
@@ -517,7 +1325,7 @@ class _DashboardPageState extends State<DashboardPage>
                   ),
                 ),
                 Padding(
-                  padding: const EdgeInsets.only(bottom: 18),
+                  padding: const EdgeInsets.only(bottom: 8),
                   child: _InventoryViewSelector(
                     selected: _inventoryView,
                     onSelected: (value) => setState(() {
@@ -527,7 +1335,7 @@ class _DashboardPageState extends State<DashboardPage>
                 ),
                 if (filteredDocs.isEmpty)
                   Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    padding: const EdgeInsets.symmetric(vertical: 6),
                     child: _EmptyState(
                       icon: _inventoryView == 'categories'
                           ? Icons.category_rounded
@@ -579,8 +1387,7 @@ class _DashboardPageState extends State<DashboardPage>
 
                     // Derive a friendly category label
                     final nameLower = name.toLowerCase();
-                    final coffeeId =
-                        data['coffeeId']?.toString().trim() ?? '';
+                    final coffeeId = data['coffeeId']?.toString().trim() ?? '';
                     String category = 'Cupcakes';
                     if (data['isCoffee'] == true) {
                       category = coffeeId.isNotEmpty
@@ -625,7 +1432,7 @@ class _DashboardPageState extends State<DashboardPage>
                         },
                       ),
                     );
-                  }).toList(),
+                  }),
               ],
             );
           },
@@ -740,49 +1547,79 @@ class _DashboardPageState extends State<DashboardPage>
 
   // ── Performance data ───────────────────────────────────────────────────────
   Widget _buildPerformanceData() {
-    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-      stream: _receiptStream(),
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Padding(
-            padding: EdgeInsets.all(28),
-            child: Center(child: CircularProgressIndicator(color: _C.primary)),
-          );
-        }
-        final now = DateTime.now();
-        final today = DateTime(now.year, now.month, now.day);
-        final tomorrow = today.add(const Duration(days: 1));
-        final receipts = (snapshot.data?.docs ?? []).where((doc) {
-          final data = doc.data();
-          final timestamp = data['timestamp'];
-          if (timestamp is! Timestamp) return false;
-          final dt = timestamp.toDate();
-          final status = data['status']?.toString().toLowerCase() ?? '';
-          final type = data['type']?.toString().toLowerCase() ?? '';
-          return !dt.isBefore(today) &&
-              dt.isBefore(tomorrow) &&
-              status != 'refund' &&
-              type != 'refund';
-        }).toList()
-          ..sort((a, b) {
-            final at = a.data()['timestamp'] as Timestamp?;
-            final bt = b.data()['timestamp'] as Timestamp?;
-            return (bt?.millisecondsSinceEpoch ?? 0)
-                .compareTo(at?.millisecondsSinceEpoch ?? 0);
-          });
+    return StreamBuilder<List<Map<String, dynamic>>>(
+      stream: LocalDatabaseSyncService().watchLocalCompletedSales(),
+      builder: (context, localSnapshot) {
+        return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+          stream: _receiptStream(),
+          builder: (context, snapshot) {
+            final localSales = localSnapshot.data ?? const [];
+            final firestoreSales = (snapshot.data?.docs ?? [])
+                .map((doc) => doc.data())
+                .toList();
+            final now = DateTime.now();
+            final today = DateTime(now.year, now.month, now.day);
+            final tomorrow = today.add(const Duration(days: 1));
+            final staffId = _staffDocId?.trim() ?? '';
+            final bySalesId = <String, Map<String, dynamic>>{};
 
-        if (receipts.isEmpty) {
-          return const _EmptyState(
-            icon: Icons.receipt_long_rounded,
-            label: 'No receipts today.',
-            sublabel: 'Confirmed orders will appear here.',
-          );
-        }
+            bool isVisibleReceipt(Map<String, dynamic> data) {
+              final timestamp = data['timestamp'];
+              if (timestamp is! Timestamp) return false;
+              final userId = data['userId']?.toString() ?? '';
+              if (staffId.isNotEmpty && userId != staffId) return false;
+              final dt = timestamp.toDate();
+              final status = data['status']?.toString().toLowerCase() ?? '';
+              final type = data['type']?.toString().toLowerCase() ?? '';
+              return !dt.isBefore(today) &&
+                  dt.isBefore(tomorrow) &&
+                  status != 'refund' &&
+                  type != 'refund';
+            }
 
-        return Column(
-          children: receipts
-              .map((doc) => _ReceiptCard(data: doc.data(), compact: false))
-              .toList(),
+            for (final data in [...localSales, ...firestoreSales]) {
+              if (!isVisibleReceipt(data)) continue;
+              final salesId = data['salesId']?.toString() ?? '';
+              final key = salesId.isNotEmpty
+                  ? salesId
+                  : 'local-${data['localId'] ?? bySalesId.length}';
+              bySalesId[key] = data;
+            }
+
+            final receipts = bySalesId.values.toList()
+              ..sort((a, b) {
+                final at = a['timestamp'] as Timestamp?;
+                final bt = b['timestamp'] as Timestamp?;
+                return (bt?.millisecondsSinceEpoch ?? 0).compareTo(
+                  at?.millisecondsSinceEpoch ?? 0,
+                );
+              });
+
+            if (receipts.isEmpty &&
+                snapshot.connectionState == ConnectionState.waiting &&
+                localSnapshot.connectionState == ConnectionState.waiting) {
+              return const Padding(
+                padding: EdgeInsets.all(28),
+                child: Center(
+                  child: CircularProgressIndicator(color: _C.primary),
+                ),
+              );
+            }
+
+            if (receipts.isEmpty) {
+              return const _EmptyState(
+                icon: Icons.receipt_long_rounded,
+                label: 'No receipts today.',
+                sublabel: 'Confirmed orders will appear here.',
+              );
+            }
+
+            return Column(
+              children: receipts
+                  .map((data) => _ReceiptCard(data: data, compact: false))
+                  .toList(),
+            );
+          },
         );
       },
     );
@@ -852,6 +1689,7 @@ class _SectionLabel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Row(
+      mainAxisSize: MainAxisSize.min,
       children: [
         Container(
           width: 4,
@@ -948,8 +1786,11 @@ class _RefundButton extends StatelessWidget {
         child: const Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.assignment_return_rounded,
-                color: Color(0xFFE65100), size: 16),
+            Icon(
+              Icons.assignment_return_rounded,
+              color: Color(0xFFE65100),
+              size: 16,
+            ),
             SizedBox(width: 6),
             Text(
               'Refund',
@@ -989,6 +1830,9 @@ class _ReceiptCard extends StatelessWidget {
         : DateTime.now();
     final paymentMode = data['paymentMode']?.toString() ?? 'Cash';
     final gcashId = data['gcashTransactionId']?.toString().trim() ?? '';
+    final type = data['type']?.toString().toLowerCase() ?? '';
+    final status = data['status']?.toString().toLowerCase() ?? '';
+    final isRefund = type == 'refund' || status == 'refund';
     final total = _money(data['total']);
     final paid = _money(data['paidAmount']);
     final change = _money(data['change']);
@@ -1026,8 +1870,11 @@ class _ReceiptCard extends StatelessWidget {
               ),
               child: Row(
                 children: [
-                  const Icon(Icons.receipt_long_rounded,
-                      color: Colors.white, size: 20),
+                  const Icon(
+                    Icons.receipt_long_rounded,
+                    color: Colors.white,
+                    size: 20,
+                  ),
                   const SizedBox(width: 10),
                   Expanded(
                     child: Text(
@@ -1040,6 +1887,28 @@ class _ReceiptCard extends StatelessWidget {
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
+                  if (isRefund) ...[
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.white24,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: const Text(
+                        'REFUND',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ],
+                  const SizedBox(width: 8),
                   Text(
                     _formatDateTime(timestamp),
                     style: const TextStyle(
@@ -1059,6 +1928,14 @@ class _ReceiptCard extends StatelessWidget {
                     final name = item['variant']?.toString().isNotEmpty == true
                         ? '${item['name']} (${item['variant']})'
                         : item['name']?.toString() ?? 'Item';
+                    final itemKind = item['isBundle'] == true
+                        ? 'Bundle'
+                        : item['isCoffee'] == true
+                        ? 'Coffee'
+                        : '';
+                    final displayName = itemKind.isNotEmpty
+                        ? '$name • $itemKind'
+                        : name;
                     final qty = _qty(item['quantity']);
                     final price = _money(item['price']);
                     return Padding(
@@ -1067,7 +1944,7 @@ class _ReceiptCard extends StatelessWidget {
                         children: [
                           Expanded(
                             child: Text(
-                              '${qty}x $name',
+                              '${qty}x $displayName',
                               style: const TextStyle(
                                 color: _C.primaryDark,
                                 fontSize: 13,
@@ -1087,16 +1964,24 @@ class _ReceiptCard extends StatelessWidget {
                     );
                   }),
                   const Divider(height: 18),
-                  _ReceiptLine('Mode of Payment',
-                      paymentMode == 'GCash' && gcashId.isNotEmpty
-                          ? 'GCash - $gcashId'
-                          : paymentMode),
-                  if (!compact) _ReceiptLine('Customer Paid',
-                      '₱${paid.toStringAsFixed(2)}'),
-                  if (!compact) _ReceiptLine('Change',
-                      '₱${change.toStringAsFixed(2)}'),
-                  _ReceiptLine('Total', '₱${total.toStringAsFixed(2)}',
-                      strong: true),
+                  _ReceiptLine(
+                    'Mode of Payment',
+                    paymentMode == 'GCash' && gcashId.isNotEmpty
+                        ? 'GCash - $gcashId'
+                        : paymentMode,
+                  ),
+                  if (!compact)
+                    _ReceiptLine(
+                      'Customer Paid',
+                      '₱${paid.toStringAsFixed(2)}',
+                    ),
+                  if (!compact)
+                    _ReceiptLine('Change', '₱${change.toStringAsFixed(2)}'),
+                  _ReceiptLine(
+                    'Total',
+                    '₱${total.toStringAsFixed(2)}',
+                    strong: true,
+                  ),
                 ],
               ),
             ),
@@ -1208,7 +2093,7 @@ class _Header extends StatelessWidget {
             Image.asset(
               'Assets/Image/Bg.jpg',
               fit: BoxFit.cover,
-              errorBuilder: (_, __, ___) => Container(color: _C.primaryDark),
+              errorBuilder: (_, _, _) => Container(color: _C.primaryDark),
             ),
 
             // ── Rich layered overlay ──────────────────────────────────────
@@ -1250,7 +2135,7 @@ class _Header extends StatelessWidget {
             // ── Main content ──────────────────────────────────────────────
             SafeArea(
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(20, 10, 20, 66),
+                padding: const EdgeInsets.fromLTRB(20, 10, 20, 28),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -1277,17 +2162,17 @@ class _Header extends StatelessWidget {
                               >(
                                 stream: FirebaseFirestore.instance
                                     .collection('messages')
-                                    .where(
-                                      'participantIds',
-                                      arrayContains: uid,
-                                    )
+                                    .where('participantIds', arrayContains: uid)
                                     .snapshots(),
                                 builder: (context, snapshot) {
                                   var unread = 0;
-                                  for (final doc in snapshot.data?.docs ??
-                                      <QueryDocumentSnapshot<
-                                        Map<String, dynamic>
-                                      >>[]) {
+                                  for (final doc
+                                      in snapshot.data?.docs ??
+                                          <
+                                            QueryDocumentSnapshot<
+                                              Map<String, dynamic>
+                                            >
+                                          >[]) {
                                     final unreadBy = doc.data()['unreadBy'];
                                     if (unreadBy is Map) {
                                       final value = unreadBy[uid];
@@ -1310,27 +2195,37 @@ class _Header extends StatelessWidget {
                       ],
                     ),
 
-                    const Spacer(),
+                    const SizedBox(height: 26),
 
                     // ── Staff Profile Card ───────────────────────────────
                     StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
                       stream: _cashDrawerStream(),
                       builder: (context, cashDrawerSnapshot) {
                         final cashDrawerBalance =
+                            cashDrawerSnapshot.data?.docs.fold<double>(0.0, (
+                              sum,
+                              doc,
+                            ) {
+                              final data = doc.data();
+                              Future.microtask(
+                                () => CashDrawerService.zeroIfPast24Hours(
+                                  doc.id,
+                                  data,
+                                ),
+                              );
+                              return sum +
+                                  ((data['balance'] as num?)?.toDouble() ??
+                                      0.0);
+                            }) ??
+                            0.0;
+                        final gcashDrawerBalance =
                             cashDrawerSnapshot.data?.docs.fold<double>(
                               0.0,
-                              (sum, doc) {
-                                final data = doc.data();
-                                Future.microtask(
-                                  () => CashDrawerService.zeroIfPast24Hours(
-                                    doc.id,
-                                    data,
-                                  ),
-                                );
-                                return sum +
-                                    ((data['balance'] as num?)?.toDouble() ??
-                                        0.0);
-                              },
+                              (sum, doc) =>
+                                  sum +
+                                  ((doc.data()['gcashBalance'] as num?)
+                                          ?.toDouble() ??
+                                      0.0),
                             ) ??
                             0.0;
                         return _StaffProfileCard(
@@ -1339,6 +2234,7 @@ class _Header extends StatelessWidget {
                           role: role,
                           photoUrl: photoUrl,
                           cashDrawerBalance: cashDrawerBalance,
+                          gcashDrawerBalance: gcashDrawerBalance,
                         );
                       },
                     ),
@@ -1382,7 +2278,7 @@ class _LogoFrame extends StatelessWidget {
         child: Image.asset(
           'Assets/Image/ob.jpg',
           fit: BoxFit.cover,
-          errorBuilder: (_, __, ___) => Container(
+          errorBuilder: (_, _, _) => Container(
             color: _C.primaryLight,
             child: const Icon(
               Icons.storefront_rounded,
@@ -1552,12 +2448,13 @@ class _MessageButton extends StatelessWidget {
 // STAFF PROFILE CARD  ← KEY UPGRADE
 // ═══════════════════════════════════════════════════════════════════════════
 
-class _StaffProfileCard extends StatelessWidget {
+class _StaffProfileCard extends StatefulWidget {
   final String name;
   final String staffId;
   final String role;
   final String? photoUrl;
   final double cashDrawerBalance;
+  final double gcashDrawerBalance;
 
   const _StaffProfileCard({
     required this.name,
@@ -1565,10 +2462,22 @@ class _StaffProfileCard extends StatelessWidget {
     required this.role,
     this.photoUrl,
     required this.cashDrawerBalance,
+    required this.gcashDrawerBalance,
   });
 
   @override
+  State<_StaffProfileCard> createState() => _StaffProfileCardState();
+}
+
+class _StaffProfileCardState extends State<_StaffProfileCard> {
+  @override
   Widget build(BuildContext context) {
+    final name = widget.name;
+    final staffId = widget.staffId;
+    final role = widget.role;
+    final photoUrl = widget.photoUrl;
+    final cashDrawerBalance = widget.cashDrawerBalance;
+
     return LayoutBuilder(
       builder: (context, constraints) {
         final isCompact = constraints.maxWidth < 380;
@@ -1657,7 +2566,7 @@ class _StaffProfileCard extends StatelessWidget {
                             Text(
                               '₱${cashDrawerBalance.toStringAsFixed(2)}',
                               style: const TextStyle(
-                                fontSize: 14,
+                                fontSize: 15,
                                 fontWeight: FontWeight.w900,
                                 color: Colors.white,
                               ),
@@ -1709,7 +2618,7 @@ class _StaffProfileCard extends StatelessWidget {
                     ),
 
                     Container(
-                      width: 118,
+                      width: 136,
                       padding: const EdgeInsets.symmetric(
                         horizontal: 12,
                         vertical: 10,
@@ -1733,7 +2642,7 @@ class _StaffProfileCard extends StatelessWidget {
                               color: Colors.white70,
                             ),
                           ),
-                          const SizedBox(height: 6),
+                          const SizedBox(height: 5),
                           Text(
                             '₱${cashDrawerBalance.toStringAsFixed(2)}',
                             style: const TextStyle(
@@ -1754,6 +2663,7 @@ class _StaffProfileCard extends StatelessWidget {
 }
 
 // ── Staff avatar ──────────────────────────────────────────────────────────────
+
 class _StaffAvatar extends StatelessWidget {
   final String? photoUrl;
   const _StaffAvatar({this.photoUrl});
@@ -1807,7 +2717,7 @@ class _StaffAvatar extends StatelessWidget {
       return Image.network(
         photoUrl!,
         fit: BoxFit.cover,
-        errorBuilder: (_, __, ___) => _fallback(),
+        errorBuilder: (_, _, _) => _fallback(),
       );
     }
     return _fallback();
@@ -2179,7 +3089,7 @@ class _ItemCardState extends State<_ItemCard> {
           return Image.memory(
             base64Decode(src.substring(commaIndex + 1)),
             fit: BoxFit.cover,
-            errorBuilder: (_, __, ___) => _imageFallback(),
+            errorBuilder: (_, _, _) => _imageFallback(),
           );
         } catch (_) {
           return _imageFallback();
@@ -2190,13 +3100,13 @@ class _ItemCardState extends State<_ItemCard> {
       return Image.network(
         src,
         fit: BoxFit.cover,
-        errorBuilder: (_, __, ___) => _imageFallback(),
+        errorBuilder: (_, _, _) => _imageFallback(),
       );
     }
     return Image.asset(
       src,
       fit: BoxFit.cover,
-      errorBuilder: (_, __, ___) => _imageFallback(),
+      errorBuilder: (_, _, _) => _imageFallback(),
     );
   }
 
@@ -2258,7 +3168,8 @@ class _HistorySheet extends StatefulWidget {
 }
 
 class _HistorySheetState extends State<_HistorySheet> {
-  String _selectedDate = '';
+  String _selectedDate = _formatDate(DateTime.now());
+  String _selectedPaymentMode = 'Cash';
 
   Map<String, List<Map<String, dynamic>>> _groupByDate(
     List<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
@@ -2275,8 +3186,9 @@ class _HistorySheetState extends State<_HistorySheet> {
       values.sort((a, b) {
         final at = a['timestamp'] as Timestamp?;
         final bt = b['timestamp'] as Timestamp?;
-        return (bt?.millisecondsSinceEpoch ?? 0)
-            .compareTo(at?.millisecondsSinceEpoch ?? 0);
+        return (bt?.millisecondsSinceEpoch ?? 0).compareTo(
+          at?.millisecondsSinceEpoch ?? 0,
+        );
       });
     }
     return grouped;
@@ -2370,12 +3282,47 @@ class _HistorySheetState extends State<_HistorySheet> {
                     );
                   }
                   final grouped = _groupByDate(snapshot.data?.docs ?? []);
-                  final dates = grouped.keys.toList()
-                    ..sort((a, b) => b.compareTo(a));
-                  if (_selectedDate.isEmpty && dates.isNotEmpty) {
-                    _selectedDate = dates.first;
+                  final today = _formatDate(DateTime.now());
+                  final dates = {today, ...grouped.keys}.toList()
+                    ..sort((a, b) {
+                      DateTime parseDate(String value) {
+                        try {
+                          return DateTime.parse(value);
+                        } catch (_) {
+                          final parts = value.split(' ');
+                          if (parts.length < 3) return DateTime(1970);
+                          const months = [
+                            'January',
+                            'February',
+                            'March',
+                            'April',
+                            'May',
+                            'June',
+                            'July',
+                            'August',
+                            'September',
+                            'October',
+                            'November',
+                            'December',
+                          ];
+                          final month = months.indexOf(parts[0]) + 1;
+                          final day =
+                              int.tryParse(parts[1].replaceAll(',', '')) ?? 1;
+                          final year = int.tryParse(parts[2]) ?? 1970;
+                          return DateTime(year, month, day);
+                        }
+                      }
+
+                      return parseDate(b).compareTo(parseDate(a));
+                    });
+                  if (!dates.contains(_selectedDate)) {
+                    _selectedDate = today;
                   }
                   final receipts = grouped[_selectedDate] ?? [];
+                  final filteredReceipts = receipts.where((receipt) {
+                    final mode = receipt['paymentMode']?.toString() ?? 'Cash';
+                    return mode == _selectedPaymentMode;
+                  }).toList();
                   double gcashTotal = 0;
                   double cashTotal = 0;
                   for (final receipt in receipts) {
@@ -2408,8 +3355,7 @@ class _HistorySheetState extends State<_HistorySheet> {
                           scrollDirection: Axis.horizontal,
                           padding: const EdgeInsets.symmetric(horizontal: 16),
                           itemCount: dates.length,
-                          separatorBuilder: (_, __) =>
-                              const SizedBox(width: 8),
+                          separatorBuilder: (_, _) => const SizedBox(width: 8),
                           itemBuilder: (_, i) {
                             final d = dates[i];
                             final selected = d == _selectedDate;
@@ -2422,8 +3368,7 @@ class _HistorySheetState extends State<_HistorySheet> {
                                   vertical: 8,
                                 ),
                                 decoration: BoxDecoration(
-                                  color:
-                                      selected ? _C.primary : Colors.white,
+                                  color: selected ? _C.primary : Colors.white,
                                   borderRadius: BorderRadius.circular(20),
                                   border: Border.all(
                                     color: selected
@@ -2455,6 +3400,10 @@ class _HistorySheetState extends State<_HistorySheet> {
                                 label: 'Cash',
                                 value: cashTotal,
                                 color: Colors.green.shade700,
+                                selected: _selectedPaymentMode == 'Cash',
+                                onTap: () => setState(() {
+                                  _selectedPaymentMode = 'Cash';
+                                }),
                               ),
                             ),
                             const SizedBox(width: 8),
@@ -2463,6 +3412,10 @@ class _HistorySheetState extends State<_HistorySheet> {
                                 label: 'GCash',
                                 value: gcashTotal,
                                 color: Colors.blue.shade700,
+                                selected: _selectedPaymentMode == 'GCash',
+                                onTap: () => setState(() {
+                                  _selectedPaymentMode = 'GCash';
+                                }),
                               ),
                             ),
                           ],
@@ -2474,7 +3427,7 @@ class _HistorySheetState extends State<_HistorySheet> {
                         color: Color(0xFFEDD9C8),
                       ),
                       Expanded(
-                        child: receipts.isEmpty
+                        child: filteredReceipts.isEmpty
                             ? Center(
                                 child: Text(
                                   'No receipt record',
@@ -2487,13 +3440,19 @@ class _HistorySheetState extends State<_HistorySheet> {
                               )
                             : ListView(
                                 controller: scrollController,
-                                padding:
-                                    const EdgeInsets.fromLTRB(16, 16, 16, 40),
-                                children: receipts
-                                    .map((data) => _ReceiptCard(
-                                          data: data,
-                                          compact: true,
-                                        ))
+                                padding: const EdgeInsets.fromLTRB(
+                                  16,
+                                  16,
+                                  16,
+                                  40,
+                                ),
+                                children: filteredReceipts
+                                    .map(
+                                      (data) => _ReceiptCard(
+                                        data: data,
+                                        compact: false,
+                                      ),
+                                    )
                                     .toList(),
                               ),
                       ),
@@ -2513,41 +3472,51 @@ class _HistoryPaymentChip extends StatelessWidget {
   final String label;
   final double value;
   final Color color;
+  final bool selected;
+  final VoidCallback onTap;
   const _HistoryPaymentChip({
     required this.label,
     required this.value,
     required this.color,
+    required this.selected,
+    required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.08),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: color.withOpacity(0.18)),
-      ),
-      child: Row(
-        children: [
-          Text(
-            label,
-            style: TextStyle(
-              color: color,
-              fontWeight: FontWeight.w800,
-              fontSize: 12,
-            ),
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: selected ? color.withOpacity(0.18) : color.withOpacity(0.08),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: selected ? color : color.withOpacity(0.18),
+            width: selected ? 1.5 : 1,
           ),
-          const Spacer(),
-          Text(
-            '₱${value.toStringAsFixed(2)}',
-            style: TextStyle(
-              color: color,
-              fontWeight: FontWeight.w900,
-              fontSize: 13,
+        ),
+        child: Row(
+          children: [
+            Text(
+              label,
+              style: TextStyle(
+                color: selected ? const Color(0xFF1B5E20) : color,
+                fontWeight: FontWeight.w800,
+                fontSize: 12,
+              ),
             ),
-          ),
-        ],
+            const Spacer(),
+            Text(
+              '₱${value.toStringAsFixed(2)}',
+              style: TextStyle(
+                color: selected ? const Color(0xFF1B5E20) : color,
+                fontWeight: FontWeight.w900,
+                fontSize: 13,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -2814,9 +3783,9 @@ class _HistoryEntryCard extends StatelessWidget {
                     final iName = d['name'] ?? 'Unknown';
                     final startQty = _startingAt(index, startA, startB, startC);
                     final remQty = _remainingAt(index, remA, remB, remC);
-                      final reducedQty =
-                          int.tryParse(d['reducedQuantity']?.toString() ?? '') ??
-                          0;
+                    final reducedQty =
+                        int.tryParse(d['reducedQuantity']?.toString() ?? '') ??
+                        0;
                     final soldQty = (startQty - remQty - reducedQty)
                         .clamp(0, startQty)
                         .toInt();
@@ -3033,89 +4002,89 @@ class _PerformanceCard extends StatelessWidget {
               ),
               child: Row(
                 children: [
-                Expanded(
-                  child: Row(
-                    children: [
-                      Flexible(
-                        child: Text(
-                          item,
-                          style: const TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w800,
-                            color: Colors.white,
-                            letterSpacing: -0.3,
+                  Expanded(
+                    child: Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            item,
+                            style: const TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w800,
+                              color: Colors.white,
+                              letterSpacing: -0.3,
+                            ),
+                            overflow: TextOverflow.ellipsis,
                           ),
-                          overflow: TextOverflow.ellipsis,
                         ),
-                      ),
-                      if (isBundle) ...[
-                        const SizedBox(width: 8),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 3,
-                          ),
-                          decoration: BoxDecoration(
-                            color: Colors.white.withOpacity(0.22),
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: Colors.white30),
-                          ),
-                          child: const Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(
-                                Icons.inventory_2_rounded,
-                                color: Colors.white,
-                                size: 12,
-                              ),
-                              SizedBox(width: 4),
-                              Text(
-                                'Bundle',
-                                style: TextStyle(
+                        if (isBundle) ...[
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 3,
+                            ),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withOpacity(0.22),
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: Colors.white30),
+                            ),
+                            child: const Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  Icons.inventory_2_rounded,
                                   color: Colors.white,
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.w800,
+                                  size: 12,
                                 ),
-                              ),
-                            ],
+                                SizedBox(width: 4),
+                                Text(
+                                  'Bundle',
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
-                        ),
-                      ] else if (isCoffee) ...[
-                        const SizedBox(width: 8),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 3,
-                          ),
-                          decoration: BoxDecoration(
-                            color: Colors.white.withOpacity(0.22),
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: Colors.white30),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const Icon(
-                                Icons.local_cafe_rounded,
-                                color: Colors.white,
-                                size: 12,
-                              ),
-                              const SizedBox(width: 4),
-                              Text(
-                                coffeeId.isNotEmpty ? coffeeId : 'Coffee',
-                                style: const TextStyle(
+                        ] else if (isCoffee) ...[
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 3,
+                            ),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withOpacity(0.22),
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: Colors.white30),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Icon(
+                                  Icons.local_cafe_rounded,
                                   color: Colors.white,
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.w800,
+                                  size: 12,
                                 ),
-                              ),
-                            ],
+                                const SizedBox(width: 4),
+                                Text(
+                                  coffeeId.isNotEmpty ? coffeeId : 'Coffee',
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
-                        ),
+                        ],
                       ],
-                    ],
+                    ),
                   ),
-                ),
                   Container(
                     padding: const EdgeInsets.symmetric(
                       horizontal: 10,
@@ -3318,9 +4287,7 @@ class _PerformanceCard extends StatelessWidget {
                       ],
                       _SummaryRow(
                         label: 'Total Sold',
-                        value: salesOnly && totalSold == 0
-                            ? '1'
-                            : '$totalSold',
+                        value: salesOnly && totalSold == 0 ? '1' : '$totalSold',
                         valueColor: Colors.green.shade700,
                       ),
                       const SizedBox(height: 10),

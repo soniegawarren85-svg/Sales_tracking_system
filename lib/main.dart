@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -8,6 +10,7 @@ import 'theme/design.dart';
 import 'Login/Login/Login.dart';
 import 'Firebase.dart';
 import 'services/inventory_service.dart';
+import 'services/local_database_sync_service.dart';
 import 'bones/bottom_nav.dart';
 import 'Admin_pages/Admin/Dashboard.dart';
 
@@ -16,6 +19,7 @@ void main() async {
   await initializeFirebase();
   // Initialize InventoryService to start listening to Firestore
   InventoryService().initialize();
+  LocalDatabaseSyncService().start();
   runApp(const MyApp());
 }
 
@@ -31,9 +35,7 @@ class MyApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       builder: (context, child) {
         return DefaultTextStyle(
-          style: GoogleFonts.dmSans(
-            color: Colors.black,
-          ),
+          style: GoogleFonts.dmSans(color: Colors.black),
           child: child ?? const SizedBox(),
         );
       },
@@ -55,21 +57,26 @@ class _SessionGateState extends State<SessionGate> {
     final prefs = await SharedPreferences.getInstance();
     final lastRole = prefs.getString('lastRole')?.trim().toLowerCase();
 
-    if (lastRole == 'admin') {
-      return const AdminDashboard();
-    }
-
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) {
       await prefs.remove('lastRole');
       return const LoginScreen();
     }
 
+    if (lastRole == 'admin') {
+      return const AdminDashboard();
+    }
+    if (lastRole == 'staff') {
+      unawaited(_validateStaffSession(user.uid, prefs));
+      return const BottomNav();
+    }
+
     try {
       final doc = await FirebaseFirestore.instance
           .collection('staff_requests')
           .doc(user.uid)
-          .get();
+          .get()
+          .timeout(const Duration(seconds: 4));
       final data = doc.data();
       final status = data?['status']?.toString().trim().toLowerCase();
       final role = data?['role']?.toString().trim().toLowerCase();
@@ -88,6 +95,30 @@ class _SessionGateState extends State<SessionGate> {
     }
   }
 
+  Future<void> _validateStaffSession(
+    String uid,
+    SharedPreferences prefs,
+  ) async {
+    try {
+      final doc = await FirebaseFirestore.instance
+          .collection('staff_requests')
+          .doc(uid)
+          .get()
+          .timeout(const Duration(seconds: 8));
+      final data = doc.data();
+      final status = data?['status']?.toString().trim().toLowerCase();
+      final role = data?['role']?.toString().trim().toLowerCase();
+      if (status != 'accepted') {
+        await FirebaseAuth.instance.signOut();
+        await prefs.remove('lastRole');
+        return;
+      }
+      await prefs.setString('lastRole', role == 'admin' ? 'admin' : 'staff');
+    } catch (_) {
+      // Keep the saved session usable offline; the next online launch rechecks it.
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return FutureBuilder<Widget>(
@@ -97,9 +128,7 @@ class _SessionGateState extends State<SessionGate> {
             snapshot.hasData) {
           return snapshot.data!;
         }
-        return const Scaffold(
-          body: Center(child: CircularProgressIndicator()),
-        );
+        return const Scaffold(body: Center(child: CircularProgressIndicator()));
       },
     );
   }

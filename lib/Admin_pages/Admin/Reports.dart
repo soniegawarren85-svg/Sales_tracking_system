@@ -1262,7 +1262,7 @@ class _GlassPanel extends StatelessWidget {
 
   const _GlassPanel({
     required this.child,
-    this.padding = const EdgeInsets.all(18),
+    this.padding = const EdgeInsets.all(20),
   });
 
   @override

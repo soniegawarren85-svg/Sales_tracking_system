@@ -45,7 +45,7 @@ class InventoryService extends ChangeNotifier {
     _initialized = true;
     await _loadFromDisk();
     _startCloudListeners();
-    await refreshFromCloud();
+    unawaited(refreshFromCloud());
   }
 
   Future<void> refreshFromCloud() async {
@@ -92,7 +92,10 @@ class InventoryService extends ChangeNotifier {
     return entry.safeItem.trim().toLowerCase() == key;
   }
 
-  Inventory? _getEntryForItemToday(String itemName, {String? sourceInventoryId}) {
+  Inventory? _getEntryForItemToday(
+    String itemName, {
+    String? sourceInventoryId,
+  }) {
     final now = DateTime.now();
 
     try {
@@ -107,7 +110,10 @@ class InventoryService extends ChangeNotifier {
     }
   }
 
-  Inventory? _getAnyEntryForItemToday(String itemName, {String? sourceInventoryId}) {
+  Inventory? _getAnyEntryForItemToday(
+    String itemName, {
+    String? sourceInventoryId,
+  }) {
     final now = DateTime.now();
 
     try {
@@ -122,15 +128,25 @@ class InventoryService extends ChangeNotifier {
   }
 
   bool hasEntryForItemToday(String itemName, {String? sourceInventoryId}) =>
-      _getEntryForItemToday(itemName, sourceInventoryId: sourceInventoryId) != null;
+      _getEntryForItemToday(itemName, sourceInventoryId: sourceInventoryId) !=
+      null;
 
-  Inventory? getEntryForItemToday(String itemName, {String? sourceInventoryId}) =>
-      _getEntryForItemToday(itemName, sourceInventoryId: sourceInventoryId);
+  Inventory? getEntryForItemToday(
+    String itemName, {
+    String? sourceInventoryId,
+  }) => _getEntryForItemToday(itemName, sourceInventoryId: sourceInventoryId);
 
   bool hasAnyEntryForItemToday(String itemName, {String? sourceInventoryId}) =>
-      _getAnyEntryForItemToday(itemName, sourceInventoryId: sourceInventoryId) != null;
+      _getAnyEntryForItemToday(
+        itemName,
+        sourceInventoryId: sourceInventoryId,
+      ) !=
+      null;
 
-  Inventory? getAnyEntryForItemToday(String itemName, {String? sourceInventoryId}) =>
+  Inventory? getAnyEntryForItemToday(
+    String itemName, {
+    String? sourceInventoryId,
+  }) =>
       _getAnyEntryForItemToday(itemName, sourceInventoryId: sourceInventoryId);
 
   void _persistUpdatedEntries() {
@@ -183,17 +199,20 @@ class InventoryService extends ChangeNotifier {
     }
 
     _persistUpdatedEntries();
-    _saveEntryToFirestore(_entries.firstWhere(
-      (entry) =>
-          _sameInventoryIdentity(
-            entry,
-            newEntry.safeItem,
-            newEntry.sourceInventoryId,
-          ) &&
-          _sameDay(entry.timestamp, newEntry.timestamp) &&
-          (entry.ownerId ?? '') == (newEntry.ownerId ?? _currentOwnerId ?? ''),
-      orElse: () => newEntry,
-    ));
+    _saveEntryToFirestore(
+      _entries.firstWhere(
+        (entry) =>
+            _sameInventoryIdentity(
+              entry,
+              newEntry.safeItem,
+              newEntry.sourceInventoryId,
+            ) &&
+            _sameDay(entry.timestamp, newEntry.timestamp) &&
+            (entry.ownerId ?? '') ==
+                (newEntry.ownerId ?? _currentOwnerId ?? ''),
+        orElse: () => newEntry,
+      ),
+    );
   }
 
   void addRemainingStockForItem({
@@ -295,7 +314,7 @@ class InventoryService extends ChangeNotifier {
           remainingC: newRemainingC,
           timestamp: existing.timestamp,
         );
-        
+
         _persistUpdatedEntries();
         _saveEntryToFirestore(_entries[index]);
       }
@@ -342,10 +361,7 @@ class InventoryService extends ChangeNotifier {
       final newRemainingC = i == 2
           ? max(0, existing.safeRemainingC - quantity)
           : existing.safeRemainingC;
-      updatedItems[i] = {
-        ...item,
-        'reducedQuantity': currentReduced + quantity,
-      };
+      updatedItems[i] = {...item, 'reducedQuantity': currentReduced + quantity};
       _entries[index] = Inventory(
         item: existing.item,
         ownerId: existing.ownerId,
@@ -371,15 +387,13 @@ class InventoryService extends ChangeNotifier {
       RegExp(r'[^A-Za-z0-9_-]'),
       '_',
     );
-    final identity = (entry.sourceInventoryId?.trim().isNotEmpty == true
-            ? entry.sourceInventoryId!
-            : entry.safeItem)
-        .trim()
-        .toLowerCase();
-    final item = identity.replaceAll(
-      RegExp(r'[^a-z0-9]+'),
-      '_',
-    );
+    final identity =
+        (entry.sourceInventoryId?.trim().isNotEmpty == true
+                ? entry.sourceInventoryId!
+                : entry.safeItem)
+            .trim()
+            .toLowerCase();
+    final item = identity.replaceAll(RegExp(r'[^a-z0-9]+'), '_');
     final dt = entry.timestamp;
     final date =
         '${dt.year.toString().padLeft(4, '0')}${dt.month.toString().padLeft(2, '0')}${dt.day.toString().padLeft(2, '0')}';
@@ -389,7 +403,11 @@ class InventoryService extends ChangeNotifier {
   void _mergeEntry(Inventory entry) {
     final index = _entries.indexWhere(
       (existing) =>
-          _sameInventoryIdentity(existing, entry.safeItem, entry.sourceInventoryId) &&
+          _sameInventoryIdentity(
+            existing,
+            entry.safeItem,
+            entry.sourceInventoryId,
+          ) &&
           (existing.ownerId ?? '') == (entry.ownerId ?? '') &&
           _sameDay(existing.timestamp, entry.timestamp),
     );
@@ -423,10 +441,10 @@ class InventoryService extends ChangeNotifier {
           .collection(_reportsCollection)
           .doc(_entryDocId(entry))
           .set({
-        ...entry.toJson(),
-        'timestamp': Timestamp.fromDate(entry.timestamp),
-        'updatedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+            ...entry.toJson(),
+            'timestamp': Timestamp.fromDate(entry.timestamp),
+            'updatedAt': FieldValue.serverTimestamp(),
+          }, SetOptions(merge: true));
     } catch (e) {
       if (kDebugMode) {
         debugPrint('Failed to save inventory report to Firestore: $e');
@@ -475,8 +493,10 @@ class InventoryService extends ChangeNotifier {
           if (data['isDeleted'] == true) continue;
           final assignedSource =
               data['sourceInventoryId']?.toString().trim() ?? doc.id;
-          final assignedName = data['name']?.toString().trim().toLowerCase() ?? '';
-          final sourceMatches = sourceId.isNotEmpty && assignedSource == sourceId;
+          final assignedName =
+              data['name']?.toString().trim().toLowerCase() ?? '';
+          final sourceMatches =
+              sourceId.isNotEmpty && assignedSource == sourceId;
           final nameMatches = entryName.isNotEmpty && assignedName == entryName;
           if (sourceMatches || nameMatches) {
             assignedData = data;
@@ -493,8 +513,16 @@ class InventoryService extends ChangeNotifier {
 
         final existingItems = List<Map<String, dynamic>>.from(entry.safeItems);
         final mergedItems = <Map<String, dynamic>>[];
-        final starts = [entry.safeStartingA, entry.safeStartingB, entry.safeStartingC];
-        final rems = [entry.safeRemainingA, entry.safeRemainingB, entry.safeRemainingC];
+        final starts = [
+          entry.safeStartingA,
+          entry.safeStartingB,
+          entry.safeStartingC,
+        ];
+        final rems = [
+          entry.safeRemainingA,
+          entry.safeRemainingB,
+          entry.safeRemainingC,
+        ];
         var changed = assignedItems.length > existingItems.length;
 
         for (var i = 0; i < assignedItems.length && i < 3; i++) {
@@ -519,7 +547,8 @@ class InventoryService extends ChangeNotifier {
               int.tryParse(assigned['quantity']?.toString() ?? '') ??
               0;
           final assignedRemaining =
-              int.tryParse(assigned['stock']?.toString() ?? '') ?? assignedStart;
+              int.tryParse(assigned['stock']?.toString() ?? '') ??
+              assignedStart;
           final price = existing['price'] ?? assigned['price'] ?? 0;
           final existingName = existing['name']?.toString() ?? '';
           final merged = {
@@ -603,12 +632,10 @@ class InventoryService extends ChangeNotifier {
               categoryId.isNotEmpty && entry.sourceInventoryId == categoryId;
           final nameMatches =
               categoryName.isNotEmpty &&
-              entry.safeItem.trim().toLowerCase() ==
-                  categoryName.toLowerCase();
+              entry.safeItem.trim().toLowerCase() == categoryName.toLowerCase();
           if (!sourceMatches && !nameMatches) continue;
 
-          final key =
-              '${_entryDocId(entry)}|${variantName.toLowerCase()}';
+          final key = '${_entryDocId(entry)}|${variantName.toLowerCase()}';
           totals[key] = (totals[key] ?? 0) + quantity;
         }
       }
@@ -647,10 +674,7 @@ class InventoryService extends ChangeNotifier {
           final addedReduction = max(0, nextReduced - currentReduced).toInt();
           if (nextReduced == currentReduced) continue;
 
-          updatedItems[itemIndex] = {
-            ...item,
-            'reducedQuantity': nextReduced,
-          };
+          updatedItems[itemIndex] = {...item, 'reducedQuantity': nextReduced};
           if (itemIndex >= 0 && itemIndex < rems.length) {
             rems[itemIndex] = max(0, rems[itemIndex] - addedReduction).toInt();
           }

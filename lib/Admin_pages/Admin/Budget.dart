@@ -1311,6 +1311,7 @@ class _BudgetPageState extends State<BudgetPage>
                     ElevatedButton.icon(
                       onPressed: () async {
                         try {
+                          FocusManager.instance.primaryFocus?.unfocus();
                           await _assignInventoryToStaff(
                             staffId: staffId,
                             staffName: staffName,
@@ -1354,6 +1355,7 @@ class _BudgetPageState extends State<BudgetPage>
       },
     );
 
+    FocusManager.instance.primaryFocus?.unfocus();
     for (final controller in qtyControllers.values) {
       controller.dispose();
     }
@@ -1747,8 +1749,9 @@ class _BudgetPageState extends State<BudgetPage>
       for (final doc in snapshot.docs) {
         final data = doc.data();
         final reportType = (data['type'] as String?)?.trim().toLowerCase();
-        if (collection == 'admin_notifications' && reportType != 'report')
+        if (collection == 'admin_notifications' && reportType != 'report') {
           continue;
+        }
         allDocs[doc.id] = doc;
       }
     }
@@ -2609,7 +2612,7 @@ class _BudgetPageState extends State<BudgetPage>
                       ),
                       const SizedBox(height: 8),
                       Text(
-                        '${transactionCount?.toString() ?? '0'}',
+                        transactionCount?.toString() ?? '0',
                         style: const TextStyle(
                           fontSize: 18,
                           fontWeight: FontWeight.w800,
@@ -2782,7 +2785,7 @@ class _BudgetPageState extends State<BudgetPage>
                                 ],
                               ),
                             );
-                          }).toList(),
+                          }),
                           const SizedBox(height: 6),
                           if (paidAmount > 0) ...[
                             Text(
@@ -2820,7 +2823,7 @@ class _BudgetPageState extends State<BudgetPage>
                   );
                 },
               );
-            }).toList(),
+            }),
           ],
           if (closingInventory.isNotEmpty) ...[
             const SizedBox(height: 16),
@@ -2883,7 +2886,7 @@ class _BudgetPageState extends State<BudgetPage>
                   ],
                 ),
               );
-            }).toList(),
+            }),
           ],
           const SizedBox(height: 16),
           FutureBuilder<Map<String, dynamic>>(
@@ -3024,7 +3027,7 @@ class _BudgetPageState extends State<BudgetPage>
                         ],
                       ),
                     );
-                  }).toList(),
+                  }),
                 ],
               );
             },

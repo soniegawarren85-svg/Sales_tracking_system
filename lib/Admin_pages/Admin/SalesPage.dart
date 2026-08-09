@@ -1252,9 +1252,9 @@ class _SalesCardState extends State<_SalesCard>
                       Expanded(
                         child: ListView.separated(
                           itemCount: filteredDocs.length,
-                          separatorBuilder: (_, __) => const SizedBox(height: 10),
+                          separatorBuilder: (_, _) => const SizedBox(height: 10),
                           itemBuilder: (context, index) {
-                            final data = filteredDocs[index].data() as Map<String, dynamic>;
+                            final data = filteredDocs[index].data();
                             final itemName = data['itemName']?.toString() ?? 'Unknown';
                             final variant = data['variant']?.toString();
                             final displayQuantity = data['quantity']?.toString() ?? '0';
@@ -1475,7 +1475,7 @@ class _SalesCardState extends State<_SalesCard>
                       Expanded(
                         child: ListView.separated(
                           itemCount: refunds.length,
-                          separatorBuilder: (_, __) => const SizedBox(height: 10),
+                          separatorBuilder: (_, _) => const SizedBox(height: 10),
                           itemBuilder: (context, index) {
                             final data = refunds[index];
                             final salesId = data['salesId']?.toString() ?? 'Refund';
@@ -1681,7 +1681,7 @@ class _SalesCardState extends State<_SalesCard>
               ]),
             ),
           );
-        }).toList(),
+        }),
       ],
     ),
   );

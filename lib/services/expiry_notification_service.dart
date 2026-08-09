@@ -54,7 +54,7 @@ class ExpiryNotificationService {
 
       final currentIds = variantIds.toSet();
       for (final doc in snapshot.docs) {
-        final data = doc.data() as Map<String, dynamic>;
+        final data = doc.data();
         final existingIds = ((data['itemIds'] as List<dynamic>?) ?? [])
             .map((e) => e?.toString() ?? '')
             .where((e) => e.isNotEmpty)

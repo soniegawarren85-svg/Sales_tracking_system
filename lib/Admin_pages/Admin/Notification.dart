@@ -59,7 +59,7 @@ class _NotificationPageState extends State<NotificationPage>
     final snapshot = await docRef.get();
     if (!snapshot.exists) return;
 
-    final data = snapshot.data() as Map<String, dynamic>?;
+    final data = snapshot.data();
     final isReport = data?['type']?.toString().trim().toLowerCase() == 'report';
 
     if (isReport) {

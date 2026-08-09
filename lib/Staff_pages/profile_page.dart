@@ -1,6 +1,9 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../Login/Login/Login.dart';
@@ -31,6 +34,7 @@ class _ProfilePageState extends State<ProfilePage>
   static const Color _border = Color(0xFFF8BBD0);
   static const Color _textSoft = Color(0xFF8B496B);
   String? _staffDocId;
+  bool _isUploadingProfilePhoto = false;
   // ────────────────────────────────────────────────────────────────
 
   @override
@@ -85,148 +89,160 @@ class _ProfilePageState extends State<ProfilePage>
     return showDialog<bool>(
       context: currentContext,
       builder: (context) {
+        final size = MediaQuery.sizeOf(context);
+        final isTablet = size.width >= 700;
+
         return Dialog(
+          insetPadding: EdgeInsets.symmetric(
+            horizontal: isTablet ? 40 : 20,
+            vertical: 24,
+          ),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(28),
           ),
           elevation: 0,
           backgroundColor: Colors.transparent,
-          child: Container(
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(28),
-              boxShadow: [
-                BoxShadow(
-                  color: _pinkDark.withOpacity(0.18),
-                  blurRadius: 32,
-                  offset: const Offset(0, 8),
-                ),
-              ],
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.fromLTRB(24, 22, 24, 18),
-                  decoration: const BoxDecoration(
-                    gradient: LinearGradient(
-                      colors: [Color(0xFF8B0035), _pinkDark],
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
+          child: ConstrainedBox(
+            constraints: BoxConstraints(maxWidth: isTablet ? 520 : size.width),
+            child: Container(
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(28),
+                boxShadow: [
+                  BoxShadow(
+                    color: _pinkDark.withOpacity(0.18),
+                    blurRadius: 32,
+                    offset: const Offset(0, 8),
+                  ),
+                ],
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.fromLTRB(24, 22, 24, 18),
+                    decoration: const BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: [Color(0xFF8B0035), _pinkDark],
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                      ),
+                      borderRadius: BorderRadius.vertical(
+                        top: Radius.circular(28),
+                      ),
                     ),
-                    borderRadius: BorderRadius.vertical(
-                      top: Radius.circular(28),
+                    child: Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withOpacity(0.2),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: const Icon(
+                            Icons.logout_rounded,
+                            color: Colors.white,
+                            size: 18,
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        const Text(
+                          'Logging Out?',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 18,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-                  child: Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.2),
-                          borderRadius: BorderRadius.circular(10),
+                  Padding(
+                    padding: const EdgeInsets.all(22),
+                    child: Column(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(14),
+                          decoration: BoxDecoration(
+                            color: _cardBg,
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                          child: const Row(
+                            children: [
+                              Icon(
+                                Icons.info_outline_rounded,
+                                color: _pinkDark,
+                                size: 18,
+                              ),
+                              SizedBox(width: 10),
+                              Expanded(
+                                child: Text(
+                                  'You will need to sign in again to access your account.',
+                                  style: TextStyle(
+                                    color: _textSoft,
+                                    fontSize: 13,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
-                        child: const Icon(
-                          Icons.logout_rounded,
-                          color: Colors.white,
-                          size: 18,
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      const Text(
-                        'Logging Out?',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 18,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.all(22),
-                  child: Column(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(14),
-                        decoration: BoxDecoration(
-                          color: _cardBg,
-                          borderRadius: BorderRadius.circular(14),
-                        ),
-                        child: const Row(
+                        const SizedBox(height: 20),
+                        Row(
                           children: [
-                            Icon(
-                              Icons.info_outline_rounded,
-                              color: _pinkDark,
-                              size: 18,
-                            ),
-                            SizedBox(width: 10),
                             Expanded(
-                              child: Text(
-                                'You will need to sign in again to access your account.',
-                                style: TextStyle(
-                                  color: _textSoft,
-                                  fontSize: 13,
+                              child: OutlinedButton(
+                                onPressed: () =>
+                                    Navigator.of(context).pop(false),
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: _pinkDark,
+                                  side: const BorderSide(
+                                    color: _border,
+                                    width: 1.5,
+                                  ),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(14),
+                                  ),
+                                  padding: const EdgeInsets.symmetric(
+                                    vertical: 13,
+                                  ),
+                                ),
+                                child: const Text(
+                                  'Cancel',
+                                  style: TextStyle(fontWeight: FontWeight.w600),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: ElevatedButton(
+                                onPressed: () =>
+                                    Navigator.of(context).pop(true),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: _pinkDark,
+                                  foregroundColor: Colors.white,
+                                  elevation: 0,
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(14),
+                                  ),
+                                  padding: const EdgeInsets.symmetric(
+                                    vertical: 13,
+                                  ),
+                                ),
+                                child: const Text(
+                                  'Sign Out',
+                                  style: TextStyle(fontWeight: FontWeight.w700),
                                 ),
                               ),
                             ),
                           ],
                         ),
-                      ),
-                      const SizedBox(height: 20),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: OutlinedButton(
-                              onPressed: () => Navigator.of(context).pop(false),
-                              style: OutlinedButton.styleFrom(
-                                foregroundColor: _pinkDark,
-                                side: const BorderSide(
-                                  color: _border,
-                                  width: 1.5,
-                                ),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(14),
-                                ),
-                                padding: const EdgeInsets.symmetric(
-                                  vertical: 13,
-                                ),
-                              ),
-                              child: const Text(
-                                'Cancel',
-                                style: TextStyle(fontWeight: FontWeight.w600),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: ElevatedButton(
-                              onPressed: () => Navigator.of(context).pop(true),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: _pinkDark,
-                                foregroundColor: Colors.white,
-                                elevation: 0,
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(14),
-                                ),
-                                padding: const EdgeInsets.symmetric(
-                                  vertical: 13,
-                                ),
-                              ),
-                              child: const Text(
-                                'Sign Out',
-                                style: TextStyle(fontWeight: FontWeight.w700),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         );
@@ -336,6 +352,54 @@ class _ProfilePageState extends State<ProfilePage>
     );
   }
 
+  Future<void> _pickAndUploadProfilePhoto() async {
+    final currentUser = FirebaseAuth.instance.currentUser;
+    final uid = currentUser?.uid ?? _staffDocId;
+    if (uid == null || uid.isEmpty || _isUploadingProfilePhoto) return;
+
+    try {
+      final picked = await ImagePicker().pickImage(
+        source: ImageSource.gallery,
+        maxWidth: 640,
+        maxHeight: 640,
+        imageQuality: 65,
+      );
+      if (picked == null) return;
+
+      setState(() => _isUploadingProfilePhoto = true);
+      final bytes = await picked.readAsBytes();
+      final imageRef = FirebaseStorage.instance.ref().child(
+        'staff_profiles/$uid-${DateTime.now().millisecondsSinceEpoch}.jpg',
+      );
+      final upload = await imageRef.putData(
+        bytes,
+        SettableMetadata(contentType: 'image/jpeg'),
+      );
+      final photoUrl = await upload.ref.getDownloadURL();
+
+      await FirebaseFirestore.instance
+          .collection('staff_requests')
+          .doc(uid)
+          .set({
+            'photoUrl': photoUrl,
+            'profileImageUrl': photoUrl,
+            'updatedAt': FieldValue.serverTimestamp(),
+          }, SetOptions(merge: true));
+      await currentUser?.updatePhotoURL(photoUrl);
+
+      if (!mounted) return;
+      _showStyledSnackBar('Profile photo updated successfully.');
+    } catch (e) {
+      if (!mounted) return;
+      _showStyledSnackBar(
+        'Unable to upload profile photo. Please try another image.',
+        isError: true,
+      );
+    } finally {
+      if (mounted) setState(() => _isUploadingProfilePhoto = false);
+    }
+  }
+
   // ─── BUILD ────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
@@ -352,7 +416,7 @@ class _ProfilePageState extends State<ProfilePage>
               SliverToBoxAdapter(
                 child: Column(
                   children: [
-                    const SizedBox(height: 20),
+                    const SizedBox(height: 0),
                     _buildInfoCard(),
                     const SizedBox(height: 24),
                     _buildChangePassword(),
@@ -393,6 +457,10 @@ class _ProfilePageState extends State<ProfilePage>
         final lastName = staffData['lastName'] ?? 'Member';
         final email = staffData['email'] ?? 'No email';
         final staffId = staffData['staffId'] ?? 'STF-000000-0000';
+        final photoUrl =
+            staffData['photoUrl']?.toString() ??
+            staffData['profileImageUrl']?.toString() ??
+            '';
 
         return Container(
           decoration: const BoxDecoration(
@@ -448,7 +516,7 @@ class _ProfilePageState extends State<ProfilePage>
                     Row(
                       crossAxisAlignment: CrossAxisAlignment.end,
                       children: [
-                        _buildAvatar(),
+                        _buildAvatar(photoUrl),
                         const SizedBox(width: 16),
                         Expanded(
                           child: Column(
@@ -700,57 +768,80 @@ class _ProfilePageState extends State<ProfilePage>
     );
   }
 
-  Widget _buildAvatar() {
-    return Stack(
-      children: [
-        Container(
-          padding: const EdgeInsets.all(3),
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            gradient: const LinearGradient(
-              colors: [_accentLight, _accent],
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: _accent.withOpacity(0.45),
-                blurRadius: 14,
-                spreadRadius: 1,
-              ),
-            ],
-          ),
-          child: Container(
-            width: 78,
-            height: 78,
-            decoration: const BoxDecoration(
-              shape: BoxShape.circle,
-              color: _pinkDark,
-            ),
-            child: const Icon(Icons.person, size: 40, color: Colors.white54),
-          ),
-        ),
-        Positioned(
-          bottom: 2,
-          right: 2,
-          child: Container(
-            width: 24,
-            height: 24,
+  Widget _buildAvatar(String? photoUrl) {
+    return GestureDetector(
+      onTap: _pickAndUploadProfilePhoto,
+      child: Stack(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(3),
             decoration: BoxDecoration(
-              color: _accent,
               shape: BoxShape.circle,
+              gradient: const LinearGradient(
+                colors: [_accentLight, _accent],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
               boxShadow: [
-                BoxShadow(color: Colors.black.withOpacity(0.25), blurRadius: 6),
+                BoxShadow(
+                  color: _accent.withOpacity(0.45),
+                  blurRadius: 14,
+                  spreadRadius: 1,
+                ),
               ],
             ),
-            child: const Icon(
-              Icons.camera_alt_rounded,
-              size: 12,
-              color: Colors.white,
+            child: ClipOval(
+              child: Container(
+                width: 78,
+                height: 78,
+                color: _pinkDark,
+                child: (photoUrl != null && photoUrl.isNotEmpty)
+                    ? Image.network(
+                        photoUrl,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, _, _) => const Icon(
+                          Icons.person,
+                          size: 40,
+                          color: Colors.white54,
+                        ),
+                      )
+                    : const Icon(Icons.person, size: 40, color: Colors.white54),
+              ),
             ),
           ),
-        ),
-      ],
+          Positioned(
+            bottom: 2,
+            right: 2,
+            child: Container(
+              width: 24,
+              height: 24,
+              decoration: BoxDecoration(
+                color: _accent,
+                shape: BoxShape.circle,
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.25),
+                    blurRadius: 6,
+                  ),
+                ],
+              ),
+              child: _isUploadingProfilePhoto
+                  ? const Padding(
+                      padding: EdgeInsets.all(5),
+                      child: CircularProgressIndicator(
+                        color: Colors.white,
+                        strokeWidth: 2,
+                      ),
+                    )
+                  : const Icon(
+                      Icons.camera_alt_rounded,
+                      size: 12,
+                      color: Colors.white,
+                    ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -835,112 +926,321 @@ class _ProfilePageState extends State<ProfilePage>
           final phone = staffData['phone'] ?? 'N/A';
           final age = staffData['age'] ?? 'N/A';
           final staffId = staffData['staffId'] ?? 'N/A';
+          final role = staffData['role'] ?? 'Staff Member';
+          final createdAt = staffData['createdAt'];
+          final memberSince = createdAt is Timestamp
+              ? _formatProfileDate(createdAt.toDate())
+              : 'N/A';
 
-          return Container(
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(22),
-              boxShadow: [
-                BoxShadow(
-                  color: _pinkMid.withOpacity(0.08),
-                  blurRadius: 20,
-                  offset: const Offset(0, 6),
+          return Column(
+            children: [
+              Transform.translate(
+                offset: const Offset(0, -18),
+                child: _buildProfileSummary(memberSince),
+              ),
+              const SizedBox(height: 2),
+              Container(
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(22),
+                  boxShadow: [
+                    BoxShadow(
+                      color: _pinkMid.withOpacity(0.08),
+                      blurRadius: 20,
+                      offset: const Offset(0, 6),
+                    ),
+                  ],
                 ),
-              ],
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 20, 20, 12),
-                  child: Row(
-                    children: [
-                      Container(
-                        width: 4,
-                        height: 20,
-                        decoration: BoxDecoration(
-                          gradient: const LinearGradient(
-                            colors: [_pinkDark, _pinkMid],
-                            begin: Alignment.topCenter,
-                            end: Alignment.bottomCenter,
+                padding: const EdgeInsets.fromLTRB(18, 18, 18, 20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                          width: 4,
+                          height: 30,
+                          decoration: BoxDecoration(
+                            color: _pinkMid,
+                            borderRadius: BorderRadius.circular(4),
                           ),
-                          borderRadius: BorderRadius.circular(4),
                         ),
-                      ),
-                      const SizedBox(width: 10),
-                      const Text(
-                        'Personal Information',
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w800,
-                          color: Color(0xFF1A1A1A),
-                          letterSpacing: 0.2,
+                        const SizedBox(width: 12),
+                        Container(
+                          width: 42,
+                          height: 42,
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFFFEAF2),
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                          child: const Icon(
+                            Icons.person_outline_rounded,
+                            color: _pinkDark,
+                          ),
                         ),
-                      ),
-                    ],
-                  ),
+                        const SizedBox(width: 12),
+                        const Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Personal Information',
+                                style: TextStyle(
+                                  fontSize: 17,
+                                  fontWeight: FontWeight.w900,
+                                  color: Color(0xFF2B1720),
+                                ),
+                              ),
+                              SizedBox(height: 2),
+                              Text(
+                                'View and manage your personal details',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                  color: _textSoft,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 18),
+                    LayoutBuilder(
+                      builder: (context, constraints) {
+                        final isWide = constraints.maxWidth >= 720;
+                        final tileWidth = isWide
+                            ? (constraints.maxWidth - 16) / 2
+                            : constraints.maxWidth;
+                        final details = [
+                          (Icons.badge_outlined, 'Staff ID', staffId),
+                          (Icons.email_outlined, 'Email Address', email),
+                          (
+                            Icons.person_outline_rounded,
+                            'First Name',
+                            firstName,
+                          ),
+                          (Icons.phone_outlined, 'Phone Number', phone),
+                          (Icons.person_outline_rounded, 'Last Name', lastName),
+                          (Icons.shield_outlined, 'Role', role),
+                          (Icons.location_on_outlined, 'Address', address),
+                          (Icons.cake_outlined, 'Age', age.toString()),
+                        ];
+
+                        return Wrap(
+                          spacing: 16,
+                          runSpacing: 12,
+                          children: details.map((detail) {
+                            return SizedBox(
+                              width: tileWidth,
+                              child: _buildDetailTile(
+                                icon: detail.$1,
+                                label: detail.$2,
+                                value: detail.$3.toString(),
+                              ),
+                            );
+                          }).toList(),
+                        );
+                      },
+                    ),
+                  ],
                 ),
-                const Divider(height: 1, color: Color(0xFFF0F0F0)),
-                _buildDetailRow(
-                  icon: Icons.badge_rounded,
-                  iconColor: Colors.purple,
-                  iconBg: const Color(0xFFF5EEF8),
-                  label: 'Staff ID',
-                  value: staffId,
-                  showDivider: true,
-                ),
-                _buildDetailRow(
-                  icon: Icons.person_rounded,
-                  iconColor: Colors.blue,
-                  iconBg: const Color(0xFFEBF5FB),
-                  label: 'First Name',
-                  value: firstName,
-                  showDivider: true,
-                ),
-                _buildDetailRow(
-                  icon: Icons.person_outline_rounded,
-                  iconColor: Colors.indigo,
-                  iconBg: const Color(0xFFF0EBFF),
-                  label: 'Last Name',
-                  value: lastName,
-                  showDivider: true,
-                ),
-                _buildDetailRow(
-                  icon: Icons.email_rounded,
-                  iconColor: const Color(0xFF3498DB),
-                  iconBg: const Color(0xFFEAF4FD),
-                  label: 'Email Address',
-                  value: email,
-                  showDivider: true,
-                ),
-                _buildDetailRow(
-                  icon: Icons.phone_rounded,
-                  iconColor: _pinkLight,
-                  iconBg: const Color(0xFFFFF0F5),
-                  label: 'Phone Number',
-                  value: phone,
-                  showDivider: true,
-                ),
-                _buildDetailRow(
-                  icon: Icons.location_on_rounded,
-                  iconColor: _accent,
-                  iconBg: const Color(0xFFFDF2E6),
-                  label: 'Address',
-                  value: address,
-                  showDivider: true,
-                ),
-                _buildDetailRow(
-                  icon: Icons.cake_rounded,
-                  iconColor: Colors.red,
-                  iconBg: const Color(0xFFFFEBEE),
-                  label: 'Age',
-                  value: age.toString(),
-                  showDivider: false,
-                ),
-              ],
-            ),
+              ),
+            ],
           );
         },
+      ),
+    );
+  }
+
+  String _formatProfileDate(DateTime value) {
+    const months = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
+    return '${months[value.month - 1]} ${value.day.toString().padLeft(2, '0')}, ${value.year}';
+  }
+
+  Widget _buildProfileSummary(String memberSince) {
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 620),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: _border),
+            boxShadow: [
+              BoxShadow(
+                color: _pinkMid.withOpacity(0.12),
+                blurRadius: 18,
+                offset: const Offset(0, 6),
+              ),
+            ],
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: _buildSummaryItem(
+                  Icons.badge_outlined,
+                  'Account Status',
+                  'Active',
+                  accent: Colors.green,
+                ),
+              ),
+              Container(width: 1, height: 42, color: _border),
+              Expanded(
+                child: _buildSummaryItem(
+                  Icons.calendar_month_outlined,
+                  'Member Since',
+                  memberSince,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSummaryItem(
+    IconData icon,
+    String label,
+    String value, {
+    Color? accent,
+  }) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Container(
+          width: 36,
+          height: 36,
+          decoration: BoxDecoration(
+            color: const Color(0xFFFFEAF2),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Icon(icon, size: 18, color: _pinkDark),
+        ),
+        const SizedBox(width: 10),
+        Flexible(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                label,
+                style: const TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w700,
+                  color: _textSoft,
+                ),
+              ),
+              const SizedBox(height: 3),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (accent != null) ...[
+                    Container(
+                      width: 7,
+                      height: 7,
+                      decoration: BoxDecoration(
+                        color: accent,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    const SizedBox(width: 5),
+                  ],
+                  Flexible(
+                    child: Text(
+                      value,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w900,
+                        color: Color(0xFF2B1720),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildDetailTile({
+    required IconData icon,
+    required String label,
+    required String value,
+  }) {
+    return Container(
+      constraints: const BoxConstraints(minHeight: 70),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: _border.withOpacity(0.75)),
+        boxShadow: [
+          BoxShadow(
+            color: _pinkMid.withOpacity(0.06),
+            blurRadius: 12,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 38,
+            height: 38,
+            decoration: BoxDecoration(
+              color: const Color(0xFFFFEAF2),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Icon(icon, size: 19, color: _pinkDark),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  label,
+                  style: const TextStyle(
+                    fontSize: 11,
+                    color: _textSoft,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  value,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w900,
+                    color: Color(0xFF24141A),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1186,8 +1486,16 @@ class _EditProfileSheetState extends State<_EditProfileSheet>
       return;
     }
 
-    if (age == null || age <= 0) {
-      _showSheetSnackBar('Enter a valid age.', isError: true);
+    if (!RegExp(r'^\d{11}$').hasMatch(phone)) {
+      _showSheetSnackBar(
+        'Phone number must be exactly 11 digits.',
+        isError: true,
+      );
+      return;
+    }
+
+    if (age == null || age < 26 || age > 50) {
+      _showSheetSnackBar('Age must be from 26 to 50 only.', isError: true);
       return;
     }
 
@@ -1516,6 +1824,10 @@ class _EditProfileSheetState extends State<_EditProfileSheet>
           hint: '09XX XXX XXXX',
           icon: Icons.phone_outlined,
           keyboardType: TextInputType.phone,
+          inputFormatters: [
+            FilteringTextInputFormatter.digitsOnly,
+            LengthLimitingTextInputFormatter(11),
+          ],
         ),
         const SizedBox(height: 24),
 
@@ -1537,6 +1849,10 @@ class _EditProfileSheetState extends State<_EditProfileSheet>
           hint: 'e.g. 24',
           icon: Icons.cake_outlined,
           keyboardType: TextInputType.number,
+          inputFormatters: [
+            FilteringTextInputFormatter.digitsOnly,
+            LengthLimitingTextInputFormatter(2),
+          ],
         ),
         const SizedBox(height: 16),
         _FieldTip(
@@ -1860,6 +2176,7 @@ class _SheetTextField extends StatelessWidget {
   final TextInputType? keyboardType;
   final int? maxLines;
   final TextCapitalization textCapitalization;
+  final List<TextInputFormatter>? inputFormatters;
 
   const _SheetTextField({
     required this.controller,
@@ -1869,6 +2186,7 @@ class _SheetTextField extends StatelessWidget {
     this.keyboardType,
     this.maxLines = 1,
     this.textCapitalization = TextCapitalization.none,
+    this.inputFormatters,
   });
 
   static const Color _pinkDark = Color(0xFFC2105C);
@@ -1882,6 +2200,7 @@ class _SheetTextField extends StatelessWidget {
       keyboardType: keyboardType,
       maxLines: maxLines,
       textCapitalization: textCapitalization,
+      inputFormatters: inputFormatters,
       decoration: InputDecoration(
         labelText: label,
         hintText: hint,

@@ -113,6 +113,12 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
       _selectedIndex = 0;
     }
 
+    final size = MediaQuery.sizeOf(context);
+    final hasTabletCanvas =
+        size.shortestSide >= 600 || (size.width >= 900 && size.height >= 520);
+    final isTabletLandscape =
+        size.width > size.height && hasTabletCanvas;
+
     return Scaffold(
       backgroundColor: Colors.white,
       extendBody: true,
@@ -125,45 +131,97 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
           const DailyStockPage(),
         ],
       ),
-      // floating home button remains; we'll keep using CurvedNavigationBar for animated curved-style bar
-      // we no longer use a separate floating home button; home is an item in the curved bar
-      // floatingActionButtonLocation and FloatingActionButton removed
-      bottomNavigationBar: CurvedNavigationBar(
-        index: _selectedIndex,
-        height: 75, // max allowed by package
-        items: <Widget>[
-          // home icon as first item
-          Icon(
-            Icons.home,
-            size: _selectedIndex == 0 ? 36 : 30,
-            color: _selectedIndex == 0 ? Colors.white : Colors.white70,
+      bottomNavigationBar: isTabletLandscape
+          ? _buildLandscapeNav()
+          : CurvedNavigationBar(
+              index: _selectedIndex,
+              height: 75,
+              items: <Widget>[
+                Icon(
+                  Icons.home,
+                  size: _selectedIndex == 0 ? 36 : 30,
+                  color: _selectedIndex == 0 ? Colors.white : Colors.white70,
+                ),
+                Icon(
+                  Icons.search,
+                  size: _selectedIndex == 1 ? 32 : 26,
+                  color: _selectedIndex == 1 ? Colors.white : Colors.white70,
+                ),
+                Icon(
+                  Icons.person_outline,
+                  size: _selectedIndex == 2 ? 32 : 26,
+                  color: _selectedIndex == 2 ? Colors.white : Colors.white70,
+                ),
+                Icon(
+                  Icons.point_of_sale_rounded,
+                  size: _selectedIndex == 3 ? 32 : 26,
+                  color: _selectedIndex == 3 ? Colors.white : Colors.white70,
+                ),
+              ],
+              color: const Color(0xFFF48FB1),
+              buttonBackgroundColor: const Color(0xFFE91E63),
+              backgroundColor: Colors.transparent,
+              animationCurve: Curves.easeInOut,
+              animationDuration: const Duration(milliseconds: 300),
+              onTap: (int idx) {
+                setState(() {
+                  _selectedIndex = idx;
+                });
+              },
+            ),
+    );
+  }
+
+  Widget _buildLandscapeNav() {
+    return SafeArea(
+      top: false,
+      child: Align(
+        alignment: Alignment.bottomCenter,
+        child: Container(
+          width: 380,
+          height: 58,
+          margin: const EdgeInsets.only(bottom: 10),
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+          decoration: BoxDecoration(
+            color: const Color(0xFFF48FB1),
+            borderRadius: BorderRadius.circular(24),
+            boxShadow: [
+              BoxShadow(
+                color: const Color(0xFFE91E63).withOpacity(0.18),
+                blurRadius: 18,
+                offset: const Offset(0, 8),
+              ),
+            ],
           ),
-          Icon(
-            Icons.search,
-            size: _selectedIndex == 1 ? 32 : 26,
-            color: _selectedIndex == 1 ? Colors.white : Colors.white70,
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            children: [
+              _landscapeNavItem(Icons.home_rounded, 0),
+              _landscapeNavItem(Icons.search_rounded, 1),
+              _landscapeNavItem(Icons.person_outline_rounded, 2),
+              _landscapeNavItem(Icons.point_of_sale_rounded, 3),
+            ],
           ),
-          Icon(
-            Icons.person_outline,
-            size: _selectedIndex == 2 ? 32 : 26,
-            color: _selectedIndex == 2 ? Colors.white : Colors.white70,
-          ),
-          Icon(
-            Icons.account_balance_wallet_rounded,
-            size: _selectedIndex == 3 ? 32 : 26,
-            color: _selectedIndex == 3 ? Colors.white : Colors.white70,
-          ),
-        ],
-        color: const Color(0xFFF48FB1),
-        buttonBackgroundColor: const Color(0xFFE91E63),
-        backgroundColor: Colors.transparent,
-        animationCurve: Curves.easeInOut,
-        animationDuration: const Duration(milliseconds: 300),
-        onTap: (int idx) {
-          setState(() {
-            _selectedIndex = idx;
-          });
-        },
+        ),
+      ),
+    );
+  }
+
+  Widget _landscapeNavItem(IconData icon, int index) {
+    final selected = _selectedIndex == index;
+    return IconButton(
+      onPressed: () => setState(() => _selectedIndex = index),
+      style: IconButton.styleFrom(
+        backgroundColor: selected
+            ? const Color(0xFFE91E63)
+            : Colors.white.withOpacity(0.12),
+        fixedSize: const Size(46, 46),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+      ),
+      icon: Icon(
+        icon,
+        size: selected ? 26 : 23,
+        color: selected ? Colors.white : Colors.white.withOpacity(0.82),
       ),
     );
   }
