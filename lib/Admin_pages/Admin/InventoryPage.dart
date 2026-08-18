@@ -128,9 +128,8 @@ class _AutoImageCarouselState extends State<_AutoImageCarousel> {
       physics: const BouncingScrollPhysics(),
       itemCount: widget.imageUrls.length,
       onPageChanged: (page) => _index = page,
-      itemBuilder: (context, index) => widget.imageBuilder(
-        widget.imageUrls[index],
-      ),
+      itemBuilder: (context, index) =>
+          widget.imageBuilder(widget.imageUrls[index]),
     );
   }
 }
@@ -417,9 +416,9 @@ class _InventoryPageState extends State<InventoryPage>
       final snapshotUpload = await imageRef
           .putData(bytes, metadata)
           .timeout(const Duration(seconds: 30));
-      return snapshotUpload.ref
-          .getDownloadURL()
-          .timeout(const Duration(seconds: 30));
+      return snapshotUpload.ref.getDownloadURL().timeout(
+        const Duration(seconds: 30),
+      );
     } catch (uploadError) {
       final contentType = _imageContentType(bytes, pickedMimeType);
       final dataUrl = _imageDataUrl(bytes, contentType);
@@ -429,7 +428,9 @@ class _InventoryPageState extends State<InventoryPage>
         );
         return dataUrl;
       }
-      debugPrint('Image upload failed and fallback image is too large: $uploadError');
+      debugPrint(
+        'Image upload failed and fallback image is too large: $uploadError',
+      );
       return null;
     }
   }
@@ -659,11 +660,7 @@ class _InventoryPageState extends State<InventoryPage>
     } else if (url.startsWith('data:image/')) {
       final bytes = _bytesFromDataUrl(url);
       child = bytes == null
-          ? const Icon(
-              Icons.image_rounded,
-              color: PinkTheme.primary,
-              size: 22,
-            )
+          ? const Icon(Icons.image_rounded, color: PinkTheme.primary, size: 22)
           : Image.memory(bytes, fit: BoxFit.cover);
     } else if (url.isNotEmpty) {
       if (url.startsWith('Assets/') || url.startsWith('assets/')) {
@@ -1368,7 +1365,7 @@ class _InventoryPageState extends State<InventoryPage>
                                             ),
                                             const SizedBox(width: 6),
                                             Text(
-                                              '${items[index]['startingStock'] ?? items[index]['stock'] ?? '0'} pcs',
+                                              '${items[index]['stock'] ?? items[index]['startingStock'] ?? '0'} pcs',
                                               style: const TextStyle(
                                                 fontSize: 12,
                                                 fontWeight: FontWeight.w700,
@@ -1791,13 +1788,16 @@ class _InventoryPageState extends State<InventoryPage>
               .toList();
           allItems.add(newVariant);
           final categoryImageUrl = item['imageUrl']?.toString() ?? '';
-          await _firestore.collection('sales_inventory').doc(item['id']).update({
-            'items': allItems,
-            if (categoryImageUrl.isEmpty &&
-                imageUrl != null &&
-                imageUrl.isNotEmpty)
-              'imageUrl': imageUrl,
-          });
+          await _firestore
+              .collection('sales_inventory')
+              .doc(item['id'])
+              .update({
+                'items': allItems,
+                if (categoryImageUrl.isEmpty &&
+                    imageUrl != null &&
+                    imageUrl.isNotEmpty)
+                  'imageUrl': imageUrl,
+              });
           setModalState(() {
             itemsList.add(newVariant);
             item['items'] = allItems;
@@ -1832,7 +1832,10 @@ class _InventoryPageState extends State<InventoryPage>
         text: variant['price']?.toString() ?? '',
       );
       final editStockController = TextEditingController(
-        text: variant['startingStock']?.toString() ?? '',
+        text:
+            variant['stock']?.toString() ??
+            variant['startingStock']?.toString() ??
+            '',
       );
       final editExpirationController = TextEditingController(
         text: variant['expirationDate']?.toString() ?? '',
@@ -2304,26 +2307,26 @@ class _InventoryPageState extends State<InventoryPage>
                                                       child: Container(
                                                         width: 20,
                                                         height: 20,
-                                                        decoration:
-                                                            BoxDecoration(
+                                                        decoration: BoxDecoration(
                                                           color:
                                                               PinkTheme.primary,
                                                           borderRadius:
-                                                              BorderRadius
-                                                                  .circular(7),
+                                                              BorderRadius.circular(
+                                                                7,
+                                                              ),
                                                         ),
                                                         child: Center(
                                                           child: Text(
                                                             '${index + 1}',
                                                             style:
                                                                 const TextStyle(
-                                                              fontSize: 11,
-                                                              fontWeight:
-                                                                  FontWeight
-                                                                      .w800,
-                                                              color:
-                                                                  Colors.white,
-                                                            ),
+                                                                  fontSize: 11,
+                                                                  fontWeight:
+                                                                      FontWeight
+                                                                          .w800,
+                                                                  color: Colors
+                                                                      .white,
+                                                                ),
                                                           ),
                                                         ),
                                                       ),
@@ -4711,31 +4714,30 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
                             ),
                           ],
                         ),
-                        if (_selectedTabIndex == 1)
-                          const SizedBox(height: 18),
+                        if (_selectedTabIndex == 1) const SizedBox(height: 18),
                         // ── TAB SWITCHER ─────────────────────────────────────
                         if (_selectedTabIndex == 1)
                           Container(
-                          padding: const EdgeInsets.all(5),
-                          decoration: BoxDecoration(
-                            color: Colors.white.withOpacity(0.15),
-                            borderRadius: BorderRadius.circular(22),
+                            padding: const EdgeInsets.all(5),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withOpacity(0.15),
+                              borderRadius: BorderRadius.circular(22),
+                            ),
+                            child: Row(
+                              children: [
+                                _buildHeaderTab(
+                                  label: 'Bundles',
+                                  icon: Icons.inventory_2_rounded,
+                                  index: 0,
+                                ),
+                                _buildHeaderTab(
+                                  label: 'Build Bundle',
+                                  icon: Icons.add_box_rounded,
+                                  index: 1,
+                                ),
+                              ],
+                            ),
                           ),
-                          child: Row(
-                            children: [
-                              _buildHeaderTab(
-                                label: 'Bundles',
-                                icon: Icons.inventory_2_rounded,
-                                index: 0,
-                              ),
-                              _buildHeaderTab(
-                                label: 'Build Bundle',
-                                icon: Icons.add_box_rounded,
-                                index: 1,
-                              ),
-                            ],
-                          ),
-                        ),
                       ],
                     ),
                   ),
@@ -7148,7 +7150,8 @@ class _RemovedInventoryPageState extends State<RemovedInventoryPage>
                         const SizedBox(width: 8),
                         _infoChip(
                           icon: Icons.inventory_2_rounded,
-                          label: '${variant['startingStock'] ?? '0'} pcs',
+                          label:
+                              '${variant['stock'] ?? variant['startingStock'] ?? '0'} pcs',
                         ),
                         const SizedBox(width: 8),
                         _infoChip(

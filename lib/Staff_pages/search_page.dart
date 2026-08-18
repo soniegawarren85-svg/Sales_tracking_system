@@ -163,6 +163,33 @@ class _AnalyticsPageState extends State<AnalyticsPage>
       String itemKey(Map<String, dynamic> item) =>
           '${item['name'] ?? ''}|${item['price'] ?? ''}'.toLowerCase();
 
+      int bundleStock(Map<String, dynamic> data) {
+        final instances = data['bundleInstances'];
+        if (instances is List && instances.isNotEmpty) {
+          return instances.whereType<Map>().where((instance) {
+            final status =
+                instance['status']?.toString().trim().toLowerCase() ??
+                'available';
+            return status == 'available';
+          }).length;
+        }
+        return int.tryParse(data['bundleCount']?.toString() ?? '') ?? 0;
+      }
+
+      bool hasBundleContents(Map<String, dynamic> data) {
+        final items = data['items'];
+        if (items is List && items.whereType<Map>().isNotEmpty) return true;
+        final instances = data['bundleInstances'];
+        if (instances is List) {
+          return instances.whereType<Map>().any((instance) {
+            final instanceItems = instance['items'];
+            return instanceItems is List &&
+                instanceItems.whereType<Map>().isNotEmpty;
+          });
+        }
+        return false;
+      }
+
       final names = <String>{};
       for (final doc in snapshot.docs) {
         final data = doc.data();
@@ -171,24 +198,41 @@ class _AnalyticsPageState extends State<AnalyticsPage>
         final categoryName = data['name']?.toString().trim() ?? '';
         final sourceId = data['sourceInventoryId']?.toString() ?? '';
         final isCoffee = data['isCoffee'] == true;
-        final rootData =
-            activeRootById[sourceId] ??
-            activeRootByName[categoryName.toLowerCase()] ??
-            (isCoffee ? data : null);
+        final rootCandidate = activeRootById[sourceId];
+        final rootByName = activeRootByName[categoryName.toLowerCase()];
+        final isBundle = data['isBundle'] == true;
+        final rootData = isBundle
+            ? ((rootCandidate?['isBundle'] == true)
+                  ? rootCandidate
+                  : (rootByName?['isBundle'] == true)
+                  ? rootByName
+                  : null)
+            : isCoffee
+            ? ((rootCandidate?['isCoffee'] == true)
+                  ? rootCandidate
+                  : (rootByName?['isCoffee'] == true)
+                  ? rootByName
+                  : data)
+            : ((rootCandidate != null && rootCandidate['isBundle'] != true)
+                  ? rootCandidate
+                  : (rootByName != null && rootByName['isBundle'] != true)
+                  ? rootByName
+                  : null);
         if (rootData == null) continue;
 
-        final isBundle = data['isBundle'] == true;
-        final bundleCount =
-            int.tryParse(data['bundleCount']?.toString() ?? '') ?? 0;
-
         if (isBundle) {
-          if (categoryName.isNotEmpty && bundleCount > 0) {
+          if (rootData['isBundle'] != true) continue;
+          if (categoryName.isNotEmpty &&
+              bundleStock(data) > 0 &&
+              hasBundleContents(data) &&
+              hasBundleContents(rootData)) {
             names.add(categoryName);
           }
           continue;
         }
 
         if (isCoffee) {
+          if (rootData['isCoffee'] != true && rootData != data) continue;
           final sizes = data['sizes'] as List<dynamic>? ?? [];
           if (categoryName.isNotEmpty && sizes.isNotEmpty) {
             names.add(categoryName);
@@ -252,12 +296,45 @@ class _AnalyticsPageState extends State<AnalyticsPage>
           .where('name', isEqualTo: item)
           .get();
       QueryDocumentSnapshot<Map<String, dynamic>>? coffeeDoc;
+      QueryDocumentSnapshot<Map<String, dynamic>>? categoryDoc;
       for (final doc in snapshot.docs) {
         final data = doc.data();
-        if (data['isCoffee'] == true && data['isDeleted'] != true) {
+        if (data['isDeleted'] == true) continue;
+        if (data['isCoffee'] == true) {
           coffeeDoc = doc;
-          break;
+          continue;
         }
+        if (data['isBundle'] != true && categoryDoc == null) {
+          categoryDoc = doc;
+        }
+      }
+      if (categoryDoc != null) {
+        final data = categoryDoc.data();
+        final sourceId = data['sourceInventoryId']?.toString().trim() ?? '';
+        if (!mounted) return;
+        Navigator.push(
+          context,
+          PageRouteBuilder(
+            pageBuilder: (_, _, _) => AllCategPage(
+              selectedCategoryName: item,
+              selectedSourceInventoryId: sourceId.isNotEmpty
+                  ? sourceId
+                  : categoryDoc!.id,
+            ),
+            transitionsBuilder: (_, animation, _, child) {
+              final tween = Tween(
+                begin: const Offset(1, 0),
+                end: Offset.zero,
+              ).chain(CurveTween(curve: Curves.easeOut));
+              return SlideTransition(
+                position: animation.drive(tween),
+                child: child,
+              );
+            },
+            transitionDuration: const Duration(milliseconds: 380),
+          ),
+        );
+        return;
       }
       if (coffeeDoc != null) {
         if (!mounted) return;

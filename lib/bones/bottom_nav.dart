@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:curved_navigation_bar/curved_navigation_bar.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import '../services/inventory_service.dart';
 import '../Staff_pages/Staff_notifcation.dart';
 import '../Staff_pages/dashboard_page.dart';
@@ -19,6 +21,10 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
   int _selectedIndex = 0;
   final ScrollController _scrollController = ScrollController();
   int _prevEntryCount = 0;
+  int _salesLaunchToken = 0;
+  String? _salesInitialView;
+  String? _salesInitialGroup;
+  bool _openPendingOnSalesLaunch = false;
 
   @override
   void initState() {
@@ -82,7 +88,12 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
         // Profile Page
         return _buildProfilePage();
       case 3:
-        return const DailyStockPage();
+        return DailyStockPage(
+          initialView: _salesInitialView,
+          initialGroupName: _salesInitialGroup,
+          openPendingOnStart: _openPendingOnSalesLaunch,
+          launchToken: _salesLaunchToken,
+        );
       default:
         return _buildDashboardPage();
     }
@@ -94,6 +105,20 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
       scrollController: _scrollController,
       onMessage: _onMessagePressed,
       onNotification: _onNotificationPressed,
+      onOpenSalesGroup:
+          ({
+            required String view,
+            required String groupName,
+            required String sourceInventoryId,
+          }) {
+            setState(() {
+              _salesInitialView = view;
+              _salesInitialGroup = groupName;
+              _openPendingOnSalesLaunch = false;
+              _salesLaunchToken++;
+              _selectedIndex = 3;
+            });
+          },
     );
   }
 
@@ -116,8 +141,7 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
     final size = MediaQuery.sizeOf(context);
     final hasTabletCanvas =
         size.shortestSide >= 600 || (size.width >= 900 && size.height >= 520);
-    final isTabletLandscape =
-        size.width > size.height && hasTabletCanvas;
+    final isTabletLandscape = size.width > size.height && hasTabletCanvas;
 
     return Scaffold(
       backgroundColor: Colors.white,
@@ -128,47 +152,138 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
           _buildDashboardPage(),
           _buildAnalyticsPage(),
           _buildProfilePage(),
-          const DailyStockPage(),
+          DailyStockPage(
+            initialView: _salesInitialView,
+            initialGroupName: _salesInitialGroup,
+            openPendingOnStart: _openPendingOnSalesLaunch,
+            launchToken: _salesLaunchToken,
+          ),
         ],
       ),
-      bottomNavigationBar: isTabletLandscape
-          ? _buildLandscapeNav()
-          : CurvedNavigationBar(
-              index: _selectedIndex,
-              height: 75,
-              items: <Widget>[
-                Icon(
-                  Icons.home,
-                  size: _selectedIndex == 0 ? 36 : 30,
-                  color: _selectedIndex == 0 ? Colors.white : Colors.white70,
+      bottomNavigationBar: Stack(
+        clipBehavior: Clip.none,
+        alignment: Alignment.bottomCenter,
+        children: [
+          _buildPendingOrdersBadge(isTabletLandscape),
+          isTabletLandscape
+              ? _buildLandscapeNav()
+              : CurvedNavigationBar(
+                  index: _selectedIndex,
+                  height: 75,
+                  items: <Widget>[
+                    Icon(
+                      Icons.home,
+                      size: _selectedIndex == 0 ? 36 : 30,
+                      color: _selectedIndex == 0
+                          ? Colors.white
+                          : Colors.white70,
+                    ),
+                    Icon(
+                      Icons.search,
+                      size: _selectedIndex == 1 ? 32 : 26,
+                      color: _selectedIndex == 1
+                          ? Colors.white
+                          : Colors.white70,
+                    ),
+                    Icon(
+                      Icons.person_outline,
+                      size: _selectedIndex == 2 ? 32 : 26,
+                      color: _selectedIndex == 2
+                          ? Colors.white
+                          : Colors.white70,
+                    ),
+                    Icon(
+                      Icons.point_of_sale_rounded,
+                      size: _selectedIndex == 3 ? 32 : 26,
+                      color: _selectedIndex == 3
+                          ? Colors.white
+                          : Colors.white70,
+                    ),
+                  ],
+                  color: const Color(0xFFF48FB1),
+                  buttonBackgroundColor: const Color(0xFFE91E63),
+                  backgroundColor: Colors.transparent,
+                  animationCurve: Curves.easeInOut,
+                  animationDuration: const Duration(milliseconds: 300),
+                  onTap: (int idx) {
+                    setState(() {
+                      if (idx != 3) _openPendingOnSalesLaunch = false;
+                      _selectedIndex = idx;
+                    });
+                  },
                 ),
-                Icon(
-                  Icons.search,
-                  size: _selectedIndex == 1 ? 32 : 26,
-                  color: _selectedIndex == 1 ? Colors.white : Colors.white70,
-                ),
-                Icon(
-                  Icons.person_outline,
-                  size: _selectedIndex == 2 ? 32 : 26,
-                  color: _selectedIndex == 2 ? Colors.white : Colors.white70,
-                ),
-                Icon(
-                  Icons.point_of_sale_rounded,
-                  size: _selectedIndex == 3 ? 32 : 26,
-                  color: _selectedIndex == 3 ? Colors.white : Colors.white70,
-                ),
-              ],
-              color: const Color(0xFFF48FB1),
-              buttonBackgroundColor: const Color(0xFFE91E63),
-              backgroundColor: Colors.transparent,
-              animationCurve: Curves.easeInOut,
-              animationDuration: const Duration(milliseconds: 300),
-              onTap: (int idx) {
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPendingOrdersBadge(bool compactNav) {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null || uid.isEmpty) return const SizedBox.shrink();
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance
+          .collection('pending_orders')
+          .where('userId', isEqualTo: uid)
+          .snapshots(),
+      builder: (context, snapshot) {
+        final count = snapshot.data?.docs.length ?? 0;
+        if (count <= 0) return const SizedBox.shrink();
+        return Positioned(
+          bottom: compactNav ? 76 : 88,
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: () {
                 setState(() {
-                  _selectedIndex = idx;
+                  _salesInitialView = null;
+                  _salesInitialGroup = null;
+                  _openPendingOnSalesLaunch = true;
+                  _salesLaunchToken++;
+                  _selectedIndex = 3;
                 });
               },
+              borderRadius: BorderRadius.circular(18),
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 9,
+                ),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(18),
+                  border: Border.all(color: const Color(0xFFF8BBD0)),
+                  boxShadow: [
+                    BoxShadow(
+                      color: const Color(0xFFE91E63).withOpacity(0.18),
+                      blurRadius: 18,
+                      offset: const Offset(0, 7),
+                    ),
+                  ],
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(
+                      Icons.bookmark_rounded,
+                      color: Color(0xFFE91E63),
+                      size: 18,
+                    ),
+                    const SizedBox(width: 7),
+                    Text(
+                      '$count pending',
+                      style: const TextStyle(
+                        color: Color(0xFFC2105C),
+                        fontSize: 13,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             ),
+          ),
+        );
+      },
     );
   }
 

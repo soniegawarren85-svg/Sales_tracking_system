@@ -1072,44 +1072,40 @@ class _ProfilePageState extends State<ProfilePage>
   }
 
   Widget _buildProfileSummary(String memberSince) {
-    return Center(
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 620),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(18),
-            border: Border.all(color: _border),
-            boxShadow: [
-              BoxShadow(
-                color: _pinkMid.withOpacity(0.12),
-                blurRadius: 18,
-                offset: const Offset(0, 6),
-              ),
-            ],
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16),
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: _border),
+        boxShadow: [
+          BoxShadow(
+            color: _pinkMid.withOpacity(0.12),
+            blurRadius: 18,
+            offset: const Offset(0, 6),
           ),
-          child: Row(
-            children: [
-              Expanded(
-                child: _buildSummaryItem(
-                  Icons.badge_outlined,
-                  'Account Status',
-                  'Active',
-                  accent: Colors.green,
-                ),
-              ),
-              Container(width: 1, height: 42, color: _border),
-              Expanded(
-                child: _buildSummaryItem(
-                  Icons.calendar_month_outlined,
-                  'Member Since',
-                  memberSince,
-                ),
-              ),
-            ],
+        ],
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: _buildSummaryItem(
+              Icons.badge_outlined,
+              'Account Status',
+              'Active',
+              accent: Colors.green,
+            ),
           ),
-        ),
+          Container(width: 1, height: 42, color: _border),
+          Expanded(
+            child: _buildSummaryItem(
+              Icons.calendar_month_outlined,
+              'Member Since',
+              memberSince,
+            ),
+          ),
+        ],
       ),
     );
   }

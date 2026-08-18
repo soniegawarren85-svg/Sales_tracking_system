@@ -573,6 +573,182 @@ class _BudgetPageState extends State<BudgetPage>
     return items.isEmpty ? safeName : '$safeName - ${items.join(', ')}';
   }
 
+  bool _hasExpiredAssignedBundleItem(Map<String, dynamic> data) {
+    final bundleItems = data['items'] as List<dynamic>? ?? [];
+    for (final raw in bundleItems) {
+      if (raw is! Map) continue;
+      final item = Map<String, dynamic>.from(raw);
+      if (_isExpiredInventoryItem(item['expirationDate']?.toString() ?? '')) {
+        return true;
+      }
+    }
+
+    final instances = data['bundleInstances'] as List<dynamic>? ?? [];
+    for (final rawInstance in instances) {
+      if (rawInstance is! Map) continue;
+      final instance = Map<String, dynamic>.from(rawInstance);
+      final items = instance['items'] as List<dynamic>? ?? [];
+      for (final raw in items) {
+        if (raw is! Map) continue;
+        final item = Map<String, dynamic>.from(raw);
+        if (_isExpiredInventoryItem(item['expirationDate']?.toString() ?? '')) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  int _availableAssignedBundleCount(Map<String, dynamic> data) {
+    final instances = data['bundleInstances'] as List<dynamic>? ?? [];
+    if (instances.isEmpty) return _parseInt(data['bundleCount']);
+    return instances.where((raw) {
+      if (raw is! Map) return false;
+      final status =
+          raw['status']?.toString().trim().toLowerCase() ?? 'available';
+      return status == 'available';
+    }).length;
+  }
+
+  Future<List<QueryDocumentSnapshot<Map<String, dynamic>>>>
+  _activeAssignedInventoryDocs(
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
+  ) async {
+    final rootSnapshot = await _firestore.collection('sales_inventory').get();
+    final activeRootById = <String, Map<String, dynamic>>{};
+    final activeRootByName = <String, Map<String, dynamic>>{};
+    for (final rootDoc in rootSnapshot.docs) {
+      final rootData = rootDoc.data();
+      if (rootData['isDeleted'] == true) continue;
+      activeRootById[rootDoc.id] = rootData;
+      final rootName = rootData['name']?.toString().trim().toLowerCase() ?? '';
+      if (rootName.isNotEmpty) activeRootByName[rootName] = rootData;
+    }
+
+    String itemKey(Map<String, dynamic> item) =>
+        '${item['name'] ?? ''}|${item['price'] ?? ''}'.toLowerCase();
+
+    return docs.where((doc) {
+      final data = doc.data();
+      if (data['isDeleted'] == true) return false;
+      if (data['isCoffee'] == true || data['isAddon'] == true) return true;
+
+      final sourceId = data['sourceInventoryId']?.toString().trim() ?? '';
+      final name = data['name']?.toString().trim().toLowerCase() ?? '';
+      final rootData = activeRootById[sourceId] ?? activeRootByName[name];
+      if (rootData == null) return false;
+
+      if (data['isBundle'] == true) {
+        if (rootData['isBundle'] != true) return false;
+        if (_hasExpiredAssignedBundleItem(data)) return false;
+        if (_hasExpiredAssignedBundleItem(rootData)) return false;
+        return _availableAssignedBundleCount(data) > 0;
+      }
+
+      final rootKeys = ((rootData['items'] as List<dynamic>?) ?? [])
+          .whereType<Map>()
+          .map((item) => itemKey(Map<String, dynamic>.from(item)))
+          .toSet();
+      final activeItems = ((data['items'] as List<dynamic>?) ?? [])
+          .whereType<Map>()
+          .map((item) => Map<String, dynamic>.from(item))
+          .where((item) {
+            final stock = item.containsKey('stock')
+                ? _parseInt(item['stock'])
+                : _parseInt(item['startingStock']);
+            return stock > 0 &&
+                !_isExpiredInventoryItem(
+                  item['expirationDate']?.toString() ?? '',
+                ) &&
+                (rootKeys.isEmpty || rootKeys.contains(itemKey(item)));
+          })
+          .toList();
+      return activeItems.isNotEmpty;
+    }).toList();
+  }
+
+  Widget _assignedTableCell(
+    String text, {
+    FontWeight weight = FontWeight.w600,
+    Color color = kBannerTop,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+      child: Text(
+        text,
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(fontSize: 12, fontWeight: weight, color: color),
+      ),
+    );
+  }
+
+  List<Map<String, dynamic>> _assignedInventoryRows(
+    QueryDocumentSnapshot<Map<String, dynamic>> doc,
+  ) {
+    final data = doc.data();
+    final name = data['name']?.toString().trim() ?? 'Inventory';
+    if (data['isBundle'] == true) {
+      final count = _availableAssignedBundleCount(data);
+      return [
+        {
+          'id': data['bundleId']?.toString().trim().isNotEmpty == true
+              ? data['bundleId'].toString()
+              : doc.id,
+          'name': name,
+          'type': 'Bundle',
+          'stock': count,
+          'used': _parseInt(data['assignedStartingStock'], fallback: count) -
+              count,
+          'reduced': 0,
+          'expiry': '--',
+        },
+      ];
+    }
+
+    final items = ((data['items'] as List<dynamic>?) ?? [])
+        .whereType<Map>()
+        .map((item) => Map<String, dynamic>.from(item))
+        .where((item) {
+          final stock = item.containsKey('stock')
+              ? _parseInt(item['stock'])
+              : _parseInt(item['startingStock']);
+          return stock > 0 &&
+              !_isExpiredInventoryItem(item['expirationDate']?.toString() ?? '');
+        })
+        .toList();
+
+    return items.map((item) {
+      final stock = item.containsKey('stock')
+          ? _parseInt(item['stock'])
+          : _parseInt(item['startingStock']);
+      final starting = _parseInt(
+        item['assignedStartingStock'],
+        fallback: _parseInt(item['startingStock'], fallback: stock),
+      );
+      final reduced = _parseInt(item['reducedQuantity']);
+      return {
+        'id': item['id']?.toString().trim().isNotEmpty == true
+            ? item['id'].toString()
+            : doc.id,
+        'name': item['name']?.toString().trim().isNotEmpty == true
+            ? item['name'].toString()
+            : name,
+        'type': data['isCoffee'] == true
+            ? 'Coffee'
+            : data['isAddon'] == true
+            ? 'Add-on'
+            : 'Item',
+        'stock': stock,
+        'used': (starting - stock - reduced).clamp(0, starting),
+        'reduced': reduced,
+        'expiry': item['expirationDate']?.toString().trim().isNotEmpty == true
+            ? item['expirationDate'].toString()
+            : '--',
+      };
+    }).toList();
+  }
+
   Widget _buildAssignedInventoryPreview(String staffId) {
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
       stream: _firestore
@@ -822,7 +998,34 @@ class _BudgetPageState extends State<BudgetPage>
                         .snapshots(),
                     builder: (context, snapshot) {
                       final docs = (snapshot.data?.docs ?? [])
-                          .where((doc) => doc.data()['isDeleted'] != true)
+                          .where((doc) {
+                            final data = doc.data();
+                            if (data['isDeleted'] == true) return false;
+                            if (data['isBundle'] == true) {
+                              return !_hasExpiredAssignedBundleItem(data) &&
+                                  _availableAssignedBundleCount(data) > 0;
+                            }
+                            final activeItems =
+                                ((data['items'] as List<dynamic>?) ?? [])
+                                    .whereType<Map>()
+                                    .map(
+                                      (item) => Map<String, dynamic>.from(item),
+                                    )
+                                    .where((item) {
+                                      final stock = item.containsKey('stock')
+                                          ? _parseInt(item['stock'])
+                                          : _parseInt(item['startingStock']);
+                                      return stock > 0 &&
+                                          !_isExpiredInventoryItem(
+                                            item['expirationDate']?.toString() ??
+                                                '',
+                                          );
+                                    })
+                                    .toList();
+                            return data['isCoffee'] == true ||
+                                data['isAddon'] == true ||
+                                activeItems.isNotEmpty;
+                          })
                           .toList();
 
                       if (snapshot.connectionState == ConnectionState.waiting) {
@@ -836,80 +1039,103 @@ class _BudgetPageState extends State<BudgetPage>
                         );
                       }
 
-                      return ListView.separated(
-                        shrinkWrap: true,
-                        itemCount: docs.length,
-                        separatorBuilder: (_, _) => const SizedBox(height: 10),
-                        itemBuilder: (context, index) {
-                          final doc = docs[index];
-                          final data = doc.data();
-                          return Container(
-                            padding: const EdgeInsets.all(12),
-                            decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius: BorderRadius.circular(16),
-                              border: Border.all(color: kAccent),
-                            ),
-                            child: Row(
-                              children: [
-                                Container(
-                                  width: 38,
-                                  height: 38,
-                                  decoration: BoxDecoration(
-                                    color: kPrimary.withOpacity(0.10),
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                  child: Icon(
-                                    data['isBundle'] == true
-                                        ? Icons.inventory_2_rounded
-                                        : Icons.category_rounded,
-                                    color: kDeep,
-                                    size: 20,
-                                  ),
-                                ),
-                                const SizedBox(width: 10),
-                                Expanded(
-                                  child: Text(
-                                    _assignedInventoryLabel(data),
-                                    maxLines: 3,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(
-                                      color: kBannerTop,
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w800,
-                                      height: 1.3,
+                      return SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: DataTable(
+                          headingRowColor: WidgetStatePropertyAll(
+                            kPrimary.withOpacity(0.08),
+                          ),
+                          columnSpacing: 18,
+                          columns: const [
+                            DataColumn(label: Text('ID')),
+                            DataColumn(label: Text('Name')),
+                            DataColumn(label: Text('Type')),
+                            DataColumn(label: Text('Stock')),
+                            DataColumn(label: Text('Used')),
+                            DataColumn(label: Text('Reduced')),
+                            DataColumn(label: Text('Expiry')),
+                            DataColumn(label: Text('Action')),
+                          ],
+                          rows: docs.expand((doc) {
+                            final rows = _assignedInventoryRows(doc);
+                            return rows.map((row) {
+                              return DataRow(
+                                cells: [
+                                  DataCell(
+                                    SizedBox(
+                                      width: 140,
+                                      child: _assignedTableCell(
+                                        row['id']?.toString() ?? '--',
+                                      ),
                                     ),
                                   ),
-                                ),
-                                IconButton(
-                                  tooltip: 'Remove assigned item',
-                                  onPressed: () async {
-                                    try {
-                                      await _removeAssignedInventoryFromStaff(
-                                        doc,
-                                      );
-                                      if (!mounted) return;
-                                      _showSnack(
-                                        'Assigned item removed',
-                                        Colors.green.shade600,
-                                      );
-                                    } catch (e) {
-                                      if (!mounted) return;
-                                      _showSnack(
-                                        'Unable to remove item: $e',
-                                        Colors.red.shade600,
-                                      );
-                                    }
-                                  },
-                                  icon: const Icon(
-                                    Icons.delete_outline_rounded,
-                                    color: kDeep,
+                                  DataCell(
+                                    SizedBox(
+                                      width: 160,
+                                      child: _assignedTableCell(
+                                        row['name']?.toString() ?? 'Item',
+                                        weight: FontWeight.w800,
+                                      ),
+                                    ),
                                   ),
-                                ),
-                              ],
-                            ),
-                          );
-                        },
+                                  DataCell(
+                                    _assignedTableCell(
+                                      row['type']?.toString() ?? 'Item',
+                                    ),
+                                  ),
+                                  DataCell(
+                                    _assignedTableCell(
+                                      row['stock']?.toString() ?? '0',
+                                      color: kPrimary,
+                                    ),
+                                  ),
+                                  DataCell(
+                                    _assignedTableCell(
+                                      row['used']?.toString() ?? '0',
+                                    ),
+                                  ),
+                                  DataCell(
+                                    _assignedTableCell(
+                                      row['reduced']?.toString() ?? '0',
+                                    ),
+                                  ),
+                                  DataCell(
+                                    _assignedTableCell(
+                                      row['expiry']?.toString() ?? '--',
+                                    ),
+                                  ),
+                                  DataCell(
+                                    IconButton(
+                                      tooltip: 'Remove assigned item',
+                                      onPressed: () async {
+                                        try {
+                                          await _removeAssignedInventoryFromStaff(
+                                            doc,
+                                          );
+                                          if (!mounted) return;
+                                          _showSnack(
+                                            'Assigned item removed',
+                                            Colors.green.shade600,
+                                          );
+                                        } catch (e) {
+                                          if (!mounted) return;
+                                          _showSnack(
+                                            'Unable to remove item: $e',
+                                            Colors.red.shade600,
+                                          );
+                                        }
+                                      },
+                                      icon: const Icon(
+                                        Icons.delete_outline_rounded,
+                                        color: kDeep,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              );
+                            });
+                          }).toList(),
+                        ),
                       );
                     },
                   ),
@@ -5574,14 +5800,37 @@ class _BudgetPageState extends State<BudgetPage>
       builder: (context, snapshot) {
         if (snapshot.hasError) return const SizedBox.shrink();
 
-        final totals = _staffInventoryTotals(snapshot.data?.docs ?? []);
+        final assignedDocs = (snapshot.data?.docs ?? [])
+            .where((doc) {
+              final data = doc.data();
+              if (data['isDeleted'] == true) return false;
+              if (data['isBundle'] == true) {
+                return !_hasExpiredAssignedBundleItem(data) &&
+                    _availableAssignedBundleCount(data) > 0;
+              }
+              final activeItems = ((data['items'] as List<dynamic>?) ?? [])
+                  .whereType<Map>()
+                  .map((item) => Map<String, dynamic>.from(item))
+                  .where((item) {
+                    final stock = item.containsKey('stock')
+                        ? _parseInt(item['stock'])
+                        : _parseInt(item['startingStock']);
+                    return stock > 0 &&
+                        !_isExpiredInventoryItem(
+                          item['expirationDate']?.toString() ?? '',
+                        );
+                  })
+                  .toList();
+              return data['isCoffee'] == true ||
+                  data['isAddon'] == true ||
+                  activeItems.isNotEmpty;
+            })
+            .toList();
+        final totals = _staffInventoryTotals(assignedDocs);
         final starting = totals['starting'] ?? 0;
         final remaining = totals['remaining'] ?? 0;
         final reduced = totals['reduced'] ?? 0;
         final used = (starting - remaining - reduced).clamp(0, starting);
-        final assignedDocs = (snapshot.data?.docs ?? [])
-            .where((doc) => doc.data()['isDeleted'] != true)
-            .toList();
 
         return Container(
           width: double.infinity,

@@ -10,7 +10,6 @@ import 'theme/design.dart';
 import 'Login/Login/Login.dart';
 import 'Firebase.dart';
 import 'services/inventory_service.dart';
-import 'services/local_database_sync_service.dart';
 import 'bones/bottom_nav.dart';
 import 'Admin_pages/Admin/Dashboard.dart';
 
@@ -19,7 +18,6 @@ void main() async {
   await initializeFirebase();
   // Initialize InventoryService to start listening to Firestore
   InventoryService().initialize();
-  LocalDatabaseSyncService().start();
   runApp(const MyApp());
 }
 

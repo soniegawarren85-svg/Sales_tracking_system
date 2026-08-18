@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -31,6 +33,7 @@ class _AllCategPageState extends State<AllCategPage>
   bool _showCategories = true;
   bool _showCoffee = false;
   bool _showAddons = false;
+  String? _selectedTableCategoryKey;
   List<String> _staffInventoryIds = const [];
 
   bool get _isFilteredCategory =>
@@ -169,6 +172,45 @@ class _AllCategPageState extends State<AllCategPage>
     return double.tryParse(cleaned) ?? 0.0;
   }
 
+  Widget _buildInventoryImage(
+    String? src, {
+    IconData fallbackIcon = Icons.cake_rounded,
+  }) {
+    final image = src?.trim() ?? '';
+    if (image.isEmpty) return _imageFallback(fallbackIcon);
+    if (image.startsWith('data:image/')) {
+      final commaIndex = image.indexOf(',');
+      if (commaIndex != -1) {
+        try {
+          return Image.memory(
+            base64Decode(image.substring(commaIndex + 1)),
+            fit: BoxFit.contain,
+            errorBuilder: (_, _, _) => _imageFallback(fallbackIcon),
+          );
+        } catch (_) {
+          return _imageFallback(fallbackIcon);
+        }
+      }
+    }
+    if (image.startsWith('http://') || image.startsWith('https://')) {
+      return Image.network(
+        image,
+        fit: BoxFit.contain,
+        errorBuilder: (_, _, _) => _imageFallback(fallbackIcon),
+      );
+    }
+    return Image.asset(
+      image,
+      fit: BoxFit.contain,
+      errorBuilder: (_, _, _) => _imageFallback(fallbackIcon),
+    );
+  }
+
+  Widget _imageFallback(IconData icon) => Container(
+    color: const Color(0xFFFFF0E4),
+    child: Icon(icon, color: const Color(0xFFC2105C), size: 30),
+  );
+
   int _parseInt(dynamic value, {int fallback = 0}) {
     if (value is num) return value.toInt();
     return int.tryParse(value?.toString() ?? '') ?? fallback;
@@ -179,13 +221,14 @@ class _AllCategPageState extends State<AllCategPage>
     Map<String, dynamic>? rootData,
   }) {
     final basePrice = _parsePrice(data['basePrice'] ?? rootData?['basePrice']);
-    final sizes = ((data['sizes'] as List<dynamic>?) ??
-            (rootData?['sizes'] as List<dynamic>?) ??
-            [])
-        .whereType<Map>()
-        .map((size) => Map<String, dynamic>.from(size))
-        .where((size) => (size['name']?.toString().trim() ?? '').isNotEmpty)
-        .toList();
+    final sizes =
+        ((data['sizes'] as List<dynamic>?) ??
+                (rootData?['sizes'] as List<dynamic>?) ??
+                [])
+            .whereType<Map>()
+            .map((size) => Map<String, dynamic>.from(size))
+            .where((size) => (size['name']?.toString().trim() ?? '').isNotEmpty)
+            .toList();
     final coffeeSizes = sizes.isEmpty
         ? [
             {'name': 'Regular', 'priceDelta': 0},
@@ -195,7 +238,8 @@ class _AllCategPageState extends State<AllCategPage>
     final addonByName = <String, Map<String, dynamic>>{};
     for (final source in [data, if (rootData != null) rootData]) {
       for (final addon
-          in (source['addonOptions'] as List<dynamic>? ?? []).whereType<Map>()) {
+          in (source['addonOptions'] as List<dynamic>? ?? [])
+              .whereType<Map>()) {
         final name = addon['name']?.toString().trim() ?? '';
         if (name.isEmpty) continue;
         addonByName.putIfAbsent(name, () => Map<String, dynamic>.from(addon));
@@ -1589,7 +1633,7 @@ class _AllCategPageState extends State<AllCategPage>
                       style: ElevatedButton.styleFrom(
                         backgroundColor: const Color(0xFFC2105C),
                         foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        padding: const EdgeInsets.symmetric(vertical: 10),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(16),
                         ),
@@ -2008,6 +2052,7 @@ class _AllCategPageState extends State<AllCategPage>
               _showCategories = true;
               _showCoffee = false;
               _showAddons = false;
+              _selectedTableCategoryKey = null;
             }),
           ),
           const SizedBox(width: 8),
@@ -2020,6 +2065,7 @@ class _AllCategPageState extends State<AllCategPage>
               _showCategories = false;
               _showCoffee = false;
               _showAddons = false;
+              _selectedTableCategoryKey = null;
             }),
           ),
           const SizedBox(width: 8),
@@ -2032,6 +2078,7 @@ class _AllCategPageState extends State<AllCategPage>
               _showCategories = false;
               _showCoffee = true;
               _showAddons = false;
+              _selectedTableCategoryKey = null;
             }),
           ),
           const SizedBox(width: 8),
@@ -2044,6 +2091,7 @@ class _AllCategPageState extends State<AllCategPage>
               _showCategories = false;
               _showCoffee = false;
               _showAddons = true;
+              _selectedTableCategoryKey = null;
             }),
           ),
         ],
@@ -2074,6 +2122,158 @@ class _AllCategPageState extends State<AllCategPage>
     );
   }
 
+  DataColumn _tableColumn(String label) {
+    return DataColumn(
+      label: Text(
+        label,
+        style: const TextStyle(
+          color: Color(0xFF8B0035),
+          fontWeight: FontWeight.w900,
+          fontSize: 12,
+        ),
+      ),
+    );
+  }
+
+  DataCell _tableCell(
+    String value, {
+    double width = 120,
+    FontWeight weight = FontWeight.w700,
+    Color color = const Color(0xFF1A0A10),
+  }) {
+    return DataCell(
+      SizedBox(
+        width: width,
+        child: Text(
+          value,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(fontSize: 12, fontWeight: weight, color: color),
+        ),
+      ),
+    );
+  }
+
+  Widget _tableBlock({
+    required String title,
+    required List<DataColumn> columns,
+    required List<DataRow> rows,
+    String? subtitle,
+    VoidCallback? onHistory,
+  }) {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFFF8BBD0)),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFFC2105C).withOpacity(0.06),
+            blurRadius: 12,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 12, 14, 8),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Color(0xFF8B0035),
+                          fontSize: 16,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      if ((subtitle ?? '').isNotEmpty)
+                        Text(
+                          subtitle!,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: const Color(0xFF8B0035).withOpacity(0.62),
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+                if (onHistory != null)
+                  IconButton(
+                    tooltip: 'History',
+                    onPressed: onHistory,
+                    icon: const Icon(Icons.history_rounded),
+                    color: const Color(0xFFC2105C),
+                  ),
+              ],
+            ),
+          ),
+          LayoutBuilder(
+            builder: (context, constraints) => SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: ConstrainedBox(
+                constraints: BoxConstraints(minWidth: constraints.maxWidth),
+                child: DataTable(
+                  headingRowColor: WidgetStatePropertyAll(
+                    const Color(0xFFC2105C).withOpacity(0.08),
+                  ),
+                  dataRowMinHeight: 58,
+                  dataRowMaxHeight: 70,
+                  columnSpacing: 22,
+                  horizontalMargin: 18,
+                  columns: columns,
+                  rows: rows,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _displayItemId(Map<String, dynamic> item, {String? fallback}) {
+    for (final key in ['id', 'itemId', 'variantId', 'sourceItemId']) {
+      final value = item[key]?.toString().trim() ?? '';
+      if (value.isNotEmpty) return value;
+    }
+    final safeFallback = fallback?.trim() ?? '';
+    return safeFallback.isNotEmpty ? safeFallback : '--';
+  }
+
+  Widget _tableReduceButton({
+    required bool enabled,
+    required VoidCallback onPressed,
+    String label = 'Reduce',
+  }) {
+    return ElevatedButton.icon(
+      onPressed: enabled ? onPressed : null,
+      icon: const Icon(Icons.remove_circle_outline_rounded, size: 16),
+      label: Text(enabled ? label : 'Unavailable'),
+      style: ElevatedButton.styleFrom(
+        backgroundColor: const Color(0xFFC2105C),
+        foregroundColor: Colors.white,
+        disabledBackgroundColor: Colors.grey.shade300,
+        elevation: 0,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        textStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800),
+      ),
+    );
+  }
+
   Widget _buildBundleList(List<Map<String, dynamic>> bundleDocs) {
     if (bundleDocs.isEmpty) {
       return _buildEmptyInventoryState(
@@ -2082,6 +2282,140 @@ class _AllCategPageState extends State<AllCategPage>
       );
     }
 
+    return ListView(
+      padding: const EdgeInsets.only(bottom: 30),
+      children: [
+        _tableBlock(
+          title: 'Bundles',
+          subtitle:
+              '${bundleDocs.length} active bundle${bundleDocs.length == 1 ? '' : 's'}',
+          columns: [
+            _tableColumn('ID'),
+            _tableColumn('Name'),
+            _tableColumn('Items'),
+            _tableColumn('Price'),
+            _tableColumn('Stock'),
+            _tableColumn('Action'),
+          ],
+          rows: bundleDocs.map((bundle) {
+            final bundleName = bundle['name']?.toString() ?? 'Bundle';
+            final bundleItems = bundle['items'] as List<dynamic>? ?? [];
+            final bundleStock = _bundleStockForData(bundle);
+            final bundlePrice = _parsePrice(bundle['price']);
+            final bundleId = bundle['bundleId']?.toString().trim() ?? '';
+
+            return DataRow(
+              cells: [
+                _tableCell(
+                  bundleId.isNotEmpty
+                      ? bundleId
+                      : bundle['sourceDocId']?.toString() ?? '--',
+                  width: 160,
+                  color: const Color(0xFFC2105C),
+                ),
+                _tableCell(bundleName, width: 180, weight: FontWeight.w900),
+                _tableCell('${bundleItems.length}', width: 70),
+                _tableCell(
+                  'PHP ${bundlePrice.toStringAsFixed(2)}',
+                  width: 100,
+                  color: const Color(0xFF2E7D32),
+                ),
+                _tableCell(
+                  '$bundleStock',
+                  width: 70,
+                  color: _stockColor(bundleStock),
+                ),
+                DataCell(
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        tooltip: 'View Bundle Items',
+                        onPressed: () => _showBundleItemsDialog(bundle),
+                        icon: const Icon(Icons.visibility_rounded),
+                        color: const Color(0xFFC2105C),
+                      ),
+                      _tableReduceButton(
+                        enabled: bundleStock > 0,
+                        onPressed: () => _showBundleReductionDialog(bundle),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            );
+          }).toList(),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildCoffeeCategoryCard(Map<String, dynamic> category, int index) {
+    final coffeeName = category['categoryName']?.toString() ?? 'Coffee';
+    final coffeeId = category['coffeeId']?.toString() ?? '';
+    final items =
+        (category['items'] as List?)?.cast<Map<String, dynamic>>() ?? [];
+
+    return _AnimatedCategorySection(
+      index: index,
+      child: _tableBlock(
+        title: coffeeName,
+        subtitle: coffeeId.isNotEmpty
+            ? '$coffeeId - ${items.length} size${items.length == 1 ? '' : 's'}'
+            : '${items.length} size${items.length == 1 ? '' : 's'}',
+        columns: [
+          _tableColumn('Size'),
+          _tableColumn('Add-ons'),
+          _tableColumn('Base'),
+          _tableColumn('Price'),
+          _tableColumn('Action'),
+        ],
+        rows: items.map((item) {
+          final sizeName = item['name']?.toString() ?? 'Regular';
+          final price = _parsePrice(item['price']);
+          final addons =
+              (item['addons'] as List?)?.cast<Map<String, dynamic>>() ?? [];
+          final addonLabel = addons.isEmpty
+              ? '--'
+              : addons
+                    .map((addon) {
+                      final addonName = addon['name']?.toString() ?? 'Add-on';
+                      final addonPrice = _parsePrice(addon['priceDelta']);
+                      return addonPrice > 0
+                          ? '$addonName +PHP ${addonPrice.toStringAsFixed(0)}'
+                          : addonName;
+                    })
+                    .join(', ');
+
+          return DataRow(
+            cells: [
+              _tableCell(sizeName, width: 130, weight: FontWeight.w900),
+              _tableCell(addonLabel, width: 240),
+              _tableCell(
+                'PHP ${_parsePrice(category['basePrice']).toStringAsFixed(2)}',
+                width: 100,
+              ),
+              _tableCell(
+                'PHP ${price.toStringAsFixed(2)}',
+                width: 100,
+                color: const Color(0xFF2E7D32),
+              ),
+              DataCell(
+                _tableReduceButton(
+                  enabled: true,
+                  label: 'Mark Low',
+                  onPressed: () => _markCoffeeLowStock(category),
+                ),
+              ),
+            ],
+          );
+        }).toList(),
+      ),
+    );
+  }
+
+  /*
+  Widget _buildBundleListOld(List<Map<String, dynamic>> bundleDocs) {
     return ListView.builder(
       padding: const EdgeInsets.fromLTRB(16, 20, 16, 30),
       itemCount: bundleDocs.length,
@@ -2092,6 +2426,7 @@ class _AllCategPageState extends State<AllCategPage>
         final bundleStock = _bundleStockForData(bundle);
         final stockColor = _stockColor(bundleStock);
         final bundlePrice = _parsePrice(bundle['price']);
+        final bundleImage = bundle['imageUrl']?.toString();
 
         return _AnimatedCategorySection(
           index: index,
@@ -2128,6 +2463,18 @@ class _AllCategPageState extends State<AllCategPage>
                   ),
                   child: Row(
                     children: [
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(16),
+                        child: SizedBox(
+                          width: 72,
+                          height: 72,
+                          child: _buildInventoryImage(
+                            bundleImage,
+                            fallbackIcon: Icons.inventory_2_rounded,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 14),
                       Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -2207,52 +2554,54 @@ class _AllCategPageState extends State<AllCategPage>
                         ],
                       ),
                       const SizedBox(height: 14),
-                      SizedBox(
-                        width: double.infinity,
-                        child: OutlinedButton.icon(
-                          onPressed: () => _showBundleItemsDialog(bundle),
-                          icon: const Icon(Icons.visibility_rounded, size: 18),
-                          label: const Text('View Bundle Items'),
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: const Color(0xFFC2105C),
-                            side: const BorderSide(
-                              color: Color(0xFFF8BBD0),
-                              width: 1.4,
-                            ),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(16),
-                            ),
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                            textStyle: const TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w800,
+                      Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              onPressed: () => _showBundleItemsDialog(bundle),
+                              icon: const Icon(Icons.visibility_rounded, size: 18),
+                              label: const Text('View Bundle Items'),
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: const Color(0xFFC2105C),
+                                side: const BorderSide(
+                                  color: Color(0xFFF8BBD0),
+                                  width: 1.4,
+                                ),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(16),
+                                ),
+                                padding: const EdgeInsets.symmetric(vertical: 10),
+                                textStyle: const TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
                             ),
                           ),
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      SizedBox(
-                        width: double.infinity,
-                        child: ElevatedButton.icon(
-                          onPressed: bundleStock > 0
-                              ? () => _showBundleReductionDialog(bundle)
-                              : null,
-                          icon: const Icon(
-                            Icons.remove_circle_outline_rounded,
-                            size: 18,
-                          ),
-                          label: const Text('Reduce'),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFFC2105C),
-                            foregroundColor: Colors.white,
-                            disabledBackgroundColor: Colors.grey.shade300,
-                            elevation: 0,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(16),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: ElevatedButton.icon(
+                              onPressed: bundleStock > 0
+                                  ? () => _showBundleReductionDialog(bundle)
+                                  : null,
+                              icon: const Icon(
+                                Icons.remove_circle_outline_rounded,
+                                size: 18,
+                              ),
+                              label: const Text('Reduce'),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: const Color(0xFFC2105C),
+                                foregroundColor: Colors.white,
+                                disabledBackgroundColor: Colors.grey.shade300,
+                                elevation: 0,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(16),
+                                ),
+                                padding: const EdgeInsets.symmetric(vertical: 10),
+                              ),
                             ),
-                            padding: const EdgeInsets.symmetric(vertical: 13),
                           ),
-                        ),
+                        ],
                       ),
                     ],
                   ),
@@ -2268,6 +2617,7 @@ class _AllCategPageState extends State<AllCategPage>
   Widget _buildCoffeeCategoryCard(Map<String, dynamic> category, int index) {
     final coffeeName = category['categoryName']?.toString() ?? 'Coffee';
     final coffeeId = category['coffeeId']?.toString() ?? '';
+    final coffeeImage = category['imageUrl']?.toString();
     final items =
         (category['items'] as List?)?.cast<Map<String, dynamic>>() ?? [];
 
@@ -2401,17 +2751,15 @@ class _AllCategPageState extends State<AllCategPage>
                   children: [
                     Row(
                       children: [
-                        Container(
-                          width: 30,
-                          height: 30,
-                          decoration: const BoxDecoration(
-                            color: Color(0xFFF48FB1),
-                            shape: BoxShape.circle,
-                          ),
-                          child: const Icon(
-                            Icons.local_cafe_rounded,
-                            color: Colors.white,
-                            size: 16,
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(14),
+                          child: SizedBox(
+                            width: 58,
+                            height: 58,
+                            child: _buildInventoryImage(
+                              item['imageUrl']?.toString() ?? coffeeImage,
+                              fallbackIcon: Icons.local_cafe_rounded,
+                            ),
                           ),
                         ),
                         const SizedBox(width: 12),
@@ -2464,6 +2812,8 @@ class _AllCategPageState extends State<AllCategPage>
       ),
     );
   }
+
+  */
 
   Widget _buildAddonList(List<Map<String, dynamic>> addonDocs) {
     if (addonDocs.isEmpty) {
@@ -2523,6 +2873,85 @@ class _AllCategPageState extends State<AllCategPage>
     );
   }
 
+  Widget _buildCategoryTable(Map<String, dynamic> category, int index) {
+    final categoryName = category['categoryName']?.toString() ?? 'Unknown';
+    final categoryLabel = _brandCategory(categoryName);
+    final items =
+        (category['items'] as List?)?.cast<Map<String, dynamic>>() ?? [];
+
+    return _AnimatedCategorySection(
+      index: index,
+      child: _tableBlock(
+        title: categoryName,
+        subtitle: categoryLabel,
+        onHistory: () =>
+            _showStockAdjustmentHistory(categoryName: categoryName),
+        columns: [
+          _tableColumn('ID'),
+          _tableColumn('Name'),
+          _tableColumn('Price'),
+          _tableColumn('Stock'),
+          _tableColumn('Expiry'),
+          _tableColumn('Action'),
+        ],
+        rows: items.map((item) {
+          final itemStock = _stockForItem(item);
+          return DataRow(
+            cells: [
+              _tableCell(
+                _displayItemId(
+                  item,
+                  fallback:
+                      item['sourceDocId']?.toString() ??
+                      category['categoryId']?.toString(),
+                ),
+                width: 140,
+                color: const Color(0xFFC2105C),
+              ),
+              _tableCell(
+                item['name']?.toString() ?? 'Item',
+                width: 180,
+                weight: FontWeight.w900,
+              ),
+              _tableCell(
+                'PHP ${_parsePrice(item['price']).toStringAsFixed(2)}',
+                width: 100,
+                color: const Color(0xFF2E7D32),
+              ),
+              _tableCell(
+                '$itemStock',
+                width: 70,
+                color: _stockColor(itemStock),
+              ),
+              _tableCell(
+                item['expirationDate']?.toString().trim().isNotEmpty == true
+                    ? item['expirationDate'].toString()
+                    : '--',
+                width: 120,
+              ),
+              DataCell(
+                _tableReduceButton(
+                  enabled: itemStock > 0,
+                  onPressed: () {
+                    _showStockAdjustmentDialog(
+                      categoryName: categoryName,
+                      sourceDocId:
+                          item['sourceDocId']?.toString() ??
+                          category['categoryId']?.toString() ??
+                          '',
+                      item: item,
+                      currentStock: itemStock,
+                    );
+                  },
+                ),
+              ),
+            ],
+          );
+        }).toList(),
+      ),
+    );
+  }
+
   Widget _buildCategoryList(List<Map<String, dynamic>> categoryDocs) {
     if (categoryDocs.isEmpty) {
       return _buildEmptyInventoryState(
@@ -2531,19 +2960,131 @@ class _AllCategPageState extends State<AllCategPage>
       );
     }
 
+    if (!_isFilteredCategory &&
+        categoryDocs.every((category) => category['isCoffee'] != true)) {
+      final selectedKey =
+          _selectedTableCategoryKey ??
+          (categoryDocs.isNotEmpty
+              ? (categoryDocs.first['categoryId']?.toString() ??
+                    categoryDocs.first['categoryName']?.toString() ??
+                    '')
+              : '');
+      final selectedCategory = categoryDocs.firstWhere((category) {
+        final key =
+            category['categoryId']?.toString() ??
+            category['categoryName']?.toString() ??
+            '';
+        return key == selectedKey;
+      }, orElse: () => categoryDocs.first);
+
+      return ListView(
+        padding: const EdgeInsets.fromLTRB(16, 20, 16, 30),
+        children: [
+          SizedBox(
+            height: 54,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              itemCount: categoryDocs.length,
+              separatorBuilder: (_, __) => const SizedBox(width: 10),
+              itemBuilder: (context, index) {
+                final category = categoryDocs[index];
+                final categoryName =
+                    category['categoryName']?.toString() ?? 'Unknown';
+                final categoryKey =
+                    category['categoryId']?.toString() ?? categoryName;
+                final selected =
+                    categoryKey ==
+                    (selectedCategory['categoryId']?.toString() ??
+                        selectedCategory['categoryName']?.toString() ??
+                        '');
+                return Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    onTap: () =>
+                        setState(() => _selectedTableCategoryKey = categoryKey),
+                    borderRadius: BorderRadius.circular(16),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 180),
+                      constraints: const BoxConstraints(minWidth: 128),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 18,
+                        vertical: 13,
+                      ),
+                      decoration: BoxDecoration(
+                        color: selected
+                            ? const Color(0xFFC2105C)
+                            : Colors.white,
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
+                          color: selected
+                              ? const Color(0xFFC2105C)
+                              : const Color(0xFFF8BBD0),
+                          width: 1.3,
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: const Color(
+                              0xFFC2105C,
+                            ).withOpacity(selected ? 0.16 : 0.06),
+                            blurRadius: selected ? 14 : 8,
+                            offset: const Offset(0, 4),
+                          ),
+                        ],
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.category_rounded,
+                            size: 16,
+                            color: selected
+                                ? Colors.white
+                                : const Color(0xFFC2105C),
+                          ),
+                          const SizedBox(width: 8),
+                          Flexible(
+                            child: Text(
+                              categoryName,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: selected
+                                    ? Colors.white
+                                    : const Color(0xFF8B0035),
+                                fontSize: 13,
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+          const SizedBox(height: 10),
+          _buildCategoryTable(selectedCategory, 0),
+        ],
+      );
+    }
+
     return ListView.builder(
       padding: const EdgeInsets.fromLTRB(16, 20, 16, 30),
       itemCount: categoryDocs.length,
       itemBuilder: (context, index) {
         final category = categoryDocs[index];
-        final categoryName = category['categoryName']?.toString() ?? 'Unknown';
-        final categoryId = category['categoryId']?.toString() ?? '';
-        final items =
-            (category['items'] as List?)?.cast<Map<String, dynamic>>() ?? [];
         if (category['isCoffee'] == true) {
           return _buildCoffeeCategoryCard(category, index);
         }
+        final categoryName = category['categoryName']?.toString() ?? 'Unknown';
+        final categoryId = category['categoryId']?.toString() ?? '';
+        final categoryImage = category['imageUrl']?.toString();
+        final items =
+            (category['items'] as List?)?.cast<Map<String, dynamic>>() ?? [];
         final categoryLabel = _brandCategory(categoryName);
+        return _buildCategoryTable(category, index);
 
         return _AnimatedCategorySection(
           index: index,
@@ -2662,6 +3203,7 @@ class _AllCategPageState extends State<AllCategPage>
                 final item = entry.value;
                 final itemStock = _stockForItem(item);
                 final stockColor = _stockColor(itemStock);
+                final itemImage = item['imageUrl']?.toString() ?? categoryImage;
 
                 return _AnimatedItemCard(
                   delay: Duration(milliseconds: 100 + idx * 60),
@@ -2687,6 +3229,15 @@ class _AllCategPageState extends State<AllCategPage>
                       child: Row(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(14),
+                            child: SizedBox(
+                              width: 76,
+                              height: 76,
+                              child: _buildInventoryImage(itemImage),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
                           Container(
                             width: 4,
                             height: 80,
@@ -2726,14 +3277,15 @@ class _AllCategPageState extends State<AllCategPage>
                                       _ItemTag(
                                         icon: Icons.tune_rounded,
                                         label:
-                                          item['variant']?.toString() ?? '',
+                                            item['variant']?.toString() ?? '',
                                         bgColor: const Color(0xFFFCE4EC),
                                         textColor: const Color(0xFFAD1457),
                                       ),
                                     if ((item['id']?.toString() ?? '')
                                         .isNotEmpty)
                                       _ItemTag(
-                                        icon: Icons.confirmation_number_outlined,
+                                        icon:
+                                            Icons.confirmation_number_outlined,
                                         label: 'ID: ${item['id']}',
                                         bgColor: const Color(0xFFFCE4EC),
                                         textColor: const Color(0xFFAD1457),
@@ -2781,7 +3333,9 @@ class _AllCategPageState extends State<AllCategPage>
                               Icons.remove_circle_outline_rounded,
                               size: 20,
                             ),
-                            label: Text(itemStock > 0 ? 'Reduce' : 'Unavailable'),
+                            label: Text(
+                              itemStock > 0 ? 'Reduce' : 'Unavailable',
+                            ),
                             style: ElevatedButton.styleFrom(
                               backgroundColor: const Color(0xFFC2105C),
                               foregroundColor: Colors.white,
@@ -3016,10 +3570,7 @@ class _AllCategPageState extends State<AllCategPage>
                   final data = doc.data() as Map<String, dynamic>?;
                   if (data == null || data['isDeleted'] == true) continue;
                   if (data['isAddon'] == true) {
-                    visibleDocs.add({
-                      ...data,
-                      'sourceDocId': doc.id,
-                    });
+                    visibleDocs.add({...data, 'sourceDocId': doc.id});
                     continue;
                   }
                   final sourceId = data['sourceInventoryId']?.toString() ?? '';
@@ -3056,10 +3607,12 @@ class _AllCategPageState extends State<AllCategPage>
                     visibleDocs.add({
                       ...data,
                       'name': data['name'] ?? 'Coffee',
-                      'imageUrl': data['imageUrl'],
+                      'imageUrl': rootData['imageUrl'] ?? data['imageUrl'],
                       'items': coffeeItems,
                       'addonOptions': coffeeItems
-                          .expand((item) => item['addons'] as List<dynamic>? ?? [])
+                          .expand(
+                            (item) => item['addons'] as List<dynamic>? ?? [],
+                          )
                           .whereType<Map>()
                           .map((addon) => Map<String, dynamic>.from(addon))
                           .toList(),
@@ -3070,6 +3623,8 @@ class _AllCategPageState extends State<AllCategPage>
                   }
 
                   if (data['isBundle'] == true) {
+                    if (rootData['isBundle'] != true) continue;
+                    if (_hasExpiredBundleItem(rootData)) continue;
                     if (_hasExpiredBundleItem(data)) continue;
                     if (_bundleStockForData(data) <= 0) continue;
                     visibleDocs.add({
@@ -3083,9 +3638,9 @@ class _AllCategPageState extends State<AllCategPage>
 
                   final rootItems =
                       ((rootData['items'] as List<dynamic>?) ?? [])
-                      .whereType<Map>()
-                      .map((item) => Map<String, dynamic>.from(item))
-                      .toList();
+                          .whereType<Map>()
+                          .map((item) => Map<String, dynamic>.from(item))
+                          .toList();
                   final rootKeys = rootItems.map(itemKey).toSet();
                   final activeItems = ((data['items'] as List<dynamic>?) ?? [])
                       .whereType<Map>()
@@ -3133,10 +3688,14 @@ class _AllCategPageState extends State<AllCategPage>
                   groupedCategories[categoryKey] = {
                     'categoryName': categoryName,
                     'categoryId':
-                        data['sourceInventoryId']?.toString().trim().isNotEmpty ==
+                        data['sourceInventoryId']
+                                ?.toString()
+                                .trim()
+                                .isNotEmpty ==
                             true
                         ? data['sourceInventoryId']
                         : data['sourceDocId'],
+                    'imageUrl': data['imageUrl'],
                     'items': itemRecords,
                     'isCoffee': data['isCoffee'] == true,
                     'sourceDocId': data['sourceDocId'],
@@ -3189,7 +3748,8 @@ class _AllCategPageState extends State<AllCategPage>
                     setState(() {
                       _showCategories = false;
                       _showCoffee = coffeeDocs.isNotEmpty && bundleDocs.isEmpty;
-                      _showAddons = addonDocs.isNotEmpty &&
+                      _showAddons =
+                          addonDocs.isNotEmpty &&
                           coffeeDocs.isEmpty &&
                           bundleDocs.isEmpty;
                     });

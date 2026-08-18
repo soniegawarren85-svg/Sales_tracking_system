@@ -85,8 +85,19 @@ bool _isExpiredItem(String expirationDate) {
 
 class DailyStockPage extends StatefulWidget {
   final bool openRefundOnStart;
+  final bool openPendingOnStart;
+  final String? initialView;
+  final String? initialGroupName;
+  final int launchToken;
 
-  const DailyStockPage({super.key, this.openRefundOnStart = false});
+  const DailyStockPage({
+    super.key,
+    this.openRefundOnStart = false,
+    this.openPendingOnStart = false,
+    this.initialView,
+    this.initialGroupName,
+    this.launchToken = 0,
+  });
 
   @override
   State<DailyStockPage> createState() => _DailyStockPageState();
@@ -149,11 +160,17 @@ class _DailyStockPageState extends State<DailyStockPage>
     _orderSearchController = TextEditingController();
     _currentUserId = FirebaseAuth.instance.currentUser?.uid;
     _staffInventoryIds = const [];
+    _applyInitialSalesTarget();
     _rootSalesInventoryStream = FirebaseFirestore.instance
         .collection('sales_inventory')
         .snapshots();
     _loadLocalOrderCache();
     _initStaffIdentity();
+    if (widget.openPendingOnStart) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _showPendingOrders();
+      });
+    }
     InventoryService().initialize().then((_) {
       if (!mounted) return;
       setState(() {
@@ -207,6 +224,32 @@ class _DailyStockPageState extends State<DailyStockPage>
     Future.delayed(const Duration(milliseconds: 200), () {
       if (mounted) _budgetCardAnimCtrl.forward();
     });
+  }
+
+  @override
+  void didUpdateWidget(covariant DailyStockPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.launchToken != widget.launchToken ||
+        oldWidget.initialView != widget.initialView ||
+        oldWidget.initialGroupName != widget.initialGroupName ||
+        oldWidget.openPendingOnStart != widget.openPendingOnStart) {
+      _applyInitialSalesTarget();
+      if (widget.openPendingOnStart) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _showPendingOrders();
+        });
+      }
+    }
+  }
+
+  void _applyInitialSalesTarget() {
+    final view = widget.initialView?.trim().toLowerCase();
+    final groupName = widget.initialGroupName?.trim();
+    if ((view ?? '').isEmpty && (groupName ?? '').isEmpty) return;
+    _showBundleView = view == 'bundle';
+    _showCoffeeView = view == 'coffee';
+    _showCartReview = false;
+    _selectedGroupName = (groupName ?? '').isEmpty ? null : groupName;
   }
 
   @override
@@ -3989,6 +4032,7 @@ class _DailyStockPageState extends State<DailyStockPage>
       await LocalDatabaseSyncService().recordCompletedSale(
         completedSalePayload,
       );
+      await LocalDatabaseSyncService().syncPendingSales();
 
       if (mounted) {
         setState(() {
@@ -3996,6 +4040,7 @@ class _DailyStockPageState extends State<DailyStockPage>
             _cashDrawer = max(0, _cashDrawer + paidAmount - change);
           }
           _cart.clear();
+          _cartItemLookup.clear();
           _showCartReview = false;
           _selectedGroupName = null;
           _seniorDiscount = false;
@@ -4006,422 +4051,445 @@ class _DailyStockPageState extends State<DailyStockPage>
         });
       }
 
-      unawaited(
-        Future<void>(() async {
-          try {
-            if (_currentUserId != null && drawerId.isNotEmpty) {
-              final drawerRef = FirebaseFirestore.instance
-                  .collection('staff_cash_drawer')
-                  .doc(drawerId);
+      await Future<void>(() async {
+        try {
+          if (_currentUserId != null && drawerId.isNotEmpty) {
+            final drawerRef = FirebaseFirestore.instance
+                .collection('staff_cash_drawer')
+                .doc(drawerId);
 
-              if (isCashPayment) {
-                await FirebaseFirestore.instance.runTransaction((
-                  transaction,
-                ) async {
-                  final drawerSnapshot = await transaction.get(drawerRef);
-                  final currentBalance = drawerSnapshot.exists
-                      ? (drawerSnapshot.data()?['balance'] as num?)
-                                ?.toDouble() ??
-                            0.0
-                      : 0.0;
-                  if (change > 0 && currentBalance + 0.001 < change) {
-                    throw Exception(
-                      'Cash drawer is not enough for ₱${change.toStringAsFixed(2)} change.',
-                    );
-                  }
-                  final newCashBalance = currentBalance + paidAmount - change;
-                  transaction.set(drawerRef, {
-                    'balance': newCashBalance,
-                    'updatedAt': DateTime.now(),
-                    'staffId': drawerId,
-                    'branchId': drawerId,
-                    'handledByStaffId': _currentUserId,
-                  }, SetOptions(merge: true));
-                });
-              } else {
-                await FirebaseFirestore.instance.runTransaction((
-                  transaction,
-                ) async {
-                  final drawerSnapshot = await transaction.get(drawerRef);
-                  final currentGcashBalance = drawerSnapshot.exists
-                      ? (drawerSnapshot.data()?['gcashBalance'] as num?)
-                                ?.toDouble() ??
-                            0.0
-                      : 0.0;
-                  transaction.set(drawerRef, {
-                    'gcashBalance': currentGcashBalance + orderTotal,
-                    'lastGcashTransactionId': gcashTransactionId.trim(),
-                    'updatedAt': DateTime.now(),
-                    'staffId': drawerId,
-                    'branchId': drawerId,
-                    'handledByStaffId': _currentUserId,
-                  }, SetOptions(merge: true));
-                });
-              }
-
-              // Update inventory stock for each sold item
-              final Map<String, Map<String, dynamic>> itemVariantQtys = {};
-
-              for (final entry in _validCartEntries(orderItems)) {
-                final item = orderItems.firstWhere(
-                  (element) => _cartKey(element) == entry.key,
-                  orElse: () => {},
-                );
-                if (item.isEmpty) continue;
-
-                final itemName = item['name'] as String?;
-                final variantName = item['variant'] as String?;
-                final sourceInventoryId =
-                    item['sourceInventoryId']?.toString() ?? '';
-                final staffInventoryDocId =
-                    item['staffInventoryDocId']?.toString() ?? '';
-                final qtyRemoved = entry.value;
-
-                if (itemName != null && itemName.isNotEmpty) {
-                  final remainingKey = sourceInventoryId.isNotEmpty
-                      ? sourceInventoryId
-                      : itemName;
-                  final variantIndex = item['variantSlot'] is num
-                      ? (item['variantSlot'] as num).toInt()
-                      : orderItems.indexWhere((e) {
-                          return e['name'] == itemName &&
-                              e['variant'] == variantName &&
-                              (e['sourceInventoryId']?.toString() ?? '') ==
-                                  sourceInventoryId;
-                        });
-                  final tracker = itemVariantQtys.putIfAbsent(
-                    remainingKey,
-                    () => {
-                      'itemName': itemName,
-                      'sourceInventoryId': sourceInventoryId,
-                      'variants': <int, int>{},
-                      'starting': <int, int>{},
-                      'remaining': <int, int>{},
-                      'items': <int, Map<String, dynamic>>{},
-                    },
+            if (isCashPayment) {
+              await FirebaseFirestore.instance.runTransaction((
+                transaction,
+              ) async {
+                final drawerSnapshot = await transaction.get(drawerRef);
+                final currentBalance = drawerSnapshot.exists
+                    ? (drawerSnapshot.data()?['balance'] as num?)?.toDouble() ??
+                          0.0
+                    : 0.0;
+                if (change > 0 && currentBalance + 0.001 < change) {
+                  throw Exception(
+                    'Cash drawer is not enough for ₱${change.toStringAsFixed(2)} change.',
                   );
-                  final variants = tracker['variants'] as Map<int, int>;
-                  if (variantIndex >= 0) {
-                    variants[variantIndex] =
-                        (variants[variantIndex] ?? 0) + qtyRemoved;
-                    final startingBySlot = tracker['starting'] as Map<int, int>;
-                    final remainingBySlot =
-                        tracker['remaining'] as Map<int, int>;
-                    final itemBySlot =
-                        tracker['items'] as Map<int, Map<String, dynamic>>;
-                    final currentStock = _parseInt(item['stock']);
-                    final startingStock = _parseInt(
-                      item['startingStock'],
-                      fallback: currentStock,
-                    );
-                    startingBySlot[variantIndex] = max(
-                      startingBySlot[variantIndex] ?? 0,
-                      startingStock,
-                    );
-                    remainingBySlot[variantIndex] = max(
-                      0,
-                      (remainingBySlot[variantIndex] ?? currentStock) -
-                          qtyRemoved,
-                    );
-                    itemBySlot[variantIndex] = {
-                      'id': item['itemId'] ?? item['id'] ?? '',
-                      'name': (variantName?.isNotEmpty ?? false)
-                          ? variantName
-                          : itemName,
-                      'variant': variantName ?? '',
-                      'price': item['price'] ?? 0,
-                      'quantity': startingStock,
-                      'reducedQuantity': _parseInt(item['reducedQuantity']),
-                      'isBundle': item['isBundle'] == true,
-                      'isCoffee': item['isCoffee'] == true,
-                      'coffeeId': item['coffeeId'] ?? '',
-                      'coffeeSize': item['coffeeSize'] ?? '',
-                      'addonName': item['addonName'] ?? '',
-                      'sugarLevel': item['sugarLevel'] ?? '',
-                    };
-                  }
+                }
+                final newCashBalance = currentBalance + paidAmount - change;
+                transaction.set(drawerRef, {
+                  'balance': newCashBalance,
+                  'updatedAt': DateTime.now(),
+                  'staffId': drawerId,
+                  'branchId': drawerId,
+                  'handledByStaffId': _currentUserId,
+                }, SetOptions(merge: true));
+              });
+            } else {
+              await FirebaseFirestore.instance.runTransaction((
+                transaction,
+              ) async {
+                final drawerSnapshot = await transaction.get(drawerRef);
+                final currentGcashBalance = drawerSnapshot.exists
+                    ? (drawerSnapshot.data()?['gcashBalance'] as num?)
+                              ?.toDouble() ??
+                          0.0
+                    : 0.0;
+                transaction.set(drawerRef, {
+                  'gcashBalance': currentGcashBalance + orderTotal,
+                  'lastGcashTransactionId': gcashTransactionId.trim(),
+                  'updatedAt': DateTime.now(),
+                  'staffId': drawerId,
+                  'branchId': drawerId,
+                  'handledByStaffId': _currentUserId,
+                }, SetOptions(merge: true));
+              });
+            }
 
-                  final stockDocs = <DocumentSnapshot<Map<String, dynamic>>>[];
-                  if (staffInventoryDocId.isNotEmpty) {
-                    final stockDoc = await FirebaseFirestore.instance
-                        .collection('staff_inventory')
-                        .doc(staffInventoryDocId)
-                        .get();
-                    if (stockDoc.exists) stockDocs.add(stockDoc);
+            // Update inventory stock for each sold item
+            final Map<String, Map<String, dynamic>> itemVariantQtys = {};
+
+            for (final entry in receiptEntries) {
+              final item = orderItems.firstWhere(
+                (element) => _cartKey(element) == entry.key,
+                orElse: () => {},
+              );
+              if (item.isEmpty) continue;
+
+              final itemName = item['name'] as String?;
+              final variantName = item['variant'] as String?;
+              final sourceInventoryId =
+                  item['sourceInventoryId']?.toString() ?? '';
+              final staffInventoryDocId =
+                  item['staffInventoryDocId']?.toString() ?? '';
+              final qtyRemoved = entry.value;
+
+              if (itemName != null && itemName.isNotEmpty) {
+                final remainingKey = sourceInventoryId.isNotEmpty
+                    ? sourceInventoryId
+                    : itemName;
+                final variantIndex = item['variantSlot'] is num
+                    ? (item['variantSlot'] as num).toInt()
+                    : orderItems.indexWhere((e) {
+                        return e['name'] == itemName &&
+                            e['variant'] == variantName &&
+                            (e['sourceInventoryId']?.toString() ?? '') ==
+                                sourceInventoryId;
+                      });
+                final tracker = itemVariantQtys.putIfAbsent(
+                  remainingKey,
+                  () => {
+                    'itemName': itemName,
+                    'sourceInventoryId': sourceInventoryId,
+                    'variants': <int, int>{},
+                    'starting': <int, int>{},
+                    'remaining': <int, int>{},
+                    'items': <int, Map<String, dynamic>>{},
+                  },
+                );
+                final variants = tracker['variants'] as Map<int, int>;
+                if (variantIndex >= 0) {
+                  variants[variantIndex] =
+                      (variants[variantIndex] ?? 0) + qtyRemoved;
+                  final startingBySlot = tracker['starting'] as Map<int, int>;
+                  final remainingBySlot = tracker['remaining'] as Map<int, int>;
+                  final itemBySlot =
+                      tracker['items'] as Map<int, Map<String, dynamic>>;
+                  final currentStock = _parseInt(item['stock']);
+                  final startingStock = _parseInt(
+                    item['startingStock'],
+                    fallback: currentStock,
+                  );
+                  startingBySlot[variantIndex] = max(
+                    startingBySlot[variantIndex] ?? 0,
+                    startingStock,
+                  );
+                  remainingBySlot[variantIndex] = max(
+                    0,
+                    (remainingBySlot[variantIndex] ?? currentStock) -
+                        qtyRemoved,
+                  );
+                  itemBySlot[variantIndex] = {
+                    'id': item['itemId'] ?? item['id'] ?? '',
+                    'name': (variantName?.isNotEmpty ?? false)
+                        ? variantName
+                        : itemName,
+                    'variant': variantName ?? '',
+                    'price': item['price'] ?? 0,
+                    'quantity': startingStock,
+                    'reducedQuantity': _parseInt(item['reducedQuantity']),
+                    'isBundle': item['isBundle'] == true,
+                    'isCoffee': item['isCoffee'] == true,
+                    'coffeeId': item['coffeeId'] ?? '',
+                    'coffeeSize': item['coffeeSize'] ?? '',
+                    'addonName': item['addonName'] ?? '',
+                    'sugarLevel': item['sugarLevel'] ?? '',
+                  };
+                }
+
+                final stockDocs = <DocumentSnapshot<Map<String, dynamic>>>[];
+                if (staffInventoryDocId.isNotEmpty) {
+                  final stockDoc = await FirebaseFirestore.instance
+                      .collection('staff_inventory')
+                      .doc(staffInventoryDocId)
+                      .get();
+                  if (stockDoc.exists) stockDocs.add(stockDoc);
+                }
+                if (stockDocs.isEmpty) {
+                  var staffQuery = FirebaseFirestore.instance
+                      .collection('staff_inventory')
+                      .where('staffId', isEqualTo: _currentUserId)
+                      .where('name', isEqualTo: itemName);
+                  if (sourceInventoryId.isNotEmpty) {
+                    staffQuery = staffQuery.where(
+                      'sourceInventoryId',
+                      isEqualTo: sourceInventoryId,
+                    );
                   }
-                  if (stockDocs.isEmpty) {
-                    var staffQuery = FirebaseFirestore.instance
-                        .collection('staff_inventory')
-                        .where('staffId', isEqualTo: _currentUserId)
-                        .where('name', isEqualTo: itemName);
-                    if (sourceInventoryId.isNotEmpty) {
-                      staffQuery = staffQuery.where(
-                        'sourceInventoryId',
-                        isEqualTo: sourceInventoryId,
+                  final querySnapshot = await staffQuery.get();
+                  stockDocs.addAll(querySnapshot.docs);
+                }
+                if (stockDocs.isEmpty && sourceInventoryId.isNotEmpty) {
+                  final querySnapshot = await FirebaseFirestore.instance
+                      .collection('staff_inventory')
+                      .where('sourceInventoryId', isEqualTo: sourceInventoryId)
+                      .limit(10)
+                      .get();
+                  final allowedStaffIds = {
+                    ..._staffInventoryIds.map((id) => id.trim()),
+                    if ((_currentUserId ?? '').trim().isNotEmpty)
+                      _currentUserId!.trim(),
+                  }..removeWhere((id) => id.isEmpty);
+                  stockDocs.addAll(
+                    querySnapshot.docs.where((doc) {
+                      final staffId =
+                          doc.data()['staffId']?.toString().trim() ?? '';
+                      return allowedStaffIds.isEmpty ||
+                          allowedStaffIds.contains(staffId);
+                    }),
+                  );
+                }
+
+                for (final doc in stockDocs) {
+                  final data = doc.data() as Map<String, dynamic>?;
+                  if (data == null) continue;
+
+                  if (data['isBundle'] == true) {
+                    final int currentBundleCount = data['bundleCount'] is num
+                        ? (data['bundleCount'] as num).toInt()
+                        : int.tryParse(data['bundleCount']?.toString() ?? '') ??
+                              0;
+                    final updatedBundleCount = max(
+                      0,
+                      currentBundleCount - qtyRemoved,
+                    );
+                    var remainingToMarkSold = qtyRemoved;
+                    final updatedBundleInstances =
+                        _bundleInstancesFromData(data).map((instance) {
+                          if (remainingToMarkSold <= 0) return instance;
+                          final status =
+                              instance['status']?.toString().toLowerCase() ??
+                              'available';
+                          if (status != 'available') return instance;
+                          remainingToMarkSold--;
+                          return {
+                            ...instance,
+                            'status': 'sold',
+                            'soldAt': Timestamp.now(),
+                            'salesId': salesId,
+                          };
+                        }).toList();
+                    await doc.reference.update({
+                      'bundleCount': updatedBundleCount,
+                      'bundleInstances': updatedBundleInstances,
+                      'updatedAt': FieldValue.serverTimestamp(),
+                    });
+                    if (updatedBundleCount == 0) {
+                      await _notifyAdminOutOfStock(
+                        itemName: itemName,
+                        variantName: '',
+                        sourceInventoryId: sourceInventoryId,
+                        staffInventoryDocId: doc.id,
                       );
                     }
-                    final querySnapshot = await staffQuery.get();
-                    stockDocs.addAll(querySnapshot.docs);
+                    continue;
                   }
 
-                  for (final doc in stockDocs) {
-                    final data = doc.data() as Map<String, dynamic>?;
-                    if (data == null) continue;
+                  final itemsList = data['items'] as List<dynamic>? ?? [];
+                  var matchedStockItem = false;
+                  final updatedItems = itemsList.map((itemData) {
+                    if (itemData is Map) {
+                      final savedItem = Map<String, dynamic>.from(itemData);
+                      final savedVariant = savedItem['name']?.toString() ?? '';
+                      final savedVariantAlt =
+                          savedItem['variant']?.toString() ?? '';
+                      final savedId = savedItem['id']?.toString() ?? '';
+                      final wantedId =
+                          item['itemId']?.toString() ??
+                          item['id']?.toString() ??
+                          '';
+                      final matchesVariant =
+                          (wantedId.isNotEmpty && savedId == wantedId) ||
+                          (wantedId.isEmpty &&
+                              (savedVariant == (variantName ?? '') ||
+                                  savedVariantAlt == (variantName ?? '') ||
+                                  savedVariant == itemName ||
+                                  savedVariantAlt == itemName));
 
-                    if (data['isBundle'] == true) {
-                      final int currentBundleCount = data['bundleCount'] is num
-                          ? (data['bundleCount'] as num).toInt()
-                          : int.tryParse(
-                                  data['bundleCount']?.toString() ?? '',
-                                ) ??
-                                0;
-                      final updatedBundleCount = max(
-                        0,
-                        currentBundleCount - qtyRemoved,
-                      );
-                      var remainingToMarkSold = qtyRemoved;
-                      final updatedBundleInstances =
-                          _bundleInstancesFromData(data).map((instance) {
-                            if (remainingToMarkSold <= 0) return instance;
-                            final status =
-                                instance['status']?.toString().toLowerCase() ??
-                                'available';
-                            if (status != 'available') return instance;
-                            remainingToMarkSold--;
-                            return {
-                              ...instance,
-                              'status': 'sold',
-                              'soldAt': Timestamp.now(),
-                              'salesId': salesId,
-                            };
-                          }).toList();
-                      await doc.reference.update({
-                        'bundleCount': updatedBundleCount,
-                        'bundleInstances': updatedBundleInstances,
-                        'updatedAt': FieldValue.serverTimestamp(),
-                      });
-                      if (updatedBundleCount == 0) {
-                        await _notifyAdminOutOfStock(
+                      if (matchesVariant) {
+                        matchedStockItem = true;
+                        // Update the stock for this variant.
+                        // If 'stock' field is missing, use 'startingStock' as the base.
+                        int currentStock;
+                        if (savedItem.containsKey('stock') &&
+                            savedItem['stock'] != null) {
+                          currentStock = savedItem['stock'] is num
+                              ? (savedItem['stock'] as num).toInt()
+                              : int.tryParse(
+                                      savedItem['stock']?.toString() ?? '',
+                                    ) ??
+                                    0;
+                        } else {
+                          currentStock = savedItem['startingStock'] is num
+                              ? (savedItem['startingStock'] as num).toInt()
+                              : int.tryParse(
+                                      savedItem['startingStock']?.toString() ??
+                                          '',
+                                    ) ??
+                                    0;
+                        }
+
+                        final updatedStock = max(0, currentStock - qtyRemoved);
+                        if (updatedStock == 0) {
+                          unawaited(
+                            _notifyAdminOutOfStock(
+                              itemName: itemName,
+                              variantName: variantName ?? '',
+                              sourceInventoryId: sourceInventoryId,
+                              staffInventoryDocId: doc.id,
+                            ),
+                          );
+                        }
+                        return {...savedItem, 'stock': updatedStock};
+                      }
+                    }
+                    return itemData;
+                  }).toList();
+
+                  if (!matchedStockItem) {
+                    final currentStock = _stockForItem(item, variantIndex);
+                    final updatedStock = max(0, currentStock - qtyRemoved);
+                    updatedItems.add({
+                      'id': item['itemId']?.toString().isNotEmpty == true
+                          ? item['itemId']
+                          : (item['id'] ?? ''),
+                      'name': variantName ?? itemName,
+                      'price': item['price'] ?? 0,
+                      'startingStock': item['startingStock'] ?? currentStock,
+                      'stock': updatedStock,
+                      'expirationDate': item['expirationDate'] ?? '',
+                      'imageUrl': item['imageUrl'] ?? '',
+                    });
+                    if (updatedStock == 0) {
+                      unawaited(
+                        _notifyAdminOutOfStock(
                           itemName: itemName,
-                          variantName: '',
+                          variantName: variantName ?? '',
                           sourceInventoryId: sourceInventoryId,
                           staffInventoryDocId: doc.id,
-                        );
-                      }
-                      continue;
+                        ),
+                      );
                     }
-
-                    final itemsList = data['items'] as List<dynamic>? ?? [];
-                    var matchedStockItem = false;
-                    final updatedItems = itemsList.map((itemData) {
-                      if (itemData is Map<String, dynamic>) {
-                        final savedVariant = itemData['name']?.toString() ?? '';
-                        final savedVariantAlt =
-                            itemData['variant']?.toString() ?? '';
-                        final savedId = itemData['id']?.toString() ?? '';
-                        final wantedId =
-                            item['itemId']?.toString() ??
-                            item['id']?.toString() ??
-                            '';
-                        final matchesVariant =
-                            (wantedId.isNotEmpty && savedId == wantedId) ||
-                            (wantedId.isEmpty &&
-                                (savedVariant == (variantName ?? '') ||
-                                    savedVariantAlt == (variantName ?? '')));
-
-                        if (matchesVariant) {
-                          matchedStockItem = true;
-                          // Update the stock for this variant.
-                          // If 'stock' field is missing, use 'startingStock' as the base.
-                          int currentStock;
-                          if (itemData.containsKey('stock') &&
-                              itemData['stock'] != null) {
-                            currentStock = itemData['stock'] is num
-                                ? (itemData['stock'] as num).toInt()
-                                : int.tryParse(
-                                        itemData['stock']?.toString() ?? '',
-                                      ) ??
-                                      0;
-                          } else {
-                            currentStock = itemData['startingStock'] is num
-                                ? (itemData['startingStock'] as num).toInt()
-                                : int.tryParse(
-                                        itemData['startingStock']?.toString() ??
-                                            '',
-                                      ) ??
-                                      0;
-                          }
-
-                          final updatedStock = max(
-                            0,
-                            currentStock - qtyRemoved,
-                          );
-                          if (updatedStock == 0) {
-                            unawaited(
-                              _notifyAdminOutOfStock(
-                                itemName: itemName,
-                                variantName: variantName ?? '',
-                                sourceInventoryId: sourceInventoryId,
-                                staffInventoryDocId: doc.id,
-                              ),
-                            );
-                          }
-                          return {...itemData, 'stock': updatedStock};
-                        }
-                      }
-                      return itemData;
-                    }).toList();
-
-                    if (!matchedStockItem) {
-                      final currentStock = _stockForItem(item, variantIndex);
-                      final updatedStock = max(0, currentStock - qtyRemoved);
-                      updatedItems.add({
-                        'id': item['itemId']?.toString().isNotEmpty == true
-                            ? item['itemId']
-                            : (item['id'] ?? ''),
-                        'name': variantName ?? itemName,
-                        'price': item['price'] ?? 0,
-                        'startingStock': item['startingStock'] ?? currentStock,
-                        'stock': updatedStock,
-                        'expirationDate': item['expirationDate'] ?? '',
-                        'imageUrl': item['imageUrl'] ?? '',
-                      });
-                      if (updatedStock == 0) {
-                        unawaited(
-                          _notifyAdminOutOfStock(
-                            itemName: itemName,
-                            variantName: variantName ?? '',
-                            sourceInventoryId: sourceInventoryId,
-                            staffInventoryDocId: doc.id,
-                          ),
-                        );
-                      }
-                    }
-
-                    await doc.reference.update({'items': updatedItems});
                   }
 
-                  final trackedBundleItemName =
-                      (variantName != null && variantName.isNotEmpty)
-                      ? variantName
-                      : itemName;
-                  await _consumeBundleTrackedStock(
-                    itemName: trackedBundleItemName,
-                    quantity: qtyRemoved,
-                  );
+                  await doc.reference.update({
+                    'items': updatedItems,
+                    'updatedAt': FieldValue.serverTimestamp(),
+                  });
                 }
+
+                final trackedBundleItemName =
+                    (variantName != null && variantName.isNotEmpty)
+                    ? variantName
+                    : itemName;
+                await _consumeBundleTrackedStock(
+                  itemName: trackedBundleItemName,
+                  quantity: qtyRemoved,
+                );
+              }
+            }
+
+            // Update remaining stock in InventoryService for each item sold
+            for (final itemEntry in itemVariantQtys.values) {
+              final itemName = itemEntry['itemName']?.toString() ?? '';
+              final sourceInventoryId =
+                  itemEntry['sourceInventoryId']?.toString() ?? '';
+              final variantQtys = itemEntry['variants'] as Map<int, int>;
+              final startingBySlot = itemEntry['starting'] as Map<int, int>;
+              final remainingBySlot = itemEntry['remaining'] as Map<int, int>;
+              final itemBySlot =
+                  itemEntry['items'] as Map<int, Map<String, dynamic>>;
+
+              int qtyA = 0, qtyB = 0, qtyC = 0;
+
+              // Map variant indices to A, B, C positions
+              for (final variantEntry in variantQtys.entries) {
+                final variantIndex = variantEntry.key;
+                final qty = variantEntry.value;
+
+                if (variantIndex == 0)
+                  qtyA = qty;
+                else if (variantIndex == 1)
+                  qtyB = qty;
+                else if (variantIndex == 2)
+                  qtyC = qty;
               }
 
-              // Update remaining stock in InventoryService for each item sold
-              for (final itemEntry in itemVariantQtys.values) {
-                final itemName = itemEntry['itemName']?.toString() ?? '';
-                final sourceInventoryId =
-                    itemEntry['sourceInventoryId']?.toString() ?? '';
-                final variantQtys = itemEntry['variants'] as Map<int, int>;
-                final startingBySlot = itemEntry['starting'] as Map<int, int>;
-                final remainingBySlot = itemEntry['remaining'] as Map<int, int>;
-                final itemBySlot =
-                    itemEntry['items'] as Map<int, Map<String, dynamic>>;
+              // Compute revenue for this item entry after any discount allocation.
+              final itemLineTotal = itemBySlot.entries.fold<double>(0.0, (
+                sum,
+                variantEntry,
+              ) {
+                final idx = variantEntry.key;
+                final price =
+                    double.tryParse(
+                      variantEntry.value['price']?.toString() ?? '0',
+                    ) ??
+                    0.0;
+                final qty = variantQtys[idx] ?? 0;
+                return sum + (price * qty);
+              });
+              final double revenueShare;
+              if (subtotal > 0 && discountAmount > 0) {
+                final discountShare = itemLineTotal / subtotal * discountAmount;
+                revenueShare = (itemLineTotal - discountShare).clamp(
+                  0.0,
+                  double.infinity,
+                );
+              } else {
+                revenueShare = itemLineTotal;
+              }
 
-                int qtyA = 0, qtyB = 0, qtyC = 0;
-
-                // Map variant indices to A, B, C positions
-                for (final variantEntry in variantQtys.entries) {
-                  final variantIndex = variantEntry.key;
-                  final qty = variantEntry.value;
-
-                  if (variantIndex == 0)
-                    qtyA = qty;
-                  else if (variantIndex == 1)
-                    qtyB = qty;
-                  else if (variantIndex == 2)
-                    qtyC = qty;
-                }
-
-                // Compute revenue for this item entry after any discount allocation.
-                final itemLineTotal = itemBySlot.entries.fold<double>(0.0, (
-                  sum,
-                  variantEntry,
-                ) {
-                  final idx = variantEntry.key;
-                  final price =
-                      double.tryParse(
-                        variantEntry.value['price']?.toString() ?? '0',
-                      ) ??
-                      0.0;
-                  final qty = variantQtys[idx] ?? 0;
-                  return sum + (price * qty);
-                });
-                final double revenueShare;
-                if (subtotal > 0 && discountAmount > 0) {
-                  final discountShare =
-                      itemLineTotal / subtotal * discountAmount;
-                  revenueShare = (itemLineTotal - discountShare).clamp(
-                    0.0,
-                    double.infinity,
+              // Subtract from remaining stock
+              if (qtyA > 0 || qtyB > 0 || qtyC > 0) {
+                final existing = InventoryService().getEntryForItemToday(
+                  itemName,
+                  sourceInventoryId: sourceInventoryId,
+                );
+                if (existing != null) {
+                  InventoryService().addRemainingStockForItem(
+                    itemName: itemName,
+                    quantityA: remainingBySlot[0] ?? existing.safeRemainingA,
+                    quantityB: remainingBySlot[1] ?? existing.safeRemainingB,
+                    quantityC: remainingBySlot[2] ?? existing.safeRemainingC,
+                    startingA: max(
+                      existing.safeStartingA,
+                      startingBySlot[0] ?? existing.safeStartingA,
+                    ),
+                    startingB: max(
+                      existing.safeStartingB,
+                      startingBySlot[1] ?? existing.safeStartingB,
+                    ),
+                    startingC: max(
+                      existing.safeStartingC,
+                      startingBySlot[2] ?? existing.safeStartingC,
+                    ),
+                    saleRevenue: revenueShare,
+                    sourceInventoryId: sourceInventoryId,
+                    items: existing.safeItems.isNotEmpty
+                        ? existing.safeItems
+                        : [0, 1, 2]
+                              .where((slot) => itemBySlot.containsKey(slot))
+                              .map((slot) => itemBySlot[slot]!)
+                              .toList(),
                   );
                 } else {
-                  revenueShare = itemLineTotal;
-                }
-
-                // Subtract from remaining stock
-                if (qtyA > 0 || qtyB > 0 || qtyC > 0) {
-                  final existing = InventoryService().getEntryForItemToday(
-                    itemName,
+                  InventoryService().addRemainingStockForItem(
+                    itemName: itemName,
+                    quantityA: remainingBySlot[0] ?? 0,
+                    quantityB: remainingBySlot[1] ?? 0,
+                    quantityC: remainingBySlot[2] ?? 0,
+                    startingA: startingBySlot[0] ?? 0,
+                    startingB: startingBySlot[1] ?? 0,
+                    startingC: startingBySlot[2] ?? 0,
+                    saleRevenue: revenueShare,
                     sourceInventoryId: sourceInventoryId,
+                    items: [0, 1, 2]
+                        .where((slot) => itemBySlot.containsKey(slot))
+                        .map((slot) => itemBySlot[slot]!)
+                        .toList(),
                   );
-                  if (existing != null) {
-                    InventoryService().addRemainingStockForItem(
-                      itemName: itemName,
-                      quantityA: remainingBySlot[0] ?? existing.safeRemainingA,
-                      quantityB: remainingBySlot[1] ?? existing.safeRemainingB,
-                      quantityC: remainingBySlot[2] ?? existing.safeRemainingC,
-                      startingA: max(
-                        existing.safeStartingA,
-                        startingBySlot[0] ?? existing.safeStartingA,
-                      ),
-                      startingB: max(
-                        existing.safeStartingB,
-                        startingBySlot[1] ?? existing.safeStartingB,
-                      ),
-                      startingC: max(
-                        existing.safeStartingC,
-                        startingBySlot[2] ?? existing.safeStartingC,
-                      ),
-                      saleRevenue: revenueShare,
-                      sourceInventoryId: sourceInventoryId,
-                      items: existing.safeItems.isNotEmpty
-                          ? existing.safeItems
-                          : [0, 1, 2]
-                                .where((slot) => itemBySlot.containsKey(slot))
-                                .map((slot) => itemBySlot[slot]!)
-                                .toList(),
-                    );
-                  } else {
-                    InventoryService().addRemainingStockForItem(
-                      itemName: itemName,
-                      quantityA: remainingBySlot[0] ?? 0,
-                      quantityB: remainingBySlot[1] ?? 0,
-                      quantityC: remainingBySlot[2] ?? 0,
-                      startingA: startingBySlot[0] ?? 0,
-                      startingB: startingBySlot[1] ?? 0,
-                      startingC: startingBySlot[2] ?? 0,
-                      saleRevenue: revenueShare,
-                      sourceInventoryId: sourceInventoryId,
-                      items: [0, 1, 2]
-                          .where((slot) => itemBySlot.containsKey(slot))
-                          .map((slot) => itemBySlot[slot]!)
-                          .toList(),
-                    );
-                  }
                 }
               }
             }
-          } catch (e) {
-            debugPrint('Background order sync failed: $e');
+            await _loadLocalOrderCache();
+            await InventoryService().refreshFromCloud();
+            if (mounted) {
+              setState(() {
+                entries = InventoryService().currentUserEntries;
+              });
+            }
           }
-        }),
-      );
+        } catch (e) {
+          debugPrint('Background order sync failed: $e');
+        }
+      });
       if (!mounted) return;
       await _showOrderSuccessDialog(
         salesId: salesId,
@@ -4673,6 +4741,23 @@ class _DailyStockPageState extends State<DailyStockPage>
         'quantity': entry.value,
         'itemId': item['itemId']?.toString() ?? item['id']?.toString() ?? '',
         'sourceInventoryId': item['sourceInventoryId']?.toString() ?? '',
+        'staffInventoryDocId': item['staffInventoryDocId']?.toString() ?? '',
+        'inventoryOwnerId': item['inventoryOwnerId']?.toString() ?? '',
+        'category': item['category']?.toString() ?? '',
+        'categoryId': item['categoryId']?.toString() ?? '',
+        'stock': _parseInt(item['stock']),
+        'startingStock': _parseInt(item['startingStock']),
+        'variantSlot': item['variantSlot'] is num
+            ? (item['variantSlot'] as num).toInt()
+            : 0,
+        'isBundle': item['isBundle'] == true,
+        'isCoffee': item['isCoffee'] == true,
+        'coffeeSize': item['coffeeSize']?.toString() ?? '',
+        'coffeeId': item['coffeeId']?.toString() ?? '',
+        'basePrice': _parsePrice(item['basePrice']),
+        'sizePriceDelta': _parsePrice(item['sizePriceDelta']),
+        'addonName': item['addonName']?.toString() ?? '',
+        'addonPriceDelta': _parsePrice(item['addonPriceDelta']),
         'groupKey': item['groupKey']?.toString() ?? '',
       });
     }
@@ -4949,7 +5034,9 @@ class _DailyStockPageState extends State<DailyStockPage>
         final restoredName = item['name']?.toString() ?? '';
         final restoredVariant = item['variant']?.toString() ?? '';
         final restoredPrice = _parsePrice(item['price']);
+        final restoredKey = _cartKey(item);
         final currentItem = _latestOrderItems.firstWhere((orderItem) {
+          if (_cartKey(orderItem) == restoredKey) return true;
           final sameName =
               (orderItem['name']?.toString() ?? '') == restoredName;
           final sameVariant =
@@ -6164,8 +6251,9 @@ class _DailyStockPageState extends State<DailyStockPage>
         .collection('staff_cash_drawer')
         .doc(drawerId.isNotEmpty ? drawerId : userId);
     final currentUser = FirebaseAuth.instance.currentUser;
-    final staffName = (currentUser?.displayName?.trim().isNotEmpty == true)
-        ? currentUser!.displayName!
+    final displayName = currentUser?.displayName?.trim() ?? '';
+    final staffName = displayName.isNotEmpty
+        ? displayName
         : currentUser?.email?.split('@').first ?? 'Staff';
 
     final balanceAfterRefund = await firestore.runTransaction<double>((
@@ -7204,13 +7292,14 @@ class _DailyStockPageState extends State<DailyStockPage>
             for (final rootDoc in rootDocs) {
               final rootData = rootDoc.data();
               if (rootData['isDeleted'] == true) continue;
-              activeRootById[rootDoc.id] = rootData;
+              final rootedData = {...rootData, '_rootDocId': rootDoc.id};
+              activeRootById[rootDoc.id] = rootedData;
               final rootName = rootData['name']
                   ?.toString()
                   .trim()
                   .toLowerCase();
               if (rootName != null && rootName.isNotEmpty) {
-                activeRootByName[rootName] = rootData;
+                activeRootByName[rootName] = rootedData;
               }
             }
 
@@ -7251,11 +7340,21 @@ class _DailyStockPageState extends State<DailyStockPage>
 
               final sourceId = data['sourceInventoryId']?.toString() ?? '';
               final name = data['name']?.toString().trim().toLowerCase() ?? '';
-              final rootData =
-                  activeRootById[sourceId] ??
-                  activeRootByName[name] ??
-                  (isCoffee ? data : null);
+              final rootCandidate = activeRootById[sourceId];
+              final bundleNameRoot = activeRootByName[name];
+              final rootData = isBundle
+                  ? ((rootCandidate?['isBundle'] == true)
+                        ? rootCandidate
+                        : (bundleNameRoot?['isBundle'] == true)
+                        ? bundleNameRoot
+                        : null)
+                  : (rootCandidate ??
+                        activeRootByName[name] ??
+                        (isCoffee ? data : null));
               if (rootData == null) continue;
+              final effectiveSourceId =
+                  rootData['_rootDocId']?.toString() ??
+                  (sourceId.isNotEmpty ? sourceId : doc.id);
 
               if (isCoffee) {
                 final basePrice = _parsePrice(data['basePrice']);
@@ -7357,7 +7456,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                 filteredDocs.add({
                   ...data,
                   'staffDocId': doc.id,
-                  'sourceInventoryId': sourceId,
+                  'sourceInventoryId': effectiveSourceId,
                   'name': data['name'] ?? 'Coffee',
                   'imageUrl': data['imageUrl'],
                   'items': coffeeItems,
@@ -7368,20 +7467,22 @@ class _DailyStockPageState extends State<DailyStockPage>
                 filteredDocs.add({
                   ...data,
                   'staffDocId': doc.id,
-                  'sourceInventoryId': sourceId,
+                  'sourceInventoryId': effectiveSourceId,
                   'name': rootData['name'] ?? data['name'],
                   'imageUrl': rootData['imageUrl'] ?? data['imageUrl'],
                   'category': rootData['category'] ?? data['category'] ?? '',
-                  'categoryId': rootData['categoryId'] ?? sourceId,
+                  'categoryId': rootData['categoryId'] ?? effectiveSourceId,
                   'items': items,
                 });
               } else {
+                if (rootData['isBundle'] != true) continue;
+                if (_hasExpiredBundleItem(rootData)) continue;
                 if (_hasExpiredBundleItem(data)) continue;
                 if (_availableBundleStock(data) <= 0) continue;
                 filteredDocs.add({
                   ...data,
                   'staffDocId': doc.id,
-                  'sourceInventoryId': sourceId,
+                  'sourceInventoryId': effectiveSourceId,
                   'name': rootData['name'] ?? data['name'],
                   'imageUrl': rootData['imageUrl'] ?? data['imageUrl'],
                 });
@@ -7959,33 +8060,7 @@ class _DailyStockPageState extends State<DailyStockPage>
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (_hasPendingOrders)
-          Align(
-            alignment: Alignment.centerLeft,
-            child: Padding(
-              padding: const EdgeInsets.only(bottom: 12),
-              child: OutlinedButton.icon(
-                onPressed: _showPendingOrders,
-                icon: const Icon(Icons.bookmark_border_rounded, size: 17),
-                label: Text('Restore held ticket ($_pendingOrderCount)'),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: _AppColors.textMid,
-                  side: const BorderSide(color: _AppColors.border),
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 14,
-                    vertical: 10,
-                  ),
-                  textStyle: const TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w800,
-                  ),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                ),
-              ),
-            ),
-          ),
+        if (_hasPendingOrders) _buildPendingOrdersBar(),
         Row(
           children: [
             Expanded(
@@ -8037,22 +8112,102 @@ class _DailyStockPageState extends State<DailyStockPage>
       children: [
         Expanded(
           child: _QuickActionButton(
-            icon: Icons.history_rounded,
-            label: 'View\nHistory',
-            onPressed: _showOrderHistory,
-            color: const Color(0xFF0288D1),
+            icon: Icons.bookmark_add_rounded,
+            label: 'Save\nPending',
+            onPressed: _cartHasValidItems(orderItems)
+                ? () => _savePendingOrder(orderItems)
+                : null,
+            color: _AppColors.accent,
           ),
         ),
         const SizedBox(width: 10),
         Expanded(
           child: _QuickActionButton(
-            icon: Icons.assignment_return_rounded,
-            label: 'Refund\nItem',
-            onPressed: () => _showRefundDialog(orderItems),
-            color: const Color(0xFFE65100),
+            icon: Icons.list_alt_rounded,
+            label: _pendingOrderCount > 0
+                ? 'View\nPending ($_pendingOrderCount)'
+                : 'View\nPending',
+            onPressed: _showPendingOrders,
+            color: const Color(0xFF7B1FA2),
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildPendingOrdersBar() {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: _showPendingOrders,
+          borderRadius: BorderRadius.circular(18),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: _AppColors.border, width: 1.2),
+              boxShadow: [
+                BoxShadow(
+                  color: _AppColors.primary.withOpacity(0.1),
+                  blurRadius: 14,
+                  offset: const Offset(0, 5),
+                ),
+              ],
+            ),
+            child: Row(
+              children: [
+                Container(
+                  width: 38,
+                  height: 38,
+                  decoration: BoxDecoration(
+                    color: _AppColors.primary.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(13),
+                  ),
+                  child: const Icon(
+                    Icons.bookmark_rounded,
+                    color: _AppColors.primary,
+                    size: 20,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                const Expanded(
+                  child: Text(
+                    'Saved pending orders',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: _AppColors.textMid,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 9,
+                    vertical: 5,
+                  ),
+                  decoration: BoxDecoration(
+                    color: _AppColors.primary,
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: Text(
+                    '$_pendingOrderCount',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 
@@ -8215,7 +8370,9 @@ class _DailyStockPageState extends State<DailyStockPage>
       });
       return groupMatch || itemMatch;
     }).toList();
-    final selectedKey = entries.any((entry) => entry.key == _selectedGroupName)
+    final selectedKey = _showBundleView
+        ? null
+        : entries.any((entry) => entry.key == _selectedGroupName)
         ? _selectedGroupName!
         : entries.isNotEmpty
         ? entries.first.key
@@ -8242,6 +8399,13 @@ class _DailyStockPageState extends State<DailyStockPage>
         const SizedBox(height: 10),
         if (entries.isEmpty)
           _buildEmptyState('No matching categories found.')
+        else if (_showBundleView)
+          _buildFastItemGrid(
+            displayGroupName: 'Bundles',
+            groupIcon: Icons.inventory_2_rounded,
+            isBundleGroup: true,
+            visibleVariants: entries.expand((entry) => entry.value).toList(),
+          )
         else
           SizedBox(
             height: 50,
@@ -8262,8 +8426,17 @@ class _DailyStockPageState extends State<DailyStockPage>
                   child: Material(
                     color: Colors.transparent,
                     child: InkWell(
-                      onTap: () =>
-                          setState(() => _selectedGroupName = groupKey),
+                      onTap: () {
+                        if (_showBundleView && variants.isNotEmpty) {
+                          final item = variants.first.value;
+                          _addSingleItemToTicket(
+                            item,
+                            _stockForItem(item, variants.first.key),
+                          );
+                          return;
+                        }
+                        setState(() => _selectedGroupName = groupKey);
+                      },
                       borderRadius: BorderRadius.circular(14),
                       child: AnimatedContainer(
                         duration: const Duration(milliseconds: 180),
@@ -8320,6 +8493,145 @@ class _DailyStockPageState extends State<DailyStockPage>
           ),
         ],
       ],
+    );
+  }
+
+  Widget _buildBundleRegisterCards(
+    List<MapEntry<String, List<MapEntry<int, Map<String, dynamic>>>>> entries,
+  ) {
+    return Column(
+      children: entries.asMap().entries.map((entry) {
+        final idx = entry.key;
+        final groupKey = entry.value.key;
+        final variants = entry.value.value;
+        final item = variants.isNotEmpty
+            ? variants.first.value
+            : <String, dynamic>{};
+        final groupName = _groupLabel(groupKey, variants);
+        final price = _parsePrice(item['price']);
+        final stock = variants.isNotEmpty
+            ? _stockForItem(item, variants.first.key)
+            : 0;
+        final imageUrl = item['imageUrl']?.toString() ?? '';
+
+        return _DelayedFadeSlide(
+          delay: Duration(milliseconds: 100 + idx * 60),
+          child: Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                onTap: () => setState(() => _selectedGroupName = groupKey),
+                borderRadius: BorderRadius.circular(20),
+                child: Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(
+                      color: _AppColors.border.withOpacity(0.85),
+                      width: 1.2,
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: _AppColors.primary.withOpacity(0.07),
+                        blurRadius: 16,
+                        offset: const Offset(0, 6),
+                      ),
+                    ],
+                  ),
+                  child: Row(
+                    children: [
+                      _orderImageBox(
+                        imageUrl,
+                        fallbackIcon: Icons.inventory_2_rounded,
+                        width: 86,
+                        height: 86,
+                      ),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'BUNDLE',
+                              style: TextStyle(
+                                color: _AppColors.primaryLight,
+                                fontSize: 10,
+                                fontWeight: FontWeight.w900,
+                                letterSpacing: 1.1,
+                              ),
+                            ),
+                            const SizedBox(height: 5),
+                            Text(
+                              groupName,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                color: _AppColors.textMid,
+                                fontSize: 18,
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                            const SizedBox(height: 9),
+                            Wrap(
+                              spacing: 6,
+                              runSpacing: 6,
+                              children: [
+                                _MiniTag(
+                                  label: '\u20B1${price.toStringAsFixed(0)}',
+                                  bgColor: const Color(0xFFE8F5E9),
+                                  textColor: const Color(0xFF2E7D32),
+                                ),
+                                _MiniTag(
+                                  label: stock <= 0 ? 'Out' : '$stock left',
+                                  bgColor: stock <= 0
+                                      ? const Color(0xFFFFEBEE)
+                                      : _AppColors.cardBg,
+                                  textColor: stock <= 0
+                                      ? const Color(0xFFB71C1C)
+                                      : _AppColors.textSoft,
+                                ),
+                                _MiniTag(
+                                  label: 'Tap to view',
+                                  bgColor: const Color(0xFFFFF0E4),
+                                  textColor: _AppColors.primary,
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Container(
+                        width: 42,
+                        height: 42,
+                        decoration: BoxDecoration(
+                          color: _AppColors.primary,
+                          borderRadius: BorderRadius.circular(14),
+                          boxShadow: [
+                            BoxShadow(
+                              color: _AppColors.primary.withOpacity(0.24),
+                              blurRadius: 12,
+                              offset: const Offset(0, 5),
+                            ),
+                          ],
+                        ),
+                        child: const Icon(
+                          Icons.chevron_right_rounded,
+                          color: Colors.white,
+                          size: 24,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      }).toList(),
     );
   }
 
@@ -9975,7 +10287,9 @@ class _DailyStockPageState extends State<DailyStockPage>
                     Expanded(
                       child: _QuickActionButton(
                         icon: Icons.list_alt_rounded,
-                        label: 'View\nPending',
+                        label: _pendingOrderCount > 0
+                            ? 'View\nPending ($_pendingOrderCount)'
+                            : 'View\nPending',
                         onPressed: _showPendingOrders,
                         color: const Color(0xFF7B1FA2),
                       ),

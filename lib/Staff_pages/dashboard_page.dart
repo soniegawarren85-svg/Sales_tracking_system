@@ -11,6 +11,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../services/inventory_service.dart';
 import '../services/cash_drawer_service.dart';
 import '../services/local_database_sync_service.dart';
+import '../Admin_pages/Admin/Message.dart';
 import 'AllCateg.dart';
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -123,12 +124,19 @@ class DashboardPage extends StatefulWidget {
   final ScrollController scrollController;
   final VoidCallback onMessage;
   final VoidCallback? onNotification;
+  final void Function({
+    required String view,
+    required String groupName,
+    required String sourceInventoryId,
+  })?
+  onOpenSalesGroup;
 
   const DashboardPage({
     super.key,
     required this.scrollController,
     required this.onMessage,
     this.onNotification,
+    this.onOpenSalesGroup,
   });
 
   @override
@@ -144,6 +152,14 @@ class _DashboardPageState extends State<DashboardPage>
   List<_CachedDoc> _cachedSalesInventoryDocs = const [];
   List<_CachedDoc> _cachedCashDrawerDocs = const [];
   String? _staffDocId;
+  final Map<String, int> _inventoryPageByView = {
+    'categories': 0,
+    'bundle': 0,
+    'coffee': 0,
+  };
+  int _performancePage = 0;
+
+  static const int _itemsPerPage = 5;
 
   @override
   void initState() {
@@ -260,7 +276,11 @@ class _DashboardPageState extends State<DashboardPage>
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => _HistorySheet(receiptStream: _receiptStream()),
+      builder: (_) => _HistorySheet(
+        receiptStream: _receiptStream(),
+        localReceiptStream: LocalDatabaseSyncService()
+            .watchLocalCompletedSales(),
+      ),
     );
   }
 
@@ -334,6 +354,20 @@ class _DashboardPageState extends State<DashboardPage>
       }).length;
     }
     return _parseStockValue(bundleData['bundleCount']);
+  }
+
+  bool _hasRefundBundleContents(Map<String, dynamic> bundleData) {
+    final items = bundleData['items'];
+    if (items is List && items.whereType<Map>().isNotEmpty) return true;
+    final instances = bundleData['bundleInstances'];
+    if (instances is List) {
+      return instances.whereType<Map>().any((instance) {
+        final instanceItems = instance['items'];
+        return instanceItems is List &&
+            instanceItems.whereType<Map>().isNotEmpty;
+      });
+    }
+    return false;
   }
 
   List<Map<String, dynamic>> _coffeeRefundOptionsFromData({
@@ -448,13 +482,33 @@ class _DashboardPageState extends State<DashboardPage>
       final categoryName = data['name']?.toString() ?? 'Item';
       final nameKey = categoryName.trim().toLowerCase();
       final isCoffee = data['isCoffee'] == true;
-      final rootData =
-          activeRootById[sourceId] ??
-          activeRootByName[nameKey] ??
-          (isCoffee ? data : null);
+      final rootCandidate = activeRootById[sourceId];
+      final rootByName = activeRootByName[nameKey];
+      final rootData = data['isBundle'] == true
+          ? ((rootCandidate?['isBundle'] == true)
+                ? rootCandidate
+                : (rootByName?['isBundle'] == true)
+                ? rootByName
+                : null)
+          : isCoffee
+          ? ((rootCandidate?['isCoffee'] == true)
+                ? rootCandidate
+                : (rootByName?['isCoffee'] == true)
+                ? rootByName
+                : data)
+          : ((rootCandidate != null && rootCandidate['isBundle'] != true)
+                ? rootCandidate
+                : (rootByName != null && rootByName['isBundle'] != true)
+                ? rootByName
+                : null);
       if (rootData == null) continue;
 
       if (data['isBundle'] == true) {
+        if (rootData['isBundle'] != true) continue;
+        if (!_hasRefundBundleContents(data) ||
+            !_hasRefundBundleContents(rootData)) {
+          continue;
+        }
         if (_hasExpiredRefundBundleItem(data)) continue;
         final count = _availableRefundBundleCount(data);
         if (count <= 0) continue;
@@ -594,8 +648,9 @@ class _DashboardPageState extends State<DashboardPage>
     final refundId =
         'R-${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}-${now.hour.toString().padLeft(2, '0')}${now.minute.toString().padLeft(2, '0')}-${now.millisecond.toString().padLeft(3, '0')}';
     final currentUser = FirebaseAuth.instance.currentUser;
-    final staffName = (currentUser?.displayName?.trim().isNotEmpty == true)
-        ? currentUser!.displayName!
+    final displayName = currentUser?.displayName?.trim() ?? '';
+    final staffName = displayName.isNotEmpty
+        ? displayName
         : currentUser?.email?.split('@').first ?? 'Staff';
     final itemLabel =
         '${option['name'] ?? 'Item'} (${option['variant'] ?? 'Refund'})';
@@ -697,17 +752,18 @@ class _DashboardPageState extends State<DashboardPage>
             return Dialog(
               insetPadding: const EdgeInsets.symmetric(
                 horizontal: 24,
-                vertical: 24,
+                vertical: 18,
               ),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(28),
               ),
               child: ConstrainedBox(
                 constraints: BoxConstraints(
-                  maxHeight: MediaQuery.of(context).size.height * 0.84,
+                  maxWidth: 720,
+                  maxHeight: MediaQuery.of(context).size.height * 0.80,
                 ),
                 child: SingleChildScrollView(
-                  padding: const EdgeInsets.all(24),
+                  padding: const EdgeInsets.all(20),
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -948,16 +1004,17 @@ class _DashboardPageState extends State<DashboardPage>
   Widget build(BuildContext context) {
     final screenWidth = MediaQuery.sizeOf(context).width;
     final isTablet = screenWidth >= 700;
-    final contentMaxWidth = isTablet ? 960.0 : double.infinity;
-    final inventoryMaxWidth = isTablet ? 760.0 : double.infinity;
+    final contentMaxWidth = isTablet ? 980.0 : double.infinity;
+    final inventoryMaxWidth = isTablet ? 980.0 : double.infinity;
     final horizontalPadding = isTablet ? 24.0 : 16.0;
+    final headerHeight = isTablet ? 260.0 : 300.0;
 
     return CustomScrollView(
       controller: widget.scrollController,
       slivers: [
         // ── Header ────────────────────────────────────────────────────────
         SliverAppBar(
-          expandedHeight: isTablet ? 270 : 300,
+          expandedHeight: headerHeight,
           collapsedHeight: 60,
           pinned: true,
           elevation: 0,
@@ -981,37 +1038,70 @@ class _DashboardPageState extends State<DashboardPage>
             color: _C.surface,
             padding: EdgeInsets.fromLTRB(
               isTablet ? 24 : 20,
-              isTablet ? 16 : 18,
+              isTablet ? 10 : 14,
               isTablet ? 24 : 20,
-              6,
+              8,
             ),
             child: Align(
-              alignment: Alignment.center,
+              alignment: isTablet ? Alignment.centerLeft : Alignment.center,
               child: ConstrainedBox(
                 constraints: BoxConstraints(maxWidth: contentMaxWidth),
-                child: const _SectionLabel(title: 'Dashboard'),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    if (isTablet)
+                      Row(
+                        children: [
+                          const _SectionLabel(title: 'Dashboard'),
+                          const Spacer(),
+                          SizedBox(
+                            width: 280,
+                            child: _buildViewAllItemsButton(),
+                          ),
+                        ],
+                      )
+                    else ...[
+                      const Align(
+                        alignment: Alignment.center,
+                        child: _SectionLabel(title: 'Dashboard'),
+                      ),
+                      const SizedBox(height: 10),
+                      _buildViewAllItemsButton(),
+                    ],
+                    const SizedBox(height: 12),
+                    Align(
+                      alignment: isTablet
+                          ? Alignment.centerLeft
+                          : Alignment.center,
+                      child: _InventoryViewSelector(
+                        selected: _inventoryView,
+                        onSelected: (value) => setState(() {
+                          _inventoryView = value;
+                          _inventoryPageByView[value] = 0;
+                        }),
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
           ),
         ),
 
         // ── Inventory list ────────────────────────────────────────────────
-        SliverSafeArea(
-          top: false,
-          sliver: SliverPadding(
-            padding: EdgeInsets.fromLTRB(
-              horizontalPadding,
-              4,
-              horizontalPadding,
-              0,
-            ),
-            sliver: SliverToBoxAdapter(
-              child: Align(
-                alignment: Alignment.topCenter,
-                child: ConstrainedBox(
-                  constraints: BoxConstraints(maxWidth: inventoryMaxWidth),
-                  child: _buildAdminInventoryList(),
-                ),
+        SliverPadding(
+          padding: EdgeInsets.fromLTRB(
+            horizontalPadding,
+            0,
+            horizontalPadding,
+            0,
+          ),
+          sliver: SliverToBoxAdapter(
+            child: Align(
+              alignment: Alignment.topCenter,
+              child: ConstrainedBox(
+                constraints: BoxConstraints(maxWidth: inventoryMaxWidth),
+                child: _buildAdminInventoryList(),
               ),
             ),
           ),
@@ -1028,14 +1118,14 @@ class _DashboardPageState extends State<DashboardPage>
               10,
             ),
             child: Align(
-              alignment: Alignment.center,
+              alignment: isTablet ? Alignment.centerLeft : Alignment.center,
               child: ConstrainedBox(
                 constraints: BoxConstraints(maxWidth: contentMaxWidth),
                 child: Wrap(
                   spacing: 12,
                   runSpacing: 10,
                   crossAxisAlignment: WrapCrossAlignment.center,
-                  alignment: WrapAlignment.spaceBetween,
+                  alignment: WrapAlignment.start,
                   children: [
                     const Padding(
                       padding: EdgeInsets.only(right: 8),
@@ -1065,7 +1155,7 @@ class _DashboardPageState extends State<DashboardPage>
               horizontalPadding,
               0,
               horizontalPadding,
-              120,
+              44,
             ),
             sliver: SliverToBoxAdapter(
               child: Align(
@@ -1202,10 +1292,24 @@ class _DashboardPageState extends State<DashboardPage>
               final sourceId = data['sourceInventoryId']?.toString() ?? '';
               final name = data['name']?.toString().trim().toLowerCase() ?? '';
               final isCoffee = data['isCoffee'] == true;
+              final rootCandidate = activeRootById[sourceId];
+              final bundleNameRoot = activeRootByName[name];
               final rootData = isCoffee
                   ? data
-                  : (activeRootById[sourceId] ?? activeRootByName[name]);
+                  : data['isBundle'] == true
+                  ? ((rootCandidate?['isBundle'] == true)
+                        ? rootCandidate
+                        : (bundleNameRoot?['isBundle'] == true)
+                        ? bundleNameRoot
+                        : null)
+                  : (rootCandidate ?? activeRootByName[name]);
               if (rootData == null) continue;
+              if (data['isBundle'] == true) {
+                if (rootData['isBundle'] != true) continue;
+                if (_hasExpiredRefundBundleItem(rootData)) continue;
+                if (_hasExpiredRefundBundleItem(data)) continue;
+                if (_availableRefundBundleCount(data) <= 0) continue;
+              }
 
               final items = isCoffee
                   ? [
@@ -1288,51 +1392,18 @@ class _DashboardPageState extends State<DashboardPage>
               return !isBundle && !isCoffee;
             }).toList();
 
+            final pageCount = (filteredDocs.length / _itemsPerPage).ceil();
+            final currentPage = (_inventoryPageByView[_inventoryView] ?? 0)
+                .clamp(0, pageCount > 0 ? pageCount - 1 : 0)
+                .toInt();
+            final startIndex = currentPage * _itemsPerPage;
+            final visibleDocs = filteredDocs
+                .skip(startIndex)
+                .take(_itemsPerPage)
+                .toList();
+
             return Column(
               children: [
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 12),
-                  child: SizedBox(
-                    width: double.infinity,
-                    child: OutlinedButton.icon(
-                      onPressed: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => const AllCategPage(),
-                          ),
-                        );
-                      },
-                      icon: const Icon(
-                        Icons.view_list_rounded,
-                        color: _C.primaryDark,
-                      ),
-                      label: const Text(
-                        'View All Items',
-                        style: TextStyle(
-                          color: _C.primaryDark,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                      style: OutlinedButton.styleFrom(
-                        side: const BorderSide(color: _C.primaryDark),
-                        padding: const EdgeInsets.symmetric(vertical: 12),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(16),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: _InventoryViewSelector(
-                    selected: _inventoryView,
-                    onSelected: (value) => setState(() {
-                      _inventoryView = value;
-                    }),
-                  ),
-                ),
                 if (filteredDocs.isEmpty)
                   Padding(
                     padding: const EdgeInsets.symmetric(vertical: 6),
@@ -1348,7 +1419,7 @@ class _DashboardPageState extends State<DashboardPage>
                     ),
                   )
                 else
-                  ...filteredDocs.map((data) {
+                  ...visibleDocs.map((data) {
                     final name = data['name']?.toString().trim() ?? '';
                     final rawSourceId =
                         data['sourceInventoryId']?.toString().trim() ?? '';
@@ -1433,11 +1504,54 @@ class _DashboardPageState extends State<DashboardPage>
                       ),
                     );
                   }),
+                if (pageCount > 1)
+                  _PagerControls(
+                    currentPage: currentPage,
+                    pageCount: pageCount,
+                    onPrevious: currentPage == 0
+                        ? null
+                        : () => setState(
+                            () => _inventoryPageByView[_inventoryView] =
+                                currentPage - 1,
+                          ),
+                    onNext: currentPage >= pageCount - 1
+                        ? null
+                        : () => setState(
+                            () => _inventoryPageByView[_inventoryView] =
+                                currentPage + 1,
+                          ),
+                  ),
               ],
             );
           },
         );
       },
+    );
+  }
+
+  Widget _buildViewAllItemsButton() {
+    return SizedBox(
+      width: double.infinity,
+      child: OutlinedButton.icon(
+        onPressed: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const AllCategPage()),
+          );
+        },
+        icon: const Icon(Icons.view_list_rounded, color: _C.primaryDark),
+        label: const Text(
+          'View All Items',
+          style: TextStyle(color: _C.primaryDark, fontWeight: FontWeight.w700),
+        ),
+        style: OutlinedButton.styleFrom(
+          side: const BorderSide(color: _C.primaryDark),
+          padding: const EdgeInsets.symmetric(vertical: 12),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+        ),
+      ),
     );
   }
 
@@ -1614,10 +1728,36 @@ class _DashboardPageState extends State<DashboardPage>
               );
             }
 
+            final pageCount = (receipts.length / _itemsPerPage).ceil();
+            final currentPage = _performancePage
+                .clamp(0, pageCount > 0 ? pageCount - 1 : 0)
+                .toInt();
+            final visibleReceipts = receipts
+                .skip(currentPage * _itemsPerPage)
+                .take(_itemsPerPage)
+                .toList();
+
             return Column(
-              children: receipts
-                  .map((data) => _ReceiptCard(data: data, compact: false))
-                  .toList(),
+              children: [
+                ...visibleReceipts.map(
+                  (data) => _ReceiptCard(data: data, compact: false),
+                ),
+                if (pageCount > 1)
+                  _PagerControls(
+                    currentPage: currentPage,
+                    pageCount: pageCount,
+                    onPrevious: currentPage == 0
+                        ? null
+                        : () => setState(
+                            () => _performancePage = currentPage - 1,
+                          ),
+                    onNext: currentPage >= pageCount - 1
+                        ? null
+                        : () => setState(
+                            () => _performancePage = currentPage + 1,
+                          ),
+                  ),
+              ],
             );
           },
         );
@@ -1629,6 +1769,79 @@ class _DashboardPageState extends State<DashboardPage>
 // ═══════════════════════════════════════════════════════════════════════════
 // Section Label
 // ═══════════════════════════════════════════════════════════════════════════
+
+class _PagerControls extends StatelessWidget {
+  final int currentPage;
+  final int pageCount;
+  final VoidCallback? onPrevious;
+  final VoidCallback? onNext;
+
+  const _PagerControls({
+    required this.currentPage,
+    required this.pageCount,
+    required this.onPrevious,
+    required this.onNext,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 2, bottom: 14),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          IconButton(
+            tooltip: 'Previous page',
+            onPressed: onPrevious,
+            icon: const Icon(Icons.chevron_left_rounded),
+            color: _C.primaryDark,
+            style: IconButton.styleFrom(
+              backgroundColor: Colors.white,
+              disabledBackgroundColor: Colors.white.withOpacity(0.55),
+              fixedSize: const Size(44, 44),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(14),
+                side: const BorderSide(color: Color(0xFFF8BBD0)),
+              ),
+            ),
+          ),
+          Container(
+            margin: const EdgeInsets.symmetric(horizontal: 10),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: const Color(0xFFF8BBD0)),
+            ),
+            child: Text(
+              '${currentPage + 1} / $pageCount',
+              style: const TextStyle(
+                color: _C.primaryDark,
+                fontSize: 13,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+          ),
+          IconButton(
+            tooltip: 'Next page',
+            onPressed: onNext,
+            icon: const Icon(Icons.chevron_right_rounded),
+            color: _C.primaryDark,
+            style: IconButton.styleFrom(
+              backgroundColor: Colors.white,
+              disabledBackgroundColor: Colors.white.withOpacity(0.55),
+              fixedSize: const Size(44, 44),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(14),
+                side: const BorderSide(color: Color(0xFFF8BBD0)),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
 
 class _InventoryViewSelector extends StatelessWidget {
   final String selected;
@@ -2061,6 +2274,308 @@ class _Header extends StatelessWidget {
         : query.where(FieldPath.documentId, whereIn: ids).snapshots();
   }
 
+  String _chatId(String meId, String otherId) {
+    final ids = [meId, otherId]..sort();
+    return ids.join('_');
+  }
+
+  static String _displayName(Map<String, dynamic> data) {
+    final first = data['firstName']?.toString().trim() ?? '';
+    final last = data['lastName']?.toString().trim() ?? '';
+    final full = [first, last].where((part) => part.isNotEmpty).join(' ');
+    return full.isEmpty ? (data['name']?.toString() ?? 'User') : full;
+  }
+
+  static bool _isOnline(Map<String, dynamic> data) {
+    if (data['isOnline'] == true) return true;
+    final lastLogin = data['lastLoginAt'];
+    if (lastLogin is! Timestamp) return false;
+    return DateTime.now().difference(lastLogin.toDate()) <
+        const Duration(minutes: 15);
+  }
+
+  void _openFullMessages(BuildContext context) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const MessagePage()),
+    );
+  }
+
+  void _openThread(
+    BuildContext context, {
+    required Map<String, String> me,
+    required String otherId,
+    required String otherName,
+  }) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ChatThreadPage(
+          chatId: _chatId(me['id']!, otherId),
+          me: me,
+          otherId: otherId,
+          otherName: otherName,
+        ),
+      ),
+    );
+  }
+
+  void _showHelpSheet(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => const _GuideSheet(),
+    );
+  }
+
+  void _showMessagePreview(BuildContext context, Map<String, String> me) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (sheetContext) {
+        return FractionallySizedBox(
+          heightFactor: 0.56,
+          child: Container(
+            decoration: const BoxDecoration(
+              color: _C.surface,
+              borderRadius: BorderRadius.vertical(top: Radius.circular(30)),
+            ),
+            child: SafeArea(
+              top: false,
+              child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                stream: FirebaseFirestore.instance
+                    .collection('staff_requests')
+                    .snapshots(),
+                builder: (context, accountSnapshot) {
+                  return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                    stream: FirebaseFirestore.instance
+                        .collection('messages')
+                        .where('participantIds', arrayContains: me['id'])
+                        .snapshots(),
+                    builder: (context, chatSnapshot) {
+                      final rows = <String, Map<String, dynamic>>{};
+                      if (me['role'] != 'admin') {
+                        rows['ADM-0001'] = {
+                          'id': 'ADM-0001',
+                          'name': 'Admin User',
+                          'role': 'admin',
+                          'online': true,
+                          'unread': 0,
+                          'lastMessage': '',
+                          'updatedAt': 0,
+                        };
+                      }
+
+                      for (final doc
+                          in accountSnapshot.data?.docs ??
+                              <QueryDocumentSnapshot<Map<String, dynamic>>>[]) {
+                        final data = doc.data();
+                        final status =
+                            data['status']?.toString().toLowerCase() ?? '';
+                        if (doc.id == me['id'] || status == 'rejected') {
+                          continue;
+                        }
+                        rows[doc.id] = {
+                          'id': doc.id,
+                          'name': _displayName(data),
+                          'role': data['role']?.toString() ?? 'staff',
+                          'online': _isOnline(data),
+                          'unread': 0,
+                          'lastMessage': '',
+                          'updatedAt': 0,
+                        };
+                      }
+
+                      for (final doc
+                          in chatSnapshot.data?.docs ??
+                              <QueryDocumentSnapshot<Map<String, dynamic>>>[]) {
+                        final chat = doc.data();
+                        final ids = (chat['participantIds'] as List? ?? [])
+                            .map((id) => id.toString())
+                            .toList();
+                        final otherId = ids.firstWhere(
+                          (id) => id != me['id'],
+                          orElse: () => '',
+                        );
+                        if (otherId.isEmpty) continue;
+                        final names = chat['participantNames'];
+                        final unreadBy = chat['unreadBy'];
+                        final updatedAt = chat['updatedAt'];
+                        final unread = unreadBy is Map
+                            ? _parseStockValue(unreadBy[me['id']])
+                            : 0;
+                        rows[otherId] = {
+                          ...?rows[otherId],
+                          'id': otherId,
+                          'name': names is Map
+                              ? names[otherId]?.toString() ?? 'Admin User'
+                              : rows[otherId]?['name'] ?? 'Admin User',
+                          'role':
+                              rows[otherId]?['role'] ??
+                              (otherId.startsWith('ADM-') ? 'admin' : 'staff'),
+                          'online': rows[otherId]?['online'] ?? false,
+                          'unread': unread,
+                          'lastMessage': chat['lastMessage']?.toString() ?? '',
+                          'updatedAt': updatedAt is Timestamp
+                              ? updatedAt.millisecondsSinceEpoch
+                              : 0,
+                        };
+                      }
+
+                      final items = rows.values.toList()
+                        ..sort((a, b) {
+                          final timeCompare = (b['updatedAt'] as int).compareTo(
+                            a['updatedAt'] as int,
+                          );
+                          if (timeCompare != 0) return timeCompare;
+                          final unreadCompare = (b['unread'] as int).compareTo(
+                            a['unread'] as int,
+                          );
+                          if (unreadCompare != 0) return unreadCompare;
+                          return (a['name']?.toString() ?? '').compareTo(
+                            b['name']?.toString() ?? '',
+                          );
+                        });
+                      final preview = items.take(5).toList();
+
+                      return Column(
+                        children: [
+                          Container(
+                            margin: const EdgeInsets.only(top: 10, bottom: 8),
+                            width: 46,
+                            height: 5,
+                            decoration: BoxDecoration(
+                              color: _C.primaryLight.withOpacity(0.55),
+                              borderRadius: BorderRadius.circular(999),
+                            ),
+                          ),
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(20, 8, 14, 12),
+                            child: Row(
+                              children: [
+                                Container(
+                                  width: 44,
+                                  height: 44,
+                                  decoration: BoxDecoration(
+                                    color: _C.primary.withOpacity(0.10),
+                                    borderRadius: BorderRadius.circular(15),
+                                  ),
+                                  child: const Icon(
+                                    Icons.mail_outline_rounded,
+                                    color: _C.primaryDark,
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                const Expanded(
+                                  child: Text(
+                                    'Messages',
+                                    style: TextStyle(
+                                      color: _C.primaryDark,
+                                      fontSize: 22,
+                                      fontWeight: FontWeight.w900,
+                                    ),
+                                  ),
+                                ),
+                                IconButton(
+                                  onPressed: () => Navigator.pop(sheetContext),
+                                  icon: const Icon(Icons.close_rounded),
+                                  color: _C.primary,
+                                ),
+                              ],
+                            ),
+                          ),
+                          Expanded(
+                            child: preview.isEmpty
+                                ? const Center(
+                                    child: Text(
+                                      'No people available.',
+                                      style: TextStyle(
+                                        color: _C.primaryDark,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                  )
+                                : ListView.separated(
+                                    padding: const EdgeInsets.fromLTRB(
+                                      20,
+                                      2,
+                                      20,
+                                      10,
+                                    ),
+                                    itemCount: preview.length,
+                                    separatorBuilder: (_, _) =>
+                                        const SizedBox(height: 10),
+                                    itemBuilder: (context, index) {
+                                      final row = preview[index];
+                                      return _MessagePreviewTile(
+                                        name: row['name']?.toString() ?? 'User',
+                                        role:
+                                            row['role']?.toString() ?? 'staff',
+                                        lastMessage:
+                                            row['lastMessage']?.toString() ??
+                                            '',
+                                        online: row['online'] == true,
+                                        unread: row['unread'] as int? ?? 0,
+                                        onTap: () {
+                                          Navigator.pop(sheetContext);
+                                          _openThread(
+                                            context,
+                                            me: me,
+                                            otherId:
+                                                row['id']?.toString() ?? '',
+                                            otherName:
+                                                row['name']?.toString() ??
+                                                'User',
+                                          );
+                                        },
+                                      );
+                                    },
+                                  ),
+                          ),
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(20, 0, 20, 14),
+                            child: SizedBox(
+                              width: double.infinity,
+                              child: OutlinedButton.icon(
+                                onPressed: () {
+                                  Navigator.pop(sheetContext);
+                                  _openFullMessages(context);
+                                },
+                                icon: const Icon(Icons.forum_rounded),
+                                label: const Text('View all messages'),
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: _C.primaryDark,
+                                  side: const BorderSide(
+                                    color: _C.primaryLight,
+                                  ),
+                                  padding: const EdgeInsets.symmetric(
+                                    vertical: 13,
+                                  ),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(16),
+                                  ),
+                                  textStyle: const TextStyle(
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      );
+                    },
+                  );
+                },
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final user = FirebaseAuth.instance.currentUser;
@@ -2154,6 +2669,8 @@ class _Header extends StatelessWidget {
                         // Notification + Message buttons
                         Row(
                           children: [
+                            _HelpButton(onTap: () => _showHelpSheet(context)),
+                            const SizedBox(width: 8),
                             if ((uid ?? '').isEmpty)
                               _MessageButton(onTap: onMessage)
                             else
@@ -2184,8 +2701,14 @@ class _Header extends StatelessWidget {
                                                 0;
                                     }
                                   }
+                                  final me = {
+                                    'id': uid!,
+                                    'name': name,
+                                    'role': role.toLowerCase(),
+                                  };
                                   return _MessageButton(
-                                    onTap: onMessage,
+                                    onTap: () =>
+                                        _showMessagePreview(context, me),
                                     badgeCount: unread,
                                   );
                                 },
@@ -2447,6 +2970,341 @@ class _MessageButton extends StatelessWidget {
 // ═══════════════════════════════════════════════════════════════════════════
 // STAFF PROFILE CARD  ← KEY UPGRADE
 // ═══════════════════════════════════════════════════════════════════════════
+
+class _HelpButton extends StatelessWidget {
+  final VoidCallback onTap;
+  const _HelpButton({required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: 40,
+        height: 40,
+        decoration: BoxDecoration(
+          color: Colors.white.withOpacity(0.14),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: Colors.white.withOpacity(0.28), width: 1.5),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.15),
+              blurRadius: 10,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: const Icon(
+          Icons.help_outline_rounded,
+          color: Colors.white,
+          size: 20,
+        ),
+      ),
+    );
+  }
+}
+
+class _GuideSheet extends StatelessWidget {
+  const _GuideSheet();
+
+  @override
+  Widget build(BuildContext context) {
+    final guides = const [
+      (
+        Icons.inventory_2_rounded,
+        'Assigned inventory',
+        'Check Categories, Bundles, and Coffee. Only allocated and available items should appear.',
+      ),
+      (
+        Icons.point_of_sale_rounded,
+        'Selling items',
+        'Tap an available item, select quantity, then confirm the order. Stock decreases after checkout.',
+      ),
+      (
+        Icons.assignment_return_rounded,
+        'Refunds',
+        'Refund only items that were already sold. Returned quantity cannot exceed refundable quantity.',
+      ),
+      (
+        Icons.history_rounded,
+        'Sales history',
+        'Use the History button to review today or previous receipt records by payment type.',
+      ),
+      (
+        Icons.mail_outline_rounded,
+        'Messages',
+        'Open Messages to contact admin or another staff account about stock, refunds, or requests.',
+      ),
+    ];
+
+    return FractionallySizedBox(
+      heightFactor: 0.62,
+      child: Container(
+        decoration: const BoxDecoration(
+          color: _C.surface,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(30)),
+        ),
+        child: SafeArea(
+          top: false,
+          child: Column(
+            children: [
+              Container(
+                margin: const EdgeInsets.only(top: 10, bottom: 8),
+                width: 46,
+                height: 5,
+                decoration: BoxDecoration(
+                  color: _C.primaryLight.withOpacity(0.55),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 8, 14, 10),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 46,
+                      height: 46,
+                      decoration: BoxDecoration(
+                        gradient: const LinearGradient(
+                          colors: [_C.primary, _C.primaryLight],
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                        ),
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      child: const Icon(
+                        Icons.help_outline_rounded,
+                        color: Colors.white,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    const Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Quick Guide',
+                            style: TextStyle(
+                              color: _C.primaryDark,
+                              fontSize: 22,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                          SizedBox(height: 2),
+                          Text(
+                            'For first-time staff users',
+                            style: TextStyle(
+                              color: _C.primaryLight,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: () => Navigator.pop(context),
+                      icon: const Icon(Icons.close_rounded),
+                      color: _C.primary,
+                    ),
+                  ],
+                ),
+              ),
+              Expanded(
+                child: ListView.separated(
+                  padding: const EdgeInsets.fromLTRB(20, 6, 20, 18),
+                  itemCount: guides.length,
+                  separatorBuilder: (_, _) => const SizedBox(height: 10),
+                  itemBuilder: (context, index) {
+                    final guide = guides[index];
+                    return Container(
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(18),
+                        border: Border.all(
+                          color: _C.primaryLight.withOpacity(0.22),
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: _C.primary.withOpacity(0.06),
+                            blurRadius: 12,
+                            offset: const Offset(0, 4),
+                          ),
+                        ],
+                      ),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Container(
+                            width: 38,
+                            height: 38,
+                            decoration: BoxDecoration(
+                              color: _C.primary.withOpacity(0.10),
+                              borderRadius: BorderRadius.circular(13),
+                            ),
+                            child: Icon(guide.$1, color: _C.primaryDark),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  guide.$2,
+                                  style: const TextStyle(
+                                    color: _C.primaryDark,
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w900,
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  guide.$3,
+                                  style: TextStyle(
+                                    color: Colors.grey.shade700,
+                                    fontSize: 12,
+                                    height: 1.35,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _MessagePreviewTile extends StatelessWidget {
+  final String name;
+  final String role;
+  final String lastMessage;
+  final bool online;
+  final int unread;
+  final VoidCallback onTap;
+
+  const _MessagePreviewTile({
+    required this.name,
+    required this.role,
+    required this.lastMessage,
+    required this.online,
+    required this.unread,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(18),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(18),
+        child: Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: _C.primaryLight.withOpacity(0.22)),
+          ),
+          child: Row(
+            children: [
+              Stack(
+                children: [
+                  CircleAvatar(
+                    radius: 22,
+                    backgroundColor: _C.primary.withOpacity(0.10),
+                    child: Text(
+                      name.trim().isEmpty ? '?' : name.trim()[0].toUpperCase(),
+                      style: const TextStyle(
+                        color: _C.primaryDark,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  ),
+                  Positioned(
+                    right: 0,
+                    bottom: 1,
+                    child: Container(
+                      width: 12,
+                      height: 12,
+                      decoration: BoxDecoration(
+                        color: online ? Colors.green : Colors.grey,
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.white, width: 2),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: _C.primaryDark,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      lastMessage.isNotEmpty
+                          ? lastMessage
+                          : '${role.toUpperCase()} - ${online ? 'Online' : 'Offline'}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: Colors.grey.shade600,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              unread > 0
+                  ? Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 5,
+                      ),
+                      decoration: const BoxDecoration(
+                        color: _C.primary,
+                        borderRadius: BorderRadius.all(Radius.circular(999)),
+                      ),
+                      child: Text(
+                        unread > 99 ? '99+' : '$unread',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w900,
+                          fontSize: 11,
+                        ),
+                      ),
+                    )
+                  : const Icon(Icons.chevron_right_rounded, color: _C.primary),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
 
 class _StaffProfileCard extends StatefulWidget {
   final String name;
@@ -3088,7 +3946,7 @@ class _ItemCardState extends State<_ItemCard> {
         try {
           return Image.memory(
             base64Decode(src.substring(commaIndex + 1)),
-            fit: BoxFit.cover,
+            fit: BoxFit.contain,
             errorBuilder: (_, _, _) => _imageFallback(),
           );
         } catch (_) {
@@ -3099,13 +3957,13 @@ class _ItemCardState extends State<_ItemCard> {
     if (src.startsWith('http://') || src.startsWith('https://')) {
       return Image.network(
         src,
-        fit: BoxFit.cover,
+        fit: BoxFit.contain,
         errorBuilder: (_, _, _) => _imageFallback(),
       );
     }
     return Image.asset(
       src,
-      fit: BoxFit.cover,
+      fit: BoxFit.contain,
       errorBuilder: (_, _, _) => _imageFallback(),
     );
   }
@@ -3161,7 +4019,11 @@ class _ItemStatusBadge extends StatelessWidget {
 
 class _HistorySheet extends StatefulWidget {
   final Stream<QuerySnapshot<Map<String, dynamic>>> receiptStream;
-  const _HistorySheet({required this.receiptStream});
+  final Stream<List<Map<String, dynamic>>> localReceiptStream;
+  const _HistorySheet({
+    required this.receiptStream,
+    required this.localReceiptStream,
+  });
 
   @override
   State<_HistorySheet> createState() => _HistorySheetState();
@@ -3172,11 +4034,10 @@ class _HistorySheetState extends State<_HistorySheet> {
   String _selectedPaymentMode = 'Cash';
 
   Map<String, List<Map<String, dynamic>>> _groupByDate(
-    List<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
+    Iterable<Map<String, dynamic>> receipts,
   ) {
     final grouped = <String, List<Map<String, dynamic>>>{};
-    for (final doc in docs) {
-      final data = doc.data();
+    for (final data in receipts) {
       final timestamp = data['timestamp'];
       if (timestamp is! Timestamp) continue;
       final dt = timestamp.toDate().toLocal();
@@ -3273,190 +4134,223 @@ class _HistorySheetState extends State<_HistorySheet> {
             ),
 
             Expanded(
-              child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                stream: widget.receiptStream,
-                builder: (context, snapshot) {
-                  if (snapshot.connectionState == ConnectionState.waiting) {
-                    return const Center(
-                      child: CircularProgressIndicator(color: _C.primary),
-                    );
-                  }
-                  final grouped = _groupByDate(snapshot.data?.docs ?? []);
-                  final today = _formatDate(DateTime.now());
-                  final dates = {today, ...grouped.keys}.toList()
-                    ..sort((a, b) {
-                      DateTime parseDate(String value) {
-                        try {
-                          return DateTime.parse(value);
-                        } catch (_) {
-                          final parts = value.split(' ');
-                          if (parts.length < 3) return DateTime(1970);
-                          const months = [
-                            'January',
-                            'February',
-                            'March',
-                            'April',
-                            'May',
-                            'June',
-                            'July',
-                            'August',
-                            'September',
-                            'October',
-                            'November',
-                            'December',
-                          ];
-                          final month = months.indexOf(parts[0]) + 1;
-                          final day =
-                              int.tryParse(parts[1].replaceAll(',', '')) ?? 1;
-                          final year = int.tryParse(parts[2]) ?? 1970;
-                          return DateTime(year, month, day);
+              child: StreamBuilder<List<Map<String, dynamic>>>(
+                stream: widget.localReceiptStream,
+                builder: (context, localSnapshot) {
+                  return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                    stream: widget.receiptStream,
+                    builder: (context, snapshot) {
+                      final localReceipts = localSnapshot.data ?? const [];
+                      final cloudReceipts = (snapshot.data?.docs ?? [])
+                          .map((doc) => doc.data())
+                          .toList();
+                      final bySalesId = <String, Map<String, dynamic>>{};
+                      for (final receipt in [
+                        ...localReceipts,
+                        ...cloudReceipts,
+                      ]) {
+                        final salesId = receipt['salesId']?.toString() ?? '';
+                        final key = salesId.isNotEmpty
+                            ? salesId
+                            : 'local-${receipt['localId'] ?? bySalesId.length}';
+                        bySalesId[key] = receipt;
+                      }
+                      if (bySalesId.isEmpty &&
+                          snapshot.connectionState == ConnectionState.waiting &&
+                          localSnapshot.connectionState ==
+                              ConnectionState.waiting) {
+                        return const Center(
+                          child: CircularProgressIndicator(color: _C.primary),
+                        );
+                      }
+                      final grouped = _groupByDate(bySalesId.values);
+                      final today = _formatDate(DateTime.now());
+                      final dates = {today, ...grouped.keys}.toList()
+                        ..sort((a, b) {
+                          DateTime parseDate(String value) {
+                            try {
+                              return DateTime.parse(value);
+                            } catch (_) {
+                              final parts = value.split(' ');
+                              if (parts.length < 3) return DateTime(1970);
+                              const months = [
+                                'January',
+                                'February',
+                                'March',
+                                'April',
+                                'May',
+                                'June',
+                                'July',
+                                'August',
+                                'September',
+                                'October',
+                                'November',
+                                'December',
+                              ];
+                              final month = months.indexOf(parts[0]) + 1;
+                              final day =
+                                  int.tryParse(parts[1].replaceAll(',', '')) ??
+                                  1;
+                              final year = int.tryParse(parts[2]) ?? 1970;
+                              return DateTime(year, month, day);
+                            }
+                          }
+
+                          return parseDate(b).compareTo(parseDate(a));
+                        });
+                      if (!dates.contains(_selectedDate)) {
+                        _selectedDate = today;
+                      }
+                      final receipts = grouped[_selectedDate] ?? [];
+                      final filteredReceipts = receipts.where((receipt) {
+                        final mode =
+                            receipt['paymentMode']?.toString() ?? 'Cash';
+                        return mode == _selectedPaymentMode;
+                      }).toList();
+                      double gcashTotal = 0;
+                      double cashTotal = 0;
+                      for (final receipt in receipts) {
+                        final total =
+                            (receipt['total'] as num?)?.toDouble() ?? 0;
+                        final mode =
+                            receipt['paymentMode']?.toString() ?? 'Cash';
+                        if (mode == 'GCash') {
+                          gcashTotal += total;
+                        } else {
+                          cashTotal += total;
                         }
                       }
 
-                      return parseDate(b).compareTo(parseDate(a));
-                    });
-                  if (!dates.contains(_selectedDate)) {
-                    _selectedDate = today;
-                  }
-                  final receipts = grouped[_selectedDate] ?? [];
-                  final filteredReceipts = receipts.where((receipt) {
-                    final mode = receipt['paymentMode']?.toString() ?? 'Cash';
-                    return mode == _selectedPaymentMode;
-                  }).toList();
-                  double gcashTotal = 0;
-                  double cashTotal = 0;
-                  for (final receipt in receipts) {
-                    final total = (receipt['total'] as num?)?.toDouble() ?? 0;
-                    final mode = receipt['paymentMode']?.toString() ?? 'Cash';
-                    if (mode == 'GCash') {
-                      gcashTotal += total;
-                    } else {
-                      cashTotal += total;
-                    }
-                  }
-
-                  if (grouped.isEmpty) {
-                    return Center(
-                      child: Text(
-                        'No receipt history yet.',
-                        style: TextStyle(
-                          color: Colors.pink.shade400,
-                          fontSize: 15,
-                        ),
-                      ),
-                    );
-                  }
-
-                  return Column(
-                    children: [
-                      SizedBox(
-                        height: 40,
-                        child: ListView.separated(
-                          scrollDirection: Axis.horizontal,
-                          padding: const EdgeInsets.symmetric(horizontal: 16),
-                          itemCount: dates.length,
-                          separatorBuilder: (_, _) => const SizedBox(width: 8),
-                          itemBuilder: (_, i) {
-                            final d = dates[i];
-                            final selected = d == _selectedDate;
-                            return GestureDetector(
-                              onTap: () => setState(() => _selectedDate = d),
-                              child: AnimatedContainer(
-                                duration: const Duration(milliseconds: 200),
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 16,
-                                  vertical: 8,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: selected ? _C.primary : Colors.white,
-                                  borderRadius: BorderRadius.circular(20),
-                                  border: Border.all(
-                                    color: selected
-                                        ? _C.primary
-                                        : Colors.pink.shade200,
-                                  ),
-                                ),
-                                child: Text(
-                                  d,
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w700,
-                                    color: selected
-                                        ? Colors.white
-                                        : Colors.pink.shade600,
-                                  ),
-                                ),
-                              ),
-                            );
-                          },
-                        ),
-                      ),
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: _HistoryPaymentChip(
-                                label: 'Cash',
-                                value: cashTotal,
-                                color: Colors.green.shade700,
-                                selected: _selectedPaymentMode == 'Cash',
-                                onTap: () => setState(() {
-                                  _selectedPaymentMode = 'Cash';
-                                }),
-                              ),
+                      if (grouped.isEmpty) {
+                        return Center(
+                          child: Text(
+                            'No receipt history yet.',
+                            style: TextStyle(
+                              color: Colors.pink.shade400,
+                              fontSize: 15,
                             ),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: _HistoryPaymentChip(
-                                label: 'GCash',
-                                value: gcashTotal,
-                                color: Colors.blue.shade700,
-                                selected: _selectedPaymentMode == 'GCash',
-                                onTap: () => setState(() {
-                                  _selectedPaymentMode = 'GCash';
-                                }),
+                          ),
+                        );
+                      }
+
+                      return Column(
+                        children: [
+                          SizedBox(
+                            height: 40,
+                            child: ListView.separated(
+                              scrollDirection: Axis.horizontal,
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 16,
                               ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const Divider(
-                        height: 1,
-                        thickness: 1,
-                        color: Color(0xFFEDD9C8),
-                      ),
-                      Expanded(
-                        child: filteredReceipts.isEmpty
-                            ? Center(
-                                child: Text(
-                                  'No receipt record',
-                                  style: TextStyle(
-                                    color: Colors.pink.shade400,
-                                    fontSize: 15,
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                                ),
-                              )
-                            : ListView(
-                                controller: scrollController,
-                                padding: const EdgeInsets.fromLTRB(
-                                  16,
-                                  16,
-                                  16,
-                                  40,
-                                ),
-                                children: filteredReceipts
-                                    .map(
-                                      (data) => _ReceiptCard(
-                                        data: data,
-                                        compact: false,
+                              itemCount: dates.length,
+                              separatorBuilder: (_, _) =>
+                                  const SizedBox(width: 8),
+                              itemBuilder: (_, i) {
+                                final d = dates[i];
+                                final selected = d == _selectedDate;
+                                return GestureDetector(
+                                  onTap: () =>
+                                      setState(() => _selectedDate = d),
+                                  child: AnimatedContainer(
+                                    duration: const Duration(milliseconds: 200),
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 16,
+                                      vertical: 8,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: selected
+                                          ? _C.primary
+                                          : Colors.white,
+                                      borderRadius: BorderRadius.circular(20),
+                                      border: Border.all(
+                                        color: selected
+                                            ? _C.primary
+                                            : Colors.pink.shade200,
                                       ),
-                                    )
-                                    .toList(),
-                              ),
-                      ),
-                    ],
+                                    ),
+                                    child: Text(
+                                      d,
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w700,
+                                        color: selected
+                                            ? Colors.white
+                                            : Colors.pink.shade600,
+                                      ),
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                          ),
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  child: _HistoryPaymentChip(
+                                    label: 'Cash',
+                                    value: cashTotal,
+                                    color: Colors.green.shade700,
+                                    selected: _selectedPaymentMode == 'Cash',
+                                    onTap: () => setState(() {
+                                      _selectedPaymentMode = 'Cash';
+                                    }),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: _HistoryPaymentChip(
+                                    label: 'GCash',
+                                    value: gcashTotal,
+                                    color: Colors.blue.shade700,
+                                    selected: _selectedPaymentMode == 'GCash',
+                                    onTap: () => setState(() {
+                                      _selectedPaymentMode = 'GCash';
+                                    }),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const Divider(
+                            height: 1,
+                            thickness: 1,
+                            color: Color(0xFFEDD9C8),
+                          ),
+                          Expanded(
+                            child: filteredReceipts.isEmpty
+                                ? Center(
+                                    child: Text(
+                                      'No receipt record',
+                                      style: TextStyle(
+                                        color: Colors.pink.shade400,
+                                        fontSize: 15,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                  )
+                                : ListView(
+                                    controller: scrollController,
+                                    padding: const EdgeInsets.fromLTRB(
+                                      16,
+                                      16,
+                                      16,
+                                      40,
+                                    ),
+                                    children: filteredReceipts
+                                        .map(
+                                          (data) => _ReceiptCard(
+                                            data: data,
+                                            compact: false,
+                                          ),
+                                        )
+                                        .toList(),
+                                  ),
+                          ),
+                        ],
+                      );
+                    },
                   );
                 },
               ),
@@ -4509,7 +5403,7 @@ class _EmptyState extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 32),
+      padding: const EdgeInsets.symmetric(vertical: 18),
       child: Center(
         child: Column(
           children: [
