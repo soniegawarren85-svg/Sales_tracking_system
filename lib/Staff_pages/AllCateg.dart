@@ -415,435 +415,481 @@ class _AllCategPageState extends State<AllCategPage>
         return StatefulBuilder(
           builder: (context, setState) {
             return Dialog(
+              insetPadding: const EdgeInsets.symmetric(
+                horizontal: 24,
+                vertical: 24,
+              ),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(28),
               ),
               elevation: 0,
               backgroundColor: Colors.transparent,
-              child: Container(
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(28),
-                  boxShadow: [
-                    BoxShadow(
-                      color: const Color(0xFFC2105C).withOpacity(0.18),
-                      blurRadius: 32,
-                      offset: const Offset(0, 8),
-                    ),
-                  ],
-                ),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    // Dialog Header
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.fromLTRB(24, 22, 24, 18),
-                      decoration: const BoxDecoration(
-                        gradient: LinearGradient(
-                          colors: [Color(0xFFC2105C), Color(0xFFE91E8C)],
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                        ),
-                        borderRadius: BorderRadius.vertical(
-                          top: Radius.circular(28),
-                        ),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 760),
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(28),
+                    boxShadow: [
+                      BoxShadow(
+                        color: const Color(0xFFC2105C).withOpacity(0.18),
+                        blurRadius: 32,
+                        offset: const Offset(0, 8),
                       ),
-                      child: Row(
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.all(8),
-                            decoration: BoxDecoration(
-                              color: Colors.white.withOpacity(0.2),
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                            child: const Icon(
-                              Icons.remove_circle_outline_rounded,
-                              color: Colors.white,
-                              size: 20,
-                            ),
+                    ],
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // Dialog Header
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.fromLTRB(24, 22, 24, 18),
+                        decoration: const BoxDecoration(
+                          gradient: LinearGradient(
+                            colors: [Color(0xFFC2105C), Color(0xFFE91E8C)],
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
                           ),
-                          const SizedBox(width: 12),
-                          const Text(
-                            'Reduce Stock',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 20,
-                              fontWeight: FontWeight.w800,
-                              letterSpacing: 0.3,
-                            ),
+                          borderRadius: BorderRadius.vertical(
+                            top: Radius.circular(28),
                           ),
-                        ],
-                      ),
-                    ),
-                    // Dialog Body
-                    Padding(
-                      padding: const EdgeInsets.all(22),
-                      child: SingleChildScrollView(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
+                        ),
+                        child: Row(
                           children: [
-                            // Item info chip row
-                            Row(
-                              children: [
-                                _InfoChip(
-                                  icon: Icons.label_outline_rounded,
-                                  label: item['name']?.toString() ?? '',
-                                  color: const Color(0xFFC2105C),
-                                ),
-                                if ((item['variant']?.toString() ?? '')
-                                    .isNotEmpty) ...[
-                                  const SizedBox(width: 8),
-                                  _InfoChip(
-                                    icon: Icons.tune_rounded,
-                                    label: item['variant']?.toString() ?? '',
-                                    color: const Color(0xFFAD1457),
-                                  ),
-                                ],
-                              ],
-                            ),
-                            const SizedBox(height: 14),
                             Container(
-                              width: double.infinity,
-                              padding: const EdgeInsets.symmetric(
-                                vertical: 10,
-                                horizontal: 14,
-                              ),
+                              padding: const EdgeInsets.all(8),
                               decoration: BoxDecoration(
-                                color: const Color(0xFFFCE4EC),
-                                borderRadius: BorderRadius.circular(12),
+                                color: Colors.white.withOpacity(0.2),
+                                borderRadius: BorderRadius.circular(10),
                               ),
-                              child: Row(
-                                children: [
-                                  const Icon(
-                                    Icons.inventory_2_outlined,
-                                    size: 16,
-                                    color: Color(0xFFC2105C),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Text(
-                                    'Current Stock: $currentStock',
-                                    style: const TextStyle(
-                                      fontWeight: FontWeight.w700,
-                                      color: Color(0xFFC2105C),
-                                      fontSize: 13,
-                                    ),
-                                  ),
-                                ],
+                              child: const Icon(
+                                Icons.remove_circle_outline_rounded,
+                                color: Colors.white,
+                                size: 20,
                               ),
                             ),
-                            const SizedBox(height: 18),
-                            _PinkTextField(
-                              controller: qtyController,
-                              label: 'Quantity to reduce',
-                              hint: 'Enter quantity',
-                              icon: Icons.remove_circle_outline,
-                              keyboardType: TextInputType.number,
-                            ),
-                            const SizedBox(height: 14),
-                            // Styled Dropdown
-                            DropdownButtonFormField<String>(
-                              initialValue: selectedReason,
-                              decoration: InputDecoration(
-                                labelText: 'Reason',
-                                labelStyle: const TextStyle(
-                                  color: Color(0xFFC2105C),
-                                ),
-                                prefixIcon: const Icon(
-                                  Icons.flag_outlined,
-                                  color: Color(0xFFC2105C),
-                                ),
-                                enabledBorder: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(14),
-                                  borderSide: const BorderSide(
-                                    color: Color(0xFFF8BBD0),
-                                    width: 1.5,
-                                  ),
-                                ),
-                                focusedBorder: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(14),
-                                  borderSide: const BorderSide(
-                                    color: Color(0xFFC2105C),
-                                    width: 2,
-                                  ),
-                                ),
-                                filled: true,
-                                fillColor: const Color(0xFFFFF0F5),
+                            const SizedBox(width: 12),
+                            const Text(
+                              'Reduce Stock',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 20,
+                                fontWeight: FontWeight.w800,
+                                letterSpacing: 0.3,
                               ),
-                              dropdownColor: Colors.white,
-                              items: reasonOptions.map((reason) {
-                                return DropdownMenuItem<String>(
-                                  value: reason,
-                                  child: Text(reason),
-                                );
-                              }).toList(),
-                              onChanged: (value) {
-                                setState(() => selectedReason = value);
-                              },
                             ),
-                            if (selectedReason == 'Other') ...[
-                              const SizedBox(height: 14),
-                              _PinkTextField(
-                                controller: commentController,
-                                label: 'Comment',
-                                hint: 'Add a note...',
-                                icon: Icons.notes_rounded,
-                                maxLines: 3,
-                              ),
-                            ],
                           ],
                         ),
                       ),
-                    ),
-                    // Actions
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(22, 0, 22, 22),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: OutlinedButton(
-                              onPressed: () => Navigator.of(context).pop(),
-                              style: OutlinedButton.styleFrom(
-                                foregroundColor: const Color(0xFFC2105C),
-                                side: const BorderSide(
-                                  color: Color(0xFFF8BBD0),
-                                  width: 1.5,
-                                ),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(14),
-                                ),
+                      // Dialog Body
+                      Flexible(
+                        child: SingleChildScrollView(
+                          padding: const EdgeInsets.all(22),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              // Item info chip row
+                              Wrap(
+                                spacing: 8,
+                                runSpacing: 8,
+                                children: [
+                                  _InfoChip(
+                                    icon: Icons.label_outline_rounded,
+                                    label: item['name']?.toString() ?? '',
+                                    color: const Color(0xFFC2105C),
+                                  ),
+                                  if ((item['variant']?.toString() ?? '')
+                                      .isNotEmpty)
+                                    _InfoChip(
+                                      icon: Icons.tune_rounded,
+                                      label: item['variant']?.toString() ?? '',
+                                      color: const Color(0xFFAD1457),
+                                    ),
+                                ],
+                              ),
+                              const SizedBox(height: 14),
+                              Container(
+                                width: double.infinity,
                                 padding: const EdgeInsets.symmetric(
-                                  vertical: 14,
+                                  vertical: 10,
+                                  horizontal: 14,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFFCE4EC),
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: Row(
+                                  children: [
+                                    const Icon(
+                                      Icons.inventory_2_outlined,
+                                      size: 16,
+                                      color: Color(0xFFC2105C),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Text(
+                                      'Current Stock: $currentStock',
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.w700,
+                                        color: Color(0xFFC2105C),
+                                        fontSize: 13,
+                                      ),
+                                    ),
+                                  ],
                                 ),
                               ),
-                              child: const Text(
-                                'Cancel',
-                                style: TextStyle(fontWeight: FontWeight.w600),
+                              const SizedBox(height: 18),
+                              _PinkTextField(
+                                controller: qtyController,
+                                label: 'Quantity to reduce',
+                                hint: 'Enter quantity',
+                                icon: Icons.remove_circle_outline,
+                                keyboardType: TextInputType.number,
                               ),
-                            ),
+                              const SizedBox(height: 14),
+                              DropdownButtonFormField<String>(
+                                initialValue: selectedReason,
+                                decoration: InputDecoration(
+                                  labelText: 'Reason',
+                                  labelStyle: const TextStyle(
+                                    color: Color(0xFFC2105C),
+                                  ),
+                                  prefixIcon: const Icon(
+                                    Icons.flag_outlined,
+                                    color: Color(0xFFC2105C),
+                                  ),
+                                  enabledBorder: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(14),
+                                    borderSide: const BorderSide(
+                                      color: Color(0xFFF8BBD0),
+                                      width: 1.5,
+                                    ),
+                                  ),
+                                  focusedBorder: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(14),
+                                    borderSide: const BorderSide(
+                                      color: Color(0xFFC2105C),
+                                      width: 2,
+                                    ),
+                                  ),
+                                  filled: true,
+                                  fillColor: const Color(0xFFFFF0F5),
+                                ),
+                                dropdownColor: Colors.white,
+                                items: reasonOptions.map((reason) {
+                                  return DropdownMenuItem<String>(
+                                    value: reason,
+                                    child: Text(reason),
+                                  );
+                                }).toList(),
+                                onChanged: (value) {
+                                  setState(() => selectedReason = value);
+                                },
+                              ),
+                              if (selectedReason == 'Other') ...[
+                                const SizedBox(height: 14),
+                                _PinkTextField(
+                                  controller: commentController,
+                                  label: 'Comment',
+                                  hint: 'Add a note...',
+                                  icon: Icons.notes_rounded,
+                                  maxLines: 3,
+                                ),
+                              ],
+                            ],
                           ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: ElevatedButton(
-                              onPressed: () async {
-                                final quantity =
-                                    int.tryParse(qtyController.text.trim()) ??
-                                    0;
-                                final reason = selectedReason?.trim() ?? '';
-                                final comment = selectedReason == 'Other'
-                                    ? commentController.text.trim()
-                                    : '';
-
-                                if (quantity <= 0 || quantity > currentStock) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    _buildSnackBar(
-                                      'Enter a valid reduction quantity',
-                                      isError: true,
+                        ),
+                      ),
+                      // Actions
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(22, 0, 22, 22),
+                        child: Align(
+                          child: ConstrainedBox(
+                            constraints: const BoxConstraints(maxWidth: 520),
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  child: OutlinedButton(
+                                    onPressed: () =>
+                                        Navigator.of(context).pop(),
+                                    style: OutlinedButton.styleFrom(
+                                      foregroundColor: const Color(0xFFC2105C),
+                                      side: const BorderSide(
+                                        color: Color(0xFFF8BBD0),
+                                        width: 1.5,
+                                      ),
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(14),
+                                      ),
+                                      padding: const EdgeInsets.symmetric(
+                                        vertical: 14,
+                                      ),
                                     ),
-                                  );
-                                  return;
-                                }
-                                if (reason.isEmpty) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    _buildSnackBar(
-                                      'Please select a reason',
-                                      isError: true,
+                                    child: const Text(
+                                      'Cancel',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.w600,
+                                      ),
                                     ),
-                                  );
-                                  return;
-                                }
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: ElevatedButton(
+                                    onPressed: () async {
+                                      final quantity =
+                                          int.tryParse(
+                                            qtyController.text.trim(),
+                                          ) ??
+                                          0;
+                                      final reason =
+                                          selectedReason?.trim() ?? '';
+                                      final comment = selectedReason == 'Other'
+                                          ? commentController.text.trim()
+                                          : '';
 
-                                try {
-                                  final docRef = FirebaseFirestore.instance
-                                      .collection('staff_inventory')
-                                      .doc(sourceDocId);
-                                  final snapshot = await docRef.get();
-                                  final data = snapshot.data();
-                                  final items =
-                                      (data?['items'] as List?)
-                                          ?.cast<Map<String, dynamic>>() ??
-                                      [];
-                                  final unitPrice = _parsePrice(item['price']);
-                                  double reductionAmount = 0.0;
-                                  final updatedItems = items.map((entry) {
-                                    final entryName =
-                                        entry['name']?.toString() ?? '';
-                                    final entryVariant =
-                                        entry['variant']?.toString() ?? '';
-                                    final entryId =
-                                        entry['id']?.toString() ?? '';
-                                    final itemName =
-                                        item['name']?.toString() ?? '';
-                                    final itemVariant =
-                                        item['variant']?.toString() ?? '';
-                                    final itemId = item['id']?.toString() ?? '';
-                                    final isMatchingEntry = itemId.isNotEmpty
-                                        ? entryId == itemId
-                                        : entryName == itemName &&
-                                              entryVariant == itemVariant;
+                                      if (quantity <= 0 ||
+                                          quantity > currentStock) {
+                                        ScaffoldMessenger.of(
+                                          context,
+                                        ).showSnackBar(
+                                          _buildSnackBar(
+                                            'Enter a valid reduction quantity',
+                                            isError: true,
+                                          ),
+                                        );
+                                        return;
+                                      }
+                                      if (reason.isEmpty) {
+                                        ScaffoldMessenger.of(
+                                          context,
+                                        ).showSnackBar(
+                                          _buildSnackBar(
+                                            'Please select a reason',
+                                            isError: true,
+                                          ),
+                                        );
+                                        return;
+                                      }
 
-                                    if (isMatchingEntry) {
-                                      final stockValue = entry['stock'] is num
-                                          ? (entry['stock'] as num).toInt()
-                                          : int.tryParse(
-                                                  entry['stock']?.toString() ??
-                                                      '',
-                                                ) ??
-                                                0;
-                                      final startingStockValue =
-                                          entry['startingStock'] is num
-                                          ? (entry['startingStock'] as num)
-                                                .toInt()
-                                          : int.tryParse(
-                                                  entry['startingStock']
+                                      try {
+                                        final docRef = FirebaseFirestore
+                                            .instance
+                                            .collection('staff_inventory')
+                                            .doc(sourceDocId);
+                                        final snapshot = await docRef.get();
+                                        final data = snapshot.data();
+                                        final items =
+                                            (data?['items'] as List?)
+                                                ?.cast<
+                                                  Map<String, dynamic>
+                                                >() ??
+                                            [];
+                                        final unitPrice = _parsePrice(
+                                          item['price'],
+                                        );
+                                        double reductionAmount = 0.0;
+                                        final updatedItems = items.map((entry) {
+                                          final entryName =
+                                              entry['name']?.toString() ?? '';
+                                          final entryVariant =
+                                              entry['variant']?.toString() ??
+                                              '';
+                                          final entryId =
+                                              entry['id']?.toString() ?? '';
+                                          final itemName =
+                                              item['name']?.toString() ?? '';
+                                          final itemVariant =
+                                              item['variant']?.toString() ?? '';
+                                          final itemId =
+                                              item['id']?.toString() ?? '';
+                                          final isMatchingEntry =
+                                              itemId.isNotEmpty
+                                              ? entryId == itemId
+                                              : entryName == itemName &&
+                                                    entryVariant == itemVariant;
+
+                                          if (isMatchingEntry) {
+                                            final stockValue =
+                                                entry['stock'] is num
+                                                ? (entry['stock'] as num)
+                                                      .toInt()
+                                                : int.tryParse(
+                                                        entry['stock']
+                                                                ?.toString() ??
+                                                            '',
+                                                      ) ??
+                                                      0;
+                                            final startingStockValue =
+                                                entry['startingStock'] is num
+                                                ? (entry['startingStock']
+                                                          as num)
+                                                      .toInt()
+                                                : int.tryParse(
+                                                        entry['startingStock']
+                                                                ?.toString() ??
+                                                            '',
+                                                      ) ??
+                                                      0;
+                                            final actualStock = stockValue > 0
+                                                ? stockValue
+                                                : startingStockValue;
+                                            final newStock =
+                                                actualStock - quantity;
+                                            final reducedStock = newStock < 0
+                                                ? 0
+                                                : newStock;
+                                            final unitPrice = _parsePrice(
+                                              entry['price'],
+                                            );
+                                            reductionAmount =
+                                                unitPrice * quantity;
+                                            final hasStockField = entry
+                                                .containsKey('stock');
+                                            final currentReduced =
+                                                int.tryParse(
+                                                  entry['reducedQuantity']
                                                           ?.toString() ??
                                                       '',
                                                 ) ??
                                                 0;
-                                      final actualStock = stockValue > 0
-                                          ? stockValue
-                                          : startingStockValue;
-                                      final newStock = actualStock - quantity;
-                                      final reducedStock = newStock < 0
-                                          ? 0
-                                          : newStock;
-                                      final unitPrice = _parsePrice(
-                                        entry['price'],
-                                      );
-                                      reductionAmount = unitPrice * quantity;
-                                      final hasStockField = entry.containsKey(
-                                        'stock',
-                                      );
-                                      final currentReduced =
-                                          int.tryParse(
-                                            entry['reducedQuantity']
-                                                    ?.toString() ??
-                                                '',
-                                          ) ??
-                                          0;
-                                      return {
-                                        ...entry,
-                                        'stock': reducedStock,
-                                        'reducedQuantity':
-                                            currentReduced + quantity,
-                                        if (!hasStockField)
-                                          'startingStock': reducedStock,
-                                      };
-                                    }
-                                    return entry;
-                                  }).toList();
+                                            return {
+                                              ...entry,
+                                              'stock': reducedStock,
+                                              'reducedQuantity':
+                                                  currentReduced + quantity,
+                                              if (!hasStockField)
+                                                'startingStock': reducedStock,
+                                            };
+                                          }
+                                          return entry;
+                                        }).toList();
 
-                                  await docRef.update({'items': updatedItems});
-                                  final selectedItemId =
-                                      item['id']?.toString() ?? '';
-                                  InventoryService().recordStockReduction(
-                                    itemName: categoryName,
-                                    variantName: selectedItemId.isNotEmpty
-                                        ? selectedItemId
-                                        : item['name']?.toString() ?? '',
-                                    quantity: quantity,
-                                    sourceInventoryId: sourceDocId,
-                                  );
-                                  await FirebaseFirestore.instance
-                                      .collection('stock_adjustments')
-                                      .add({
-                                        'userId': FirebaseAuth
-                                            .instance
-                                            .currentUser
-                                            ?.uid,
-                                        'staffId': FirebaseAuth
-                                            .instance
-                                            .currentUser
-                                            ?.uid,
-                                        'categoryName': categoryName,
-                                        'categoryId': sourceDocId,
-                                        'itemName': item['name'] ?? '',
-                                        'variant': item['variant'] ?? '',
-                                        'quantity': quantity,
-                                        'unitPrice': unitPrice,
-                                        'lossAmount': reductionAmount,
-                                        'reason': reason,
-                                        'comment': comment,
-                                        'createdAt':
-                                            FieldValue.serverTimestamp(),
-                                      });
+                                        await docRef.update({
+                                          'items': updatedItems,
+                                        });
+                                        final selectedItemId =
+                                            item['id']?.toString() ?? '';
+                                        InventoryService().recordStockReduction(
+                                          itemName: categoryName,
+                                          variantName: selectedItemId.isNotEmpty
+                                              ? selectedItemId
+                                              : item['name']?.toString() ?? '',
+                                          quantity: quantity,
+                                          sourceInventoryId: sourceDocId,
+                                        );
+                                        await FirebaseFirestore.instance
+                                            .collection('stock_adjustments')
+                                            .add({
+                                              'userId': FirebaseAuth
+                                                  .instance
+                                                  .currentUser
+                                                  ?.uid,
+                                              'staffId': FirebaseAuth
+                                                  .instance
+                                                  .currentUser
+                                                  ?.uid,
+                                              'categoryName': categoryName,
+                                              'categoryId': sourceDocId,
+                                              'itemName': item['name'] ?? '',
+                                              'variant': item['variant'] ?? '',
+                                              'quantity': quantity,
+                                              'unitPrice': unitPrice,
+                                              'lossAmount': reductionAmount,
+                                              'reason': reason,
+                                              'comment': comment,
+                                              'createdAt':
+                                                  FieldValue.serverTimestamp(),
+                                            });
 
-                                  final currentUser =
-                                      FirebaseAuth.instance.currentUser;
-                                  final staffName =
-                                      (currentUser?.displayName
-                                              ?.trim()
-                                              .isNotEmpty ==
-                                          true
-                                      ? currentUser!.displayName!
-                                      : currentUser?.email?.split('@').first ??
-                                            'Staff');
-                                  final variantLabel =
-                                      (item['variant']?.toString() ?? '')
-                                          .isNotEmpty
-                                      ? ' (${item['variant']})'
-                                      : '';
+                                        final currentUser =
+                                            FirebaseAuth.instance.currentUser;
+                                        final staffName =
+                                            (currentUser?.displayName
+                                                    ?.trim()
+                                                    .isNotEmpty ==
+                                                true
+                                            ? currentUser!.displayName!
+                                            : currentUser?.email
+                                                      ?.split('@')
+                                                      .first ??
+                                                  'Staff');
+                                        final variantLabel =
+                                            (item['variant']?.toString() ?? '')
+                                                .isNotEmpty
+                                            ? ' (${item['variant']})'
+                                            : '';
 
-                                  await FirebaseFirestore.instance
-                                      .collection('admin_notifications')
-                                      .add({
-                                        'title': 'Stock reduced',
-                                        'message':
-                                            '$staffName reduced $quantity x ${item['name'] ?? ''}$variantLabel from $currentStock to ${currentStock - quantity}. Expected sales decreased by ₱${reductionAmount.toStringAsFixed(2)}.',
-                                        'category': 'Stock',
-                                        'type': 'stock_adjustment',
-                                        'itemName': item['name'] ?? '',
-                                        'variant': item['variant'] ?? '',
-                                        'quantity': quantity,
-                                        'reductionAmount': reductionAmount,
-                                        'categoryName': categoryName,
-                                        'staffId': currentUser?.uid,
-                                        'staffName': staffName,
-                                        'isRead': false,
-                                        'createdAt':
-                                            FieldValue.serverTimestamp(),
-                                      });
+                                        await FirebaseFirestore.instance
+                                            .collection('admin_notifications')
+                                            .add({
+                                              'title': 'Stock reduced',
+                                              'message':
+                                                  '$staffName reduced $quantity x ${item['name'] ?? ''}$variantLabel from $currentStock to ${currentStock - quantity}. Expected sales decreased by ₱${reductionAmount.toStringAsFixed(2)}.',
+                                              'category': 'Stock',
+                                              'type': 'stock_adjustment',
+                                              'itemName': item['name'] ?? '',
+                                              'variant': item['variant'] ?? '',
+                                              'quantity': quantity,
+                                              'reductionAmount':
+                                                  reductionAmount,
+                                              'categoryName': categoryName,
+                                              'staffId': currentUser?.uid,
+                                              'staffName': staffName,
+                                              'isRead': false,
+                                              'createdAt':
+                                                  FieldValue.serverTimestamp(),
+                                            });
 
-                                  if (mounted) {
-                                    Navigator.of(context).pop();
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      _buildSnackBar(
-                                        'Stock reduced successfully!',
+                                        if (mounted) {
+                                          Navigator.of(context).pop();
+                                          ScaffoldMessenger.of(
+                                            context,
+                                          ).showSnackBar(
+                                            _buildSnackBar(
+                                              'Stock reduced successfully!',
+                                            ),
+                                          );
+                                        }
+                                      } catch (e) {
+                                        if (mounted) {
+                                          ScaffoldMessenger.of(
+                                            context,
+                                          ).showSnackBar(
+                                            _buildSnackBar(
+                                              'Failed to reduce stock: $e',
+                                              isError: true,
+                                            ),
+                                          );
+                                        }
+                                      }
+                                    },
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: const Color(0xFFC2105C),
+                                      foregroundColor: Colors.white,
+                                      elevation: 0,
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(14),
                                       ),
-                                    );
-                                  }
-                                } catch (e) {
-                                  if (mounted) {
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      _buildSnackBar(
-                                        'Failed to reduce stock: $e',
-                                        isError: true,
+                                      padding: const EdgeInsets.symmetric(
+                                        vertical: 14,
                                       ),
-                                    );
-                                  }
-                                }
-                              },
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: const Color(0xFFC2105C),
-                                foregroundColor: Colors.white,
-                                elevation: 0,
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(14),
+                                    ),
+                                    child: const Text(
+                                      'Save',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                  ),
                                 ),
-                                padding: const EdgeInsets.symmetric(
-                                  vertical: 14,
-                                ),
-                              ),
-                              child: const Text(
-                                'Save',
-                                style: TextStyle(fontWeight: FontWeight.w700),
-                              ),
+                              ],
                             ),
                           ),
-                        ],
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
             );

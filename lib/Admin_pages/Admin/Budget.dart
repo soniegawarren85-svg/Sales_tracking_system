@@ -449,6 +449,24 @@ class _BudgetPageState extends State<BudgetPage>
     }
   }
 
+  bool _isNearExpiryInventoryItem(String expirationDate) {
+    if (expirationDate.trim().isEmpty || expirationDate == '--') return false;
+    try {
+      final expiryDate = DateTime.parse(expirationDate);
+      final today = DateTime.now();
+      final startOfToday = DateTime(today.year, today.month, today.day);
+      final expiryDay = DateTime(
+        expiryDate.year,
+        expiryDate.month,
+        expiryDate.day,
+      );
+      final daysLeft = expiryDay.difference(startOfToday).inDays;
+      return daysLeft >= 0 && daysLeft <= 7;
+    } catch (_) {
+      return false;
+    }
+  }
+
   int _stockForAssignableItem(Map<String, dynamic> item) {
     return item.containsKey('stock')
         ? _parseInt(item['stock'])
@@ -683,6 +701,38 @@ class _BudgetPageState extends State<BudgetPage>
     );
   }
 
+  Widget _assignedWarningCell(
+    String text, {
+    required bool showWarning,
+    Color color = kBannerTop,
+    FontWeight weight = FontWeight.w700,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (showWarning) ...[
+            const Icon(
+              Icons.warning_amber_rounded,
+              size: 15,
+              color: Color(0xFFF9A825),
+            ),
+            const SizedBox(width: 5),
+          ],
+          Flexible(
+            child: Text(
+              text,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(fontSize: 12, fontWeight: weight, color: color),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   List<Map<String, dynamic>> _assignedInventoryRows(
     QueryDocumentSnapshot<Map<String, dynamic>> doc,
   ) {
@@ -698,8 +748,8 @@ class _BudgetPageState extends State<BudgetPage>
           'name': name,
           'type': 'Bundle',
           'stock': count,
-          'used': _parseInt(data['assignedStartingStock'], fallback: count) -
-              count,
+          'used':
+              _parseInt(data['assignedStartingStock'], fallback: count) - count,
           'reduced': 0,
           'expiry': '--',
         },
@@ -714,7 +764,9 @@ class _BudgetPageState extends State<BudgetPage>
               ? _parseInt(item['stock'])
               : _parseInt(item['startingStock']);
           return stock > 0 &&
-              !_isExpiredInventoryItem(item['expirationDate']?.toString() ?? '');
+              !_isExpiredInventoryItem(
+                item['expirationDate']?.toString() ?? '',
+              );
         })
         .toList();
 
@@ -997,36 +1049,32 @@ class _BudgetPageState extends State<BudgetPage>
                         .where('staffId', isEqualTo: staffId)
                         .snapshots(),
                     builder: (context, snapshot) {
-                      final docs = (snapshot.data?.docs ?? [])
-                          .where((doc) {
-                            final data = doc.data();
-                            if (data['isDeleted'] == true) return false;
-                            if (data['isBundle'] == true) {
-                              return !_hasExpiredAssignedBundleItem(data) &&
-                                  _availableAssignedBundleCount(data) > 0;
-                            }
-                            final activeItems =
-                                ((data['items'] as List<dynamic>?) ?? [])
-                                    .whereType<Map>()
-                                    .map(
-                                      (item) => Map<String, dynamic>.from(item),
-                                    )
-                                    .where((item) {
-                                      final stock = item.containsKey('stock')
-                                          ? _parseInt(item['stock'])
-                                          : _parseInt(item['startingStock']);
-                                      return stock > 0 &&
-                                          !_isExpiredInventoryItem(
-                                            item['expirationDate']?.toString() ??
-                                                '',
-                                          );
-                                    })
-                                    .toList();
-                            return data['isCoffee'] == true ||
-                                data['isAddon'] == true ||
-                                activeItems.isNotEmpty;
-                          })
-                          .toList();
+                      final docs = (snapshot.data?.docs ?? []).where((doc) {
+                        final data = doc.data();
+                        if (data['isDeleted'] == true) return false;
+                        if (data['isBundle'] == true) {
+                          return !_hasExpiredAssignedBundleItem(data) &&
+                              _availableAssignedBundleCount(data) > 0;
+                        }
+                        final activeItems =
+                            ((data['items'] as List<dynamic>?) ?? [])
+                                .whereType<Map>()
+                                .map((item) => Map<String, dynamic>.from(item))
+                                .where((item) {
+                                  final stock = item.containsKey('stock')
+                                      ? _parseInt(item['stock'])
+                                      : _parseInt(item['startingStock']);
+                                  return stock > 0 &&
+                                      !_isExpiredInventoryItem(
+                                        item['expirationDate']?.toString() ??
+                                            '',
+                                      );
+                                })
+                                .toList();
+                        return data['isCoffee'] == true ||
+                            data['isAddon'] == true ||
+                            activeItems.isNotEmpty;
+                      }).toList();
 
                       if (snapshot.connectionState == ConnectionState.waiting) {
                         return const Center(
@@ -1059,6 +1107,13 @@ class _BudgetPageState extends State<BudgetPage>
                           rows: docs.expand((doc) {
                             final rows = _assignedInventoryRows(doc);
                             return rows.map((row) {
+                              final stock = _parseInt(row['stock']);
+                              final expiry = row['expiry']?.toString() ?? '--';
+                              final isLowStock = stock > 0 && stock <= 50;
+                              final isNearExpiry = _isNearExpiryInventoryItem(
+                                expiry,
+                              );
+                              const warningColor = Color(0xFFF9A825);
                               return DataRow(
                                 cells: [
                                   DataCell(
@@ -1084,9 +1139,12 @@ class _BudgetPageState extends State<BudgetPage>
                                     ),
                                   ),
                                   DataCell(
-                                    _assignedTableCell(
-                                      row['stock']?.toString() ?? '0',
-                                      color: kPrimary,
+                                    _assignedWarningCell(
+                                      stock.toString(),
+                                      showWarning: isLowStock,
+                                      color: isLowStock
+                                          ? warningColor
+                                          : kPrimary,
                                     ),
                                   ),
                                   DataCell(
@@ -1100,8 +1158,13 @@ class _BudgetPageState extends State<BudgetPage>
                                     ),
                                   ),
                                   DataCell(
-                                    _assignedTableCell(
-                                      row['expiry']?.toString() ?? '--',
+                                    _assignedWarningCell(
+                                      expiry,
+                                      showWarning: isNearExpiry,
+                                      color: isNearExpiry
+                                          ? warningColor
+                                          : kBannerTop,
+                                      weight: FontWeight.w600,
                                     ),
                                   ),
                                   DataCell(
@@ -1314,7 +1377,8 @@ class _BudgetPageState extends State<BudgetPage>
                                     const SizedBox(width: 10),
                                     Expanded(
                                       child: _AssignModeButton(
-                                        selected: !showCategories &&
+                                        selected:
+                                            !showCategories &&
                                             !showCoffee &&
                                             !showAddons,
                                         icon: Icons.inventory_2_rounded,
@@ -4337,10 +4401,8 @@ class _BudgetPageState extends State<BudgetPage>
                       final data =
                           snapshot.data!.data() as Map<String, dynamic>;
                       Future.microtask(
-                        () => CashDrawerService.zeroIfPast24Hours(
-                          branchId,
-                          data,
-                        ),
+                        () =>
+                            CashDrawerService.zeroIfPast24Hours(branchId, data),
                       );
                       cashBalance = (data['balance'] as num?)?.toDouble() ?? 0;
                     }
@@ -5800,32 +5862,30 @@ class _BudgetPageState extends State<BudgetPage>
       builder: (context, snapshot) {
         if (snapshot.hasError) return const SizedBox.shrink();
 
-        final assignedDocs = (snapshot.data?.docs ?? [])
-            .where((doc) {
-              final data = doc.data();
-              if (data['isDeleted'] == true) return false;
-              if (data['isBundle'] == true) {
-                return !_hasExpiredAssignedBundleItem(data) &&
-                    _availableAssignedBundleCount(data) > 0;
-              }
-              final activeItems = ((data['items'] as List<dynamic>?) ?? [])
-                  .whereType<Map>()
-                  .map((item) => Map<String, dynamic>.from(item))
-                  .where((item) {
-                    final stock = item.containsKey('stock')
-                        ? _parseInt(item['stock'])
-                        : _parseInt(item['startingStock']);
-                    return stock > 0 &&
-                        !_isExpiredInventoryItem(
-                          item['expirationDate']?.toString() ?? '',
-                        );
-                  })
-                  .toList();
-              return data['isCoffee'] == true ||
-                  data['isAddon'] == true ||
-                  activeItems.isNotEmpty;
-            })
-            .toList();
+        final assignedDocs = (snapshot.data?.docs ?? []).where((doc) {
+          final data = doc.data();
+          if (data['isDeleted'] == true) return false;
+          if (data['isBundle'] == true) {
+            return !_hasExpiredAssignedBundleItem(data) &&
+                _availableAssignedBundleCount(data) > 0;
+          }
+          final activeItems = ((data['items'] as List<dynamic>?) ?? [])
+              .whereType<Map>()
+              .map((item) => Map<String, dynamic>.from(item))
+              .where((item) {
+                final stock = item.containsKey('stock')
+                    ? _parseInt(item['stock'])
+                    : _parseInt(item['startingStock']);
+                return stock > 0 &&
+                    !_isExpiredInventoryItem(
+                      item['expirationDate']?.toString() ?? '',
+                    );
+              })
+              .toList();
+          return data['isCoffee'] == true ||
+              data['isAddon'] == true ||
+              activeItems.isNotEmpty;
+        }).toList();
         final totals = _staffInventoryTotals(assignedDocs);
         final starting = totals['starting'] ?? 0;
         final remaining = totals['remaining'] ?? 0;

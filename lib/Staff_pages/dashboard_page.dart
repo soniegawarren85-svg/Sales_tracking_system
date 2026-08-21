@@ -2,6 +2,7 @@
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -1121,23 +1122,18 @@ class _DashboardPageState extends State<DashboardPage>
               alignment: isTablet ? Alignment.centerLeft : Alignment.center,
               child: ConstrainedBox(
                 constraints: BoxConstraints(maxWidth: contentMaxWidth),
-                child: Wrap(
-                  spacing: 12,
-                  runSpacing: 10,
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  alignment: WrapAlignment.start,
+                child: Column(
+                  crossAxisAlignment: isTablet
+                      ? CrossAxisAlignment.start
+                      : CrossAxisAlignment.center,
                   children: [
-                    const Padding(
-                      padding: EdgeInsets.only(right: 8),
-                      child: _SectionLabel(title: 'Performance'),
-                    ),
+                    const _SectionLabel(title: 'Performance'),
+                    const SizedBox(height: 10),
                     Wrap(
                       spacing: 8,
                       runSpacing: 8,
-                      children: [
-                        _RefundButton(onTap: _openRefundFlow),
-                        _HistoryButton(onTap: _showHistory),
-                      ],
+                      alignment: WrapAlignment.center,
+                      children: [_HistoryButton(onTap: _showHistory)],
                     ),
                   ],
                 ),
@@ -1155,7 +1151,7 @@ class _DashboardPageState extends State<DashboardPage>
               horizontalPadding,
               0,
               horizontalPadding,
-              44,
+              18,
             ),
             sliver: SliverToBoxAdapter(
               child: Align(
@@ -2599,7 +2595,8 @@ class _Header extends StatelessWidget {
             : data['name']?.toString().trim() ?? 'Staff Name';
         final staffId = data['staffId']?.toString().trim() ?? '#0000';
         final role = data['role']?.toString().trim() ?? 'Staff Member';
-        final photoUrl = data['photoUrl'] as String?;
+        final photoUrl =
+            data['photoUrl']?.toString() ?? data['profileImageUrl']?.toString();
 
         return Stack(
           fit: StackFit.expand,
@@ -3571,9 +3568,14 @@ class _StaffAvatar extends StatelessWidget {
   }
 
   Widget _buildPhoto() {
-    if (photoUrl != null && photoUrl!.isNotEmpty) {
+    final url = photoUrl?.trim() ?? '';
+    if (url.startsWith('data:image/')) {
+      final bytes = _bytesFromDataUrl(url);
+      if (bytes != null) return Image.memory(bytes, fit: BoxFit.cover);
+    }
+    if (url.isNotEmpty) {
       return Image.network(
-        photoUrl!,
+        url,
         fit: BoxFit.cover,
         errorBuilder: (_, _, _) => _fallback(),
       );
@@ -3585,6 +3587,16 @@ class _StaffAvatar extends StatelessWidget {
     color: const Color(0xFFC2105C),
     child: const Icon(Icons.person_rounded, color: Color(0xFFFFD8B5), size: 38),
   );
+
+  Uint8List? _bytesFromDataUrl(String dataUrl) {
+    final commaIndex = dataUrl.indexOf(',');
+    if (!dataUrl.startsWith('data:image/') || commaIndex == -1) return null;
+    try {
+      return base64Decode(dataUrl.substring(commaIndex + 1));
+    } catch (_) {
+      return null;
+    }
+  }
 }
 
 // ── Role badge ────────────────────────────────────────────────────────────────
@@ -3780,9 +3792,10 @@ class _ItemCardState extends State<_ItemCard> {
           ),
           child: ClipRRect(
             borderRadius: BorderRadius.circular(20),
-            child: IntrinsicHeight(
+            child: SizedBox(
+              height: 118,
               child: Row(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
+                crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
                   // ── Left accent bar (gradient) ────────────────────────
                   Container(
