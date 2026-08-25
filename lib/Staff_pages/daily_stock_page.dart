@@ -147,12 +147,10 @@ class _DailyStockPageState extends State<DailyStockPage>
   // ─── Animation Controllers ──────────────────────────────────────────────
   late AnimationController _headerAnimCtrl;
   late AnimationController _budgetCardAnimCtrl;
-  late AnimationController _pulseAnimCtrl;
   late Animation<double> _headerFade;
   late Animation<Offset> _headerSlide;
   late Animation<double> _budgetCardFade;
   late Animation<Offset> _budgetCardSlide;
-  late Animation<double> _pulseAnim;
 
   @override
   void initState() {
@@ -190,10 +188,6 @@ class _DailyStockPageState extends State<DailyStockPage>
       vsync: this,
       duration: const Duration(milliseconds: 600),
     );
-    _pulseAnimCtrl = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1600),
-    )..repeat(reverse: true);
 
     _headerFade = CurvedAnimation(
       parent: _headerAnimCtrl,
@@ -215,11 +209,6 @@ class _DailyStockPageState extends State<DailyStockPage>
             curve: Curves.easeOutCubic,
           ),
         );
-
-    _pulseAnim = Tween<double>(
-      begin: 1.0,
-      end: 1.04,
-    ).animate(CurvedAnimation(parent: _pulseAnimCtrl, curve: Curves.easeInOut));
 
     _headerAnimCtrl.forward();
     Future.delayed(const Duration(milliseconds: 200), () {
@@ -472,7 +461,6 @@ class _DailyStockPageState extends State<DailyStockPage>
     _qtyControllers.clear();
     _headerAnimCtrl.dispose();
     _budgetCardAnimCtrl.dispose();
-    _pulseAnimCtrl.dispose();
     if (_tabletOrientationLocked) {
       SystemChrome.setPreferredOrientations(DeviceOrientation.values);
     }
@@ -7378,9 +7366,7 @@ class _DailyStockPageState extends State<DailyStockPage>
             _cachedStaffInventoryDocs.isEmpty) {
           return const Padding(
             padding: EdgeInsets.symmetric(vertical: 40),
-            child: Center(
-              child: CircularProgressIndicator(color: _AppColors.primary),
-            ),
+            child: _SalesProcessLoadingSkeleton(),
           );
         }
 
@@ -7413,9 +7399,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                 _cachedSalesInventoryDocs.isEmpty) {
               return const Padding(
                 padding: EdgeInsets.symmetric(vertical: 40),
-                child: Center(
-                  child: CircularProgressIndicator(color: _AppColors.primary),
-                ),
+                child: _SalesProcessLoadingSkeleton(),
               );
             }
             final activeRootById = <String, Map<String, dynamic>>{};
@@ -7860,7 +7844,7 @@ class _DailyStockPageState extends State<DailyStockPage>
           )
         else
           _buildCategoryGrid(groupedOrderItems, orderItems),
-        SizedBox(height: isTabletLandscape ? 0 : 24),
+        const SizedBox(height: 0),
       ],
     );
   }
@@ -7908,6 +7892,13 @@ class _DailyStockPageState extends State<DailyStockPage>
                             ),
                             Expanded(
                               child: SingleChildScrollView(
+                                // With one complete grid page there is nothing
+                                // below the last row to reveal. Disable the
+                                // parent scroll so it cannot travel into blank
+                                // space under the final three cards.
+                                physics: _latestOrderItems.length <= 6
+                                    ? const NeverScrollableScrollPhysics()
+                                    : const ClampingScrollPhysics(),
                                 padding: const EdgeInsets.fromLTRB(
                                   20,
                                   10,
@@ -8825,6 +8816,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                   final imageUrl = item['imageUrl']?.toString() ?? '';
 
                   return _DelayedFadeSlide(
+                    key: ValueKey(key),
                     delay: Duration(milliseconds: 80 + listIdx * 45),
                     child: Material(
                       color: Colors.transparent,
@@ -8833,8 +8825,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                             ? null
                             : () => _addSingleItemToTicket(item, stock),
                         borderRadius: BorderRadius.circular(20),
-                        child: AnimatedContainer(
-                          duration: const Duration(milliseconds: 180),
+                        child: Container(
                           padding: const EdgeInsets.all(14),
                           decoration: BoxDecoration(
                             color: Colors.white,
@@ -9421,8 +9412,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                     variants: coffeeVariants,
                   ),
                   borderRadius: BorderRadius.circular(20),
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 180),
+                  child: Container(
                     padding: const EdgeInsets.all(14),
                     decoration: BoxDecoration(
                       color: Colors.white,
@@ -10506,60 +10496,51 @@ class _DailyStockPageState extends State<DailyStockPage>
             padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
             child: SizedBox(
               width: double.infinity,
-              child: AnimatedBuilder(
-                animation: _pulseAnim,
-                builder: (context, child) {
-                  return Transform.scale(
-                    scale: validCartEntries.isNotEmpty ? _pulseAnim.value : 1.0,
-                    child: child,
-                  );
-                },
-                child: ElevatedButton(
-                  onPressed: () => _showOrderConfirmationDialog(orderItems),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: _AppColors.primary,
-                    foregroundColor: Colors.white,
-                    elevation: 0,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    padding: const EdgeInsets.symmetric(vertical: 18),
-                    shadowColor: _AppColors.primary.withOpacity(0.4),
+              child: ElevatedButton(
+                onPressed: () => _showOrderConfirmationDialog(orderItems),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: _AppColors.primary,
+                  foregroundColor: Colors.white,
+                  elevation: 0,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(20),
                   ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const Icon(Icons.check_circle_outline_rounded, size: 22),
+                  padding: const EdgeInsets.symmetric(vertical: 18),
+                  shadowColor: _AppColors.primary.withOpacity(0.4),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Icon(Icons.check_circle_outline_rounded, size: 22),
+                    const SizedBox(width: 10),
+                    const Text(
+                      'Confirm Order',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    if (validCartEntries.isNotEmpty) ...[
                       const SizedBox(width: 10),
-                      const Text(
-                        'Confirm Order',
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w800,
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 3,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.22),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Text(
+                          '₱${_discountedTotal(orderItems).toStringAsFixed(0)}',
+                          style: const TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                          ),
                         ),
                       ),
-                      if (validCartEntries.isNotEmpty) ...[
-                        const SizedBox(width: 10),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 10,
-                            vertical: 3,
-                          ),
-                          decoration: BoxDecoration(
-                            color: Colors.white.withOpacity(0.22),
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                          child: Text(
-                            '₱${_discountedTotal(orderItems).toStringAsFixed(0)}',
-                            style: const TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ),
-                      ],
                     ],
-                  ),
+                  ],
                 ),
               ),
             ),
@@ -10779,12 +10760,8 @@ class _DailyStockPageState extends State<DailyStockPage>
                     ),
                   Expanded(
                     child: SingleChildScrollView(
-                      padding: const EdgeInsets.fromLTRB(
-                        16,
-                        10,
-                        16,
-                        24 + _staffBottomNavReserve,
-                      ),
+                      physics: const ClampingScrollPhysics(),
+                      padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
                       child: _buildOrderSection(),
                     ),
                   ),
@@ -10825,49 +10802,78 @@ class _DailyStockPageState extends State<DailyStockPage>
 
 // ─── Helper Widgets ───────────────────────────────────────────────────────────
 
-class _DelayedFadeSlide extends StatefulWidget {
+class _DelayedFadeSlide extends StatelessWidget {
   final Widget child;
   final Duration delay;
-  const _DelayedFadeSlide({required this.child, required this.delay});
-
-  @override
-  State<_DelayedFadeSlide> createState() => _DelayedFadeSlideState();
-}
-
-class _DelayedFadeSlideState extends State<_DelayedFadeSlide>
-    with SingleTickerProviderStateMixin {
-  late AnimationController _ctrl;
-  late Animation<double> _fade;
-  late Animation<Offset> _slide;
-
-  @override
-  void initState() {
-    super.initState();
-    _ctrl = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 500),
-    );
-    _fade = CurvedAnimation(parent: _ctrl, curve: Curves.easeOut);
-    _slide = Tween<Offset>(
-      begin: const Offset(0, 0.12),
-      end: Offset.zero,
-    ).animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOutCubic));
-    Future.delayed(widget.delay, () {
-      if (mounted) _ctrl.forward();
-    });
-  }
-
-  @override
-  void dispose() {
-    _ctrl.dispose();
-    super.dispose();
-  }
+  const _DelayedFadeSlide({super.key, required this.child, required this.delay});
 
   @override
   Widget build(BuildContext context) {
-    return FadeTransition(
-      opacity: _fade,
-      child: SlideTransition(position: _slide, child: widget.child),
+    // Item lists rebuild whenever the ticket changes. Keeping them static
+    // prevents all cards from replaying their entrance animation (blinking).
+    return child;
+  }
+}
+
+class _SalesProcessLoadingSkeleton extends StatelessWidget {
+  const _SalesProcessLoadingSkeleton();
+
+  @override
+  Widget build(BuildContext context) {
+    Widget bar({double? width, double height = 16}) => Container(
+      width: width,
+      height: height,
+      decoration: BoxDecoration(
+        color: const Color(0xFFF8D8E6),
+        borderRadius: BorderRadius.circular(10),
+      ),
+    );
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          bar(width: 76, height: 12),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(child: bar(height: 48)),
+              const SizedBox(width: 10),
+              Expanded(child: bar(height: 48)),
+            ],
+          ),
+          const SizedBox(height: 16),
+          GridView.builder(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            itemCount: 6,
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 2,
+              mainAxisSpacing: 12,
+              crossAxisSpacing: 12,
+              childAspectRatio: .9,
+            ),
+            itemBuilder: (_, __) => Container(
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: _AppColors.border),
+              ),
+              padding: const EdgeInsets.all(14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  bar(height: 82),
+                  const Spacer(),
+                  bar(width: 100),
+                  const SizedBox(height: 8),
+                  bar(width: 64, height: 12),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

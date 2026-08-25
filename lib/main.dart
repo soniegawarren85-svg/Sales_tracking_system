@@ -12,6 +12,7 @@ import 'Firebase.dart';
 import 'services/inventory_service.dart';
 import 'bones/bottom_nav.dart';
 import 'Admin_pages/Admin/Dashboard.dart';
+import 'widgets/network_status_banner.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -32,9 +33,11 @@ class MyApp extends StatelessWidget {
       home: const SessionGate(),
       debugShowCheckedModeBanner: false,
       builder: (context, child) {
-        return DefaultTextStyle(
-          style: GoogleFonts.dmSans(color: Colors.black),
-          child: child ?? const SizedBox(),
+        return NetworkStatusBanner(
+          child: DefaultTextStyle(
+            style: GoogleFonts.dmSans(color: Colors.black),
+            child: child ?? const SizedBox(),
+          ),
         );
       },
     );

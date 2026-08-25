@@ -1012,6 +1012,7 @@ class _DashboardPageState extends State<DashboardPage>
 
     return CustomScrollView(
       controller: widget.scrollController,
+      physics: const ClampingScrollPhysics(),
       slivers: [
         // ── Header ────────────────────────────────────────────────────────
         SliverAppBar(
@@ -1145,13 +1146,13 @@ class _DashboardPageState extends State<DashboardPage>
         // ── Performance cards ─────────────────────────────────────────────
         SliverSafeArea(
           top: false,
-          bottom: true,
+          bottom: false,
           sliver: SliverPadding(
             padding: EdgeInsets.fromLTRB(
               horizontalPadding,
               0,
               horizontalPadding,
-              18,
+              0,
             ),
             sliver: SliverToBoxAdapter(
               child: Align(
@@ -1189,12 +1190,7 @@ class _DashboardPageState extends State<DashboardPage>
         }
         if (snapshot.connectionState == ConnectionState.waiting &&
             _cachedStaffInventoryDocs.isEmpty) {
-          return const Center(
-            child: Padding(
-              padding: EdgeInsets.all(32),
-              child: CircularProgressIndicator(color: _C.primaryLight),
-            ),
-          );
+          return const _DashboardLoadingSkeleton();
         }
 
         final docs =
@@ -1226,12 +1222,7 @@ class _DashboardPageState extends State<DashboardPage>
             }
             if (rootSnapshot.connectionState == ConnectionState.waiting &&
                 _cachedSalesInventoryDocs.isEmpty) {
-              return const Center(
-                child: Padding(
-                  padding: EdgeInsets.all(24),
-                  child: CircularProgressIndicator(color: _C.primaryLight),
-                ),
-              );
+              return const _DashboardLoadingSkeleton();
             }
             final activeRootById = <String, Map<String, dynamic>>{};
             final activeRootByName = <String, Map<String, dynamic>>{};
@@ -1708,12 +1699,7 @@ class _DashboardPageState extends State<DashboardPage>
             if (receipts.isEmpty &&
                 snapshot.connectionState == ConnectionState.waiting &&
                 localSnapshot.connectionState == ConnectionState.waiting) {
-              return const Padding(
-                padding: EdgeInsets.all(28),
-                child: Center(
-                  child: CircularProgressIndicator(color: _C.primary),
-                ),
-              );
+              return const _DashboardLoadingSkeleton(compact: true);
             }
 
             if (receipts.isEmpty) {
@@ -5399,6 +5385,78 @@ class _ErrorCard extends StatelessWidget {
           Text(
             message,
             style: TextStyle(color: Colors.red.shade700, fontSize: 14),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DashboardLoadingSkeleton extends StatelessWidget {
+  final bool compact;
+
+  const _DashboardLoadingSkeleton({this.compact = false});
+
+  @override
+  Widget build(BuildContext context) {
+    Widget block({double? width, double height = 16}) => Container(
+      width: width,
+      height: height,
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFE1EC),
+        borderRadius: BorderRadius.circular(10),
+      ),
+    );
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 18),
+      child: Column(
+        children: [
+          Container(
+            width: double.infinity,
+            height: compact ? 106 : 166,
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(26),
+            ),
+            child: Row(
+              children: [
+                if (!compact) ...[
+                  Container(
+                    width: 96,
+                    height: 120,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFFE1EC),
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                  ),
+                  const SizedBox(width: 16),
+                ],
+                Expanded(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      block(width: compact ? 100 : 70, height: 11),
+                      const SizedBox(height: 10),
+                      block(width: compact ? 180 : 130, height: 22),
+                      const SizedBox(height: 12),
+                      block(width: 100, height: 34),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Container(
+                  width: 46,
+                  height: 46,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFFE1EC),
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                ),
+              ],
+            ),
           ),
         ],
       ),
