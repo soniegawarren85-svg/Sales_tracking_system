@@ -12,6 +12,7 @@ class AllCategPage extends StatefulWidget {
   final String? selectedSourceInventoryId;
   final bool selectedIsBundle;
   final bool selectedIsCoffee;
+  final bool embedded;
 
   const AllCategPage({
     super.key,
@@ -19,6 +20,7 @@ class AllCategPage extends StatefulWidget {
     this.selectedSourceInventoryId,
     this.selectedIsBundle = false,
     this.selectedIsCoffee = false,
+    this.embedded = false,
   });
 
   @override
@@ -33,8 +35,14 @@ class _AllCategPageState extends State<AllCategPage>
   bool _showCategories = true;
   bool _showCoffee = false;
   bool _showAddons = false;
+  String _tableSearchQuery = '';
   String? _selectedTableCategoryKey;
   List<String> _staffInventoryIds = const [];
+  // Keep both subscriptions stable while the user searches or switches tabs.
+  // Recreating them from build() temporarily put StreamBuilder back into its
+  // waiting state, which replaced the search field with the loading layout.
+  Stream<QuerySnapshot>? _staffInventoryStreamCache;
+  late final Stream<QuerySnapshot> _rootInventoryStream;
 
   bool get _isFilteredCategory =>
       (widget.selectedCategoryName?.trim().isNotEmpty ?? false) ||
@@ -47,6 +55,9 @@ class _AllCategPageState extends State<AllCategPage>
     super.initState();
     _showCoffee = widget.selectedIsCoffee;
     _showCategories = !widget.selectedIsBundle && !widget.selectedIsCoffee;
+    _rootInventoryStream = FirebaseFirestore.instance
+        .collection('sales_inventory')
+        .snapshots();
     _initStaffIdentity();
     _headerAnimController = AnimationController(
       vsync: this,
@@ -101,10 +112,18 @@ class _AllCategPageState extends State<AllCategPage>
       }
     } catch (_) {}
 
-    if (mounted) setState(() => _staffInventoryIds = ids.toList());
+    if (mounted) {
+      setState(() {
+        _staffInventoryIds = ids.toList();
+        _staffInventoryStreamCache = null;
+      });
+    }
   }
 
   Stream<QuerySnapshot> _staffInventoryStream() {
+    if (_staffInventoryStreamCache != null) {
+      return _staffInventoryStreamCache!;
+    }
     final ids = _staffInventoryIds
         .where((id) => id.trim().isNotEmpty)
         .toSet()
@@ -112,9 +131,11 @@ class _AllCategPageState extends State<AllCategPage>
         .toList();
     final query = FirebaseFirestore.instance.collection('staff_inventory');
     if (ids.isEmpty) {
-      return query.where('staffId', isEqualTo: '').snapshots();
+      return _staffInventoryStreamCache = query
+          .where('staffId', isEqualTo: '')
+          .snapshots();
     }
-    return ids.length == 1
+    return _staffInventoryStreamCache = ids.length == 1
         ? query.where('staffId', isEqualTo: ids.first).snapshots()
         : query.where('staffId', whereIn: ids).snapshots();
   }
@@ -2168,6 +2189,51 @@ class _AllCategPageState extends State<AllCategPage>
     );
   }
 
+  Widget _buildInventoryLoadingState() {
+    Widget bar(double width) => Container(
+      width: width,
+      height: 16,
+      decoration: BoxDecoration(
+        color: const Color(0xFFF8BBD0),
+        borderRadius: BorderRadius.circular(8),
+      ),
+    );
+
+    return ListView.builder(
+      padding: const EdgeInsets.all(16),
+      physics: const NeverScrollableScrollPhysics(),
+      itemCount: 3,
+      itemBuilder: (_, index) => Container(
+        height: 112,
+        margin: const EdgeInsets.only(bottom: 12),
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: const Color(0xFFF8BBD0)),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 76,
+              height: 76,
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFE4EE),
+                borderRadius: BorderRadius.circular(14),
+              ),
+            ),
+            const SizedBox(width: 14),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [bar(150), const SizedBox(height: 12), bar(95)],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   DataColumn _tableColumn(String label) {
     return DataColumn(
       label: Text(
@@ -3421,6 +3487,7 @@ class _AllCategPageState extends State<AllCategPage>
       body: NestedScrollView(
         headerSliverBuilder: (context, innerBoxIsScrolled) => [
           SliverAppBar(
+            automaticallyImplyLeading: false,
             expandedHeight: 160,
             floating: false,
             pinned: true,
@@ -3530,26 +3597,31 @@ class _AllCategPageState extends State<AllCategPage>
                 ),
               ),
             ),
-            leadingWidth: 72,
-            leading: IconButton(
-              constraints: const BoxConstraints(minWidth: 56, minHeight: 56),
-              icon: Container(
-                width: 44,
-                height: 44,
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.22),
-                  borderRadius: BorderRadius.circular(14),
-                ),
-                child: const Center(
-                  child: Icon(
-                    Icons.arrow_back_ios_new_rounded,
-                    color: Colors.white,
-                    size: 22,
+            leadingWidth: widget.embedded ? 0 : 72,
+            leading: widget.embedded
+                ? null
+                : IconButton(
+                    constraints: const BoxConstraints(
+                      minWidth: 56,
+                      minHeight: 56,
+                    ),
+                    icon: Container(
+                      width: 44,
+                      height: 44,
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.22),
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      child: const Center(
+                        child: Icon(
+                          Icons.arrow_back_ios_new_rounded,
+                          color: Colors.white,
+                          size: 22,
+                        ),
+                      ),
+                    ),
+                    onPressed: () => Navigator.of(context).pop(),
                   ),
-                ),
-              ),
-              onPressed: () => Navigator.of(context).pop(),
-            ),
           ),
         ],
         body: StreamBuilder<QuerySnapshot>(
@@ -3575,21 +3647,15 @@ class _AllCategPageState extends State<AllCategPage>
               );
             }
             if (snapshot.connectionState == ConnectionState.waiting) {
-              return const Center(
-                child: CircularProgressIndicator(color: Color(0xFFC2105C)),
-              );
+              return _buildInventoryLoadingState();
             }
 
             final docs = snapshot.data?.docs ?? [];
             return StreamBuilder<QuerySnapshot>(
-              stream: FirebaseFirestore.instance
-                  .collection('sales_inventory')
-                  .snapshots(),
+              stream: _rootInventoryStream,
               builder: (context, rootSnapshot) {
                 if (rootSnapshot.connectionState == ConnectionState.waiting) {
-                  return const Center(
-                    child: CircularProgressIndicator(color: Color(0xFFC2105C)),
-                  );
+                  return _buildInventoryLoadingState();
                 }
 
                 final activeRootById = <String, Map<String, dynamic>>{};
@@ -3783,6 +3849,68 @@ class _AllCategPageState extends State<AllCategPage>
                 }
                 final addonDocs = addonByName.values.toList();
 
+                bool matchesVisibleFields(Map<String, dynamic> data) {
+                  final query = _tableSearchQuery.trim().toLowerCase();
+                  if (query.isEmpty) return true;
+                  final visibleValues = <String>[
+                    data['id']?.toString() ?? '',
+                    data['itemId']?.toString() ?? '',
+                    data['variantId']?.toString() ?? '',
+                    data['coffeeId']?.toString() ?? '',
+                    data['name']?.toString() ?? '',
+                    data['price']?.toString() ?? '',
+                    data['stock']?.toString() ?? '',
+                    data['startingStock']?.toString() ?? '',
+                    data['expirationDate']?.toString() ?? '',
+                    data['expiryDate']?.toString() ?? '',
+                  ].join(' ').toLowerCase();
+                  return visibleValues.contains(query);
+                }
+
+                List<Map<String, dynamic>> searchedCategoryData(
+                  List<Map<String, dynamic>> docs,
+                ) {
+                  final query = _tableSearchQuery.trim().toLowerCase();
+                  if (query.isEmpty) return docs;
+                  return docs.map((data) {
+                    final categoryMatches = matchesVisibleFields({
+                      'id': data['categoryId'],
+                      'name': data['categoryName'],
+                      'coffeeId': data['coffeeId'],
+                    });
+                    final items =
+                        (data['items'] as List?)
+                            ?.whereType<Map>()
+                            .map((item) => Map<String, dynamic>.from(item))
+                            .toList() ??
+                        [];
+                    final matchingItems = items
+                        .where(matchesVisibleFields)
+                        .toList();
+                    if (categoryMatches) return data;
+                    return {...data, 'items': matchingItems};
+                  }).toList();
+                }
+
+                bool matchesSearch(Map<String, dynamic> data) {
+                  if (matchesVisibleFields(data)) return true;
+                  final nestedItems = (data['items'] as List?) ?? [];
+                  return nestedItems.whereType<Map>().any(
+                    (item) => matchesVisibleFields(
+                      Map<String, dynamic>.from(item),
+                    ),
+                  );
+                }
+
+                final searchedCategoryDocs = searchedCategoryData(categoryDocs);
+                final searchedCoffeeDocs = searchedCategoryData(coffeeDocs);
+                final searchedBundleDocs = bundleDocs
+                    .where(matchesSearch)
+                    .toList();
+                final searchedAddonDocs = addonDocs
+                    .where(matchesSearch)
+                    .toList();
+
                 if (!_isFilteredCategory &&
                     categoryDocs.isEmpty &&
                     (bundleDocs.isNotEmpty ||
@@ -3821,24 +3949,46 @@ class _AllCategPageState extends State<AllCategPage>
                         coffeeCount: coffeeDocs.length,
                         addonCount: addonDocs.length,
                       ),
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(20, 10, 20, 12),
+                      child: TextField(
+                        onChanged: (value) =>
+                            setState(() => _tableSearchQuery = value),
+                        decoration: InputDecoration(
+                          hintText: 'Search',
+                          prefixIcon: const Icon(
+                            Icons.search_rounded,
+                            color: Color(0xFFC2105C),
+                          ),
+                          filled: true,
+                          fillColor: Colors.white,
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(16),
+                            borderSide: const BorderSide(
+                              color: Color(0xFFF48FB1),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
                     Expanded(
                       child: widget.selectedIsCoffee
-                          ? _buildCategoryList(coffeeDocs)
+                          ? _buildCategoryList(searchedCoffeeDocs)
                           : widget.selectedIsBundle
-                          ? _buildBundleList(bundleDocs)
+                          ? _buildBundleList(searchedBundleDocs)
                           : _isFilteredCategory
                           ? _buildCategoryList(
                               widget.selectedIsCoffee
-                                  ? coffeeDocs
-                                  : categoryDocs,
+                                  ? searchedCoffeeDocs
+                                  : searchedCategoryDocs,
                             )
                           : _showCoffee
-                          ? _buildCategoryList(coffeeDocs)
+                          ? _buildCategoryList(searchedCoffeeDocs)
                           : _showAddons
-                          ? _buildAddonList(addonDocs)
+                          ? _buildAddonList(searchedAddonDocs)
                           : _showCategories
-                          ? _buildCategoryList(categoryDocs)
-                          : _buildBundleList(bundleDocs),
+                          ? _buildCategoryList(searchedCategoryDocs)
+                          : _buildBundleList(searchedBundleDocs),
                     ),
                   ],
                 );
@@ -3895,10 +4045,7 @@ class _AnimatedCategorySectionState extends State<_AnimatedCategorySection>
 
   @override
   Widget build(BuildContext context) {
-    return FadeTransition(
-      opacity: _fade,
-      child: SlideTransition(position: _slide, child: widget.child),
-    );
+    return widget.child;
   }
 }
 
@@ -3943,10 +4090,7 @@ class _AnimatedItemCardState extends State<_AnimatedItemCard>
 
   @override
   Widget build(BuildContext context) {
-    return FadeTransition(
-      opacity: _fade,
-      child: SlideTransition(position: _slide, child: widget.child),
-    );
+    return widget.child;
   }
 }
 

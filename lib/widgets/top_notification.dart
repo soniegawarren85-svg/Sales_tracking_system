@@ -9,26 +9,34 @@ void showTopNotification(
   final overlay = Overlay.maybeOf(context);
   if (overlay == null) return;
 
-  final entry = OverlayEntry(
+  late final OverlayEntry entry;
+  void dismiss() {
+    if (entry.mounted) entry.remove();
+  }
+
+  entry = OverlayEntry(
     builder: (context) => _TopNotificationOverlay(
       message: message,
       isError: isError,
       backgroundColor: backgroundColor,
+      onDismiss: dismiss,
     ),
   );
   overlay.insert(entry);
-  Future.delayed(const Duration(milliseconds: 2800), entry.remove);
+  Future.delayed(const Duration(milliseconds: 2800), dismiss);
 }
 
 class _TopNotificationOverlay extends StatefulWidget {
   final String message;
   final bool isError;
   final Color? backgroundColor;
+  final VoidCallback onDismiss;
 
   const _TopNotificationOverlay({
     required this.message,
     required this.isError,
     required this.backgroundColor,
+    required this.onDismiss,
   });
 
   @override
@@ -118,6 +126,20 @@ class _TopNotificationOverlayState extends State<_TopNotificationOverlay>
                           color: Colors.white,
                           fontWeight: FontWeight.w700,
                         ),
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: widget.onDismiss,
+                      tooltip: 'Dismiss notification',
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(
+                        minWidth: 32,
+                        minHeight: 32,
+                      ),
+                      icon: const Icon(
+                        Icons.close_rounded,
+                        color: Colors.white,
+                        size: 20,
                       ),
                     ),
                   ],

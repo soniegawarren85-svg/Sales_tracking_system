@@ -77,6 +77,7 @@ flutter:
   # Assets
   assets:
     - Assets/Image/Bg.jpg
+    - Assets/Image/Final_bg.jpg
     - Assets/Image/T.jpg
     - Assets/Image/T1.jpg
     - Assets/Image/ass.png

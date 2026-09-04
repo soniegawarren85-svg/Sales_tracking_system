@@ -5,7 +5,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import '../services/inventory_service.dart';
 import '../Staff_pages/Staff_notifcation.dart';
 import '../Staff_pages/dashboard_page.dart';
-import '../Staff_pages/search_page.dart';
+import '../Staff_pages/AllCateg.dart';
 import '../Staff_pages/profile_page.dart';
 import '../Staff_pages/daily_stock_page.dart';
 import '../Admin_pages/Admin/Message.dart';
@@ -82,8 +82,7 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
         // Dashboard Page
         return _buildDashboardPage();
       case 1:
-        // Analytics Page
-        return _buildAnalyticsPage();
+        return _buildAllItemsPage();
       case 2:
         // Profile Page
         return _buildProfilePage();
@@ -119,11 +118,18 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
               _selectedIndex = 3;
             });
           },
+      onOpenAllItems: () => setState(() {
+        _salesInitialView = null;
+        _salesInitialGroup = null;
+        _openPendingOnSalesLaunch = false;
+        _salesLaunchToken++;
+        _selectedIndex = 3;
+      }),
     );
   }
 
-  Widget _buildAnalyticsPage() {
-    return AnalyticsPage(onMessage: _onMessagePressed);
+  Widget _buildAllItemsPage() {
+    return const AllCategPage(embedded: true);
   }
 
   Widget _buildProfilePage() {
@@ -150,7 +156,7 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
         index: _selectedIndex,
         children: [
           _buildDashboardPage(),
-          _buildAnalyticsPage(),
+          _buildAllItemsPage(),
           _buildProfilePage(),
           DailyStockPage(
             initialView: _salesInitialView,
@@ -179,7 +185,7 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
                           : Colors.white70,
                     ),
                     Icon(
-                      Icons.search,
+                      Icons.view_list_rounded,
                       size: _selectedIndex == 1 ? 32 : 26,
                       color: _selectedIndex == 1
                           ? Colors.white
@@ -312,7 +318,7 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             children: [
               _landscapeNavItem(Icons.home_rounded, 0),
-              _landscapeNavItem(Icons.search_rounded, 1),
+              _landscapeNavItem(Icons.view_list_rounded, 1),
               _landscapeNavItem(Icons.person_outline_rounded, 2),
               _landscapeNavItem(Icons.point_of_sale_rounded, 3),
             ],

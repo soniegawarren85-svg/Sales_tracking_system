@@ -108,6 +108,24 @@ List<String> _inventoryImageUrls(Map<String, dynamic> data) {
   return urls;
 }
 
+String _buildCategoryDisplayId(Map<String, dynamic> data) {
+  final timestampValue = data['categoryTimestamp'] ?? data['timestamp'];
+  final dateTime = timestampValue is Timestamp
+      ? timestampValue.toDate().toLocal()
+      : DateTime.now();
+  final datePart =
+      '${dateTime.year}${dateTime.month.toString().padLeft(2, '0')}${dateTime.day.toString().padLeft(2, '0')}';
+  final timePart =
+      '${dateTime.hour.toString().padLeft(2, '0')}${dateTime.minute.toString().padLeft(2, '0')}';
+  final name = data['name']?.toString().trim() ?? '';
+  var codeSource = name.isNotEmpty ? name : (data['id']?.toString() ?? 'CAT');
+  codeSource = codeSource.replaceAll(RegExp(r'[^A-Za-z0-9]'), '');
+  final code = codeSource.length >= 4
+      ? codeSource.substring(0, 4).toUpperCase()
+      : codeSource.toUpperCase().padRight(4, 'X');
+  return 'CAT-$datePart-$timePart-$code';
+}
+
 class _C {
   static const primary = Color(0xFFE91E63);
   static const primaryLight = Color(0xFFF48FB1);
@@ -131,6 +149,7 @@ class DashboardPage extends StatefulWidget {
     required String sourceInventoryId,
   })?
   onOpenSalesGroup;
+  final VoidCallback? onOpenAllItems;
 
   const DashboardPage({
     super.key,
@@ -138,6 +157,7 @@ class DashboardPage extends StatefulWidget {
     required this.onMessage,
     this.onNotification,
     this.onOpenSalesGroup,
+    this.onOpenAllItems,
   });
 
   @override
@@ -153,6 +173,11 @@ class _DashboardPageState extends State<DashboardPage>
   List<_CachedDoc> _cachedSalesInventoryDocs = const [];
   List<_CachedDoc> _cachedCashDrawerDocs = const [];
   String? _staffDocId;
+  String _inventorySearchQuery = '';
+  bool _isResolvingStaffIdentity = true;
+  Stream<QuerySnapshot<Map<String, dynamic>>>? _staffInventoryStreamCache;
+  Stream<QuerySnapshot<Map<String, dynamic>>>? _receiptStreamCache;
+  late final Stream<QuerySnapshot<Map<String, dynamic>>> _rootInventoryStream;
   final Map<String, int> _inventoryPageByView = {
     'categories': 0,
     'bundle': 0,
@@ -165,6 +190,9 @@ class _DashboardPageState extends State<DashboardPage>
   @override
   void initState() {
     super.initState();
+    _rootInventoryStream = FirebaseFirestore.instance
+        .collection('sales_inventory')
+        .snapshots();
     _initStaffIdentity();
     _loadLocalDashboardCache();
     InventoryService().addListener(_onInventoryChanged);
@@ -200,8 +228,16 @@ class _DashboardPageState extends State<DashboardPage>
         FirebaseAuth.instance.currentUser?.uid ??
         prefs.getString('lastStaffDocId') ??
         prefs.getString('lastUserId');
-    if ((uid ?? '').isEmpty) return;
-    if (mounted) setState(() => _staffDocId = uid);
+    if ((uid ?? '').isEmpty) {
+      if (mounted) setState(() => _isResolvingStaffIdentity = false);
+      return;
+    }
+    if (mounted) {
+      setState(() {
+        _staffDocId = uid;
+        _receiptStreamCache = null;
+      });
+    }
     _staffInventoryIds = const [];
     await _loadStaffInventoryIds(uid!);
   }
@@ -245,10 +281,17 @@ class _DashboardPageState extends State<DashboardPage>
       }
     } catch (_) {}
 
-    if (mounted) setState(() => _staffInventoryIds = ids.toList());
+    if (mounted) {
+      setState(() {
+        _staffInventoryIds = ids.toList();
+        _isResolvingStaffIdentity = false;
+        _staffInventoryStreamCache = null;
+      });
+    }
   }
 
   Stream<QuerySnapshot<Map<String, dynamic>>> _staffInventoryStream() {
+    if (_staffInventoryStreamCache != null) return _staffInventoryStreamCache!;
     final ids = _staffInventoryIds
         .where((id) => id.trim().isNotEmpty)
         .toSet()
@@ -256,20 +299,19 @@ class _DashboardPageState extends State<DashboardPage>
         .toList();
     final query = FirebaseFirestore.instance.collection('staff_inventory');
     if (ids.isEmpty) {
-      return query.where('staffId', isEqualTo: '').snapshots();
+      return _staffInventoryStreamCache = query
+          .where('staffId', isEqualTo: '')
+          .snapshots();
     }
-    return ids.length == 1
+    return _staffInventoryStreamCache = ids.length == 1
         ? query.where('staffId', isEqualTo: ids.first).snapshots()
         : query.where('staffId', whereIn: ids).snapshots();
   }
 
   Stream<QuerySnapshot<Map<String, dynamic>>> _receiptStream() {
-    final id = _staffDocId?.trim() ?? '';
+    if (_receiptStreamCache != null) return _receiptStreamCache!;
     final query = FirebaseFirestore.instance.collection('completed_sales');
-    if (id.isEmpty) {
-      return query.where('userId', isEqualTo: '__missing_staff__').snapshots();
-    }
-    return query.where('userId', isEqualTo: id).snapshots();
+    return _receiptStreamCache = query.snapshots();
   }
 
   void _showHistory() {
@@ -1052,23 +1094,12 @@ class _DashboardPageState extends State<DashboardPage>
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     if (isTablet)
-                      Row(
-                        children: [
-                          const _SectionLabel(title: 'Dashboard'),
-                          const Spacer(),
-                          SizedBox(
-                            width: 280,
-                            child: _buildViewAllItemsButton(),
-                          ),
-                        ],
-                      )
+                      Row(children: [const _SectionLabel(title: 'Dashboard')])
                     else ...[
                       const Align(
                         alignment: Alignment.center,
                         child: _SectionLabel(title: 'Dashboard'),
                       ),
-                      const SizedBox(height: 10),
-                      _buildViewAllItemsButton(),
                     ],
                     const SizedBox(height: 12),
                     Align(
@@ -1081,6 +1112,14 @@ class _DashboardPageState extends State<DashboardPage>
                           _inventoryView = value;
                           _inventoryPageByView[value] = 0;
                         }),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 620),
+                        child: _buildDashboardSearchField(),
                       ),
                     ),
                   ],
@@ -1174,6 +1213,9 @@ class _DashboardPageState extends State<DashboardPage>
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
       stream: _staffInventoryStream(),
       builder: (context, snapshot) {
+        if (_isResolvingStaffIdentity) {
+          return const _DashboardLoadingSkeleton();
+        }
         if (snapshot.hasError) {
           return _ErrorCard(message: 'Error loading inventory');
         }
@@ -1205,9 +1247,7 @@ class _DashboardPageState extends State<DashboardPage>
 
         // ── Filter out sales transactions (status='completed') to show only inventory ──────────────────
         return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-          stream: FirebaseFirestore.instance
-              .collection('sales_inventory')
-              .snapshots(),
+          stream: _rootInventoryStream,
           builder: (context, rootSnapshot) {
             if (rootSnapshot.hasData) {
               unawaited(
@@ -1319,6 +1359,7 @@ class _DashboardPageState extends State<DashboardPage>
                 ...data,
                 'staffDocId': doc.id,
                 'sourceInventoryId': sourceId,
+                'categoryTimestamp': rootData['timestamp'] ?? data['timestamp'],
                 'name': rootData['name'] ?? data['name'],
                 'imageUrl': rootData['imageUrl'] ?? data['imageUrl'],
                 'items': items,
@@ -1374,9 +1415,21 @@ class _DashboardPageState extends State<DashboardPage>
             final filteredDocs = sortedDocs.where((data) {
               final isBundle = data['isBundle'] == true;
               final isCoffee = data['isCoffee'] == true;
-              if (_inventoryView == 'bundle') return isBundle;
-              if (_inventoryView == 'coffee') return isCoffee;
-              return !isBundle && !isCoffee;
+              final matchesView = _inventoryView == 'bundle'
+                  ? isBundle
+                  : _inventoryView == 'coffee'
+                  ? isCoffee
+                  : !isBundle && !isCoffee;
+              if (!matchesView) return false;
+              final query = _inventorySearchQuery.trim().toLowerCase();
+              if (query.isEmpty) return true;
+              final name = data['name']?.toString().toLowerCase() ?? '';
+              final visibleId = _buildCategoryDisplayId(data).toLowerCase();
+              final coffeeId = data['coffeeId']?.toString().toLowerCase() ?? '';
+              final searchableText = _inventoryView == 'coffee'
+                  ? '$name $coffeeId'
+                  : '$name $visibleId';
+              return searchableText.contains(query);
             }).toList();
 
             final pageCount = (filteredDocs.length / _itemsPerPage).ceil();
@@ -1398,7 +1451,9 @@ class _DashboardPageState extends State<DashboardPage>
                       icon: _inventoryView == 'categories'
                           ? Icons.category_rounded
                           : Icons.inventory_2_rounded,
-                      label: _inventoryView == 'bundle'
+                      label: _inventorySearchQuery.trim().isNotEmpty
+                          ? 'No matching items found.'
+                          : _inventoryView == 'bundle'
                           ? 'No bundles found.'
                           : _inventoryView == 'coffee'
                           ? 'No coffee items found.'
@@ -1446,19 +1501,13 @@ class _DashboardPageState extends State<DashboardPage>
                     // Derive a friendly category label
                     final nameLower = name.toLowerCase();
                     final coffeeId = data['coffeeId']?.toString().trim() ?? '';
-                    String category = 'Cupcakes';
+                    String category = sourceId.isEmpty
+                        ? 'Category item'
+                        : 'ID: ${_buildCategoryDisplayId(data)}';
                     if (data['isCoffee'] == true) {
                       category = coffeeId.isNotEmpty
                           ? 'Coffee - $coffeeId'
                           : 'Coffee';
-                    } else if (nameLower.contains('cupcake') ||
-                        nameLower.contains('cupcakes')) {
-                      category = 'Cupcakes Set';
-                    } else if (nameLower.contains('cake')) {
-                      category = 'Cakes';
-                    } else if (nameLower.contains('drink') ||
-                        nameLower.contains('juice')) {
-                      category = 'Beverages';
                     }
 
                     return Padding(
@@ -1516,15 +1565,40 @@ class _DashboardPageState extends State<DashboardPage>
     );
   }
 
+  Widget _buildDashboardSearchField() {
+    return TextField(
+      onChanged: (value) => setState(() {
+        _inventorySearchQuery = value;
+        _inventoryPageByView[_inventoryView] = 0;
+      }),
+      decoration: InputDecoration(
+        hintText: 'Search items',
+        prefixIcon: const Icon(Icons.search_rounded, color: _C.primaryDark),
+        filled: true,
+        fillColor: Colors.white,
+        contentPadding: const EdgeInsets.symmetric(vertical: 14),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(16),
+          borderSide: const BorderSide(color: _C.primaryLight),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(16),
+          borderSide: const BorderSide(color: _C.primaryLight),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(16),
+          borderSide: const BorderSide(color: _C.primaryDark, width: 1.5),
+        ),
+      ),
+    );
+  }
+
   Widget _buildViewAllItemsButton() {
     return SizedBox(
       width: double.infinity,
       child: OutlinedButton.icon(
         onPressed: () {
-          Navigator.push(
-            context,
-            MaterialPageRoute(builder: (_) => const AllCategPage()),
-          );
+          widget.onOpenAllItems?.call();
         },
         icon: const Icon(Icons.view_list_rounded, color: _C.primaryDark),
         label: const Text(
@@ -1697,8 +1771,8 @@ class _DashboardPageState extends State<DashboardPage>
               });
 
             if (receipts.isEmpty &&
-                snapshot.connectionState == ConnectionState.waiting &&
-                localSnapshot.connectionState == ConnectionState.waiting) {
+                (snapshot.connectionState == ConnectionState.waiting ||
+                    localSnapshot.connectionState == ConnectionState.waiting)) {
               return const _DashboardLoadingSkeleton(compact: true);
             }
 
@@ -2589,7 +2663,7 @@ class _Header extends StatelessWidget {
           children: [
             // ── Background image (unchanged — your existing asset) ────────
             Image.asset(
-              'Assets/Image/Bg.jpg',
+              'Assets/Image/Final_bg.jpg',
               fit: BoxFit.cover,
               errorBuilder: (_, _, _) => Container(color: _C.primaryDark),
             ),
@@ -2601,9 +2675,9 @@ class _Header extends StatelessWidget {
                   begin: Alignment.topCenter,
                   end: Alignment.bottomCenter,
                   colors: [
-                    Color.fromARGB(221, 75, 0, 40),
-                    Color.fromARGB(185, 255, 152, 217),
-                    Color.fromARGB(235, 116, 1, 64),
+                    Color.fromARGB(155, 145, 0, 75),
+                    Color.fromARGB(130, 235, 55, 145),
+                    Color.fromARGB(165, 175, 0, 95),
                   ],
                   stops: [0.0, 0.45, 1.0],
                 ),
@@ -3829,32 +3903,39 @@ class _ItemCardState extends State<_ItemCard> {
                         children: [
                           // Category label
                           Text(
-                            widget.category.toUpperCase(),
+                            widget.itemName,
                             style: TextStyle(
-                              fontSize: 9.5,
-                              fontWeight: FontWeight.w700,
+                              // The product/category name is the primary
+                              // label. Keep it larger than its ID for every
+                              // category, coffee, and bundle card.
+                              fontSize: 18,
+                              fontWeight: FontWeight.w900,
                               color: widget.isLocked
                                   ? Colors.grey.shade400
-                                  : _C.accent.withOpacity(0.9),
-                              letterSpacing: 1.2,
+                                  : _C.primaryDark,
+                              letterSpacing: -0.2,
                             ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                           ),
 
                           const SizedBox(height: 3),
 
                           // Item name  ← UPGRADED
                           Text(
-                            widget.itemName,
+                            widget.category,
                             style: TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w900,
+                              // IDs are supporting information: smaller and
+                                // IDs are supporting information below the item name.
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.w800,
                               color: widget.isLocked
                                   ? Colors.grey.shade500
                                   : _C.primaryDark,
-                              letterSpacing: -0.3,
+                              letterSpacing: 0.2,
                               height: 1.2,
                             ),
-                            maxLines: 2,
+                            maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                           ),
 
@@ -4030,7 +4111,7 @@ class _HistorySheet extends StatefulWidget {
 
 class _HistorySheetState extends State<_HistorySheet> {
   String _selectedDate = _formatDate(DateTime.now());
-  String _selectedPaymentMode = 'Cash';
+  String _selectedPaymentMode = 'All';
 
   Map<String, List<Map<String, dynamic>>> _groupByDate(
     Iterable<Map<String, dynamic>> receipts,
@@ -4202,6 +4283,7 @@ class _HistorySheetState extends State<_HistorySheet> {
                       }
                       final receipts = grouped[_selectedDate] ?? [];
                       final filteredReceipts = receipts.where((receipt) {
+                        if (_selectedPaymentMode == 'All') return true;
                         final mode =
                             receipt['paymentMode']?.toString() ?? 'Cash';
                         return mode == _selectedPaymentMode;
@@ -5414,7 +5496,7 @@ class _DashboardLoadingSkeleton extends StatelessWidget {
         children: [
           Container(
             width: double.infinity,
-            height: compact ? 106 : 166,
+            height: compact ? 128 : 166,
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
               color: Colors.white,

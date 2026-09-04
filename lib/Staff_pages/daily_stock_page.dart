@@ -120,6 +120,7 @@ class _DailyStockPageState extends State<DailyStockPage>
   List<_CachedDoc> _cachedSalesInventoryDocs = const [];
   List<_CachedDoc> _cachedStaffRequestDocs = const [];
   List<_CachedDoc> _cachedBranchDocs = const [];
+  bool _isResolvingStaffIdentity = true;
   bool _seniorDiscount = false;
   bool _pwdDiscount = false;
   bool _showBundleView = false;
@@ -344,6 +345,7 @@ class _DailyStockPageState extends State<DailyStockPage>
     setState(() {
       _staffInventoryIds = ids.toList();
       _staffInventoryStreamCache = null;
+      _isResolvingStaffIdentity = false;
     });
     _subscribeToStaffBudget(uid);
     _subscribeToCashDrawer(uid);
@@ -742,15 +744,8 @@ class _DailyStockPageState extends State<DailyStockPage>
   }
 
   void _cacheLatestOrderItems(List<Map<String, dynamic>> orderItems) {
-    final changed = !_sameOrderItemSnapshot(_latestOrderItems, orderItems);
     _latestOrderItems = orderItems;
     _rememberOrderItems(orderItems);
-
-    if (changed && _isTabletLandscape(context)) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) setState(() {});
-      });
-    }
   }
 
   String _groupKeyForItem(Map<String, dynamic> item) {
@@ -5598,9 +5593,6 @@ class _DailyStockPageState extends State<DailyStockPage>
     final userId = FirebaseAuth.instance.currentUser?.uid;
     if (userId == null) return [];
 
-    final activeInventoryKeys = await _loadActiveRefundInventoryKeys(userId);
-    if (activeInventoryKeys.isEmpty) return [];
-
     final snapshot = await FirebaseFirestore.instance
         .collection('completed_sales')
         .orderBy('timestamp', descending: true)
@@ -5614,13 +5606,17 @@ class _DailyStockPageState extends State<DailyStockPage>
       final type = data['type']?.toString().toLowerCase() ?? 'sale';
       final status = data['status']?.toString().toLowerCase() ?? '';
       if (type == 'refund' || status == 'refund') continue;
+      final timestamp = data['timestamp'];
+      if (timestamp is! Timestamp ||
+          DateTime.now().difference(timestamp.toDate()).inHours >= 5) {
+        continue;
+      }
 
       final rawItems = data['items'] as List<dynamic>? ?? [];
       for (final raw in rawItems) {
         if (raw is! Map) continue;
         final item = Map<String, dynamic>.from(raw);
         if (item['isBundle'] == true) continue;
-        if (!activeInventoryKeys.contains(_cartKey(item))) continue;
         final soldQty = _parseInt(item['quantity'], fallback: 1);
         final refundedQty = _parseInt(item['refunded']);
         final maxRefundQty = soldQty - refundedQty;
@@ -7345,6 +7341,13 @@ class _DailyStockPageState extends State<DailyStockPage>
       );
     }
 
+    if (_isResolvingStaffIdentity) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 40),
+        child: _SalesProcessLoadingSkeleton(),
+      );
+    }
+
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
       stream: _staffInventoryStream(),
       builder: (context, snapshot) {
@@ -7836,6 +7839,8 @@ class _DailyStockPageState extends State<DailyStockPage>
           ),
         _buildInventoryModeToggle(),
         const SizedBox(height: 14),
+        _buildOrderSearchField(),
+        const SizedBox(height: 14),
         if (orderItems.isEmpty)
           _buildEmptyState(
             _showBundleView
@@ -7885,10 +7890,6 @@ class _DailyStockPageState extends State<DailyStockPage>
                                 10,
                               ),
                               child: _buildTabletSalesHeader(),
-                            ),
-                            Padding(
-                              padding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
-                              child: _buildOrderSearchField(),
                             ),
                             Expanded(
                               child: SingleChildScrollView(
@@ -8173,7 +8174,10 @@ class _DailyStockPageState extends State<DailyStockPage>
         _currentUserId ??
         prefs.getString('lastStaffDocId') ??
         prefs.getString('lastUserId');
-    if ((uid ?? '').isEmpty) return;
+    if ((uid ?? '').isEmpty) {
+      if (mounted) setState(() => _isResolvingStaffIdentity = false);
+      return;
+    }
     _currentUserId = uid;
     await _loadCashierToolsPreference(uid!);
     await _loadStaffInventoryIds(uid);
@@ -9833,8 +9837,12 @@ class _DailyStockPageState extends State<DailyStockPage>
           else
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 16, 16, 6),
-              child: Column(
-                children: validCartEntries.map((entry) {
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 430),
+                child: Scrollbar(
+                  child: SingleChildScrollView(
+                    child: Column(
+                      children: validCartEntries.map((entry) {
                   final item = orderItems.firstWhere(
                     (element) => _cartKey(element) == entry.key,
                     orElse: () => {},
@@ -10014,7 +10022,10 @@ class _DailyStockPageState extends State<DailyStockPage>
                       ),
                     ),
                   );
-                }).toList(),
+                      }).toList(),
+                    ),
+                  ),
+                ),
               ),
             ),
           Padding(
@@ -10753,11 +10764,6 @@ class _DailyStockPageState extends State<DailyStockPage>
                         ? _buildOrderReviewHeader()
                         : _buildPageHeader(),
                   ),
-                  if (!_showCartReview)
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
-                      child: _buildOrderSearchField(),
-                    ),
                   Expanded(
                     child: SingleChildScrollView(
                       physics: const ClampingScrollPhysics(),
