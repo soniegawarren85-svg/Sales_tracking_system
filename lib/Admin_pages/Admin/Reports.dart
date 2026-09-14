@@ -1546,7 +1546,12 @@ class _ReportData {
         final isCoffee = item['isCoffee'] == true ||
             category.contains('coffee') ||
             coffeeRefs.matches(name: name, sourceId: sourceId);
-        final variantLabel = variant.isEmpty ? '' : variant;
+        // Use the actual coffee size in performance reports (Small, Medium,
+        // Large) instead of losing it behind a generic variant label.
+        final coffeeSize = item['coffeeSize']?.toString().trim() ?? '';
+        final variantLabel = isCoffee
+            ? (coffeeSize.isNotEmpty ? coffeeSize : variant)
+            : variant;
         final key = '${name.toLowerCase()}|${variantLabel.toLowerCase()}';
 
         totalQuantity += signedQuantity;

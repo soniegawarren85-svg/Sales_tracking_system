@@ -1,11 +1,14 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../services/inventory_service.dart';
+import '../widgets/top_notification.dart';
 
 class AllCategPage extends StatefulWidget {
   final String? selectedCategoryName;
@@ -35,6 +38,7 @@ class _AllCategPageState extends State<AllCategPage>
   bool _showCategories = true;
   bool _showCoffee = false;
   bool _showAddons = false;
+  bool _showAllCategoryItems = false;
   String _tableSearchQuery = '';
   String? _selectedTableCategoryKey;
   List<String> _staffInventoryIds = const [];
@@ -374,6 +378,31 @@ class _AllCategPageState extends State<AllCategPage>
         : _parseInt(bundleData['bundleCount']);
   }
 
+  String _bundleExpirationDate(Map<String, dynamic> bundleData) {
+    final dates = <String>[];
+    void collectItems(dynamic rawItems) {
+      if (rawItems is! List) return;
+      for (final raw in rawItems) {
+        if (raw is! Map) continue;
+        final date = raw['expirationDate']?.toString().trim() ?? '';
+        if (date.isNotEmpty) dates.add(date);
+      }
+    }
+
+    collectItems(bundleData['items']);
+    for (final instance in _bundleInstancesFromData(bundleData)) {
+      collectItems(instance['items']);
+    }
+    if (dates.isEmpty) return '--';
+    dates.sort((a, b) {
+      final first = DateTime.tryParse(a);
+      final second = DateTime.tryParse(b);
+      if (first == null || second == null) return a.compareTo(b);
+      return first.compareTo(second);
+    });
+    return dates.first;
+  }
+
   bool _hasExpiredBundleItem(Map<String, dynamic> bundleData) {
     final rawItems = bundleData['items'] as List<dynamic>? ?? [];
     for (final raw in rawItems) {
@@ -422,6 +451,7 @@ class _AllCategPageState extends State<AllCategPage>
     final qtyController = TextEditingController();
     final commentController = TextEditingController();
     String? selectedReason;
+    bool isSaving = false;
     final reasonOptions = [
       'Damaged',
       'Dropped',
@@ -441,12 +471,12 @@ class _AllCategPageState extends State<AllCategPage>
                 vertical: 24,
               ),
               shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(28),
+                borderRadius: BorderRadius.circular(20),
               ),
               elevation: 0,
               backgroundColor: Colors.transparent,
               child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 760),
+                constraints: const BoxConstraints(maxWidth: 560),
                 child: Container(
                   decoration: BoxDecoration(
                     color: Colors.white,
@@ -465,7 +495,7 @@ class _AllCategPageState extends State<AllCategPage>
                       // Dialog Header
                       Container(
                         width: double.infinity,
-                        padding: const EdgeInsets.fromLTRB(24, 22, 24, 18),
+                        padding: const EdgeInsets.fromLTRB(16, 12, 8, 12),
                         decoration: const BoxDecoration(
                           gradient: LinearGradient(
                             colors: [Color(0xFFC2105C), Color(0xFFE91E8C)],
@@ -473,7 +503,7 @@ class _AllCategPageState extends State<AllCategPage>
                             end: Alignment.bottomRight,
                           ),
                           borderRadius: BorderRadius.vertical(
-                            top: Radius.circular(28),
+                            top: Radius.circular(20),
                           ),
                         ),
                         child: Row(
@@ -491,14 +521,22 @@ class _AllCategPageState extends State<AllCategPage>
                               ),
                             ),
                             const SizedBox(width: 12),
-                            const Text(
-                              'Reduce Stock',
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontSize: 20,
-                                fontWeight: FontWeight.w800,
-                                letterSpacing: 0.3,
+                            const Expanded(
+                              child: Text(
+                                'Reduce Stock',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w800,
+                                  letterSpacing: 0.3,
+                                ),
                               ),
+                            ),
+                            IconButton(
+                              onPressed: () => Navigator.of(context).pop(),
+                              icon: const Icon(Icons.close_rounded),
+                              color: Colors.white,
+                              visualDensity: VisualDensity.compact,
                             ),
                           ],
                         ),
@@ -621,43 +659,16 @@ class _AllCategPageState extends State<AllCategPage>
                           ),
                         ),
                       ),
-                      // Actions
                       Padding(
-                        padding: const EdgeInsets.fromLTRB(22, 0, 22, 22),
+                        padding: const EdgeInsets.fromLTRB(22, 0, 22, 18),
                         child: Align(
-                          child: ConstrainedBox(
-                            constraints: const BoxConstraints(maxWidth: 520),
-                            child: Row(
-                              children: [
-                                Expanded(
-                                  child: OutlinedButton(
-                                    onPressed: () =>
-                                        Navigator.of(context).pop(),
-                                    style: OutlinedButton.styleFrom(
-                                      foregroundColor: const Color(0xFFC2105C),
-                                      side: const BorderSide(
-                                        color: Color(0xFFF8BBD0),
-                                        width: 1.5,
-                                      ),
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(14),
-                                      ),
-                                      padding: const EdgeInsets.symmetric(
-                                        vertical: 14,
-                                      ),
-                                    ),
-                                    child: const Text(
-                                      'Cancel',
-                                      style: TextStyle(
-                                        fontWeight: FontWeight.w600,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(width: 12),
-                                Expanded(
-                                  child: ElevatedButton(
-                                    onPressed: () async {
+                          alignment: Alignment.centerRight,
+                          child: SizedBox(
+                            width: 190,
+                            child: ElevatedButton(
+                              onPressed: isSaving
+                                  ? null
+                                  : () async {
                                       final quantity =
                                           int.tryParse(
                                             qtyController.text.trim(),
@@ -693,6 +704,7 @@ class _AllCategPageState extends State<AllCategPage>
                                         return;
                                       }
 
+                                      setState(() => isSaving = true);
                                       try {
                                         final docRef = FirebaseFirestore
                                             .instance
@@ -812,6 +824,12 @@ class _AllCategPageState extends State<AllCategPage>
                                                   ?.uid,
                                               'categoryName': categoryName,
                                               'categoryId': sourceDocId,
+                                              'itemId':
+                                                  item['id']?.toString() ??
+                                                  item['itemId']?.toString() ??
+                                                  item['variantId']
+                                                      ?.toString() ??
+                                                  '',
                                               'itemName': item['name'] ?? '',
                                               'variant': item['variant'] ?? '',
                                               'quantity': quantity,
@@ -864,16 +882,14 @@ class _AllCategPageState extends State<AllCategPage>
 
                                         if (mounted) {
                                           Navigator.of(context).pop();
-                                          ScaffoldMessenger.of(
+                                          showTopNotification(
                                             context,
-                                          ).showSnackBar(
-                                            _buildSnackBar(
-                                              'Stock reduced successfully!',
-                                            ),
+                                            'Stock reduced successfully!',
                                           );
                                         }
                                       } catch (e) {
                                         if (mounted) {
+                                          setState(() => isSaving = false);
                                           ScaffoldMessenger.of(
                                             context,
                                           ).showSnackBar(
@@ -885,26 +901,32 @@ class _AllCategPageState extends State<AllCategPage>
                                         }
                                       }
                                     },
-                                    style: ElevatedButton.styleFrom(
-                                      backgroundColor: const Color(0xFFC2105C),
-                                      foregroundColor: Colors.white,
-                                      elevation: 0,
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(14),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: const Color(0xFFC2105C),
+                                foregroundColor: Colors.white,
+                                elevation: 0,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(14),
+                                ),
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 12,
+                                ),
+                              ),
+                              child: isSaving
+                                  ? const SizedBox(
+                                      width: 18,
+                                      height: 18,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        color: Colors.white,
                                       ),
-                                      padding: const EdgeInsets.symmetric(
-                                        vertical: 14,
-                                      ),
-                                    ),
-                                    child: const Text(
-                                      'Save',
+                                    )
+                                  : const Text(
+                                      'Reduce',
                                       style: TextStyle(
                                         fontWeight: FontWeight.w700,
                                       ),
                                     ),
-                                  ),
-                                ),
-                              ],
                             ),
                           ),
                         ),
@@ -962,294 +984,1345 @@ class _AllCategPageState extends State<AllCategPage>
     return 'Cupcakes';
   }
 
+  String _monthName(int month) {
+    const months = [
+      '',
+      'January',
+      'February',
+      'March',
+      'April',
+      'May',
+      'June',
+      'July',
+      'August',
+      'September',
+      'October',
+      'November',
+      'December',
+    ];
+    return months[month.clamp(1, 12)];
+  }
+
   Future<void> _showStockAdjustmentHistory({
     required String categoryName,
+    String? categoryId,
+    Map<String, String> itemIds = const {},
   }) async {
+    var historySearch = '';
+    // Default to today; choose a different day from the calendar to view
+    // older records.
+    DateTime? historyDate = DateTime.now();
+    var selectedHistoryCategory = categoryName;
     await showDialog<void>(
       context: context,
-      builder: (context) {
-        return Dialog(
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(28),
-          ),
-          elevation: 0,
-          backgroundColor: Colors.transparent,
-          child: Container(
-            width: double.maxFinite,
-            constraints: const BoxConstraints(maxHeight: 560),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(28),
-              boxShadow: [
-                BoxShadow(
-                  color: const Color(0xFFC2105C).withOpacity(0.18),
-                  blurRadius: 32,
-                  offset: const Offset(0, 8),
-                ),
-              ],
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          return Dialog(
+            insetPadding: const EdgeInsets.symmetric(
+              horizontal: 24,
+              vertical: 24,
             ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // Header
-                Container(
-                  padding: const EdgeInsets.fromLTRB(24, 22, 24, 18),
-                  decoration: const BoxDecoration(
-                    gradient: LinearGradient(
-                      colors: [Color(0xFFC2105C), Color(0xFFE91E8C)],
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(22),
+            ),
+            elevation: 0,
+            backgroundColor: Colors.transparent,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 640, maxHeight: 600),
+              child: Container(
+                width: double.infinity,
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(28),
+                  boxShadow: [
+                    BoxShadow(
+                      color: const Color(0xFFC2105C).withOpacity(0.18),
+                      blurRadius: 32,
+                      offset: const Offset(0, 8),
                     ),
-                    borderRadius: BorderRadius.vertical(
-                      top: Radius.circular(28),
-                    ),
-                  ),
-                  child: Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.2),
-                          borderRadius: BorderRadius.circular(10),
+                  ],
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // Header
+                    Container(
+                      padding: const EdgeInsets.fromLTRB(16, 14, 10, 14),
+                      decoration: const BoxDecoration(
+                        gradient: LinearGradient(
+                          colors: [Color(0xFFC2105C), Color(0xFFE91E8C)],
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
                         ),
-                        child: const Icon(
-                          Icons.history_rounded,
-                          color: Colors.white,
-                          size: 20,
+                        borderRadius: BorderRadius.vertical(
+                          top: Radius.circular(22),
                         ),
                       ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Text(
-                              'Reduction History',
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontSize: 19,
-                                fontWeight: FontWeight.w800,
+                      child: Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(7),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withOpacity(0.2),
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: const Icon(
+                              Icons.history_rounded,
+                              color: Colors.white,
+                              size: 20,
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text(
+                                  'Categories History',
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.w900,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          IconButton(
+                            onPressed: () => Navigator.of(context).pop(),
+                            icon: const Icon(Icons.close_rounded),
+                            color: Colors.white,
+                            visualDensity: VisualDensity.compact,
+                          ),
+                        ],
+                      ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              onChanged: (value) => setDialogState(
+                                () =>
+                                    historySearch = value.trim().toLowerCase(),
+                              ),
+                              decoration: InputDecoration(
+                                hintText:
+                                    'Search item, ID, price, reason, date',
+                                prefixIcon: const Icon(Icons.search_rounded),
+                                isDense: true,
+                                filled: true,
+                                fillColor: const Color(0xFFFFF0F5),
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
                               ),
                             ),
-                            Text(
-                              categoryName,
-                              style: TextStyle(
-                                color: Colors.white.withOpacity(0.8),
-                                fontSize: 12,
+                          ),
+                          IconButton(
+                            onPressed: () async {
+                              final picked = await showDatePicker(
+                                context: context,
+                                initialDate: historyDate ?? DateTime.now(),
+                                firstDate: DateTime(2020),
+                                lastDate: DateTime(2100),
+                              );
+                              if (picked != null) {
+                                setDialogState(() => historyDate = picked);
+                              }
+                            },
+                            icon: const Icon(Icons.calendar_month_rounded),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                        child: Wrap(
+                          spacing: 8,
+                          children: [
+                            ChoiceChip(
+                              label: const Text('All'),
+                              selected: selectedHistoryCategory.isEmpty,
+                              onSelected: (_) => setDialogState(
+                                () => selectedHistoryCategory = '',
+                              ),
+                            ),
+                            ChoiceChip(
+                              label: Text(categoryName),
+                              selected: selectedHistoryCategory == categoryName,
+                              onSelected: (_) => setDialogState(
+                                () => selectedHistoryCategory = categoryName,
                               ),
                             ),
                           ],
                         ),
                       ),
-                    ],
-                  ),
-                ),
-                // Content
-                Expanded(
-                  child: StreamBuilder<QuerySnapshot>(
-                    stream: FirebaseFirestore.instance
-                        .collection('stock_adjustments')
-                        .where('categoryName', isEqualTo: categoryName)
-                        .snapshots(),
-                    builder: (context, snapshot) {
-                      if (snapshot.hasError) {
-                        return const Center(
-                          child: Text('Error loading history.'),
-                        );
-                      }
-                      if (snapshot.connectionState == ConnectionState.waiting) {
-                        return const Center(
-                          child: CircularProgressIndicator(
-                            color: Color(0xFFC2105C),
-                          ),
-                        );
-                      }
-
-                      final docs = snapshot.data?.docs ?? [];
-                      docs.sort((a, b) {
-                        final aT =
-                            (a.data() as Map<String, dynamic>?)?['createdAt']
-                                as Timestamp?;
-                        final bT =
-                            (b.data() as Map<String, dynamic>?)?['createdAt']
-                                as Timestamp?;
-                        if (aT == null && bT == null) return 0;
-                        if (aT == null) return 1;
-                        if (bT == null) return -1;
-                        return bT.compareTo(aT);
-                      });
-
-                      if (docs.isEmpty) {
-                        return Center(
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(
-                                Icons.history_toggle_off_rounded,
-                                size: 48,
-                                color: const Color(0xFFF8BBD0),
+                    ),
+                    // Content
+                    Expanded(
+                      child: StreamBuilder<QuerySnapshot>(
+                        stream: FirebaseFirestore.instance
+                            .collection('stock_adjustments')
+                            .snapshots(),
+                        builder: (context, snapshot) {
+                          if (snapshot.hasError) {
+                            return const Center(
+                              child: Text('Error loading history.'),
+                            );
+                          }
+                          if (snapshot.connectionState ==
+                              ConnectionState.waiting) {
+                            return const Center(
+                              child: CircularProgressIndicator(
+                                color: Color(0xFFC2105C),
                               ),
-                              const SizedBox(height: 12),
-                              const Text(
-                                'No reduction history found.',
-                                style: TextStyle(
-                                  color: Color(0xFFAD1457),
-                                  fontWeight: FontWeight.w500,
+                            );
+                          }
+
+                          final docs = (snapshot.data?.docs ?? []).where((doc) {
+                            final data = doc.data() as Map<String, dynamic>?;
+                            // Historical adjustments were saved with several
+                            // category schemas.  The selected date must never
+                            // hide a real reduction merely due to that old
+                            // category metadata; the dialog is a history of
+                            // all category reductions for the staff/day.
+                            final timestamp = data?['createdAt'] as Timestamp?;
+                            if (historyDate != null && timestamp != null) {
+                              final date = timestamp.toDate().toLocal();
+                              final startOfDay = DateTime(
+                                historyDate!.year,
+                                historyDate!.month,
+                                historyDate!.day,
+                              );
+                              final endOfDay = startOfDay
+                                  .add(const Duration(days: 1))
+                                  .subtract(const Duration(microseconds: 1));
+                              if (date.isBefore(startOfDay) ||
+                                  date.isAfter(endOfDay)) {
+                                return false;
+                              }
+                            }
+                            if (historySearch.isEmpty) return true;
+                            final createdAtDate = timestamp?.toDate().toLocal();
+                            final formattedDate = createdAtDate == null
+                                ? ''
+                                : '${createdAtDate.year.toString().padLeft(4, '0')}-${createdAtDate.month.toString().padLeft(2, '0')}-${createdAtDate.day.toString().padLeft(2, '0')} ${createdAtDate.hour.toString().padLeft(2, '0')}:${createdAtDate.minute.toString().padLeft(2, '0')}:${createdAtDate.second.toString().padLeft(2, '0')}';
+                            return [
+                              data?['itemName']?.toString() ?? '',
+                              data?['itemId']?.toString() ?? '',
+                              data?['unitPrice']?.toString() ?? '',
+                              data?['reason']?.toString() ?? '',
+                              formattedDate,
+                              createdAtDate == null
+                                  ? ''
+                                  : '${createdAtDate.day.toString().padLeft(2, '0')}/${createdAtDate.month.toString().padLeft(2, '0')}/${createdAtDate.year}',
+                              createdAtDate == null
+                                  ? ''
+                                  : '${createdAtDate.month}/${createdAtDate.day}/${createdAtDate.year}',
+                              createdAtDate == null
+                                  ? ''
+                                  : '${createdAtDate.day} ${_monthName(createdAtDate.month)} ${createdAtDate.year}',
+                              createdAtDate == null
+                                  ? ''
+                                  : '${_monthName(createdAtDate.month)} ${createdAtDate.day}, ${createdAtDate.year}',
+                            ].join(' ').toLowerCase().contains(historySearch);
+                          }).toList();
+                          docs.sort((a, b) {
+                            final aT =
+                                (a.data()
+                                        as Map<String, dynamic>?)?['createdAt']
+                                    as Timestamp?;
+                            final bT =
+                                (b.data()
+                                        as Map<String, dynamic>?)?['createdAt']
+                                    as Timestamp?;
+                            if (aT == null && bT == null) return 0;
+                            if (aT == null) return 1;
+                            if (bT == null) return -1;
+                            return bT.compareTo(aT);
+                          });
+
+                          if (docs.isEmpty) {
+                            return _buildLegacyCategoryReductions(
+                              categoryName: categoryName,
+                              categoryId: categoryId,
+                              selectedDate: historyDate,
+                            );
+                          }
+
+                          return ListView.builder(
+                            padding: const EdgeInsets.all(12),
+                            itemCount: docs.length,
+                            itemBuilder: (context, index) {
+                              final data =
+                                  docs[index].data() as Map<String, dynamic>?;
+                              final quantity =
+                                  data?['quantity']?.toString() ?? '0';
+                              final itemName =
+                                  data?['itemName']?.toString() ?? 'Unknown';
+                              final historyVariant =
+                                  data?['variant']?.toString().toLowerCase() ??
+                                  '';
+                              final historyItemKey =
+                                  '${itemName.toLowerCase()}|$historyVariant';
+                              final itemId =
+                                  data?['itemId']
+                                          ?.toString()
+                                          .trim()
+                                          .isNotEmpty ==
+                                      true
+                                  ? data!['itemId'].toString()
+                                  : itemIds[historyItemKey] ?? '';
+                              final unitPrice = _parsePrice(data?['unitPrice']);
+                              final reason =
+                                  data?['reason']?.toString() ?? 'No reason';
+                              final comment =
+                                  data?['comment']?.toString() ?? '';
+                              final timestamp =
+                                  data?['createdAt'] as Timestamp?;
+                              final when = timestamp != null
+                                  ? DateTime.fromMillisecondsSinceEpoch(
+                                      timestamp.seconds * 1000,
+                                    )
+                                  : null;
+                              final formattedDate = when != null
+                                  ? '${when.year.toString().padLeft(4, '0')}-${when.month.toString().padLeft(2, '0')}-${when.day.toString().padLeft(2, '0')}'
+                                  : 'Unknown date';
+                              final formattedTime = when != null
+                                  ? '${when.hour.toString().padLeft(2, '0')}:${when.minute.toString().padLeft(2, '0')}:${when.second.toString().padLeft(2, '0')}'
+                                  : 'Unknown time';
+
+                              return Container(
+                                margin: const EdgeInsets.only(bottom: 12),
+                                padding: const EdgeInsets.all(16),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFFFF0F5),
+                                  borderRadius: BorderRadius.circular(18),
+                                  border: Border.all(
+                                    color: const Color(0xFFF8BBD0),
+                                    width: 1,
+                                  ),
                                 ),
-                              ),
-                            ],
-                          ),
-                        );
-                      }
-
-                      return ListView.builder(
-                        padding: const EdgeInsets.all(16),
-                        itemCount: docs.length,
-                        itemBuilder: (context, index) {
-                          final data =
-                              docs[index].data() as Map<String, dynamic>?;
-                          final quantity = data?['quantity']?.toString() ?? '0';
-                          final itemName =
-                              data?['itemName']?.toString() ?? 'Unknown';
-                          final variant = data?['variant']?.toString() ?? '';
-                          final reason =
-                              data?['reason']?.toString() ?? 'No reason';
-                          final comment = data?['comment']?.toString() ?? '';
-                          final timestamp = data?['createdAt'] as Timestamp?;
-                          final when = timestamp != null
-                              ? DateTime.fromMillisecondsSinceEpoch(
-                                  timestamp.seconds * 1000,
-                                )
-                              : null;
-                          final formattedDate = when != null
-                              ? '${when.year.toString().padLeft(4, '0')}-${when.month.toString().padLeft(2, '0')}-${when.day.toString().padLeft(2, '0')}'
-                              : 'Unknown date';
-                          final formattedTime = when != null
-                              ? '${when.hour.toString().padLeft(2, '0')}:${when.minute.toString().padLeft(2, '0')}:${when.second.toString().padLeft(2, '0')}'
-                              : 'Unknown time';
-
-                          return Container(
-                            margin: const EdgeInsets.only(bottom: 12),
-                            padding: const EdgeInsets.all(16),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFFFFF0F5),
-                              borderRadius: BorderRadius.circular(18),
-                              border: Border.all(
-                                color: const Color(0xFFF8BBD0),
-                                width: 1,
-                              ),
-                            ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Row(
-                                  mainAxisAlignment:
-                                      MainAxisAlignment.spaceBetween,
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    Expanded(
-                                      child: Text(
-                                        itemName,
-                                        style: const TextStyle(
-                                          fontWeight: FontWeight.w800,
-                                          fontSize: 15,
-                                          color: Color(0xFFC2105C),
-                                        ),
-                                      ),
-                                    ),
                                     Container(
                                       padding: const EdgeInsets.symmetric(
-                                        horizontal: 10,
+                                        horizontal: 8,
                                         vertical: 4,
                                       ),
                                       decoration: BoxDecoration(
-                                        color: const Color(0xFFC2105C),
-                                        borderRadius: BorderRadius.circular(20),
+                                        color: const Color(0xFFFFF3CD),
+                                        borderRadius: BorderRadius.circular(7),
+                                        border: Border.all(
+                                          color: const Color(0xFFFFD166),
+                                        ),
                                       ),
                                       child: Text(
-                                        '-$quantity',
+                                        categoryName,
                                         style: const TextStyle(
-                                          color: Colors.white,
+                                          color: Color(0xFF9A6700),
+                                          fontSize: 11,
                                           fontWeight: FontWeight.w800,
-                                          fontSize: 13,
                                         ),
                                       ),
                                     ),
-                                  ],
-                                ),
-                                const SizedBox(height: 6),
-                                Text(
-                                  'Variant: $variant',
-                                  style: const TextStyle(
-                                    color: Color(0xFFAD1457),
-                                    fontSize: 12,
-                                  ),
-                                ),
-                                const SizedBox(height: 8),
-                                _HistoryDetailRow(
-                                  icon: Icons.flag_outlined,
-                                  label: reason,
-                                ),
-                                if (comment.isNotEmpty) ...[
-                                  const SizedBox(height: 4),
-                                  _HistoryDetailRow(
-                                    icon: Icons.notes_rounded,
-                                    label: comment,
-                                  ),
-                                ],
-                                const SizedBox(height: 8),
-                                Row(
-                                  children: [
-                                    const Icon(
-                                      Icons.calendar_today_outlined,
-                                      size: 12,
-                                      color: Color(0xFFAD1457),
+                                    const SizedBox(height: 8),
+                                    Row(
+                                      mainAxisAlignment:
+                                          MainAxisAlignment.spaceBetween,
+                                      children: [
+                                        Expanded(
+                                          child: Wrap(
+                                            spacing: 8,
+                                            runSpacing: 4,
+                                            crossAxisAlignment:
+                                                WrapCrossAlignment.center,
+                                            children: [
+                                              Text(
+                                                itemName,
+                                                style: const TextStyle(
+                                                  fontWeight: FontWeight.w800,
+                                                  fontSize: 15,
+                                                  color: Color(0xFFC2105C),
+                                                ),
+                                              ),
+                                              if (itemId.isNotEmpty)
+                                                Container(
+                                                  padding:
+                                                      const EdgeInsets.symmetric(
+                                                        horizontal: 8,
+                                                        vertical: 4,
+                                                      ),
+                                                  decoration: BoxDecoration(
+                                                    color: const Color(
+                                                      0xFFE8F5E9,
+                                                    ),
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                          8,
+                                                        ),
+                                                    border: Border.all(
+                                                      color: const Color(
+                                                        0xFF81C784,
+                                                      ),
+                                                    ),
+                                                  ),
+                                                  child: Text(
+                                                    'ID: $itemId',
+                                                    style: const TextStyle(
+                                                      color: Color(0xFF2E7D32),
+                                                      fontSize: 11,
+                                                      fontWeight:
+                                                          FontWeight.w800,
+                                                    ),
+                                                  ),
+                                                ),
+                                            ],
+                                          ),
+                                        ),
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 10,
+                                            vertical: 4,
+                                          ),
+                                          decoration: BoxDecoration(
+                                            color: const Color(0xFFC2105C),
+                                            borderRadius: BorderRadius.circular(
+                                              20,
+                                            ),
+                                          ),
+                                          child: Text(
+                                            '-$quantity',
+                                            style: const TextStyle(
+                                              color: Colors.white,
+                                              fontWeight: FontWeight.w800,
+                                              fontSize: 13,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
                                     ),
-                                    const SizedBox(width: 4),
+                                    const SizedBox(height: 6),
                                     Text(
-                                      '$formattedDate  $formattedTime',
+                                      'Price: PHP ${unitPrice.toStringAsFixed(2)}',
                                       style: const TextStyle(
-                                        fontSize: 11,
                                         color: Color(0xFFAD1457),
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w700,
                                       ),
                                     ),
+                                    const SizedBox(height: 8),
+                                    _HistoryDetailRow(
+                                      icon: Icons.flag_outlined,
+                                      label: reason,
+                                    ),
+                                    if (comment.isNotEmpty) ...[
+                                      const SizedBox(height: 4),
+                                      _HistoryDetailRow(
+                                        icon: Icons.notes_rounded,
+                                        label: comment,
+                                      ),
+                                    ],
+                                    const SizedBox(height: 8),
+                                    Row(
+                                      children: [
+                                        const Icon(
+                                          Icons.calendar_today_outlined,
+                                          size: 12,
+                                          color: Color(0xFFAD1457),
+                                        ),
+                                        const SizedBox(width: 4),
+                                        Text(
+                                          '$formattedDate  $formattedTime',
+                                          style: const TextStyle(
+                                            fontSize: 11,
+                                            color: Color(0xFFAD1457),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
                                   ],
                                 ),
-                              ],
-                            ),
+                              );
+                            },
                           );
                         },
-                      );
-                    },
-                  ),
-                ),
-                // Footer
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-                  child: SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton(
-                      onPressed: () => Navigator.of(context).pop(),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFFFCE4EC),
-                        foregroundColor: const Color(0xFFC2105C),
-                        elevation: 0,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(14),
-                        ),
-                        padding: const EdgeInsets.symmetric(vertical: 14),
                       ),
-                      child: const Text(
-                        'Close',
-                        style: TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  /// Older app versions only persisted reductions in `inventory_reports`.
+  /// Keep those records visible without modifying the original data.
+  Widget _buildLegacyCategoryReductions({
+    required String categoryName,
+    String? categoryId,
+    required DateTime? selectedDate,
+  }) {
+    return FutureBuilder<QuerySnapshot>(
+      future: FirebaseFirestore.instance.collection('inventory_reports').get(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(
+            child: CircularProgressIndicator(color: Color(0xFFC2105C)),
+          );
+        }
+        final target = selectedDate == null
+            ? null
+            : DateTime(selectedDate.year, selectedDate.month, selectedDate.day);
+        final entries = <Map<String, dynamic>>[];
+        for (final doc in snapshot.data?.docs ?? const []) {
+          final data = doc.data() as Map<String, dynamic>? ?? const {};
+          final rawDate = data['timestamp'];
+          final date = rawDate is Timestamp
+              ? rawDate.toDate().toLocal()
+              : DateTime.tryParse(rawDate?.toString() ?? '');
+          if (date == null ||
+              (target != null &&
+                  (date.year != target.year ||
+                      date.month != target.month ||
+                      date.day != target.day))) {
+            continue;
+          }
+          // Legacy reports used several different fields for the category
+          // (and some did not save one at all).  Do not discard a valid
+          // dated reduction just because that old category metadata differs.
+          for (final raw in data['items'] as List<dynamic>? ?? const []) {
+            if (raw is! Map) continue;
+            final item = Map<String, dynamic>.from(raw);
+            final quantity = _parseInt(item['reducedQuantity']);
+            if (quantity <= 0) continue;
+            entries.add({
+              'name': item['name']?.toString() ?? 'Item',
+              'variant': item['variant']?.toString() ?? '',
+              'quantity': quantity,
+              'price': _parsePrice(item['price']),
+              'date': date,
+            });
+          }
+        }
+        if (entries.isEmpty) {
+          return const Center(
+            child: Text(
+              'No reduction history found.',
+              style: TextStyle(color: Color(0xFFAD1457)),
+            ),
+          );
+        }
+        return ListView.separated(
+          padding: const EdgeInsets.all(12),
+          itemCount: entries.length,
+          separatorBuilder: (_, _) => const SizedBox(height: 10),
+          itemBuilder: (context, index) {
+            final entry = entries[index];
+            final date = entry['date'] as DateTime;
+            final variant = entry['variant'] as String;
+            return Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFF0F5),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: const Color(0xFFF8BBD0)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(children: [
+                    Expanded(child: Text(
+                      '${entry['name']}${variant.isEmpty ? '' : ' ($variant)'}',
+                      style: const TextStyle(
+                        color: Color(0xFFC2105C), fontWeight: FontWeight.w800),
+                    )),
+                    Text('-${entry['quantity']}', style: const TextStyle(
+                      color: Color(0xFFC2105C), fontWeight: FontWeight.w900)),
+                  ]),
+                  const SizedBox(height: 6),
+                  Text('Price: PHP ${(entry['price'] as double).toStringAsFixed(2)}'),
+                  const SizedBox(height: 4),
+                  const Text('Reason: Stock reduction'),
+                  const SizedBox(height: 4),
+                  Text('${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}'),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Future<void> _showCoffeeVoidDialog(Map<String, dynamic> category) async {
+    final coffeeName = category['categoryName']?.toString() ?? 'Coffee';
+    final sourceDocId = category['sourceDocId']?.toString() ?? '';
+    final items =
+        (category['items'] as List?)?.cast<Map<String, dynamic>>() ?? [];
+    final quantityController = TextEditingController();
+    final commentController = TextEditingController();
+    String? selectedSize;
+    String? selectedReason;
+    bool isSaving = false;
+    final reasons = ['Damaged', 'Dropped', 'Expired', 'Contaminated', 'Other'];
+
+    await showDialog<void>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setState) {
+          final selectedItem = items.firstWhere(
+            (item) => item['name']?.toString() == selectedSize,
+            orElse: () => items.isNotEmpty ? items.first : <String, dynamic>{},
+          );
+          return Dialog(
+            insetPadding: const EdgeInsets.symmetric(
+              horizontal: 24,
+              vertical: 24,
+            ),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 560),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.fromLTRB(16, 12, 8, 12),
+                    decoration: const BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: [Color(0xFFC2105C), Color(0xFFE91E8C)],
+                      ),
+                      borderRadius: BorderRadius.vertical(
+                        top: Radius.circular(20),
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(
+                          Icons.remove_circle_outline_rounded,
+                          color: Colors.white,
+                        ),
+                        const SizedBox(width: 10),
+                        const Expanded(
+                          child: Text(
+                            'Void Coffee Item',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 18,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                        ),
+                        IconButton(
+                          onPressed: () => Navigator.pop(context),
+                          icon: const Icon(Icons.close_rounded),
+                          color: Colors.white,
+                        ),
+                      ],
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        _InfoChip(
+                          icon: Icons.local_cafe_rounded,
+                          label: coffeeName,
+                          color: const Color(0xFFC2105C),
+                        ),
+                        const SizedBox(height: 12),
+                        DropdownButtonFormField<String>(
+                          initialValue: selectedSize,
+                          decoration: InputDecoration(
+                            labelText: 'Size',
+                            prefixIcon: const Icon(
+                              Icons.straighten_rounded,
+                              color: Color(0xFFC2105C),
+                            ),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                          ),
+                          items: items.map((item) {
+                            final size = item['name']?.toString() ?? 'Size';
+                            return DropdownMenuItem(
+                              value: size,
+                              child: Text(size),
+                            );
+                          }).toList(),
+                          onChanged: (value) =>
+                              setState(() => selectedSize = value),
+                        ),
+                        const SizedBox(height: 12),
+                        _PinkTextField(
+                          controller: quantityController,
+                          label: 'Quantity to void',
+                          hint: 'Enter quantity',
+                          icon: Icons.remove_circle_outline,
+                          keyboardType: TextInputType.number,
+                        ),
+                        const SizedBox(height: 12),
+                        DropdownButtonFormField<String>(
+                          initialValue: selectedReason,
+                          decoration: InputDecoration(
+                            labelText: 'Reason',
+                            prefixIcon: const Icon(
+                              Icons.flag_outlined,
+                              color: Color(0xFFC2105C),
+                            ),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                          ),
+                          items: reasons
+                              .map(
+                                (reason) => DropdownMenuItem(
+                                  value: reason,
+                                  child: Text(reason),
+                                ),
+                              )
+                              .toList(),
+                          onChanged: (value) =>
+                              setState(() => selectedReason = value),
+                        ),
+                        if (selectedReason == 'Other') ...[
+                          const SizedBox(height: 12),
+                          _PinkTextField(
+                            controller: commentController,
+                            label: 'Comment',
+                            hint: 'Optional note',
+                            icon: Icons.notes_rounded,
+                            maxLines: 2,
+                          ),
+                        ],
+                        const SizedBox(height: 16),
+                        Align(
+                          alignment: Alignment.centerRight,
+                          child: SizedBox(
+                            width: 190,
+                            child: ElevatedButton(
+                              onPressed: isSaving
+                                  ? null
+                                  : () async {
+                                      final quantity = _parseInt(
+                                        quantityController.text,
+                                      );
+                                      final reason =
+                                          selectedReason?.trim() ?? '';
+                                      if (selectedSize == null ||
+                                          selectedSize!.trim().isEmpty) {
+                                        ScaffoldMessenger.of(
+                                          context,
+                                        ).showSnackBar(
+                                          _buildSnackBar(
+                                            'Please select a coffee size first',
+                                            isError: true,
+                                          ),
+                                        );
+                                        return;
+                                      }
+                                      if (quantity <= 0) {
+                                        ScaffoldMessenger.of(
+                                          context,
+                                        ).showSnackBar(
+                                          _buildSnackBar(
+                                            'Please enter a quantity to void',
+                                            isError: true,
+                                          ),
+                                        );
+                                        return;
+                                      }
+                                      if (reason.isEmpty) {
+                                        ScaffoldMessenger.of(
+                                          context,
+                                        ).showSnackBar(
+                                          _buildSnackBar(
+                                            'Please select a reason',
+                                            isError: true,
+                                          ),
+                                        );
+                                        return;
+                                      }
+                                      setState(() => isSaving = true);
+                                      try {
+                                        if (sourceDocId.trim().isEmpty) {
+                                          throw StateError(
+                                            'Coffee inventory record was not found.',
+                                          );
+                                        }
+                                        final docRef = FirebaseFirestore
+                                            .instance
+                                            .collection('staff_inventory')
+                                            .doc(sourceDocId);
+                                        final snapshot = await docRef.get();
+                                        if (!snapshot.exists) {
+                                          throw StateError(
+                                            'Coffee inventory record was not found.',
+                                          );
+                                        }
+                                        final snapshotData = snapshot.data()!;
+                                        final inventoryField =
+                                            snapshotData['items'] is List
+                                            ? 'items'
+                                            : 'sizes';
+                                        final rawInventoryItems =
+                                            (snapshotData[inventoryField]
+                                                as List?) ??
+                                            [];
+                                        final storedItems = rawInventoryItems
+                                            .whereType<Map>()
+                                            .map(
+                                              (item) =>
+                                                  Map<String, dynamic>.from(
+                                                    item,
+                                                  ),
+                                            )
+                                            .toList();
+                                        final normalizedSize = selectedSize!
+                                            .trim()
+                                            .toLowerCase();
+                                        var matched = false;
+                                        final updatedItems = storedItems.map((
+                                          entry,
+                                        ) {
+                                          final entryName =
+                                              entry['name']
+                                                  ?.toString()
+                                                  .trim() ??
+                                              '';
+                                          final entryVariant =
+                                              entry['variant']
+                                                  ?.toString()
+                                                  .trim() ??
+                                              '';
+                                          final entrySize =
+                                              entry['size']
+                                                  ?.toString()
+                                                  .trim() ??
+                                              '';
+                                          if (entryName.toLowerCase() !=
+                                                  normalizedSize &&
+                                              entryVariant.toLowerCase() !=
+                                                  normalizedSize &&
+                                              entrySize.toLowerCase() !=
+                                                  normalizedSize) {
+                                            return entry;
+                                          }
+                                          matched = true;
+                                          final hasStockField = entry
+                                              .containsKey('stock');
+                                          final hasStartingStockField = entry
+                                              .containsKey('startingStock');
+                                          final hasAssignedStockField = entry
+                                              .containsKey(
+                                                'assignedStartingStock',
+                                              );
+                                          final current = _parseInt(
+                                            hasStockField
+                                                ? entry['stock']
+                                                : hasStartingStockField
+                                                ? entry['startingStock']
+                                                : hasAssignedStockField
+                                                ? entry['assignedStartingStock']
+                                                : quantity,
+                                          );
+                                          if (quantity > current) {
+                                            throw StateError(
+                                              'Not enough stock for $selectedSize.',
+                                            );
+                                          }
+                                          return {
+                                            ...entry,
+                                            'stock': current - quantity,
+                                          };
+                                        }).toList();
+                                        if (!matched) {
+                                          throw StateError(
+                                            'Selected coffee size was not found in inventory.',
+                                          );
+                                        }
+
+                                        final batch = FirebaseFirestore.instance
+                                            .batch();
+                                        batch.update(docRef, {
+                                          inventoryField: updatedItems,
+                                          'updatedAt':
+                                              FieldValue.serverTimestamp(),
+                                        });
+                                        final historyRef = FirebaseFirestore
+                                            .instance
+                                            .collection('stock_adjustments')
+                                            .doc();
+                                        batch.set(historyRef, {
+                                          'type': 'coffee_void',
+                                          'categoryId': sourceDocId,
+                                          'categoryName': coffeeName,
+                                          'coffeeId':
+                                              category['coffeeId']
+                                                  ?.toString() ??
+                                              '',
+                                          'itemName': coffeeName,
+                                          'variant': selectedSize,
+                                          'quantity': quantity,
+                                          'unitPrice': _parsePrice(
+                                            selectedItem['price'],
+                                          ),
+                                          'reason': reason,
+                                          'comment': selectedReason == 'Other'
+                                              ? commentController.text.trim()
+                                              : '',
+                                          'userId': FirebaseAuth
+                                              .instance
+                                              .currentUser
+                                              ?.uid,
+                                          'staffId': FirebaseAuth
+                                              .instance
+                                              .currentUser
+                                              ?.uid,
+                                          'createdAt':
+                                              FieldValue.serverTimestamp(),
+                                        });
+                                        await batch.commit().timeout(
+                                          const Duration(seconds: 15),
+                                          onTimeout: () => throw TimeoutException(
+                                            'Saving took too long. Please check your connection and try again.',
+                                          ),
+                                        );
+                                        if (!mounted) return;
+                                        Navigator.pop(context);
+                                        showTopNotification(
+                                          context,
+                                          'Coffee item voided successfully!',
+                                        );
+                                      } catch (error) {
+                                        if (mounted) {
+                                          setState(() => isSaving = false);
+                                          ScaffoldMessenger.of(
+                                            context,
+                                          ).showSnackBar(
+                                            _buildSnackBar(
+                                              'Failed to void coffee item: $error',
+                                              isError: true,
+                                            ),
+                                          );
+                                        }
+                                      }
+                                    },
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: const Color(0xFFC2105C),
+                                foregroundColor: Colors.white,
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 12,
+                                ),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(14),
+                                ),
+                              ),
+                              child: isSaving
+                                  ? const SizedBox(
+                                      width: 18,
+                                      height: 18,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        color: Colors.white,
+                                      ),
+                                    )
+                                  : const Text('Proceed Void'),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+    quantityController.dispose();
+    commentController.dispose();
+  }
+
+  Future<void> _showCoffeeVoidHistory(Map<String, dynamic> category) async {
+    final sourceDocId = category['sourceDocId']?.toString() ?? '';
+    final coffeeName = category['categoryName']?.toString() ?? 'Coffee';
+    var historySearch = '';
+    DateTime? historyDate = DateTime.now();
+
+    await showDialog<void>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          return Dialog(
+            insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+            clipBehavior: Clip.antiAlias,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 640, maxHeight: 600),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.fromLTRB(16, 12, 8, 12),
+                    color: const Color(0xFFC2105C),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.history_rounded, color: Colors.white),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            'Coffee History',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 18,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                        ),
+                        IconButton(
+                          onPressed: () => Navigator.pop(context),
+                          icon: const Icon(Icons.close_rounded),
+                          color: Colors.white,
+                        ),
+                      ],
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            onChanged: (value) => setDialogState(
+                              () => historySearch = value.trim().toLowerCase(),
+                            ),
+                            decoration: InputDecoration(
+                              hintText: 'Search coffee, ID, price, reason, date',
+                              prefixIcon: const Icon(Icons.search_rounded),
+                              isDense: true,
+                              filled: true,
+                              fillColor: const Color(0xFFFFF0F5),
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                            ),
+                          ),
+                        ),
+                        IconButton(
+                          onPressed: () async {
+                            final picked = await showDatePicker(
+                              context: context,
+                              initialDate: historyDate ?? DateTime.now(),
+                              firstDate: DateTime(2020),
+                              lastDate: DateTime(2100),
+                            );
+                            if (picked != null) {
+                              setDialogState(() => historyDate = picked);
+                            }
+                          },
+                          icon: const Icon(Icons.calendar_month_rounded),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      child: Wrap(
+                        spacing: 8,
+                        children: [
+                          ChoiceChip(
+                            label: const Text('All'),
+                            selected: historySearch.isEmpty,
+                            onSelected: (_) =>
+                                setDialogState(() => historySearch = ''),
+                          ),
+                          ChoiceChip(
+                            label: Text(coffeeName),
+                            selected: historySearch == coffeeName.toLowerCase(),
+                            onSelected: (_) => setDialogState(
+                              () => historySearch = coffeeName.toLowerCase(),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   ),
-                ),
-              ],
+                  Flexible(
+                    child: FutureBuilder<QuerySnapshot>(
+                      future: FirebaseFirestore.instance
+                          .collection('stock_adjustments')
+                          .where('categoryId', isEqualTo: sourceDocId)
+                          .get(),
+                      builder: (context, snapshot) {
+                        final docs =
+                            (snapshot.data?.docs ?? [])
+                                .where(
+                                  (doc) =>
+                                      (doc.data()
+                                          as Map<String, dynamic>?)?['type'] ==
+                                      'coffee_void',
+                                )
+                                .where((doc) {
+                                  final data = doc.data() as Map<String, dynamic>?;
+                                  final timestamp = data?['createdAt'] as Timestamp?;
+                                  if (historyDate != null && timestamp != null) {
+                                    final date = timestamp.toDate().toLocal();
+                                    final startOfDay = DateTime(
+                                      historyDate!.year,
+                                      historyDate!.month,
+                                      historyDate!.day,
+                                    );
+                                    final endOfDay = startOfDay
+                                        .add(const Duration(days: 1))
+                                        .subtract(const Duration(microseconds: 1));
+                                    if (date.isBefore(startOfDay) ||
+                                        date.isAfter(endOfDay)) {
+                                      return false;
+                                    }
+                                  }
+                                  if (historySearch.isEmpty) return true;
+                                  final createdAtDate = timestamp?.toDate().toLocal();
+                                  final formattedDate = createdAtDate == null
+                                      ? ''
+                                      : '${createdAtDate.year.toString().padLeft(4, '0')}-${createdAtDate.month.toString().padLeft(2, '0')}-${createdAtDate.day.toString().padLeft(2, '0')} ${createdAtDate.hour.toString().padLeft(2, '0')}:${createdAtDate.minute.toString().padLeft(2, '0')}:${createdAtDate.second.toString().padLeft(2, '0')}';
+                                  final searchText = [
+                                    data?['itemName']?.toString() ?? '',
+                                    data?['coffeeId']?.toString() ?? '',
+                                    data?['variant']?.toString() ?? '',
+                                    data?['unitPrice']?.toString() ?? '',
+                                    data?['reason']?.toString() ?? '',
+                                    data?['comment']?.toString() ?? '',
+                                    data?['categoryName']?.toString() ?? '',
+                                    formattedDate,
+                                    createdAtDate == null
+                                        ? ''
+                                        : '${createdAtDate.day.toString().padLeft(2, '0')}/${createdAtDate.month.toString().padLeft(2, '0')}/${createdAtDate.year}',
+                                    createdAtDate == null
+                                        ? ''
+                                        : '${createdAtDate.month}/${createdAtDate.day}/${createdAtDate.year}',
+                                    createdAtDate == null
+                                        ? ''
+                                        : '${createdAtDate.day} ${_monthName(createdAtDate.month)} ${createdAtDate.year}',
+                                    createdAtDate == null
+                                        ? ''
+                                        : '${_monthName(createdAtDate.month)} ${createdAtDate.day}, ${createdAtDate.year}',
+                                  ].join(' ').toLowerCase();
+                                  return searchText.contains(historySearch);
+                                })
+                                .toList()
+                              ..sort((a, b) {
+                                final aData = a.data() as Map<String, dynamic>?;
+                                final bData = b.data() as Map<String, dynamic>?;
+                                final aTime =
+                                    (aData?['createdAt'] as Timestamp?)?.toDate() ??
+                                    DateTime.fromMillisecondsSinceEpoch(0);
+                                final bTime =
+                                    (bData?['createdAt'] as Timestamp?)?.toDate() ??
+                                    DateTime.fromMillisecondsSinceEpoch(0);
+                                return bTime.compareTo(aTime);
+                              });
+                        if (snapshot.connectionState == ConnectionState.waiting)
+                          return const Center(child: CircularProgressIndicator());
+                        if (docs.isEmpty)
+                          return const Center(
+                            child: Text(
+                              'No voided coffee items yet.',
+                              style: TextStyle(color: Color(0xFFAD1457)),
+                            ),
+                          );
+                        return ListView.builder(
+                          padding: const EdgeInsets.all(12),
+                          itemCount: docs.length,
+                          itemBuilder: (context, index) {
+                            final data = docs[index].data() as Map<String, dynamic>;
+                            final quantity = data['quantity']?.toString() ?? '0';
+                            final variant = data['variant']?.toString() ?? '';
+                            final itemName =
+                                data['itemName']?.toString() ?? coffeeName;
+                            final coffeeId =
+                                data['coffeeId']?.toString() ??
+                                category['coffeeId']?.toString() ??
+                                '';
+                            final reason = data['reason']?.toString() ?? '';
+                            final comment = data['comment']?.toString() ?? '';
+                            final timestamp = data['createdAt'] as Timestamp?;
+                            final when = timestamp?.toDate();
+                            final dateLabel = when == null
+                                ? 'Unknown date'
+                                : '${when.year.toString().padLeft(4, '0')}-${when.month.toString().padLeft(2, '0')}-${when.day.toString().padLeft(2, '0')} ${when.hour.toString().padLeft(2, '0')}:${when.minute.toString().padLeft(2, '0')}:${when.second.toString().padLeft(2, '0')}';
+                            return Container(
+                              margin: const EdgeInsets.only(bottom: 12),
+                              padding: const EdgeInsets.all(16),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFFFF0F5),
+                                borderRadius: BorderRadius.circular(18),
+                                border: Border.all(color: const Color(0xFFF8BBD0)),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 8,
+                                      vertical: 4,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFFFFF3CD),
+                                      borderRadius: BorderRadius.circular(8),
+                                      border: Border.all(
+                                        color: const Color(0xFFFFD166),
+                                      ),
+                                    ),
+                                    child: const Text(
+                                      'Coffee',
+                                      style: TextStyle(
+                                        color: Color(0xFF9A6700),
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w800,
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Row(
+                                    children: [
+                                      Expanded(
+                                        child: Wrap(
+                                          spacing: 8,
+                                          runSpacing: 4,
+                                          crossAxisAlignment:
+                                              WrapCrossAlignment.center,
+                                          children: [
+                                            Text(
+                                              itemName,
+                                              style: const TextStyle(
+                                                color: Color(0xFFC2105C),
+                                                fontSize: 15,
+                                                fontWeight: FontWeight.w800,
+                                              ),
+                                            ),
+                                            if (coffeeId.isNotEmpty)
+                                              Container(
+                                                padding: const EdgeInsets.symmetric(
+                                                  horizontal: 8,
+                                                  vertical: 4,
+                                                ),
+                                                decoration: BoxDecoration(
+                                                  color: const Color(0xFFE8F5E9),
+                                                  borderRadius:
+                                                      BorderRadius.circular(8),
+                                                  border: Border.all(
+                                                    color: const Color(0xFF81C784),
+                                                  ),
+                                                ),
+                                                child: Text(
+                                                  'ID: $coffeeId',
+                                                  style: const TextStyle(
+                                                    color: Color(0xFF2E7D32),
+                                                    fontSize: 11,
+                                                    fontWeight: FontWeight.w800,
+                                                  ),
+                                                ),
+                                              ),
+                                          ],
+                                        ),
+                                      ),
+                                      if (variant.isNotEmpty)
+                                        Container(
+                                          margin: const EdgeInsets.only(right: 6),
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 8,
+                                            vertical: 5,
+                                          ),
+                                          decoration: BoxDecoration(
+                                            color: const Color(0xFFFCE4EC),
+                                            borderRadius: BorderRadius.circular(9),
+                                            border: Border.all(
+                                              color: const Color(0xFFF48FB1),
+                                            ),
+                                          ),
+                                          child: Text(
+                                            variant,
+                                            style: const TextStyle(
+                                              color: Color(0xFFAD1457),
+                                              fontSize: 11,
+                                              fontWeight: FontWeight.w800,
+                                            ),
+                                          ),
+                                        ),
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 10,
+                                          vertical: 4,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: const Color(0xFFC2105C),
+                                          borderRadius: BorderRadius.circular(20),
+                                        ),
+                                        child: Text(
+                                          '-$quantity',
+                                          style: const TextStyle(
+                                            color: Colors.white,
+                                            fontWeight: FontWeight.w800,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 6),
+                                  Text(
+                                    'Price: PHP ${_parsePrice(data['unitPrice']).toStringAsFixed(2)}',
+                                    style: const TextStyle(
+                                      color: Color(0xFFAD1457),
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  _HistoryDetailRow(
+                                    icon: Icons.flag_outlined,
+                                    label: reason,
+                                  ),
+                                  if (comment.isNotEmpty) ...[
+                                    const SizedBox(height: 4),
+                                    _HistoryDetailRow(
+                                      icon: Icons.notes_rounded,
+                                      label: comment,
+                                    ),
+                                  ],
+                                  const SizedBox(height: 8),
+                                  _HistoryDetailRow(
+                                    icon: Icons.calendar_today_outlined,
+                                    label: dateLabel,
+                                  ),
+                                ],
+                              ),
+                            );
+                          },
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
             ),
-          ),
-        );
-      },
+          );
+        },
+      ),
     );
   }
 
@@ -1258,292 +2331,356 @@ class _AllCategPageState extends State<AllCategPage>
     final bundlePrice = _parsePrice(bundle['price']);
     final bundleId = bundle['bundleId']?.toString() ?? '';
     final bundleInstances = _bundleInstancesFromData(bundle);
+    final availableBundleInstances = bundleInstances.where((instance) {
+      final status =
+          instance['status']?.toString().trim().toLowerCase() ?? 'available';
+      return status == 'available';
+    }).toList();
+    var bundleSearch = '';
+    var selectedBundleFilter = '';
 
     await showDialog<void>(
       context: context,
       builder: (context) {
-        return Dialog(
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(28),
-          ),
-          elevation: 0,
-          backgroundColor: Colors.transparent,
-          child: Container(
-            width: double.maxFinite,
-            constraints: const BoxConstraints(maxHeight: 620),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(28),
-              boxShadow: [
-                BoxShadow(
-                  color: const Color(0xFFC2105C).withOpacity(0.18),
-                  blurRadius: 32,
-                  offset: const Offset(0, 8),
-                ),
-              ],
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  padding: const EdgeInsets.fromLTRB(22, 20, 14, 18),
-                  decoration: const BoxDecoration(
-                    gradient: LinearGradient(
-                      colors: [Color(0xFFC2105C), Color(0xFFE91E8C)],
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                    ),
-                    borderRadius: BorderRadius.vertical(
-                      top: Radius.circular(28),
-                    ),
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            final normalizedBundleSearch = bundleSearch.trim().toLowerCase();
+            final filteredBundleInstances = availableBundleInstances.where((instance) {
+              final index = availableBundleInstances.indexOf(instance);
+              final instanceId =
+                  instance['id']?.toString() ??
+                  _bundleInstanceId(bundleId, index);
+              final itemNames = (instance['items'] as List<dynamic>? ?? [])
+                  .whereType<Map>()
+                  .map((item) => item['name']?.toString() ?? '')
+                  .where((name) => name.isNotEmpty)
+                  .join(' ');
+              final haystack = [
+                bundleName,
+                bundleId,
+                instanceId,
+                bundlePrice.toStringAsFixed(2),
+                itemNames,
+              ].join(' ').toLowerCase();
+
+              if (selectedBundleFilter.isNotEmpty &&
+                  selectedBundleFilter != bundleName) {
+                return false;
+              }
+
+              if (normalizedBundleSearch.isEmpty) {
+                return true;
+              }
+
+              return haystack.contains(normalizedBundleSearch);
+            }).toList();
+
+            return Dialog(
+              insetPadding: const EdgeInsets.symmetric(
+                horizontal: 32,
+                vertical: 24,
+              ),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(28),
+              ),
+              elevation: 0,
+              backgroundColor: Colors.transparent,
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 760, maxHeight: 620),
+                child: Container(
+                  width: double.infinity,
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(28),
+                    boxShadow: [
+                      BoxShadow(
+                        color: const Color(0xFFC2105C).withOpacity(0.18),
+                        blurRadius: 32,
+                        offset: const Offset(0, 8),
+                      ),
+                    ],
                   ),
-                  child: Row(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
                     children: [
                       Container(
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.2),
-                          borderRadius: BorderRadius.circular(10),
+                        padding: const EdgeInsets.fromLTRB(22, 20, 14, 18),
+                        decoration: const BoxDecoration(
+                          gradient: LinearGradient(
+                            colors: [Color(0xFFC2105C), Color(0xFFE91E8C)],
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                          ),
+                          borderRadius: BorderRadius.vertical(
+                            top: Radius.circular(28),
+                          ),
                         ),
-                        child: const Icon(
-                          Icons.inventory_2_rounded,
-                          color: Colors.white,
-                          size: 20,
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
+                        child: Row(
                           children: [
-                            Text(
-                              bundleName,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
+                            Container(
+                              padding: const EdgeInsets.all(8),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withOpacity(0.2),
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              child: const Icon(
+                                Icons.inventory_2_rounded,
                                 color: Colors.white,
-                                fontSize: 19,
-                                fontWeight: FontWeight.w900,
+                                size: 20,
                               ),
                             ),
-                            const SizedBox(height: 3),
-                            Text(
-                              '${bundleInstances.length} bundle${bundleInstances.length == 1 ? '' : 's'} - ₱${bundlePrice.toStringAsFixed(2)}',
-                              style: const TextStyle(
-                                color: Colors.white70,
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Text(
+                                'All Bundle',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 19,
+                                  fontWeight: FontWeight.w900,
+                                ),
                               ),
+                            ),
+                            IconButton(
+                              onPressed: () => Navigator.pop(context),
+                              icon: const Icon(Icons.close_rounded),
+                              color: Colors.white,
                             ),
                           ],
                         ),
                       ),
-                      IconButton(
-                        onPressed: () => Navigator.pop(context),
-                        icon: const Icon(Icons.close_rounded),
-                        color: Colors.white,
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
+                        child: TextField(
+                          onChanged: (value) => setDialogState(
+                            () => bundleSearch = value.trim().toLowerCase(),
+                          ),
+                          decoration: InputDecoration(
+                            hintText: 'Search bundle, ID, price, items',
+                            prefixIcon: const Icon(Icons.search_rounded),
+                            isDense: true,
+                            filled: true,
+                            fillColor: const Color(0xFFFFF0F5),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                          ),
+                        ),
+                      ),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                          child: Wrap(
+                            spacing: 8,
+                            children: [
+                              ChoiceChip(
+                                label: const Text('All'),
+                                selected: selectedBundleFilter.isEmpty,
+                                onSelected: (_) => setDialogState(
+                                  () => selectedBundleFilter = '',
+                                ),
+                              ),
+                              ChoiceChip(
+                                label: Text(bundleName),
+                                selected: selectedBundleFilter == bundleName,
+                                onSelected: (_) => setDialogState(
+                                  () => selectedBundleFilter = bundleName,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      Flexible(
+                        child: filteredBundleInstances.isEmpty
+                            ? const Center(
+                                child: Padding(
+                                  padding: EdgeInsets.all(28),
+                                  child: Text(
+                                    'No bundle items available.',
+                                    style: TextStyle(
+                                      color: Color(0xFFAD1457),
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ),
+                              )
+                            : ListView.separated(
+                                padding: const EdgeInsets.fromLTRB(
+                                  12,
+                                  12,
+                                  12,
+                                  16,
+                                ),
+                                itemCount: filteredBundleInstances.length,
+                                separatorBuilder: (_, _) =>
+                                    const SizedBox(height: 12),
+                                itemBuilder: (context, index) {
+                                  final instance = filteredBundleInstances[index];
+                                  final items =
+                                      instance['items'] as List<dynamic>? ?? [];
+                                  final instanceId =
+                                      instance['id']?.toString() ??
+                                      _bundleInstanceId(bundleId, index);
+
+                                  return Container(
+                                    padding: const EdgeInsets.all(14),
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFFFFF0F5),
+                                      borderRadius: BorderRadius.circular(18),
+                                      border: Border.all(
+                                        color: const Color(0xFFF8BBD0),
+                                      ),
+                                    ),
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Row(
+                                          children: [
+                                            Expanded(
+                                              child: Column(
+                                                crossAxisAlignment:
+                                                    CrossAxisAlignment.start,
+                                                children: [
+                                                  Row(
+                                                    children: [
+                                                      Expanded(
+                                                        child: Text(
+                                                          instanceId,
+                                                          style: const TextStyle(
+                                                            color: Color(
+                                                              0xFF4A0020,
+                                                            ),
+                                                            fontSize: 15,
+                                                            fontWeight:
+                                                                FontWeight.w900,
+                                                          ),
+                                                        ),
+                                                      ),
+                                                      IconButton(
+                                                        tooltip: 'Copy bundle ID',
+                                                        visualDensity:
+                                                            VisualDensity.compact,
+                                                        onPressed: () async {
+                                                          await Clipboard.setData(
+                                                            ClipboardData(
+                                                              text: instanceId,
+                                                            ),
+                                                          );
+                                                          if (!context.mounted) {
+                                                            return;
+                                                          }
+                                                          ScaffoldMessenger.of(
+                                                            context,
+                                                          ).showSnackBar(
+                                                            _buildSnackBar(
+                                                              'Bundle ID copied',
+                                                            ),
+                                                          );
+                                                        },
+                                                        icon: const Icon(
+                                                          Icons.copy_rounded,
+                                                          size: 17,
+                                                        ),
+                                                        color: const Color(
+                                                          0xFFC2105C,
+                                                        ),
+                                                      ),
+                                                    ],
+                                                  ),
+                                                  Text(
+                                                    'Bundle price: ₱${bundlePrice.toStringAsFixed(2)}',
+                                                    style: const TextStyle(
+                                                      color: Color(0xFFAD1457),
+                                                      fontSize: 12,
+                                                      fontWeight:
+                                                          FontWeight.w700,
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                            ),
+                                            const SizedBox(width: 8),
+                                            _ItemTag(
+                                              icon: Icons.check_circle_rounded,
+                                              label: 'Available',
+                                              bgColor: const Color(
+                                                0xFFE8F5E9,
+                                              ),
+                                              textColor: const Color(
+                                                0xFF2E7D32,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                        const SizedBox(height: 12),
+                                        if (items.isEmpty)
+                                          const Text(
+                                            'No items in this bundle.',
+                                            style: TextStyle(
+                                              color: Color(0xFFAD1457),
+                                              fontSize: 12,
+                                            ),
+                                          )
+                                        else
+                                          ...items.map((item) {
+                                            if (item is! Map<String, dynamic>) {
+                                              return const SizedBox.shrink();
+                                            }
+                                            final itemName =
+                                                item['name']?.toString() ??
+                                                    'Item';
+                                            return Padding(
+                                              padding: const EdgeInsets.only(
+                                                bottom: 8,
+                                              ),
+                                              child: Row(
+                                                children: [
+                                                  Expanded(
+                                                    child: Text(
+                                                      itemName,
+                                                      style: const TextStyle(
+                                                        color: Color(
+                                                          0xFF4A0020,
+                                                        ),
+                                                        fontSize: 13,
+                                                        fontWeight:
+                                                            FontWeight.w700,
+                                                      ),
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                            );
+                                          }),
+                                      ],
+                                    ),
+                                  );
+                                },
+                              ),
                       ),
                     ],
                   ),
                 ),
-                Flexible(
-                  child: bundleInstances.isEmpty
-                      ? const Center(
-                          child: Padding(
-                            padding: EdgeInsets.all(28),
-                            child: Text(
-                              'No bundle items available.',
-                              style: TextStyle(
-                                color: Color(0xFFAD1457),
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ),
-                        )
-                      : ListView.separated(
-                          padding: const EdgeInsets.all(16),
-                          itemCount: bundleInstances.length,
-                          separatorBuilder: (_, _) =>
-                              const SizedBox(height: 12),
-                          itemBuilder: (context, index) {
-                            final instance = bundleInstances[index];
-                            final items =
-                                instance['items'] as List<dynamic>? ?? [];
-                            final status =
-                                instance['status']?.toString() ?? 'available';
-                            final statusLabel = _bundleStatusLabel(status);
-                            final canReduce =
-                                status != 'sold' && status != 'reduced';
-
-                            return Container(
-                              padding: const EdgeInsets.all(14),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFFFF0F5),
-                                borderRadius: BorderRadius.circular(18),
-                                border: Border.all(
-                                  color: const Color(0xFFF8BBD0),
-                                ),
-                              ),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Row(
-                                    children: [
-                                      Expanded(
-                                        child: Column(
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.start,
-                                          children: [
-                                            Text(
-                                              'Bundle #${instance['number'] ?? index + 1}',
-                                              style: const TextStyle(
-                                                color: Color(0xFF4A0020),
-                                                fontSize: 15,
-                                                fontWeight: FontWeight.w900,
-                                              ),
-                                            ),
-                                            const SizedBox(height: 2),
-                                            Text(
-                                              'Bundle ID: ${instance['id'] ?? _bundleInstanceId(bundleId, index)}',
-                                              maxLines: 1,
-                                              overflow: TextOverflow.ellipsis,
-                                              style: const TextStyle(
-                                                color: Color(0xFFAD1457),
-                                                fontSize: 11,
-                                                fontWeight: FontWeight.w600,
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                      ),
-                                      Wrap(
-                                        spacing: 8,
-                                        runSpacing: 8,
-                                        alignment: WrapAlignment.end,
-                                        children: [
-                                          OutlinedButton.icon(
-                                            onPressed: canReduce
-                                                ? () async {
-                                                    Navigator.pop(context);
-                                                    await _showBundleInstanceReductionDialog(
-                                                      bundle: bundle,
-                                                      instanceIndex: index,
-                                                      instance: instance,
-                                                    );
-                                                  }
-                                                : null,
-                                            icon: const Icon(
-                                              Icons.remove_circle_outline,
-                                              size: 14,
-                                            ),
-                                            label: const Text('Reduce'),
-                                            style: OutlinedButton.styleFrom(
-                                              foregroundColor: const Color(
-                                                0xFFC2105C,
-                                              ),
-                                              disabledForegroundColor:
-                                                  Colors.grey,
-                                              side: const BorderSide(
-                                                color: Color(0xFFF8BBD0),
-                                              ),
-                                              padding:
-                                                  const EdgeInsets.symmetric(
-                                                    horizontal: 10,
-                                                    vertical: 8,
-                                                  ),
-                                              minimumSize: Size.zero,
-                                              tapTargetSize:
-                                                  MaterialTapTargetSize
-                                                      .shrinkWrap,
-                                              textStyle: const TextStyle(
-                                                fontSize: 11,
-                                                fontWeight: FontWeight.w800,
-                                              ),
-                                            ),
-                                          ),
-                                          _ItemTag(
-                                            icon: Icons.info_outline_rounded,
-                                            label: statusLabel,
-                                            bgColor: Colors.white,
-                                            textColor: const Color(0xFFC2105C),
-                                          ),
-                                        ],
-                                      ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 12),
-                                  if (items.isEmpty)
-                                    const Text(
-                                      'No items in this bundle.',
-                                      style: TextStyle(
-                                        color: Color(0xFFAD1457),
-                                        fontSize: 12,
-                                      ),
-                                    )
-                                  else
-                                    ...items.map((item) {
-                                      if (item is! Map<String, dynamic>) {
-                                        return const SizedBox.shrink();
-                                      }
-                                      final itemName =
-                                          item['name']?.toString() ?? 'Item';
-                                      final itemQty = _parseInt(
-                                        item['quantity'],
-                                        fallback: 1,
-                                      );
-                                      final remainingQty = _parseInt(
-                                        item['remaining'],
-                                        fallback: itemQty,
-                                      );
-                                      final itemPrice = _parsePrice(
-                                        item['price'],
-                                      );
-                                      return Padding(
-                                        padding: const EdgeInsets.only(
-                                          bottom: 8,
-                                        ),
-                                        child: Row(
-                                          children: [
-                                            Expanded(
-                                              child: Text(
-                                                '$itemName - $remainingQty of $itemQty pcs',
-                                                style: const TextStyle(
-                                                  color: Color(0xFF4A0020),
-                                                  fontSize: 13,
-                                                  fontWeight: FontWeight.w700,
-                                                ),
-                                              ),
-                                            ),
-                                            Text(
-                                              '₱${itemPrice.toStringAsFixed(2)}',
-                                              style: const TextStyle(
-                                                color: Color(0xFFC2105C),
-                                                fontSize: 13,
-                                                fontWeight: FontWeight.w900,
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                      );
-                                    }),
-                                ],
-                              ),
-                            );
-                          },
-                        ),
-                ),
-              ],
-            ),
-          ),
+              ),
+            );
+          },
         );
       },
     );
   }
 
+
   Future<void> _showBundleReductionDialog(Map<String, dynamic> bundle) async {
-    final qtyController = TextEditingController();
+    final bundleIdController = TextEditingController();
     final commentController = TextEditingController();
+    final selectedBundleIds = <String>[];
     String? selectedReason;
+    String? validationMessage;
+    bool isSaving = false;
     final reasonOptions = [
       'Damaged',
       'Dropped',
@@ -1561,152 +2698,359 @@ class _AllCategPageState extends State<AllCategPage>
         return StatefulBuilder(
           builder: (context, setDialogState) {
             return Dialog(
+              insetPadding: const EdgeInsets.symmetric(
+                horizontal: 24,
+                vertical: 24,
+              ),
               shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(28),
+                borderRadius: BorderRadius.circular(20),
               ),
               backgroundColor: Colors.white,
-              child: Padding(
-                padding: const EdgeInsets.all(20),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Row(
-                      children: [
-                        const Expanded(
-                          child: Text(
-                            'Reduce Bundle',
-                            style: TextStyle(
-                              color: Color(0xFF4A0020),
-                              fontSize: 20,
-                              fontWeight: FontWeight.w900,
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 560),
+                child: Padding(
+                  padding: const EdgeInsets.all(14),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Container(
+                        margin: const EdgeInsets.only(bottom: 10),
+                        padding: const EdgeInsets.fromLTRB(12, 10, 6, 10),
+                        decoration: const BoxDecoration(
+                          color: Color(0xFFC2105C),
+                          borderRadius: BorderRadius.vertical(
+                            top: Radius.circular(20),
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(
+                              Icons.remove_circle_outline_rounded,
+                              color: Colors.white,
+                              size: 22,
+                            ),
+                            const SizedBox(width: 10),
+                            const Expanded(
+                              child: Text(
+                                'Reduce Bundle',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w900,
+                                ),
+                              ),
+                            ),
+                            IconButton(
+                              onPressed: () => Navigator.pop(context),
+                              icon: const Icon(Icons.close_rounded),
+                              color: Colors.white,
+                              visualDensity: VisualDensity.compact,
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      _InfoChip(
+                        icon: Icons.inventory_2_rounded,
+                        label: '$bundleName - Bundle stock: $currentStock',
+                        color: const Color(0xFFC2105C),
+                      ),
+                      const SizedBox(height: 10),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: _PinkTextField(
+                              controller: bundleIdController,
+                              label: 'Bundle ID',
+                              hint: 'e.g. 13000 113-001',
+                              icon: Icons.confirmation_number_outlined,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          IconButton.filled(
+                            tooltip: 'Add bundle ID',
+                            onPressed: () {
+                              final enteredId = bundleIdController.text.trim();
+                              final instances = _bundleInstancesFromData(
+                                bundle,
+                              );
+                              final matchingIndex = instances.indexWhere((
+                                instance,
+                              ) {
+                                final index = instances.indexOf(instance);
+                                final instanceId =
+                                    instance['id']?.toString().trim() ??
+                                    _bundleInstanceId(
+                                      bundle['bundleId']?.toString() ?? '',
+                                      index,
+                                    );
+                                return instanceId == enteredId;
+                              });
+                              final status = matchingIndex < 0
+                                  ? ''
+                                  : instances[matchingIndex]['status']
+                                            ?.toString()
+                                            .trim()
+                                            .toLowerCase() ??
+                                        'available';
+                              if (enteredId.isEmpty ||
+                                  matchingIndex < 0 ||
+                                  status != 'available') {
+                                setDialogState(() {
+                                  validationMessage =
+                                      'Invalid bundle ID number.';
+                                });
+                                return;
+                              }
+                              if (selectedBundleIds.contains(enteredId)) {
+                                setDialogState(() {
+                                  validationMessage =
+                                      'Bundle ID already added.';
+                                });
+                                return;
+                              }
+                              setDialogState(() {
+                                selectedBundleIds.add(enteredId);
+                                bundleIdController.clear();
+                                validationMessage = null;
+                              });
+                            },
+                            icon: const Icon(Icons.add_rounded),
+                            style: IconButton.styleFrom(
+                              backgroundColor: const Color(0xFFC2105C),
+                              foregroundColor: Colors.white,
+                            ),
+                          ),
+                        ],
+                      ),
+                      if (selectedBundleIds.isNotEmpty) ...[
+                        const SizedBox(height: 8),
+                        SingleChildScrollView(
+                          scrollDirection: Axis.horizontal,
+                          child: Row(
+                            children: selectedBundleIds.map((id) {
+                              return Padding(
+                                padding: const EdgeInsets.only(right: 6),
+                                child: Chip(
+                                  label: Text(id),
+                                  deleteIcon: const Icon(Icons.close, size: 15),
+                                  onDeleted: () => setDialogState(
+                                    () => selectedBundleIds.remove(id),
+                                  ),
+                                  backgroundColor: const Color(0xFFE8F5E9),
+                                  side: const BorderSide(
+                                    color: Color(0xFF81C784),
+                                  ),
+                                  labelStyle: const TextStyle(
+                                    color: Color(0xFF2E7D32),
+                                    fontWeight: FontWeight.w800,
+                                    fontSize: 11,
+                                  ),
+                                ),
+                              );
+                            }).toList(),
+                          ),
+                        ),
+                      ],
+                      if (validationMessage != null) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          validationMessage!,
+                          style: const TextStyle(
+                            color: Color(0xFFC62828),
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                      const SizedBox(height: 10),
+                      DropdownButtonFormField<String>(
+                        initialValue: selectedReason,
+                        decoration: InputDecoration(
+                          labelText: 'Reason',
+                          prefixIcon: const Icon(
+                            Icons.flag_outlined,
+                            color: Color(0xFFC2105C),
+                          ),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                        ),
+                        items: reasonOptions
+                            .map(
+                              (reason) => DropdownMenuItem(
+                                value: reason,
+                                child: Text(reason),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: (value) =>
+                            setDialogState(() => selectedReason = value),
+                      ),
+                      if (selectedReason == 'Other') ...[
+                        const SizedBox(height: 12),
+                        _PinkTextField(
+                          controller: commentController,
+                          label: 'Comment',
+                          hint: 'Optional note',
+                          icon: Icons.notes_rounded,
+                          maxLines: 2,
+                        ),
+                      ],
+                      const SizedBox(height: 14),
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: ElevatedButton.icon(
+                          onPressed: isSaving
+                              ? null
+                              : () async {
+                                  final reason = selectedReason?.trim() ?? '';
+                                  final instances = _bundleInstancesFromData(
+                                    bundle,
+                                  );
+                                  if (selectedBundleIds.isEmpty) {
+                                    setDialogState(() {
+                                      validationMessage =
+                                          'Invalid Bundle ID number.';
+                                    });
+                                    return;
+                                  }
+                                  if (reason.isEmpty) {
+                                    setDialogState(
+                                      () => validationMessage =
+                                          'Please select a reason.',
+                                    );
+                                    return;
+                                  }
+
+                                  setDialogState(() {
+                                    isSaving = true;
+                                    validationMessage = null;
+                                  });
+
+                                  try {
+                                    for (final selectedId
+                                        in selectedBundleIds) {
+                                      final instanceIndex = instances
+                                          .indexWhere((instance) {
+                                            final index = instances.indexOf(
+                                              instance,
+                                            );
+                                            final instanceId =
+                                                instance['id']
+                                                    ?.toString()
+                                                    .trim() ??
+                                                _bundleInstanceId(
+                                                  bundle['bundleId']
+                                                          ?.toString() ??
+                                                      '',
+                                                  index,
+                                                );
+                                            return instanceId == selectedId;
+                                          });
+                                      if (instanceIndex < 0) {
+                                        throw StateError(
+                                          'One selected bundle ID is no longer available.',
+                                        );
+                                      }
+                                      final instance = instances[instanceIndex];
+                                      instances[instanceIndex] = {
+                                        ...instance,
+                                        'status': 'reduced',
+                                        'reductionReason': reason,
+                                        'reductionComment':
+                                            selectedReason == 'Other'
+                                            ? commentController.text.trim()
+                                            : '',
+                                        'reducedAt': Timestamp.now(),
+                                      };
+                                    }
+
+                                    final user =
+                                        FirebaseAuth.instance.currentUser;
+                                    final docRef = FirebaseFirestore.instance
+                                        .collection('staff_inventory')
+                                        .doc(sourceDocId);
+                                    final batch = FirebaseFirestore.instance
+                                        .batch();
+                                    batch.update(docRef, {
+                                      'bundleInstances': instances,
+                                      'bundleCount':
+                                          currentStock -
+                                          selectedBundleIds.length,
+                                      'updatedAt': FieldValue.serverTimestamp(),
+                                    });
+                                    final historyRef = FirebaseFirestore
+                                        .instance
+                                        .collection('stock_adjustments')
+                                        .doc();
+                                    batch.set(historyRef, {
+                                      'type': 'bundle_stock_adjustment',
+                                      'userId': user?.uid,
+                                      'staffId': user?.uid,
+                                      'categoryId': sourceDocId,
+                                      'categoryName': bundleName,
+                                      'itemName': bundleName,
+                                      'bundlePrice': _parsePrice(
+                                        bundle['price'],
+                                      ),
+                                      'bundleInstanceIds': selectedBundleIds,
+                                      'quantity': selectedBundleIds.length,
+                                      'previousStock': currentStock,
+                                      'newStock':
+                                          currentStock -
+                                          selectedBundleIds.length,
+                                      'reason': reason,
+                                      'comment': selectedReason == 'Other'
+                                          ? commentController.text.trim()
+                                          : '',
+                                      'createdAt': FieldValue.serverTimestamp(),
+                                    });
+                                    await batch.commit();
+                                  } catch (error) {
+                                    if (context.mounted) {
+                                      setDialogState(() {
+                                        isSaving = false;
+                                        validationMessage =
+                                            'Failed to reduce bundle: $error';
+                                      });
+                                    }
+                                    return;
+                                  }
+
+                                  if (!mounted) return;
+                                  Navigator.pop(context);
+                                  showTopNotification(
+                                    context,
+                                    '${selectedBundleIds.length} bundle(s) reduced successfully!',
+                                  );
+                                },
+                          icon: const Icon(Icons.remove_circle_outline_rounded),
+                          label: isSaving
+                              ? const SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Colors.white,
+                                  ),
+                                )
+                              : const Text('Reduce Bundle'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFFC2105C),
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 10),
+                            minimumSize: const Size(190, 42),
+                            maximumSize: const Size(210, 42),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(16),
                             ),
                           ),
                         ),
-                        IconButton(
-                          onPressed: () => Navigator.pop(context),
-                          icon: const Icon(Icons.close_rounded),
-                          color: const Color(0xFFC2105C),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    _InfoChip(
-                      icon: Icons.inventory_2_rounded,
-                      label: '$bundleName - Stock: $currentStock',
-                      color: const Color(0xFFC2105C),
-                    ),
-                    const SizedBox(height: 14),
-                    _PinkTextField(
-                      controller: qtyController,
-                      label: 'Quantity to reduce',
-                      hint: 'Enter quantity',
-                      icon: Icons.remove_circle_outline,
-                      keyboardType: TextInputType.number,
-                    ),
-                    const SizedBox(height: 12),
-                    DropdownButtonFormField<String>(
-                      initialValue: selectedReason,
-                      decoration: InputDecoration(
-                        labelText: 'Reason',
-                        prefixIcon: const Icon(
-                          Icons.flag_outlined,
-                          color: Color(0xFFC2105C),
-                        ),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(14),
-                        ),
-                      ),
-                      items: reasonOptions
-                          .map(
-                            (reason) => DropdownMenuItem(
-                              value: reason,
-                              child: Text(reason),
-                            ),
-                          )
-                          .toList(),
-                      onChanged: (value) =>
-                          setDialogState(() => selectedReason = value),
-                    ),
-                    if (selectedReason == 'Other') ...[
-                      const SizedBox(height: 12),
-                      _PinkTextField(
-                        controller: commentController,
-                        label: 'Comment',
-                        hint: 'Optional note',
-                        icon: Icons.notes_rounded,
-                        maxLines: 2,
                       ),
                     ],
-                    const SizedBox(height: 18),
-                    ElevatedButton.icon(
-                      onPressed: () async {
-                        final qty = _parseInt(qtyController.text);
-                        final reason = selectedReason?.trim() ?? '';
-                        if (qty <= 0 || qty > currentStock) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            _buildSnackBar(
-                              'Enter a valid reduction quantity',
-                              isError: true,
-                            ),
-                          );
-                          return;
-                        }
-                        if (reason.isEmpty) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            _buildSnackBar(
-                              'Please select a reason',
-                              isError: true,
-                            ),
-                          );
-                          return;
-                        }
-
-                        final user = FirebaseAuth.instance.currentUser;
-                        final docRef = FirebaseFirestore.instance
-                            .collection('staff_inventory')
-                            .doc(sourceDocId);
-                        await docRef.update({
-                          'bundleCount': currentStock - qty,
-                          'updatedAt': FieldValue.serverTimestamp(),
-                        });
-                        await FirebaseFirestore.instance
-                            .collection('stock_adjustments')
-                            .add({
-                              'type': 'bundle_stock_adjustment',
-                              'userId': user?.uid,
-                              'staffId': user?.uid,
-                              'categoryId': sourceDocId,
-                              'categoryName': bundleName,
-                              'itemName': bundleName,
-                              'quantity': qty,
-                              'previousStock': currentStock,
-                              'newStock': currentStock - qty,
-                              'reason': reason,
-                              'comment': selectedReason == 'Other'
-                                  ? commentController.text.trim()
-                                  : '',
-                              'createdAt': FieldValue.serverTimestamp(),
-                            });
-
-                        if (!mounted) return;
-                        Navigator.pop(context);
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          _buildSnackBar('Bundle reduced successfully!'),
-                        );
-                      },
-                      icon: const Icon(Icons.remove_circle_outline_rounded),
-                      label: const Text('Reduce Bundle'),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFFC2105C),
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(vertical: 10),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(16),
-                        ),
-                      ),
-                    ),
-                  ],
+                  ),
                 ),
               ),
             );
@@ -1715,7 +3059,7 @@ class _AllCategPageState extends State<AllCategPage>
       },
     );
 
-    qtyController.dispose();
+    bundleIdController.dispose();
     commentController.dispose();
   }
 
@@ -1746,6 +3090,10 @@ class _AllCategPageState extends State<AllCategPage>
         return StatefulBuilder(
           builder: (context, setDialogState) {
             return Dialog(
+              insetPadding: const EdgeInsets.symmetric(
+                horizontal: 32,
+                vertical: 24,
+              ),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(28),
               ),
@@ -1760,7 +3108,7 @@ class _AllCategPageState extends State<AllCategPage>
                       children: [
                         Expanded(
                           child: Text(
-                            'Reduce Bundle #${instance['number'] ?? instanceIndex + 1}',
+                            'Reduce Bundle $instanceId',
                             style: const TextStyle(
                               color: Color(0xFF4A0020),
                               fontSize: 20,
@@ -1886,8 +3234,9 @@ class _AllCategPageState extends State<AllCategPage>
 
                         if (!mounted) return;
                         Navigator.pop(context);
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          _buildSnackBar('Bundle reduced successfully!'),
+                        showTopNotification(
+                          context,
+                          'Bundle reduced successfully!',
                         );
                       },
                       icon: const Icon(Icons.remove_circle_outline_rounded),
@@ -1916,127 +3265,396 @@ class _AllCategPageState extends State<AllCategPage>
   Future<void> _showBundleReductionHistory(Map<String, dynamic> bundle) async {
     final sourceDocId = bundle['sourceDocId']?.toString() ?? '';
     final bundleName = bundle['name']?.toString() ?? 'Bundle';
+    final bundleItemNames = (bundle['items'] as List?)
+            ?.whereType<Map>()
+            .map((item) => item['name']?.toString() ?? '')
+            .where((name) => name.isNotEmpty)
+            .join(' ') ??
+        '';
+    var historySearch = '';
+    DateTime? historyDate = DateTime.now();
 
     await showDialog<void>(
       context: context,
-      builder: (context) {
-        return Dialog(
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(24),
-          ),
-          child: Container(
-            width: double.maxFinite,
-            constraints: const BoxConstraints(maxHeight: 540),
-            padding: const EdgeInsets.all(18),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        '$bundleName History',
-                        style: const TextStyle(
-                          color: Color(0xFF4A0020),
-                          fontSize: 18,
-                          fontWeight: FontWeight.w900,
-                        ),
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          return Dialog(
+            insetPadding: const EdgeInsets.symmetric(
+              horizontal: 24,
+              vertical: 24,
+            ),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(24),
+            ),
+            child: Container(
+              width: double.infinity,
+              constraints: const BoxConstraints(maxWidth: 640, maxHeight: 600),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(24),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.fromLTRB(16, 12, 8, 12),
+                    decoration: const BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: [Color(0xFFC2105C), Color(0xFFE91E8C)],
+                      ),
+                      borderRadius: BorderRadius.vertical(
+                        top: Radius.circular(24),
                       ),
                     ),
-                    IconButton(
-                      onPressed: () => Navigator.pop(context),
-                      icon: const Icon(Icons.close_rounded),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 10),
-                Flexible(
-                  child: FutureBuilder<QuerySnapshot>(
-                    future: FirebaseFirestore.instance
-                        .collection('stock_adjustments')
-                        .where('categoryId', isEqualTo: sourceDocId)
-                        .get(),
-                    builder: (context, snapshot) {
-                      if (snapshot.connectionState == ConnectionState.waiting) {
-                        return const Center(
-                          child: CircularProgressIndicator(
-                            color: Color(0xFFC2105C),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.history_rounded, color: Colors.white),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text(
+                                'Bundle History',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w900,
+                                ),
+                              ),
+                            ],
                           ),
-                        );
-                      }
-                      final docs =
-                          (snapshot.data?.docs ?? []).where((doc) {
-                            final data = doc.data() as Map<String, dynamic>?;
-                            return data?['type'] == 'bundle_stock_adjustment';
-                          }).toList()..sort((a, b) {
-                            final aData = a.data() as Map<String, dynamic>?;
-                            final bData = b.data() as Map<String, dynamic>?;
-                            final aTime =
-                                (aData?['createdAt'] as Timestamp?)?.toDate() ??
-                                DateTime.fromMillisecondsSinceEpoch(0);
-                            final bTime =
-                                (bData?['createdAt'] as Timestamp?)?.toDate() ??
-                                DateTime.fromMillisecondsSinceEpoch(0);
-                            return bTime.compareTo(aTime);
-                          });
-                      if (docs.isEmpty) {
-                        return const Center(
-                          child: Text('No bundle reductions yet.'),
-                        );
-                      }
-                      return ListView.separated(
-                        itemCount: docs.length,
-                        separatorBuilder: (_, _) => const SizedBox(height: 8),
-                        itemBuilder: (context, index) {
-                          final data =
-                              docs[index].data() as Map<String, dynamic>;
-                          return Container(
-                            padding: const EdgeInsets.all(12),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFFFFF0F5),
-                              borderRadius: BorderRadius.circular(14),
-                              border: Border.all(
-                                color: const Color(0xFFF8BBD0),
+                        ),
+                        IconButton(
+                          onPressed: () => Navigator.pop(context),
+                          icon: const Icon(Icons.close_rounded),
+                          color: Colors.white,
+                        ),
+                      ],
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            onChanged: (value) => setDialogState(
+                              () => historySearch = value.trim().toLowerCase(),
+                            ),
+                            decoration: InputDecoration(
+                              hintText:
+                                  'Search bundle, ID, price, reason, date',
+                              prefixIcon: const Icon(Icons.search_rounded),
+                              isDense: true,
+                              filled: true,
+                              fillColor: const Color(0xFFFFF0F5),
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(12),
                               ),
                             ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  '${data['quantity']} bundle(s) reduced',
-                                  style: const TextStyle(
-                                    color: Color(0xFF4A0020),
-                                    fontWeight: FontWeight.w900,
-                                  ),
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  'Reason: ${data['reason'] ?? ''}',
-                                  style: const TextStyle(
-                                    color: Color(0xFFAD1457),
-                                    fontSize: 12,
-                                  ),
-                                ),
-                                if ((data['comment']?.toString() ?? '')
-                                    .isNotEmpty)
-                                  Text(
-                                    'Note: ${data['comment']}',
-                                    style: const TextStyle(fontSize: 12),
-                                  ),
-                              ],
+                          ),
+                        ),
+                        IconButton(
+                          onPressed: () async {
+                            final picked = await showDatePicker(
+                              context: context,
+                              initialDate: historyDate ?? DateTime.now(),
+                              firstDate: DateTime(2020),
+                              lastDate: DateTime(2100),
+                            );
+                            if (picked != null) {
+                              setDialogState(() => historyDate = picked);
+                            }
+                          },
+                          icon: const Icon(Icons.calendar_month_rounded),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      child: Wrap(
+                        spacing: 8,
+                        children: [
+                          ChoiceChip(
+                            label: const Text('All'),
+                            selected: historySearch.isEmpty,
+                            onSelected: (_) =>
+                                setDialogState(() => historySearch = ''),
+                          ),
+                          ChoiceChip(
+                            label: Text(bundleName),
+                            selected: historySearch == bundleName.toLowerCase(),
+                            onSelected: (_) => setDialogState(
+                              () => historySearch = bundleName.toLowerCase(),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Flexible(
+                    child: FutureBuilder<QuerySnapshot>(
+                      future: FirebaseFirestore.instance
+                          .collection('stock_adjustments')
+                          .where('categoryId', isEqualTo: sourceDocId)
+                          .get(),
+                      builder: (context, snapshot) {
+                        if (snapshot.connectionState ==
+                            ConnectionState.waiting) {
+                          return const Center(
+                            child: CircularProgressIndicator(
+                              color: Color(0xFFC2105C),
                             ),
                           );
-                        },
-                      );
-                    },
+                        }
+                        final docs =
+                            (snapshot.data?.docs ?? []).where((doc) {
+                              final data = doc.data() as Map<String, dynamic>?;
+                              if (data?['type'] != 'bundle_stock_adjustment') {
+                                return false;
+                              }
+                              final timestamp =
+                                  data?['createdAt'] as Timestamp?;
+                              if (historyDate != null && timestamp != null) {
+                                final date = timestamp.toDate().toLocal();
+                                final startOfDay = DateTime(
+                                  historyDate!.year,
+                                  historyDate!.month,
+                                  historyDate!.day,
+                                );
+                                final endOfDay = startOfDay
+                                    .add(const Duration(days: 1))
+                                    .subtract(const Duration(microseconds: 1));
+                                if (date.isBefore(startOfDay) ||
+                                    date.isAfter(endOfDay)) {
+                                  return false;
+                                }
+                              }
+                              if (historySearch.isEmpty) return true;
+                              final createdAtDate = timestamp?.toDate().toLocal();
+                              final formattedDate = createdAtDate == null
+                                  ? ''
+                                  : '${createdAtDate.year.toString().padLeft(4, '0')}-${createdAtDate.month.toString().padLeft(2, '0')}-${createdAtDate.day.toString().padLeft(2, '0')} ${createdAtDate.hour.toString().padLeft(2, '0')}:${createdAtDate.minute.toString().padLeft(2, '0')}:${createdAtDate.second.toString().padLeft(2, '0')}';
+                              return [
+                                data?['categoryName']?.toString() ?? '',
+                                data?['bundleInstanceId']?.toString() ?? '',
+                                (data?['bundleInstanceIds'] as List?)?.join(
+                                      ' ',
+                                    ) ??
+                                    '',
+                                data?['bundlePrice']?.toString() ?? '',
+                                data?['reason']?.toString() ?? '',
+                                formattedDate,
+                                createdAtDate == null
+                                    ? ''
+                                    : '${createdAtDate.day.toString().padLeft(2, '0')}/${createdAtDate.month.toString().padLeft(2, '0')}/${createdAtDate.year}',
+                                createdAtDate == null
+                                    ? ''
+                                    : '${createdAtDate.month}/${createdAtDate.day}/${createdAtDate.year}',
+                                createdAtDate == null
+                                    ? ''
+                                    : '${createdAtDate.day} ${_monthName(createdAtDate.month)} ${createdAtDate.year}',
+                                createdAtDate == null
+                                    ? ''
+                                    : '${_monthName(createdAtDate.month)} ${createdAtDate.day}, ${createdAtDate.year}',
+                              ].join(' ').toLowerCase().contains(historySearch);
+                            }).toList()..sort((a, b) {
+                              final aData = a.data() as Map<String, dynamic>?;
+                              final bData = b.data() as Map<String, dynamic>?;
+                              final aTime =
+                                  (aData?['createdAt'] as Timestamp?)
+                                      ?.toDate() ??
+                                  DateTime.fromMillisecondsSinceEpoch(0);
+                              final bTime =
+                                  (bData?['createdAt'] as Timestamp?)
+                                      ?.toDate() ??
+                                  DateTime.fromMillisecondsSinceEpoch(0);
+                              return bTime.compareTo(aTime);
+                            });
+                        if (docs.isEmpty) {
+                          return const Center(
+                            child: Text('No bundle reductions yet.'),
+                          );
+                        }
+                        return ListView.separated(
+                          padding: const EdgeInsets.symmetric(horizontal: 10),
+                          itemCount: docs.length,
+                          separatorBuilder: (_, _) =>
+                              const SizedBox(height: 10),
+                          itemBuilder: (context, index) {
+                            final data =
+                                docs[index].data() as Map<String, dynamic>;
+                            final timestamp = data['createdAt'] as Timestamp?;
+                            final reducedOn = timestamp?.toDate();
+                            final reducedOnLabel = reducedOn == null
+                                ? 'Unknown date'
+                                : '${reducedOn.year.toString().padLeft(4, '0')}-${reducedOn.month.toString().padLeft(2, '0')}-${reducedOn.day.toString().padLeft(2, '0')} ${reducedOn.hour.toString().padLeft(2, '0')}:${reducedOn.minute.toString().padLeft(2, '0')}';
+                            return Container(
+                              margin: const EdgeInsets.symmetric(horizontal: 2),
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFFFF0F5),
+                                borderRadius: BorderRadius.circular(14),
+                                border: Border.all(
+                                  color: const Color(0xFFF8BBD0),
+                                ),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 8,
+                                      vertical: 4,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFFFFF3CD),
+                                      borderRadius: BorderRadius.circular(8),
+                                      border: Border.all(
+                                        color: const Color(0xFFFFD166),
+                                      ),
+                                    ),
+                                    child: Text(
+                                      bundleName,
+                                      style: const TextStyle(
+                                        color: Color(0xFF9A6700),
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w800,
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  if ((data['bundleInstanceIds'] is List &&
+                                          (data['bundleInstanceIds'] as List)
+                                              .isNotEmpty) ||
+                                      (data['bundleInstanceId']?.toString() ??
+                                              '')
+                                          .isNotEmpty) ...[
+                                    Row(
+                                      children: [
+                                        const Text(
+                                          'Bundle ID:',
+                                          style: TextStyle(
+                                            color: Color(0xFF4A0020),
+                                            fontWeight: FontWeight.w800,
+                                          ),
+                                        ),
+                                        const SizedBox(width: 6),
+                                        Expanded(
+                                          child: SingleChildScrollView(
+                                            scrollDirection: Axis.horizontal,
+                                            child: Row(
+                                              children: [
+                                                ...((data['bundleInstanceIds']
+                                                            is List)
+                                                        ? (data['bundleInstanceIds']
+                                                              as List)
+                                                        : [data['bundleInstanceId']])
+                                                    .where((id) => id != null)
+                                                    .map(
+                                                      (id) => Padding(
+                                                        padding:
+                                                            const EdgeInsets.only(
+                                                              right: 6,
+                                                            ),
+                                                        child: Chip(
+                                                          label: Text(
+                                                            id.toString(),
+                                                          ),
+                                                          backgroundColor:
+                                                              const Color(
+                                                                0xFFE8F5E9,
+                                                              ),
+                                                          labelStyle:
+                                                              const TextStyle(
+                                                                color: Color(
+                                                                  0xFF2E7D32,
+                                                                ),
+                                                                fontSize: 11,
+                                                                fontWeight:
+                                                                    FontWeight
+                                                                        .w800,
+                                                              ),
+                                                        ),
+                                                      ),
+                                                    ),
+                                              ],
+                                            ),
+                                          ),
+                                        ),
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 9,
+                                            vertical: 4,
+                                          ),
+                                          decoration: BoxDecoration(
+                                            color: const Color(0xFFC2105C),
+                                            borderRadius: BorderRadius.circular(
+                                              18,
+                                            ),
+                                          ),
+                                          child: const Text(
+                                            '-1',
+                                            style: TextStyle(
+                                              color: Colors.white,
+                                              fontWeight: FontWeight.w800,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 4),
+                                  ],
+                                  Text(
+                                    'Bundle price: PHP ${_parsePrice(data['bundlePrice'] ?? bundle['price']).toStringAsFixed(2)}',
+                                    style: const TextStyle(
+                                      color: Color(0xFFAD1457),
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 6),
+                                  Text(
+                                    'Reason: ${data['reason'] ?? ''}',
+                                    style: const TextStyle(
+                                      color: Color(0xFFAD1457),
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    'Reduced on: $reducedOnLabel',
+                                    style: const TextStyle(
+                                      color: Color(0xFFAD1457),
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                  if ((data['comment']?.toString() ?? '')
+                                      .isNotEmpty)
+                                    Text(
+                                      'Note: ${data['comment']}',
+                                      style: const TextStyle(fontSize: 12),
+                                    ),
+                                ],
+                              ),
+                            );
+                          },
+                        );
+                      },
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
-        );
-      },
+          );
+        },
+      ),
     );
   }
 
@@ -2114,7 +3732,7 @@ class _AllCategPageState extends State<AllCategPage>
             selected: _showCategories && !_showCoffee && !_showAddons,
             label: 'Categories',
             count: categoryCount,
-            icon: Icons.category_rounded,
+            icon: Icons.grid_view_rounded,
             onTap: () => setState(() {
               _showCategories = true;
               _showCoffee = false;
@@ -2145,19 +3763,6 @@ class _AllCategPageState extends State<AllCategPage>
               _showCategories = false;
               _showCoffee = true;
               _showAddons = false;
-              _selectedTableCategoryKey = null;
-            }),
-          ),
-          const SizedBox(width: 8),
-          option(
-            selected: _showAddons,
-            label: 'Add-ons',
-            count: addonCount,
-            icon: Icons.add_circle_outline_rounded,
-            onTap: () => setState(() {
-              _showCategories = false;
-              _showCoffee = false;
-              _showAddons = true;
               _selectedTableCategoryKey = null;
             }),
           ),
@@ -2271,7 +3876,10 @@ class _AllCategPageState extends State<AllCategPage>
     required List<DataColumn> columns,
     required List<DataRow> rows,
     String? subtitle,
+    VoidCallback? onView,
+    VoidCallback? onAddons,
     VoidCallback? onHistory,
+    bool compact = false,
   }) {
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 14, 16, 0),
@@ -2322,6 +3930,29 @@ class _AllCategPageState extends State<AllCategPage>
                     ],
                   ),
                 ),
+                if (onView != null)
+                  IconButton(
+                    tooltip: 'View bundle items',
+                    onPressed: onView,
+                    icon: const Icon(Icons.visibility_rounded),
+                    color: const Color(0xFFC2105C),
+                  ),
+                if (onAddons != null)
+                  TextButton.icon(
+                    onPressed: onAddons,
+                    icon: const Icon(
+                      Icons.add_circle_outline_rounded,
+                      size: 16,
+                    ),
+                    label: const Text('View add-ons'),
+                    style: TextButton.styleFrom(
+                      foregroundColor: const Color(0xFFC2105C),
+                      textStyle: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
                 if (onHistory != null)
                   IconButton(
                     tooltip: 'History',
@@ -2343,8 +3974,8 @@ class _AllCategPageState extends State<AllCategPage>
                   ),
                   dataRowMinHeight: 58,
                   dataRowMaxHeight: 70,
-                  columnSpacing: 22,
-                  horizontalMargin: 18,
+                  columnSpacing: compact ? 10 : 22,
+                  horizontalMargin: compact ? 10 : 18,
                   columns: columns,
                   rows: rows,
                 ),
@@ -2390,31 +4021,38 @@ class _AllCategPageState extends State<AllCategPage>
     if (bundleDocs.isEmpty) {
       return _buildEmptyInventoryState(
         icon: Icons.inventory_2_outlined,
-        message: 'No bundles available.',
+        message: 'No bundles found.',
       );
     }
+
+    final availableBundleCount = bundleDocs.length;
 
     return ListView(
       padding: const EdgeInsets.only(bottom: 30),
       children: [
         _tableBlock(
           title: 'Bundles',
-          subtitle:
-              '${bundleDocs.length} active bundle${bundleDocs.length == 1 ? '' : 's'}',
+          subtitle: 'Available bundles: $availableBundleCount',
+          onView: bundleDocs.length == 1
+              ? () => _showBundleItemsDialog(bundleDocs.first)
+              : null,
+          onHistory: bundleDocs.length == 1
+              ? () => _showBundleReductionHistory(bundleDocs.first)
+              : null,
           columns: [
             _tableColumn('ID'),
-            _tableColumn('Name'),
-            _tableColumn('Items'),
+            _tableColumn('Bundle Name'),
             _tableColumn('Price'),
             _tableColumn('Stock'),
+            _tableColumn('Expire date'),
             _tableColumn('Action'),
           ],
           rows: bundleDocs.map((bundle) {
             final bundleName = bundle['name']?.toString() ?? 'Bundle';
-            final bundleItems = bundle['items'] as List<dynamic>? ?? [];
             final bundleStock = _bundleStockForData(bundle);
             final bundlePrice = _parsePrice(bundle['price']);
             final bundleId = bundle['bundleId']?.toString().trim() ?? '';
+            final bundleExpirationDate = _bundleExpirationDate(bundle);
 
             return DataRow(
               cells: [
@@ -2426,7 +4064,6 @@ class _AllCategPageState extends State<AllCategPage>
                   color: const Color(0xFFC2105C),
                 ),
                 _tableCell(bundleName, width: 180, weight: FontWeight.w900),
-                _tableCell('${bundleItems.length}', width: 70),
                 _tableCell(
                   'PHP ${bundlePrice.toStringAsFixed(2)}',
                   width: 100,
@@ -2437,21 +4074,11 @@ class _AllCategPageState extends State<AllCategPage>
                   width: 70,
                   color: _stockColor(bundleStock),
                 ),
+                _tableCell(bundleExpirationDate, width: 120),
                 DataCell(
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      IconButton(
-                        tooltip: 'View Bundle Items',
-                        onPressed: () => _showBundleItemsDialog(bundle),
-                        icon: const Icon(Icons.visibility_rounded),
-                        color: const Color(0xFFC2105C),
-                      ),
-                      _tableReduceButton(
-                        enabled: bundleStock > 0,
-                        onPressed: () => _showBundleReductionDialog(bundle),
-                      ),
-                    ],
+                  _tableReduceButton(
+                    enabled: bundleStock > 0,
+                    onPressed: () => _showBundleReductionDialog(bundle),
                   ),
                 ),
               ],
@@ -2467,62 +4094,125 @@ class _AllCategPageState extends State<AllCategPage>
     final coffeeId = category['coffeeId']?.toString() ?? '';
     final items =
         (category['items'] as List?)?.cast<Map<String, dynamic>>() ?? [];
+    final addonByName = <String, Map<String, dynamic>>{};
+    for (final rawAddon in (category['addonOptions'] as List?) ?? const []) {
+      if (rawAddon is! Map) continue;
+      final addon = Map<String, dynamic>.from(rawAddon);
+      final addonName = addon['name']?.toString().trim().toLowerCase() ?? '';
+      if (addonName.isNotEmpty) {
+        addonByName.putIfAbsent(addonName, () => addon);
+      }
+    }
+    final addonDocs = addonByName.values.toList();
 
-    return _AnimatedCategorySection(
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance.collection('completed_sales').snapshots(),
+      builder: (context, salesSnapshot) {
+        var totalSoldFromReceipts = 0;
+        for (final saleDoc in salesSnapshot.data?.docs ?? const []) {
+          final sale = saleDoc.data();
+          final type = sale['type']?.toString().toLowerCase() ?? 'sale';
+          final status = sale['status']?.toString().toLowerCase() ?? '';
+          final sign = (type == 'refund' || status == 'refund') ? -1 : 1;
+          for (final raw in sale['items'] as List<dynamic>? ?? const []) {
+            if (raw is! Map) continue;
+            final sold = Map<String, dynamic>.from(raw);
+            if (sold['isCoffee'] != true) continue;
+            final soldCoffeeId = sold['coffeeId']?.toString().trim() ?? '';
+            final soldName = sold['name']?.toString().trim().toLowerCase() ?? '';
+            final matchesCoffee = coffeeId.isNotEmpty
+                ? soldCoffeeId == coffeeId
+                : soldName == coffeeName.trim().toLowerCase();
+            if (matchesCoffee) {
+              totalSoldFromReceipts += sign * _parseInt(sold['quantity'], fallback: 1);
+            }
+          }
+        }
+        return _AnimatedCategorySection(
       index: index,
       child: _tableBlock(
-        title: coffeeName,
-        subtitle: coffeeId.isNotEmpty
-            ? '$coffeeId - ${items.length} size${items.length == 1 ? '' : 's'}'
-            : '${items.length} size${items.length == 1 ? '' : 's'}',
+        title: 'Coffee',
+        subtitle: 'Available Coffee Items: 1',
+        onAddons: addonDocs.isEmpty
+            ? null
+            : () => _showCoffeeAddonsDialog(addonDocs, category),
+        onHistory: () => _showCoffeeVoidHistory(category),
+        compact: true,
         columns: [
-          _tableColumn('Size'),
-          _tableColumn('Add-ons'),
-          _tableColumn('Base'),
-          _tableColumn('Price'),
+          _tableColumn('ID'),
+          _tableColumn('Coffee Name'),
+          _tableColumn('Small'),
+          _tableColumn('Medium'),
+          _tableColumn('Large'),
+          _tableColumn('Total Sold'),
           _tableColumn('Action'),
         ],
-        rows: items.map((item) {
-          final sizeName = item['name']?.toString() ?? 'Regular';
-          final price = _parsePrice(item['price']);
-          final addons =
-              (item['addons'] as List?)?.cast<Map<String, dynamic>>() ?? [];
-          final addonLabel = addons.isEmpty
-              ? '--'
-              : addons
-                    .map((addon) {
-                      final addonName = addon['name']?.toString() ?? 'Add-on';
-                      final addonPrice = _parsePrice(addon['priceDelta']);
-                      return addonPrice > 0
-                          ? '$addonName +PHP ${addonPrice.toStringAsFixed(0)}'
-                          : addonName;
-                    })
-                    .join(', ');
+        rows: [
+          if (items.isNotEmpty)
+            (() {
+              Map<String, dynamic>? itemForSize(String size) {
+                final normalizedSize = size.toLowerCase();
+                for (final item in items) {
+                  final name =
+                      item['name']?.toString().trim().toLowerCase() ?? '';
+                  if (name.startsWith(normalizedSize)) return item;
+                }
+                return null;
+              }
 
-          return DataRow(
-            cells: [
-              _tableCell(sizeName, width: 130, weight: FontWeight.w900),
-              _tableCell(addonLabel, width: 240),
-              _tableCell(
-                'PHP ${_parsePrice(category['basePrice']).toStringAsFixed(2)}',
-                width: 100,
-              ),
-              _tableCell(
-                'PHP ${price.toStringAsFixed(2)}',
-                width: 100,
-                color: const Color(0xFF2E7D32),
-              ),
-              DataCell(
-                _tableReduceButton(
-                  enabled: true,
-                  label: 'Mark Low',
-                  onPressed: () => _markCoffeeLowStock(category),
-                ),
-              ),
-            ],
-          );
-        }).toList(),
+              String priceForSize(String size) {
+                final item = itemForSize(size);
+                return item == null
+                    ? '--'
+                    : 'PHP ${_parsePrice(item['price']).toStringAsFixed(2)}';
+              }
+
+              final totalSold = totalSoldFromReceipts < 0
+                  ? 0
+                  : totalSoldFromReceipts;
+
+              return DataRow(
+                cells: [
+                  _tableCell(
+                    coffeeId.isNotEmpty ? coffeeId : '--',
+                    width: 105,
+                    color: const Color(0xFFC2105C),
+                  ),
+                  _tableCell(coffeeName, width: 145, weight: FontWeight.w900),
+                  _tableCell(
+                    priceForSize('small'),
+                    width: 88,
+                    color: const Color(0xFF2E7D32),
+                  ),
+                  _tableCell(
+                    priceForSize('medium'),
+                    width: 88,
+                    color: const Color(0xFF2E7D32),
+                  ),
+                  _tableCell(
+                    priceForSize('large'),
+                    width: 88,
+                    color: const Color(0xFF2E7D32),
+                  ),
+                  _tableCell(
+                    '$totalSold',
+                    width: 75,
+                    color: const Color(0xFF2E7D32),
+                  ),
+                  DataCell(
+                    _tableReduceButton(
+                      enabled: true,
+                      label: 'Void',
+                      onPressed: () => _showCoffeeVoidDialog(category),
+                    ),
+                  ),
+                ],
+              );
+            })(),
+        ],
       ),
+        );
+      },
     );
   }
 
@@ -2876,13 +4566,47 @@ class _AllCategPageState extends State<AllCategPage>
                         ),
                         const SizedBox(width: 12),
                         Expanded(
-                          child: Text(
-                            sizeName,
-                            style: const TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w800,
-                              color: Color(0xFF1A0A10),
-                            ),
+                                        child: Wrap(
+                                          spacing: 8,
+                                          runSpacing: 4,
+                                          crossAxisAlignment:
+                                              WrapCrossAlignment.center,
+                                          children: [
+                                            Text(
+                                              itemName,
+                                              style: const TextStyle(
+                                                fontWeight: FontWeight.w800,
+                                                fontSize: 15,
+                                                color: Color(0xFFC2105C),
+                                              ),
+                                            ),
+                                            if ((categoryId ?? '').isNotEmpty)
+                                              Container(
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                      horizontal: 8,
+                                                      vertical: 4,
+                                                    ),
+                                                decoration: BoxDecoration(
+                                                  color: const Color(0xFFE8F5E9),
+                                                  borderRadius:
+                                                      BorderRadius.circular(8),
+                                                  border: Border.all(
+                                                    color: const Color(
+                                                      0xFF81C784,
+                                                    ),
+                                                  ),
+                                                ),
+                                                child: Text(
+                                                  'ID: $categoryId',
+                                                  style: const TextStyle(
+                                                    color: Color(0xFF2E7D32),
+                                                    fontSize: 11,
+                                                    fontWeight: FontWeight.w800,
+                                                  ),
+                                                ),
+                                              ),
+                                          ],
                           ),
                         ),
                         _ItemTag(
@@ -2926,6 +4650,232 @@ class _AllCategPageState extends State<AllCategPage>
   }
 
   */
+
+  Future<void> _showCoffeeAddonsDialog(
+    List<Map<String, dynamic>> addonDocs,
+    Map<String, dynamic> category,
+  ) async {
+    var searchQuery = '';
+    await showDialog<void>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          return Dialog(
+            insetPadding: const EdgeInsets.symmetric(
+              horizontal: 24,
+              vertical: 24,
+            ),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(24),
+            ),
+            clipBehavior: Clip.antiAlias,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 760, maxHeight: 560),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.fromLTRB(18, 14, 10, 14),
+                    decoration: const BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: [Color(0xFFC2105C), Color(0xFFE91E8C)],
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(
+                          Icons.add_circle_outline_rounded,
+                          color: Colors.white,
+                        ),
+                        const SizedBox(width: 10),
+                        const Expanded(
+                          child: Text(
+                            'Coffee Add-ons',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 18,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                        ),
+                        IconButton(
+                          onPressed: () => Navigator.pop(context),
+                          icon: const Icon(Icons.close_rounded),
+                          color: Colors.white,
+                        ),
+                      ],
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+                    child: TextField(
+                      onChanged: (value) => setDialogState(
+                        () => searchQuery = value.trim().toLowerCase(),
+                      ),
+                      decoration: InputDecoration(
+                        hintText: 'Search add-ons',
+                        prefixIcon: const Icon(
+                          Icons.search_rounded,
+                          color: Color(0xFFC2105C),
+                        ),
+                        filled: true,
+                        fillColor: const Color(0xFFFFF0F5),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(14),
+                          borderSide: const BorderSide(
+                            color: Color(0xFFF8BBD0),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  Expanded(
+                    child: Builder(
+                      builder: (context) {
+                        final filteredAddons = addonDocs.where((addon) {
+                          if (searchQuery.isEmpty) return true;
+                          return [
+                            _displayItemId(addon),
+                            addon['name']?.toString() ?? '',
+                            addon['status']?.toString() ?? '',
+                          ].join(' ').toLowerCase().contains(searchQuery);
+                        }).toList();
+                        if (filteredAddons.isEmpty) {
+                          return const Center(
+                            child: Text(
+                              'No add-ons found.',
+                              style: TextStyle(color: Color(0xFFAD1457)),
+                            ),
+                          );
+                        }
+                        return SingleChildScrollView(
+                          padding: const EdgeInsets.fromLTRB(12, 8, 12, 16),
+                          child: Table(
+                            columnWidths: const {
+                              0: FlexColumnWidth(1.1),
+                              1: FlexColumnWidth(1.5),
+                              2: FlexColumnWidth(1.0),
+                              3: FlexColumnWidth(0.9),
+                            },
+                            border: TableBorder(
+                              horizontalInside: BorderSide(
+                                color: Color(0xFFF8BBD0),
+                              ),
+                            ),
+                            children: [
+                              TableRow(
+                                decoration: BoxDecoration(
+                                  color: const Color(
+                                    0xFFC2105C,
+                                  ).withOpacity(0.08),
+                                ),
+                                children: const [
+                                  _AddonHeaderCell('ID'),
+                                  _AddonHeaderCell('Add-on'),
+                                  _AddonHeaderCell('Status'),
+                                  _AddonHeaderCell('Price'),
+                                ],
+                              ),
+                              ...filteredAddons.map((addon) {
+                                final addonId = _displayItemId(addon);
+                                final addonName =
+                                    addon['name']?.toString() ?? 'Add-on';
+                                final status =
+                                    addon['status']?.toString() ??
+                                    (addon['isAvailable'] == false
+                                        ? 'Unavailable'
+                                        : 'Available');
+                                final price = _parsePrice(
+                                  addon['priceDelta'] ?? addon['price'],
+                                );
+                                return TableRow(
+                                  children: [
+                                    _AddonCell(
+                                      addonId,
+                                      color: const Color(0xFF2E7D32),
+                                    ),
+                                    _AddonCell(
+                                      addonName,
+                                      weight: FontWeight.w800,
+                                    ),
+                                    _AddonCell(
+                                      status,
+                                      color: status.toLowerCase() == 'available'
+                                          ? const Color(0xFF2E7D32)
+                                          : const Color(0xFFC62828),
+                                    ),
+                                    _AddonCell(
+                                      'PHP ${price.toStringAsFixed(2)}',
+                                      color: const Color(0xFF2E7D32),
+                                    ),
+                                  ],
+                                );
+                              }),
+                            ],
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Future<void> _showAddonVoidNotice(
+    Map<String, dynamic> addon,
+    Map<String, dynamic> category,
+  ) async {
+    final addonName = addon['name']?.toString() ?? 'Add-on';
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Void add-on?'),
+        content: Text('Record $addonName as voided?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFC2105C),
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('Void'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    try {
+      await FirebaseFirestore.instance.collection('stock_adjustments').add({
+        'type': 'addon_void',
+        'categoryId': category['sourceDocId']?.toString() ?? '',
+        'categoryName': category['categoryName']?.toString() ?? 'Coffee',
+        'itemId': _displayItemId(addon),
+        'itemName': addonName,
+        'quantity': 1,
+        'unitPrice': _parsePrice(addon['priceDelta'] ?? addon['price']),
+        'reason': 'Voided',
+        'userId': FirebaseAuth.instance.currentUser?.uid,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+      if (!mounted) return;
+      showTopNotification(context, '$addonName voided successfully!');
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        _buildSnackBar('Failed to void add-on: $error', isError: true),
+      );
+    }
+  }
 
   Widget _buildAddonList(List<Map<String, dynamic>> addonDocs) {
     if (addonDocs.isEmpty) {
@@ -2987,7 +4937,6 @@ class _AllCategPageState extends State<AllCategPage>
 
   Widget _buildCategoryTable(Map<String, dynamic> category, int index) {
     final categoryName = category['categoryName']?.toString() ?? 'Unknown';
-    final categoryLabel = _brandCategory(categoryName);
     final items =
         (category['items'] as List?)?.cast<Map<String, dynamic>>() ?? [];
 
@@ -2995,15 +4944,26 @@ class _AllCategPageState extends State<AllCategPage>
       index: index,
       child: _tableBlock(
         title: categoryName,
-        subtitle: categoryLabel,
-        onHistory: () =>
-            _showStockAdjustmentHistory(categoryName: categoryName),
+        subtitle: 'Available items: ${items.length}',
+        onHistory: () => _showStockAdjustmentHistory(
+          categoryName: categoryName,
+          categoryId:
+              category['categoryId']?.toString() ??
+              (items.isNotEmpty
+                  ? items.first['sourceDocId']?.toString()
+                  : null),
+          itemIds: {
+            for (final item in items)
+              '${item['name']?.toString().toLowerCase() ?? ''}|${item['variant']?.toString().toLowerCase() ?? ''}':
+                  _displayItemId(item),
+          },
+        ),
         columns: [
           _tableColumn('ID'),
-          _tableColumn('Name'),
+          _tableColumn('Items Name'),
           _tableColumn('Price'),
           _tableColumn('Stock'),
-          _tableColumn('Expiry'),
+          _tableColumn('Expire date'),
           _tableColumn('Action'),
         ],
         rows: items.map((item) {
@@ -3064,11 +5024,14 @@ class _AllCategPageState extends State<AllCategPage>
     );
   }
 
-  Widget _buildCategoryList(List<Map<String, dynamic>> categoryDocs) {
+  Widget _buildCategoryList(
+    List<Map<String, dynamic>> categoryDocs, {
+    String emptyMessage = 'No items found.',
+  }) {
     if (categoryDocs.isEmpty) {
       return _buildEmptyInventoryState(
         icon: Icons.category_outlined,
-        message: 'No category items available.',
+        message: emptyMessage,
       );
     }
 
@@ -3096,24 +5059,83 @@ class _AllCategPageState extends State<AllCategPage>
             height: 54,
             child: ListView.separated(
               scrollDirection: Axis.horizontal,
-              itemCount: categoryDocs.length,
+              itemCount: categoryDocs.length + 1,
               separatorBuilder: (_, __) => const SizedBox(width: 10),
               itemBuilder: (context, index) {
-                final category = categoryDocs[index];
+                if (index == 0) {
+                  final selected = _showAllCategoryItems;
+                  return Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      onTap: () => setState(() {
+                        _showAllCategoryItems = true;
+                        _selectedTableCategoryKey = '__all__';
+                      }),
+                      borderRadius: BorderRadius.circular(16),
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 180),
+                        constraints: const BoxConstraints(minWidth: 88),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 10,
+                        ),
+                        decoration: BoxDecoration(
+                          color: selected
+                              ? const Color(0xFFC2105C)
+                              : Colors.white,
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(
+                            color: selected
+                                ? const Color(0xFFC2105C)
+                                : const Color(0xFFF8BBD0),
+                            width: 1.3,
+                          ),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.apps_rounded,
+                              size: 16,
+                              color: selected
+                                  ? Colors.white
+                                  : const Color(0xFFC2105C),
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              'All',
+                              style: TextStyle(
+                                color: selected
+                                    ? Colors.white
+                                    : const Color(0xFF8B0035),
+                                fontSize: 13,
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  );
+                }
+                final category = categoryDocs[index - 1];
                 final categoryName =
                     category['categoryName']?.toString() ?? 'Unknown';
                 final categoryKey =
                     category['categoryId']?.toString() ?? categoryName;
                 final selected =
+                    !_showAllCategoryItems &&
                     categoryKey ==
-                    (selectedCategory['categoryId']?.toString() ??
-                        selectedCategory['categoryName']?.toString() ??
-                        '');
+                        (selectedCategory['categoryId']?.toString() ??
+                            selectedCategory['categoryName']?.toString() ??
+                            '');
                 return Material(
                   color: Colors.transparent,
                   child: InkWell(
-                    onTap: () =>
-                        setState(() => _selectedTableCategoryKey = categoryKey),
+                    onTap: () => setState(() {
+                      _showAllCategoryItems = false;
+                      _selectedTableCategoryKey = categoryKey;
+                    }),
                     borderRadius: BorderRadius.circular(16),
                     child: AnimatedContainer(
                       duration: const Duration(milliseconds: 180),
@@ -3177,7 +5199,12 @@ class _AllCategPageState extends State<AllCategPage>
             ),
           ),
           const SizedBox(height: 10),
-          _buildCategoryTable(selectedCategory, 0),
+          if (_showAllCategoryItems)
+            ...categoryDocs.asMap().entries.map(
+              (entry) => _buildCategoryTable(entry.value, entry.key),
+            )
+          else
+            _buildCategoryTable(selectedCategory, 0),
         ],
       );
     }
@@ -3283,6 +5310,7 @@ class _AllCategPageState extends State<AllCategPage>
                     ElevatedButton.icon(
                       onPressed: () => _showStockAdjustmentHistory(
                         categoryName: categoryName,
+                        categoryId: categoryId,
                       ),
                       icon: const Icon(Icons.history_rounded, size: 15),
                       label: const Text('History'),
@@ -3566,7 +5594,7 @@ class _AllCategPageState extends State<AllCategPage>
                                           : _isCoffeeView
                                           ? '${widget.selectedCategoryName ?? 'Selected'} Coffee'
                                           : '${widget.selectedCategoryName ?? 'Selected'} Categories'
-                                    : 'All Categories',
+                                    : 'Inventory',
                                 style: const TextStyle(
                                   color: Colors.white,
                                   fontSize: 28,
@@ -3809,6 +5837,7 @@ class _AllCategPageState extends State<AllCategPage>
                         : data['sourceDocId'],
                     'imageUrl': data['imageUrl'],
                     'items': itemRecords,
+                    'addonOptions': data['addonOptions'] ?? const [],
                     'isCoffee': data['isCoffee'] == true,
                     'sourceDocId': data['sourceDocId'],
                     'coffeeId': data['coffeeId'],
@@ -3872,33 +5901,36 @@ class _AllCategPageState extends State<AllCategPage>
                 ) {
                   final query = _tableSearchQuery.trim().toLowerCase();
                   if (query.isEmpty) return docs;
-                  return docs.map((data) {
-                    final categoryMatches = matchesVisibleFields({
-                      'id': data['categoryId'],
-                      'name': data['categoryName'],
-                      'coffeeId': data['coffeeId'],
-                    });
-                    final items =
-                        (data['items'] as List?)
-                            ?.whereType<Map>()
-                            .map((item) => Map<String, dynamic>.from(item))
-                            .toList() ??
-                        [];
-                    final matchingItems = items
-                        .where(matchesVisibleFields)
-                        .toList();
-                    if (categoryMatches) return data;
-                    return {...data, 'items': matchingItems};
-                  }).toList();
+                  return docs
+                      .map((data) {
+                        final categoryMatches = matchesVisibleFields({
+                          'id': data['categoryId'],
+                          'name': data['categoryName'],
+                          'coffeeId': data['coffeeId'],
+                        });
+                        final items =
+                            (data['items'] as List?)
+                                ?.whereType<Map>()
+                                .map((item) => Map<String, dynamic>.from(item))
+                                .toList() ??
+                            [];
+                        final matchingItems = items
+                            .where(matchesVisibleFields)
+                            .toList();
+                        if (categoryMatches) return data;
+                        if (matchingItems.isEmpty) return null;
+                        return {...data, 'items': matchingItems};
+                      })
+                      .whereType<Map<String, dynamic>>()
+                      .toList();
                 }
 
                 bool matchesSearch(Map<String, dynamic> data) {
                   if (matchesVisibleFields(data)) return true;
                   final nestedItems = (data['items'] as List?) ?? [];
                   return nestedItems.whereType<Map>().any(
-                    (item) => matchesVisibleFields(
-                      Map<String, dynamic>.from(item),
-                    ),
+                    (item) =>
+                        matchesVisibleFields(Map<String, dynamic>.from(item)),
                   );
                 }
 
@@ -3922,10 +5954,7 @@ class _AllCategPageState extends State<AllCategPage>
                     setState(() {
                       _showCategories = false;
                       _showCoffee = coffeeDocs.isNotEmpty && bundleDocs.isEmpty;
-                      _showAddons =
-                          addonDocs.isNotEmpty &&
-                          coffeeDocs.isEmpty &&
-                          bundleDocs.isEmpty;
+                      _showAddons = false;
                     });
                   });
                 }
@@ -3936,7 +5965,7 @@ class _AllCategPageState extends State<AllCategPage>
                     addonDocs.isEmpty) {
                   return _buildEmptyInventoryState(
                     icon: Icons.category_outlined,
-                    message: 'No items available.',
+                    message: 'No items found.',
                   );
                 }
 
@@ -3973,7 +6002,10 @@ class _AllCategPageState extends State<AllCategPage>
                     ),
                     Expanded(
                       child: widget.selectedIsCoffee
-                          ? _buildCategoryList(searchedCoffeeDocs)
+                          ? _buildCategoryList(
+                              searchedCoffeeDocs,
+                              emptyMessage: 'No coffee items found.',
+                            )
                           : widget.selectedIsBundle
                           ? _buildBundleList(searchedBundleDocs)
                           : _isFilteredCategory
@@ -3981,13 +6013,20 @@ class _AllCategPageState extends State<AllCategPage>
                               widget.selectedIsCoffee
                                   ? searchedCoffeeDocs
                                   : searchedCategoryDocs,
+                              emptyMessage: widget.selectedIsCoffee
+                                  ? 'No coffee items found.'
+                                  : 'No items found.',
                             )
                           : _showCoffee
-                          ? _buildCategoryList(searchedCoffeeDocs)
-                          : _showAddons
-                          ? _buildAddonList(searchedAddonDocs)
+                          ? _buildCategoryList(
+                              searchedCoffeeDocs,
+                              emptyMessage: 'No coffee items found.',
+                            )
                           : _showCategories
-                          ? _buildCategoryList(searchedCategoryDocs)
+                          ? _buildCategoryList(
+                              searchedCategoryDocs,
+                              emptyMessage: 'No items found.',
+                            )
                           : _buildBundleList(searchedBundleDocs),
                     ),
                   ],
@@ -4002,6 +6041,52 @@ class _AllCategPageState extends State<AllCategPage>
 }
 
 // ─── Helper Widgets ──────────────────────────────────────────────────────────
+
+class _AddonHeaderCell extends StatelessWidget {
+  final String label;
+
+  const _AddonHeaderCell(this.label);
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 12),
+      child: Text(
+        label,
+        style: const TextStyle(
+          color: Color(0xFF8B0035),
+          fontSize: 12,
+          fontWeight: FontWeight.w900,
+        ),
+      ),
+    );
+  }
+}
+
+class _AddonCell extends StatelessWidget {
+  final String value;
+  final Color color;
+  final FontWeight weight;
+
+  const _AddonCell(
+    this.value, {
+    this.color = const Color(0xFF1A0A10),
+    this.weight = FontWeight.w600,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 12),
+      child: Text(
+        value,
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(color: color, fontSize: 12, fontWeight: weight),
+      ),
+    );
+  }
+}
 
 class _AnimatedCategorySection extends StatefulWidget {
   final Widget child;

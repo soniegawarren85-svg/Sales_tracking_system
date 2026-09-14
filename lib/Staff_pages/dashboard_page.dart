@@ -311,7 +311,16 @@ class _DashboardPageState extends State<DashboardPage>
   Stream<QuerySnapshot<Map<String, dynamic>>> _receiptStream() {
     if (_receiptStreamCache != null) return _receiptStreamCache!;
     final query = FirebaseFirestore.instance.collection('completed_sales');
-    return _receiptStreamCache = query.snapshots();
+    // Read the same staff receipts used by Performance.  Previously the
+    // History sheet listened to the unfiltered collection, which can be
+    // denied/empty under Firestore rules even though Performance has data.
+    final staffId = _staffDocId?.trim() ?? '';
+    // During startup the profile/staff ID can still be resolving.  In that
+    // short state Performance can already display sales, so History must not
+    // turn its stream into an intentionally empty query.
+    return _receiptStreamCache = staffId.isEmpty
+        ? query.snapshots()
+        : query.where('userId', isEqualTo: staffId).snapshots();
   }
 
   void _showHistory() {
@@ -1513,6 +1522,9 @@ class _DashboardPageState extends State<DashboardPage>
                     return Padding(
                       padding: const EdgeInsets.only(bottom: 12),
                       child: _ItemCard(
+                        key: ValueKey(
+                          '$sourceId|${data['coffeeId'] ?? ''}|$name',
+                        ),
                         itemName: name,
                         category: category,
                         imageAsset: imageUrls.isNotEmpty
@@ -2544,7 +2556,7 @@ class _Header extends StatelessWidget {
                           ),
                           Expanded(
                             child: preview.isEmpty
-                                ? const Center(
+                    ? const Center(
                                     child: Text(
                                       'No people available.',
                                       style: TextStyle(
@@ -3759,6 +3771,7 @@ class _ItemCard extends StatefulWidget {
   final VoidCallback onTap;
 
   const _ItemCard({
+    super.key,
     required this.imageAsset,
     this.imageAssets = const [],
     required this.itemName,
@@ -4113,20 +4126,43 @@ class _HistorySheetState extends State<_HistorySheet> {
   String _selectedDate = _formatDate(DateTime.now());
   String _selectedPaymentMode = 'All';
 
+  DateTime? _receiptDate(dynamic value) {
+    if (value is Timestamp) return value.toDate().toLocal();
+    if (value is DateTime) return value.toLocal();
+    if (value is num) {
+      return DateTime.fromMillisecondsSinceEpoch(value.toInt()).toLocal();
+    }
+    if (value is String) return DateTime.tryParse(value)?.toLocal();
+    return null;
+  }
+
+  DateTime? _dateForReceipt(Map<String, dynamic> data) {
+    final timestampDate = _receiptDate(data['timestamp'] ?? data['createdAt']);
+    if (timestampDate != null) return timestampDate;
+
+    final salesId = data['salesId']?.toString() ?? '';
+    final match = RegExp(r'^[A-Za-z]-?(\d{4})(\d{2})(\d{2})').firstMatch(salesId);
+    if (match == null) return null;
+    final year = int.tryParse(match.group(1)!);
+    final month = int.tryParse(match.group(2)!);
+    final day = int.tryParse(match.group(3)!);
+    if (year == null || month == null || day == null) return null;
+    return DateTime(year, month, day);
+  }
+
   Map<String, List<Map<String, dynamic>>> _groupByDate(
     Iterable<Map<String, dynamic>> receipts,
   ) {
     final grouped = <String, List<Map<String, dynamic>>>{};
     for (final data in receipts) {
-      final timestamp = data['timestamp'];
-      if (timestamp is! Timestamp) continue;
-      final dt = timestamp.toDate().toLocal();
+      final dt = _dateForReceipt(data);
+      if (dt == null) continue;
       grouped.putIfAbsent(_formatDate(dt), () => []).add(data);
     }
     for (final values in grouped.values) {
       values.sort((a, b) {
-        final at = a['timestamp'] as Timestamp?;
-        final bt = b['timestamp'] as Timestamp?;
+        final at = _dateForReceipt(a);
+        final bt = _dateForReceipt(b);
         return (bt?.millisecondsSinceEpoch ?? 0).compareTo(
           at?.millisecondsSinceEpoch ?? 0,
         );
@@ -4218,7 +4254,13 @@ class _HistorySheetState extends State<_HistorySheet> {
                 stream: widget.localReceiptStream,
                 builder: (context, localSnapshot) {
                   return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                    stream: widget.receiptStream,
+                    // Use a fresh listener when the sheet opens.  A cached
+                    // listener created before the staff profile resolved can
+                    // otherwise stay empty while the Performance listener is
+                    // already receiving the same completed sale.
+                    stream: FirebaseFirestore.instance
+                        .collection('completed_sales')
+                        .snapshots(),
                     builder: (context, snapshot) {
                       final localReceipts = localSnapshot.data ?? const [];
                       final cloudReceipts = (snapshot.data?.docs ?? [])

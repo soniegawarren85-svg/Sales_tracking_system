@@ -21,6 +21,7 @@ class MessagePage extends StatefulWidget {
 class _MessagePageState extends State<MessagePage> {
   Map<String, String>? _me;
   Set<String> _pinnedIds = {};
+  String _search = '';
 
   @override
   void initState() {
@@ -274,7 +275,13 @@ class _MessagePageState extends State<MessagePage> {
                           pinned: _pinnedIds.contains(id),
                         );
                       }
-                      final items = rows.values.toList()
+                      final items = rows.values.where((row) {
+                        final query = _search.trim().toLowerCase();
+                        return query.isEmpty ||
+                            row.name.toLowerCase().contains(query) ||
+                            row.role.toLowerCase().contains(query) ||
+                            row.lastMessage.toLowerCase().contains(query);
+                      }).toList()
                         ..sort((a, b) {
                           if (a.pinned != b.pinned) return a.pinned ? -1 : 1;
                           final unreadCompare = b.unread.compareTo(a.unread);
@@ -287,12 +294,29 @@ class _MessagePageState extends State<MessagePage> {
                       return Center(
                         child: ConstrainedBox(
                           constraints: const BoxConstraints(maxWidth: 900),
-                          child: ListView.separated(
-                            padding: const EdgeInsets.all(16),
-                            itemCount: items.length,
-                            separatorBuilder: (_, _) =>
-                                const SizedBox(height: 10),
-                            itemBuilder: (context, index) {
+                          child: Column(
+                            children: [
+                              Padding(
+                                padding: const EdgeInsets.fromLTRB(16, 16, 16, 6),
+                                child: TextField(
+                                  onChanged: (value) => setState(() => _search = value),
+                                  decoration: InputDecoration(
+                                    hintText: 'Find or start a conversation',
+                                    prefixIcon: const Icon(Icons.search_rounded),
+                                    filled: true,
+                                    fillColor: Colors.white,
+                                    border: OutlineInputBorder(
+                                      borderRadius: BorderRadius.circular(16),
+                                      borderSide: BorderSide(color: _chatPink.withOpacity(.25)),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              Expanded(child: ListView.separated(
+                                padding: const EdgeInsets.all(16),
+                                itemCount: items.length,
+                                separatorBuilder: (_, _) => const SizedBox(height: 10),
+                                itemBuilder: (context, index) {
                               final row = items[index];
                               return _EntranceItem(
                                 index: index,
@@ -307,12 +331,15 @@ class _MessagePageState extends State<MessagePage> {
                                         me: me,
                                         otherId: row.id,
                                         otherName: row.name,
+                                        otherPhotoUrl: row.photoUrl,
                                       ),
                                     ),
                                   ),
                                 ),
                               );
-                            },
+                                },
+                              )),
+                            ],
                           ),
                         ),
                       );
@@ -842,6 +869,7 @@ class ChatThreadPage extends StatefulWidget {
   final Map<String, String> me;
   final String otherId;
   final String otherName;
+  final String? otherPhotoUrl;
 
   const ChatThreadPage({
     super.key,
@@ -849,6 +877,7 @@ class ChatThreadPage extends StatefulWidget {
     required this.me,
     required this.otherId,
     required this.otherName,
+    this.otherPhotoUrl,
   });
 
   @override
@@ -931,18 +960,10 @@ class _ChatThreadPageState extends State<ChatThreadPage> {
             foregroundColor: Colors.white,
             title: Row(
               children: [
-                CircleAvatar(
-                  radius: 17,
-                  backgroundColor: Colors.white24,
-                  child: Text(
-                    widget.otherName.isEmpty
-                        ? '?'
-                        : widget.otherName[0].toUpperCase(),
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w900,
-                    ),
-                  ),
+                _ChatAvatar(
+                  name: widget.otherName,
+                  photoUrl: widget.otherPhotoUrl,
+                  online: false,
                 ),
                 const SizedBox(width: 10),
                 Expanded(
