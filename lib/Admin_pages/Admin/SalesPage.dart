@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../models/inventory.dart';
 import '../../services/inventory_service.dart';
+import '../../services/branch_session.dart';
 
 // ─── THEME ──────────────────────────────────────────────────────────
 class _C {
@@ -32,6 +33,7 @@ class _SalesPageState extends State<SalesPage> with TickerProviderStateMixin {
   String _searchQuery = '';
   final Map<String, String> _staffNameCache = {};
   final Set<String> _pendingStaffNameLoads = {};
+  Set<String> _branchStaffIds = <String>{};
 
   @override
   void initState() {
@@ -46,6 +48,19 @@ class _SalesPageState extends State<SalesPage> with TickerProviderStateMixin {
     });
     // Listen to changes
     InventoryService().addListener(_onInventoryChanged);
+    BranchSession.instance.addListener(_loadBranchStaff);
+    _loadBranchStaff();
+  }
+
+  Future<void> _loadBranchStaff() async {
+    final branchId = BranchSession.instance.branchId;
+    if (branchId == null) {
+      if (mounted) setState(() => _branchStaffIds = <String>{});
+      return;
+    }
+    final doc = await FirebaseFirestore.instance.collection('branches').doc(branchId).get();
+    final ids = (doc.data()?['staffIds'] as List<dynamic>? ?? []).map((id) => id.toString()).toSet();
+    if (mounted && BranchSession.instance.branchId == branchId) setState(() => _branchStaffIds = ids);
   }
 
   void _onInventoryChanged() {
@@ -55,6 +70,7 @@ class _SalesPageState extends State<SalesPage> with TickerProviderStateMixin {
   @override
   void dispose() {
     InventoryService().removeListener(_onInventoryChanged);
+    BranchSession.instance.removeListener(_loadBranchStaff);
     _fadeCtrl.dispose();
     super.dispose();
   }
@@ -169,6 +185,7 @@ class _SalesPageState extends State<SalesPage> with TickerProviderStateMixin {
 
   List<Inventory> _filterEntries(List<Inventory> entries) {
     return entries.where((inv) {
+      if (!BranchSession.instance.isMainBranch && !_branchStaffIds.contains(inv.ownerId)) return false;
       if (!_isSameDay(inv.timestamp, _selectedDate)) return false;
       return _matchesSearchQuery(inv);
     }).toList();

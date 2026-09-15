@@ -60,6 +60,11 @@ class _SessionGateState extends State<SessionGate> {
 
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) {
+      // Admin login supports a local session because the legacy admin flow
+      // does not always create a Firebase Auth user.
+      if (lastRole == 'admin') {
+        return const AdminDashboard();
+      }
       await prefs.remove('lastRole');
       return const LoginScreen();
     }

@@ -1,12 +1,40 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_storage/firebase_storage.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sales_tracking/Login/Login/Login.dart';
+import 'BranchAccessPage.dart';
 
-class SettingsPage extends StatelessWidget {
+class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
+
+  @override
+  State<SettingsPage> createState() => _SettingsPageState();
+}
+
+class _SettingsPageState extends State<SettingsPage> {
+  bool _isUploadingProfilePhoto = false;
+  String? _lastProfilePhotoUrl;
+  String _adminId = 'ADM-0001';
+
+  @override
+  void initState() {
+    super.initState();
+    _loadAdminId();
+  }
+
+  Future<void> _loadAdminId() async {
+    final prefs = await SharedPreferences.getInstance();
+    final savedAdminId = prefs.getString('adminId')?.trim();
+    if (!mounted || savedAdminId == null || savedAdminId.isEmpty) return;
+    setState(() => _adminId = savedAdminId);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -91,124 +119,150 @@ class SettingsPage extends StatelessWidget {
                       bottom: 65,
                       left: 24,
                       right: 24,
-                      child: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-                        stream: FirebaseAuth.instance.currentUser?.uid != null
-                            ? FirebaseFirestore.instance
-                                .collection('staff_requests')
-                                .doc(FirebaseAuth.instance.currentUser!.uid)
-                                .snapshots()
-                            : Stream<DocumentSnapshot<Map<String, dynamic>>>.empty(),
-                        builder: (context, snapshot) {
-                          final data = snapshot.data?.data();
-                          final fullName = _getFullName(data);
-                          final email = data?['email']?.toString() ?? 'No email';
-                          final role = data?['role']?.toString().trim().toLowerCase() ?? 'admin';
-                          final roleLabel = role == 'admin' ? 'Administrator' : 'Staff';
+                      child:
+                          StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+                            stream:
+                                FirebaseAuth.instance.currentUser?.uid != null
+                                ? FirebaseFirestore.instance
+                                      .collection('staff_requests')
+                                      .doc(
+                                        FirebaseAuth.instance.currentUser!.uid,
+                                      )
+                                      .snapshots()
+                                : Stream<
+                                    DocumentSnapshot<Map<String, dynamic>>
+                                  >.empty(),
+                            builder: (context, snapshot) {
+                              final data = snapshot.data?.data();
+                              final fullName = _getFullName(data);
+                              final email =
+                                  data?['email']?.toString() ?? 'No email';
+                              final adminId =
+                                  data?['adminId']?.toString() ??
+                                  data?['staffId']?.toString() ??
+                                  _adminId;
+                              final role =
+                                  data?['role']
+                                      ?.toString()
+                                      .trim()
+                                      .toLowerCase() ??
+                                  'admin';
+                              final roleLabel = role == 'admin'
+                                  ? 'Administrator'
+                                  : 'Staff';
+                              final photoUrl =
+                                  data?['photoUrl']?.toString() ??
+                                  data?['profileImageUrl']?.toString();
 
-                          return Row(
-                            children: [
-                              /// Avatar with Ring
-                              Container(
-                                padding: const EdgeInsets.all(3),
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  border: Border.all(
-                                    color: Colors.white.withOpacity(0.8),
-                                    width: 2.5,
-                                  ),
-                                  boxShadow: [
-                                    BoxShadow(
-                                      color: Colors.black.withOpacity(0.2),
-                                      blurRadius: 12,
-                                      offset: const Offset(0, 6),
-                                    )
-                                  ],
-                                ),
-                                child: const CircleAvatar(
-                                  radius: 34,
-                                  backgroundColor: Color(0xFFAD1457),
-                                  child: Icon(
-                                    Icons.person_rounded,
-                                    size: 38,
-                                    color: Colors.white,
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(width: 16),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Text(
-                                      fullName,
-                                      style: const TextStyle(
-                                        fontSize: 20,
-                                        fontWeight: FontWeight.w800,
-                                        color: Colors.white,
-                                        letterSpacing: 0.3,
+                              return Row(
+                                children: [
+                                  /// Avatar with Ring
+                                  Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      _buildAdminAvatar(photoUrl),
+                                      const SizedBox(height: 3),
+                                      Text(
+                                        adminId,
+                                        style: const TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.w800,
+                                          letterSpacing: 0.5,
+                                        ),
                                       ),
+                                    ],
+                                  ),
+                                  const SizedBox(width: 16),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Text(
+                                          fullName,
+                                          style: const TextStyle(
+                                            fontSize: 20,
+                                            fontWeight: FontWeight.w800,
+                                            color: Colors.white,
+                                            letterSpacing: 0.3,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 3),
+                                        Text(
+                                          email,
+                                          style: TextStyle(
+                                            fontSize: 13.5,
+                                            color: Colors.white.withOpacity(
+                                              0.85,
+                                            ),
+                                            fontWeight: FontWeight.w400,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 8),
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 10,
+                                            vertical: 4,
+                                          ),
+                                          decoration: BoxDecoration(
+                                            color: Colors.white.withOpacity(
+                                              0.2,
+                                            ),
+                                            borderRadius: BorderRadius.circular(
+                                              20,
+                                            ),
+                                            border: Border.all(
+                                              color: Colors.white.withOpacity(
+                                                0.4,
+                                              ),
+                                              width: 1,
+                                            ),
+                                          ),
+                                          child: Text(
+                                            roleLabel,
+                                            style: const TextStyle(
+                                              fontSize: 11,
+                                              color: Colors.white,
+                                              fontWeight: FontWeight.w600,
+                                              letterSpacing: 0.5,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
                                     ),
-                                    const SizedBox(height: 3),
-                                    Text(
-                                      email,
-                                      style: TextStyle(
-                                        fontSize: 13.5,
-                                        color: Colors.white.withOpacity(0.85),
-                                        fontWeight: FontWeight.w400,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 8),
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(
-                                          horizontal: 10, vertical: 4),
+                                  ),
+
+                                  /// Edit Icon
+                                  GestureDetector(
+                                    onTap: () =>
+                                        _showAccountInformation(context, data),
+                                    child: Container(
+                                      width: 38,
+                                      height: 38,
                                       decoration: BoxDecoration(
+                                        shape: BoxShape.circle,
                                         color: Colors.white.withOpacity(0.2),
-                                        borderRadius: BorderRadius.circular(20),
                                         border: Border.all(
                                           color: Colors.white.withOpacity(0.4),
                                           width: 1,
                                         ),
                                       ),
-                                      child: Text(
-                                        roleLabel,
-                                        style: const TextStyle(
-                                          fontSize: 11,
-                                          color: Colors.white,
-                                          fontWeight: FontWeight.w600,
-                                          letterSpacing: 0.5,
-                                        ),
+                                      child: const Icon(
+                                        Icons.edit_rounded,
+                                        size: 18,
+                                        color: Colors.white,
                                       ),
                                     ),
-                                  ],
-                                ),
-                              ),
-                              /// Edit Icon
-                              Container(
-                                width: 38,
-                                height: 38,
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  color: Colors.white.withOpacity(0.2),
-                                  border: Border.all(
-                                    color: Colors.white.withOpacity(0.4),
-                                    width: 1,
                                   ),
-                                ),
-                                child: const Icon(
-                                  Icons.edit_rounded,
-                                  size: 18,
-                                  color: Colors.white,
-                                ),
-                              ),
-                            ],
-                          );
-                        },
-                      ),
+                                ],
+                              );
+                            },
+                          ),
                     ),
 
                     /// Title (collapsed)
-                   
                   ],
                 ),
               ),
@@ -221,54 +275,65 @@ class SettingsPage extends StatelessWidget {
                 delegate: SliverChildListDelegate([
                   const SizedBox(height: 6),
 
-                  /// --- SECTION: Account ---
                   _sectionLabel("Account"),
                   _settingItem(
-                    icon: Icons.lock_rounded,
-                    title: "Change Password",
-                    subtitle: "Update your credentials",
-                    iconColor: const Color(0xFF8E24AA),
+                    icon: Icons.manage_accounts_rounded,
+                    title: "Account information",
+                    subtitle: "",
+                    subtitleWidget: _buildAccountInformationSummary(),
+                    iconColor: const Color(0xFF7B1FA2),
                     iconBg: const Color(0xFFF3E5F5),
-                    onTap: () => _showChangePassword(context),
+                    onTap: () => _showAccountInformation(context, null),
+                  ),
+
+                  const SizedBox(height: 6),
+
+                  _sectionLabel("Transaction settings"),
+                  _settingItem(
+                    icon: Icons.discount_rounded,
+                    title: "Discount Control",
+                    subtitle: "Manage discount permissions",
+                    iconColor: const Color(0xFFFF6F00),
+                    iconBg: const Color(0xFFFFF8E1),
+                    onTap: _showDiscountSettings,
                   ),
                   _settingItem(
-                    icon: Icons.notifications_rounded,
-                    title: "Notifications",
-                    subtitle: "Manage alerts & sounds",
-                    iconColor: const Color(0xFFE91E63),
-                    iconBg: const Color(0xFFFCE4EC),
-                    onTap: () => _showNotificationSettings(context),
-                  ),
-                  _settingItem(
-                    icon: Icons.dark_mode_rounded,
-                    title: "Dark Mode",
-                    subtitle: "Toggle dark appearance",
+                    icon: Icons.payments_rounded,
+                    title: "Payment Settings",
+                    subtitle: "Configure payment and cash drawer options",
                     iconColor: const Color(0xFF3949AB),
                     iconBg: const Color(0xFFE8EAF6),
-                    onTap: () => _showDarkMode(context),
+                    onTap: _showPaymentSettings,
                   ),
 
                   const SizedBox(height: 6),
 
-                  /// --- SECTION: Privacy ---
-                  _sectionLabel("Privacy & Safety"),
+                  _sectionLabel("Access control"),
                   _settingItem(
-                    icon: Icons.security_rounded,
-                    title: "Privacy & Security",
-                    subtitle: "Data and permissions",
+                    icon: Icons.verified_user_rounded,
+                    title: "Security and Approval",
+                    subtitle: "Manage access and approvals",
                     iconColor: const Color(0xFF00897B),
                     iconBg: const Color(0xFFE0F2F1),
-                    onTap: () => _showInfoDialog(
-                      context,
-                      'Privacy & Security',
-                      'Your account data is stored in Firebase. Keep your login details private and sign out on shared devices.',
-                    ),
+                    onTap: _showApprovalSettings,
                   ),
 
                   const SizedBox(height: 6),
 
-                  /// --- SECTION: Support ---
-                  _sectionLabel("Support"),
+                  _sectionLabel("System settings"),
+                  _settingItem(
+                    icon: Icons.account_tree_rounded,
+                    title: "Branch access",
+                    subtitle: "Manage and search branches",
+                    iconColor: const Color(0xFFD81B60),
+                    iconBg: const Color(0xFFFCE4EC),
+                    onTap: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => const BranchAccessPage(),
+                      ),
+                    ),
+                  ),
                   _settingItem(
                     icon: Icons.info_rounded,
                     title: "About App",
@@ -282,16 +347,12 @@ class SettingsPage extends StatelessWidget {
                     ),
                   ),
                   _settingItem(
-                    icon: Icons.help_rounded,
-                    title: "Help & Support",
-                    subtitle: "FAQs and contact us",
-                    iconColor: const Color(0xFFFF6F00),
-                    iconBg: const Color(0xFFFFF8E1),
-                    onTap: () => _showInfoDialog(
-                      context,
-                      'Help & Support',
-                      'For login, password, inventory, cash drawer, or order issues, contact the system administrator.',
-                    ),
+                    icon: Icons.lock_rounded,
+                    title: "Change Password",
+                    subtitle: "Update your credentials",
+                    iconColor: const Color(0xFF8E24AA),
+                    iconBg: const Color(0xFFF3E5F5),
+                    onTap: () => _showChangePassword(context),
                   ),
 
                   const SizedBox(height: 28),
@@ -323,14 +384,339 @@ class SettingsPage extends StatelessWidget {
     );
   }
 
+  Widget _buildAdminAvatar(String? photoUrl) {
+    final url = photoUrl?.trim() ?? '';
+    Widget avatar;
+    if (url.startsWith('data:image/')) {
+      final commaIndex = url.indexOf(',');
+      final bytes = commaIndex == -1
+          ? null
+          : base64Decode(url.substring(commaIndex + 1));
+      avatar = bytes == null
+          ? const Icon(Icons.person_rounded, size: 38, color: Colors.white)
+          : Image.memory(bytes, fit: BoxFit.cover, gaplessPlayback: true);
+    } else if (url.isNotEmpty) {
+      avatar = Image.network(
+        url,
+        fit: BoxFit.cover,
+        errorBuilder: (_, _, _) =>
+            const Icon(Icons.person_rounded, size: 38, color: Colors.white),
+      );
+    } else {
+      avatar = const Icon(Icons.person_rounded, size: 38, color: Colors.white);
+    }
+
+    return GestureDetector(
+      onTap: _pickAndUploadProfilePhoto,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(3),
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              border: Border.all(
+                color: Colors.white.withOpacity(0.8),
+                width: 2.5,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.2),
+                  blurRadius: 12,
+                  offset: const Offset(0, 6),
+                ),
+              ],
+            ),
+            child: ClipOval(
+              child: Container(
+                width: 68,
+                height: 68,
+                color: const Color(0xFFAD1457),
+                child: avatar,
+              ),
+            ),
+          ),
+          Positioned(
+            right: -2,
+            bottom: 0,
+            child: Container(
+              width: 23,
+              height: 23,
+              decoration: BoxDecoration(
+                color: const Color(0xFFFF8C42),
+                shape: BoxShape.circle,
+                border: Border.all(color: Colors.white, width: 2),
+              ),
+              child: _isUploadingProfilePhoto
+                  ? const Padding(
+                      padding: EdgeInsets.all(4),
+                      child: CircularProgressIndicator(
+                        color: Colors.white,
+                        strokeWidth: 2,
+                      ),
+                    )
+                  : const Icon(
+                      Icons.camera_alt_rounded,
+                      size: 12,
+                      color: Colors.white,
+                    ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _pickAndUploadProfilePhoto() async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null || uid.isEmpty || _isUploadingProfilePhoto) return;
+    try {
+      final picked = await ImagePicker().pickImage(
+        source: ImageSource.gallery,
+        maxWidth: 640,
+        maxHeight: 640,
+        imageQuality: 65,
+      );
+      if (picked == null) return;
+      setState(() => _isUploadingProfilePhoto = true);
+      final bytes = await picked.readAsBytes();
+      final photoUrl = await _uploadProfilePhoto(bytes, uid);
+      await FirebaseFirestore.instance
+          .collection('staff_requests')
+          .doc(uid)
+          .set({
+            'photoUrl': photoUrl,
+            'profileImageUrl': photoUrl,
+            'updatedAt': FieldValue.serverTimestamp(),
+          }, SetOptions(merge: true));
+      _lastProfilePhotoUrl = photoUrl;
+      await FirebaseAuth.instance.currentUser?.updatePhotoURL(
+        photoUrl.startsWith('data:image/') ? null : photoUrl,
+      );
+      if (mounted) _showStyledSnackBar('Profile photo updated successfully.');
+    } catch (_) {
+      if (mounted) {
+        _showStyledSnackBar(
+          'Unable to upload profile photo. Please try another image.',
+          isError: true,
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isUploadingProfilePhoto = false);
+    }
+  }
+
+  Future<String> _uploadProfilePhoto(Uint8List bytes, String uid) async {
+    try {
+      final imageRef = FirebaseStorage.instance.ref().child(
+        'admin_profiles/$uid-${DateTime.now().millisecondsSinceEpoch}.jpg',
+      );
+      final upload = await imageRef
+          .putData(bytes, SettableMetadata(contentType: 'image/jpeg'))
+          .timeout(const Duration(seconds: 12));
+      return upload.ref.getDownloadURL().timeout(const Duration(seconds: 12));
+    } catch (_) {
+      final dataUrl = 'data:image/jpeg;base64,${base64Encode(bytes)}';
+      if (dataUrl.length > 700000) rethrow;
+      return dataUrl;
+    }
+  }
+
+  Future<void> _showAccountInformation(
+    BuildContext context,
+    Map<String, dynamic>? incomingData,
+  ) async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    var data = <String, dynamic>{...?incomingData};
+    if (uid != null) {
+      final snapshot = await FirebaseFirestore.instance
+          .collection('staff_requests')
+          .doc(uid)
+          .get();
+      data = {...data, ...?snapshot.data()};
+    }
+    if (!mounted) return;
+
+    final currentUser = FirebaseAuth.instance.currentUser;
+    final firstName = TextEditingController(
+      text: data['firstName']?.toString() ?? '',
+    );
+    final middleName = TextEditingController(
+      text: data['middleName']?.toString() ?? '',
+    );
+    final lastName = TextEditingController(
+      text: data['lastName']?.toString() ?? '',
+    );
+    final email = TextEditingController(
+      text: data['email']?.toString() ?? currentUser?.email ?? '',
+    );
+    final age = TextEditingController(text: data['age']?.toString() ?? '');
+    final address = TextEditingController(
+      text: data['address']?.toString() ?? '',
+    );
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => Dialog(
+        insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxWidth: 620,
+            maxHeight: MediaQuery.of(dialogContext).size.height * 0.86,
+          ),
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(24, 22, 24, 18),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const Text(
+                  'Account information',
+                  style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 18),
+                TextField(
+                  controller: firstName,
+                  decoration: const InputDecoration(labelText: 'First name'),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: middleName,
+                  decoration: const InputDecoration(labelText: 'Middle name'),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: lastName,
+                  decoration: const InputDecoration(labelText: 'Last name'),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: email,
+                  keyboardType: TextInputType.emailAddress,
+                  decoration: const InputDecoration(labelText: 'Gmail / email'),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: age,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(labelText: 'Age'),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: address,
+                  maxLines: 3,
+                  decoration: const InputDecoration(labelText: 'Address'),
+                ),
+                const SizedBox(height: 18),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(dialogContext),
+                      child: const Text('Cancel'),
+                    ),
+                    const SizedBox(width: 10),
+                    FilledButton(
+                      onPressed: () async {
+                        if (uid == null) return;
+                        await FirebaseFirestore.instance
+                            .collection('staff_requests')
+                            .doc(uid)
+                            .set({
+                              'firstName': firstName.text.trim(),
+                              'middleName': middleName.text.trim(),
+                              'lastName': lastName.text.trim(),
+                              'email': email.text.trim(),
+                              'age': age.text.trim(),
+                              'address': address.text.trim(),
+                              'updatedAt': FieldValue.serverTimestamp(),
+                            }, SetOptions(merge: true));
+                        final updatedName = [
+                          firstName.text.trim(),
+                          middleName.text.trim(),
+                          lastName.text.trim(),
+                        ].where((part) => part.isNotEmpty).join(' ');
+                        if (updatedName.isNotEmpty) {
+                          await currentUser?.updateDisplayName(updatedName);
+                        }
+                        if (dialogContext.mounted) Navigator.pop(dialogContext);
+                        if (mounted) {
+                          _showStyledSnackBar('Account information updated.');
+                        }
+                      },
+                      child: const Text('Save'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    firstName.dispose();
+    middleName.dispose();
+    lastName.dispose();
+    email.dispose();
+    age.dispose();
+    address.dispose();
+  }
+
+  void _showStyledSnackBar(String message, {bool isError = false}) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: isError ? Colors.red.shade600 : Colors.green.shade600,
+      ),
+    );
+  }
+
+  Widget _buildAccountInformationSummary() {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null || uid.isEmpty) {
+      return const Text('No account information saved yet.');
+    }
+
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance
+          .collection('staff_requests')
+          .doc(uid)
+          .snapshots(),
+      builder: (context, snapshot) {
+        final data = snapshot.data?.data() ?? const <String, dynamic>{};
+        final name = _getFullName(data);
+        final email = data['email']?.toString().trim() ?? '';
+        final age = data['age']?.toString().trim() ?? '';
+        final address = data['address']?.toString().trim() ?? '';
+        final values = <String>[
+          if (name != 'Admin User') name,
+          if (email.isNotEmpty) email,
+          if (age.isNotEmpty) 'Age: $age',
+          if (address.isNotEmpty) address,
+        ];
+
+        return Text(
+          values.isEmpty
+              ? 'No account information saved yet.'
+              : values.join(' • '),
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+        );
+      },
+    );
+  }
+
   String _getFullName(Map<String, dynamic>? data) {
     if (data == null) return 'Admin User';
     final firstName = (data['firstName'] as String?)?.trim() ?? '';
     final middleName = (data['middleName'] as String?)?.trim() ?? '';
     final lastName = (data['lastName'] as String?)?.trim() ?? '';
-    final fullName = [firstName, middleName, lastName]
-        .where((part) => part.isNotEmpty)
-        .join(' ');
+    final fullName = [
+      firstName,
+      middleName,
+      lastName,
+    ].where((part) => part.isNotEmpty).join(' ');
     return fullName.isEmpty ? 'Admin User' : fullName;
   }
 
@@ -464,6 +850,326 @@ class SettingsPage extends StatelessWidget {
     );
   }
 
+  DocumentReference<Map<String, dynamic>>? get _settingsReference {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null || uid.isEmpty) return null;
+    return FirebaseFirestore.instance.collection('admin_settings').doc(uid);
+  }
+
+  Future<Map<String, dynamic>> _readAdminSettings() async {
+    final reference = _settingsReference;
+    if (reference == null) return {};
+    final snapshot = await reference.get();
+    return snapshot.data() ?? {};
+  }
+
+  Future<void> _showDiscountSettings() async {
+    final data = await _readAdminSettings();
+    if (!mounted) return;
+    final discounts = ((data['discounts'] as List<dynamic>?) ?? [])
+        .whereType<Map>()
+        .map(
+          (item) => <String, dynamic>{
+            'name': item['name']?.toString() ?? 'Discount',
+            'percent': (item['percent'] as num?)?.toDouble() ?? 0,
+          },
+        )
+        .toList();
+    if (discounts.isEmpty) {
+      discounts.addAll([
+        {'name': 'Senior', 'percent': 20.0},
+        {'name': 'PWD', 'percent': 20.0},
+      ]);
+    }
+    var enabled = data['discountsEnabled'] as bool? ?? true;
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Discount Control'),
+          content: SizedBox(
+            width: 520,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Enable discount'),
+                    subtitle: const Text('Allow discounts during staff sales'),
+                    value: enabled,
+                    onChanged: (value) => setDialogState(() => enabled = value),
+                  ),
+                  const Divider(),
+                  ...discounts.asMap().entries.map((entry) {
+                    final discount = entry.value;
+                    return ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: Text(discount['name'].toString()),
+                      subtitle: Text('${discount['percent']}% discount'),
+                      trailing: IconButton(
+                        tooltip: 'Remove discount',
+                        icon: const Icon(
+                          Icons.delete_outline,
+                          color: Colors.red,
+                        ),
+                        onPressed: () =>
+                            setDialogState(() => discounts.removeAt(entry.key)),
+                      ),
+                    );
+                  }),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: OutlinedButton.icon(
+                      onPressed: () async {
+                        final result = await _showAddDiscountDialog(context);
+                        if (result != null) {
+                          setDialogState(() => discounts.add(result));
+                        }
+                      },
+                      icon: const Icon(Icons.add),
+                      label: const Text('Add discount type'),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () async {
+                await _settingsReference?.set({
+                  'discountsEnabled': enabled,
+                  'discounts': discounts,
+                  'updatedAt': FieldValue.serverTimestamp(),
+                }, SetOptions(merge: true));
+                if (dialogContext.mounted) Navigator.pop(dialogContext);
+                if (mounted) _showStyledSnackBar('Discount settings saved.');
+              },
+              child: const Text('Save'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<Map<String, dynamic>?> _showAddDiscountDialog(
+    BuildContext parentContext,
+  ) async {
+    final nameController = TextEditingController();
+    final percentController = TextEditingController();
+    final result = await showDialog<Map<String, dynamic>>(
+      context: parentContext,
+      builder: (context) => AlertDialog(
+        title: const Text('Add discount type'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: nameController,
+              decoration: const InputDecoration(labelText: 'Discount name'),
+            ),
+            TextField(
+              controller: percentController,
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+              ),
+              decoration: const InputDecoration(labelText: 'Percent'),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () {
+              final name = nameController.text.trim();
+              final percent = double.tryParse(percentController.text.trim());
+              if (name.isEmpty ||
+                  percent == null ||
+                  percent <= 0 ||
+                  percent > 100) {
+                return;
+              }
+              Navigator.pop(context, {'name': name, 'percent': percent});
+            },
+            child: const Text('Add'),
+          ),
+        ],
+      ),
+    );
+    nameController.dispose();
+    percentController.dispose();
+    return result;
+  }
+
+  Future<void> _showPaymentSettings() async {
+    final data = await _readAdminSettings();
+    if (!mounted) return;
+    final methods = ((data['paymentMethods'] as List<dynamic>?) ?? [])
+        .map((method) => method.toString())
+        .where((method) => method.trim().isNotEmpty)
+        .toList();
+    if (methods.isEmpty) methods.addAll(['Cash', 'GCash', 'Maya']);
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Payment Settings'),
+          content: SizedBox(
+            width: 520,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text('Payment methods available in staff sales.'),
+                ),
+                const SizedBox(height: 10),
+                ...methods.asMap().entries.map(
+                  (entry) => ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.payments_outlined),
+                    title: Text(entry.value),
+                    trailing: IconButton(
+                      tooltip: 'Remove payment method',
+                      icon: const Icon(Icons.delete_outline, color: Colors.red),
+                      onPressed: () =>
+                          setDialogState(() => methods.removeAt(entry.key)),
+                    ),
+                  ),
+                ),
+                OutlinedButton.icon(
+                  onPressed: () async {
+                    final controller = TextEditingController();
+                    final method = await showDialog<String>(
+                      context: context,
+                      builder: (context) => AlertDialog(
+                        title: const Text('Add payment method'),
+                        content: TextField(
+                          controller: controller,
+                          autofocus: true,
+                          decoration: const InputDecoration(
+                            labelText: 'Method name',
+                            hintText: 'Cards',
+                          ),
+                        ),
+                        actions: [
+                          TextButton(
+                            onPressed: () => Navigator.pop(context),
+                            child: const Text('Cancel'),
+                          ),
+                          FilledButton(
+                            onPressed: () =>
+                                Navigator.pop(context, controller.text.trim()),
+                            child: const Text('Add'),
+                          ),
+                        ],
+                      ),
+                    );
+                    controller.dispose();
+                    if (method != null && method.isNotEmpty) {
+                      setDialogState(() => methods.add(method));
+                    }
+                  },
+                  icon: const Icon(Icons.add),
+                  label: const Text('Add payment method'),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () async {
+                await _settingsReference?.set({
+                  'paymentMethods': methods,
+                  'updatedAt': FieldValue.serverTimestamp(),
+                }, SetOptions(merge: true));
+                if (dialogContext.mounted) Navigator.pop(dialogContext);
+                if (mounted) _showStyledSnackBar('Payment settings saved.');
+              },
+              child: const Text('Save'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showApprovalSettings() async {
+    final data = await _readAdminSettings();
+    if (!mounted) return;
+    var voidApproval = data['voidApproval'] as bool? ?? true;
+    var refundApproval = data['refundApproval'] as bool? ?? true;
+    var discountApproval = data['discountApproval'] as bool? ?? false;
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Security and Approval'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SwitchListTile(
+                title: const Text('Void approval'),
+                subtitle: const Text('Require approval before voiding a sale'),
+                value: voidApproval,
+                onChanged: (value) =>
+                    setDialogState(() => voidApproval = value),
+              ),
+              SwitchListTile(
+                title: const Text('Refund approval'),
+                subtitle: const Text(
+                  'Require approval before processing refunds',
+                ),
+                value: refundApproval,
+                onChanged: (value) =>
+                    setDialogState(() => refundApproval = value),
+              ),
+              SwitchListTile(
+                title: const Text('Discount approval'),
+                subtitle: const Text('Require approval for staff discounts'),
+                value: discountApproval,
+                onChanged: (value) =>
+                    setDialogState(() => discountApproval = value),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () async {
+                await _settingsReference?.set({
+                  'voidApproval': voidApproval,
+                  'refundApproval': refundApproval,
+                  'discountApproval': discountApproval,
+                  'updatedAt': FieldValue.serverTimestamp(),
+                }, SetOptions(merge: true));
+                if (dialogContext.mounted) Navigator.pop(dialogContext);
+                if (mounted) _showStyledSnackBar('Approval settings saved.');
+              },
+              child: const Text('Save'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   static void _showInfoDialog(
     BuildContext context,
     String title,
@@ -505,6 +1211,7 @@ class SettingsPage extends StatelessWidget {
     required IconData icon,
     required String title,
     required String subtitle,
+    Widget? subtitleWidget,
     required Color iconColor,
     required Color iconBg,
     VoidCallback? onTap,
@@ -559,14 +1266,15 @@ class SettingsPage extends StatelessWidget {
                         ),
                       ),
                       const SizedBox(height: 2),
-                      Text(
-                        subtitle,
-                        style: TextStyle(
-                          fontSize: 12.5,
-                          color: Colors.grey[500],
-                          fontWeight: FontWeight.w400,
-                        ),
-                      ),
+                      subtitleWidget ??
+                          Text(
+                            subtitle,
+                            style: TextStyle(
+                              fontSize: 12.5,
+                              color: Colors.grey[500],
+                              fontWeight: FontWeight.w400,
+                            ),
+                          ),
                     ],
                   ),
                 ),
@@ -636,10 +1344,8 @@ class _LogoutButtonState extends State<_LogoutButton>
       onTap: () => _showLogoutDialog(context),
       child: AnimatedBuilder(
         animation: _scaleAnim,
-        builder: (context, child) => Transform.scale(
-          scale: _scaleAnim.value,
-          child: child,
-        ),
+        builder: (context, child) =>
+            Transform.scale(scale: _scaleAnim.value, child: child),
         child: Container(
           width: double.infinity,
           height: 60,
@@ -697,9 +1403,7 @@ class _LogoutButtonState extends State<_LogoutButton>
       barrierDismissible: false,
       barrierColor: Colors.black.withOpacity(0.5),
       builder: (_) => Dialog(
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(28),
-        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
         elevation: 0,
         backgroundColor: Colors.transparent,
         child: Container(
@@ -813,7 +1517,8 @@ class _LogoutButtonState extends State<_LogoutButton>
                         await FirebaseAuth.instance.signOut();
                         Navigator.of(context).pushAndRemoveUntil(
                           MaterialPageRoute(
-                              builder: (_) => const LoginScreen()),
+                            builder: (_) => const LoginScreen(),
+                          ),
                           (route) => false,
                         );
                       },

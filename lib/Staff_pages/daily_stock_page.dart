@@ -8546,12 +8546,6 @@ class _DailyStockPageState extends State<DailyStockPage>
                             ),
                           ),
                           IconButton(
-                            tooltip: 'Pending order history',
-                            onPressed: _showPendingOrderHistory,
-                            icon: const Icon(Icons.history_rounded),
-                            color: _AppColors.primary,
-                          ),
-                          IconButton(
                             tooltip: 'Close',
                             onPressed: () => Navigator.pop(drawerContext),
                             icon: const Icon(Icons.close_rounded),
@@ -8840,7 +8834,7 @@ class _DailyStockPageState extends State<DailyStockPage>
       child: Stack(
         children: [
           SingleChildScrollView(
-            padding: const EdgeInsets.fromLTRB(14, 10, 14, 76),
+            padding: const EdgeInsets.fromLTRB(14, 10, 14, 180),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [

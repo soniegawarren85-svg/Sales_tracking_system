@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../services/inventory_service.dart';
 import '../../services/expiry_notification_service.dart';
+import '../../services/branch_session.dart';
 
 import 'InventoryPage.dart';
 import 'CoffeeMenuPage.dart';
@@ -52,6 +53,16 @@ class _AdminDashboardState extends State<AdminDashboard>
     print('✅ AdminDashboard initialized');
     print('📦 Current entries: ${InventoryService().entries.length}');
     ExpiryNotificationService().checkAndNotifyExpiringItems();
+    BranchSession.instance.load();
+    BranchSession.instance.addListener(_onBranchChanged);
+  }
+
+  void _onBranchChanged() { if (mounted) setState(() => _selectedIndex = 0); }
+
+  @override
+  void dispose() {
+    BranchSession.instance.removeListener(_onBranchChanged);
+    super.dispose();
   }
 
   bool _isExpired(String? expirationDateString) {
@@ -225,24 +236,6 @@ class _AdminDashboardState extends State<AdminDashboard>
             );
           },
         ),
-        const SizedBox(width: 4),
-        StreamBuilder<QuerySnapshot>(
-          stream: FirebaseFirestore.instance
-              .collection('admin_notifications')
-              .where('isRead', isEqualTo: false)
-              .snapshots(),
-          builder: (context, snapshot) {
-            final unreadCount = snapshot.hasData
-                ? snapshot.data!.docs.length
-                : 0;
-            return _buildIconButton(Icons.notifications_none_rounded, () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const NotificationPage()),
-              );
-            }, badgeCount: unreadCount, iconSize: 22, padding: const EdgeInsets.all(10));
-          },
-        ),
         const SizedBox(width: 8),
       ],
 
@@ -394,45 +387,45 @@ class _AdminDashboardState extends State<AdminDashboard>
   Widget _buildShopTitle() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
       children: [
-        // Decorative label
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-          decoration: BoxDecoration(
-            color: Colors.white.withOpacity(0.18),
-            borderRadius: BorderRadius.circular(20),
-          ),
+        ShaderMask(
+          shaderCallback: (bounds) => const LinearGradient(
+            colors: [Color(0xFFFFD166), Color(0xFFFF8C42)],
+          ).createShader(bounds),
           child: const Text(
-            '🧁  BAKERY MANAGEMENT',
+            "Angel Bite'z",
             style: TextStyle(
-              fontSize: 9,
+              fontSize: 26,
+              fontWeight: FontWeight.w900,
               color: Colors.white,
-              letterSpacing: 1.4,
-              fontWeight: FontWeight.w700,
+              letterSpacing: -0.5,
+              height: 1.1,
             ),
           ),
         ),
-        const SizedBox(height: 10),
-        const Text(
-          "Angel'Z Bites",
-          style: TextStyle(
-            fontSize: 20,
-            fontWeight: FontWeight.w900,
-            color: Colors.white,
-            height: 1.1,
-            letterSpacing: 0.2,
-          ),
-        ),
-        const SizedBox(height: 4),
-        const Text(
-          "Cupcakes",
-          style: TextStyle(
-            fontSize: 15,
-            fontWeight: FontWeight.w500,
-            color: Colors.white70,
-            height: 1.2,
-            letterSpacing: 0.5,
-          ),
+        const SizedBox(height: 3),
+        Row(
+          children: [
+            Container(
+              width: 5,
+              height: 5,
+              decoration: const BoxDecoration(
+                shape: BoxShape.circle,
+                color: Color(0xFFFFD166),
+              ),
+            ),
+            const SizedBox(width: 6),
+            Text(
+              BranchSession.instance.isMainBranch ? 'Cupcakes • Main Branch' : 'Cupcakes • ${BranchSession.instance.displayName}',
+              style: TextStyle(
+                fontSize: 12,
+                color: Color(0xFFFFD8B5),
+                fontWeight: FontWeight.w500,
+                letterSpacing: 0.9,
+              ),
+            ),
+          ],
         ),
       ],
     );
@@ -473,53 +466,59 @@ class _AdminDashboardState extends State<AdminDashboard>
 
         final isNarrow = MediaQuery.of(context).size.width < 360;
         final avatarStack = Stack(
+          alignment: Alignment.bottomRight,
           children: [
             Container(
-              padding: const EdgeInsets.all(3),
-              decoration: BoxDecoration(
+              width: 74,
+              height: 74,
+              decoration: const BoxDecoration(
                 shape: BoxShape.circle,
-                border: Border.all(
-                  color: Colors.white.withOpacity(0.8),
-                  width: 2,
+                gradient: LinearGradient(
+                  colors: [Color(0xFFFFD166), Color(0xFFFF8C42)],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
                 ),
-                boxShadow: const [
+                boxShadow: [
                   BoxShadow(
-                    color: Colors.black26,
-                    blurRadius: 8,
-                    offset: Offset(0, 3),
+                    color: Color(0x77FF8C42),
+                    blurRadius: 18,
+                    spreadRadius: 3,
                   ),
                 ],
               ),
+              padding: const EdgeInsets.all(3),
               child: ClipOval(
                 child: Image.network(
                   kAdminAvatarUrl,
-                  width: 52,
-                  height: 52,
+                  width: 74,
+                  height: 74,
                   fit: BoxFit.cover,
                   errorBuilder: (_, _, _) => Container(
-                    width: 52,
-                    height: 52,
+                    width: 74,
+                    height: 74,
                     color: Colors.white.withOpacity(0.25),
                     child: const Icon(
                       Icons.person_rounded,
                       color: Colors.white,
-                      size: 30,
+                      size: 38,
                     ),
                   ),
                 ),
               ),
             ),
-            Positioned(
-              bottom: 2,
-              right: 2,
-              child: Container(
-                width: 13,
-                height: 13,
-                decoration: BoxDecoration(
-                  color: const Color(0xFF66BB6A),
-                  shape: BoxShape.circle,
-                  border: Border.all(color: Colors.white, width: 2),
-                ),
+            Container(
+              width: 17,
+              height: 17,
+              decoration: BoxDecoration(
+                color: const Color(0xFF43A047),
+                shape: BoxShape.circle,
+                border: Border.all(color: Colors.white, width: 2.5),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.green.withOpacity(0.55),
+                    blurRadius: 6,
+                  ),
+                ],
               ),
             ),
           ],
@@ -529,64 +528,102 @@ class _AdminDashboardState extends State<AdminDashboard>
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 4,
+                ),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFD166).withOpacity(0.18),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
+                    color: const Color(0xFFFFD166).withOpacity(0.50),
+                    width: 1,
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(
+                      Icons.workspace_premium_rounded,
+                      color: Color(0xFFFFD166),
+                      size: 12,
+                    ),
+                    const SizedBox(width: 5),
+                    const Text(
+                      'ADMIN',
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w800,
+                        color: Color(0xFFFFD166),
+                        letterSpacing: 1.0,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 7),
               Text(
                 fullName,
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(
                   color: Colors.white,
-                  fontSize: 16,
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: 0.2,
+                  fontSize: 22,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: -0.4,
+                  height: 1.1,
                 ),
               ),
-              const SizedBox(height: 4),
-              Wrap(
-                runSpacing: 6,
-                spacing: 8,
-                children: [
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 3,
+              const SizedBox(height: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 11,
+                  vertical: 5,
+                ),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                    color: Colors.white.withOpacity(0.22),
+                    width: 1,
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(
+                      Icons.badge_outlined,
+                      color: Color(0xFFFFD8B5),
+                      size: 14,
                     ),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.2),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Text(
-                      'ID: $displayId',
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 11,
+                    const SizedBox(width: 6),
+                    const Text(
+                      'ID',
+                      style: TextStyle(
+                        fontSize: 10,
                         fontWeight: FontWeight.w600,
+                        color: Color(0xFFFFB380),
                         letterSpacing: 0.8,
                       ),
                     ),
-                  ),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 3,
+                    const SizedBox(width: 5),
+                    Container(
+                      width: 1,
+                      height: 12,
+                      color: Colors.white.withOpacity(0.25),
                     ),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFFFB74D).withOpacity(0.3),
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(
-                        color: const Color(0xFFFFB74D).withOpacity(0.6),
-                        width: 1,
+                    const SizedBox(width: 5),
+                    Text(
+                      displayId,
+                      style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w800,
+                        color: Color(0xFFFFD8B5),
+                        letterSpacing: 1.2,
                       ),
                     ),
-                    child: const Text(
-                      '👑 Admin',
-                      style: TextStyle(
-                        color: Color(0xFFFFE0B2),
-                        fontSize: 11,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: 0.4,
-                      ),
-                    ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ],
           ),
@@ -653,12 +690,13 @@ class _AdminDashboardState extends State<AdminDashboard>
   //  STATS CARD
   // ══════════════════════════════════════════════════════════════════════════
   Widget _buildStatsCard() {
+    final activeBranchId = BranchSession.instance.branchId;
     return LayoutBuilder(
       builder: (context, constraints) {
         return StreamBuilder<QuerySnapshot>(
-          stream: FirebaseFirestore.instance
-              .collection('sales_inventory')
-              .snapshots(),
+          stream: activeBranchId == null
+              ? FirebaseFirestore.instance.collection('sales_inventory').snapshots()
+              : FirebaseFirestore.instance.collection('staff_inventory').where('staffId', isEqualTo: activeBranchId).snapshots(),
           builder: (context, salesSnapshot) {
             int totalStock = 0;
             int totalItems = 0;
@@ -688,9 +726,9 @@ class _AdminDashboardState extends State<AdminDashboard>
             }
 
             return StreamBuilder<QuerySnapshot>(
-              stream: FirebaseFirestore.instance
-                  .collection('staff_requests')
-                  .snapshots(),
+              stream: activeBranchId == null
+                  ? FirebaseFirestore.instance.collection('staff_requests').snapshots()
+                  : FirebaseFirestore.instance.collection('staff_requests').where('branchIds', arrayContains: activeBranchId).snapshots(),
               builder: (context, staffSnapshot) {
                 final staffCount = staffSnapshot.hasData
                     ? staffSnapshot.data!.docs.where((doc) {
@@ -939,7 +977,7 @@ class _AdminDashboardState extends State<AdminDashboard>
     IconData icon,
     VoidCallback onTap, {
     int badgeCount = 0,
-    double iconSize = 24,
+    double iconSize = 19,
     EdgeInsets? padding,
   }) {
     return GestureDetector(
@@ -948,30 +986,45 @@ class _AdminDashboardState extends State<AdminDashboard>
         clipBehavior: Clip.none,
         children: [
           Container(
+            width: 40,
+            height: 40,
             margin: const EdgeInsets.only(top: 4, bottom: 10),
-            padding: padding ?? const EdgeInsets.all(10),
+            padding: padding ?? const EdgeInsets.all(8),
             decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.18),
-              borderRadius: BorderRadius.circular(12),
+              color: Colors.white.withOpacity(0.14),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(
+                color: Colors.white.withOpacity(0.28),
+                width: 1.5,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.15),
+                  blurRadius: 10,
+                  offset: const Offset(0, 4),
+                ),
+              ],
             ),
             child: Icon(icon, color: Colors.white, size: iconSize),
           ),
           if (badgeCount > 0)
             Positioned(
-              right: -2,
-              top: 4,
+              right: -3,
+              top: 0,
               child: Container(
-                padding: const EdgeInsets.all(4),
+                constraints: const BoxConstraints(minWidth: 18, minHeight: 18),
+                padding: const EdgeInsets.symmetric(horizontal: 5),
+                alignment: Alignment.center,
                 decoration: const BoxDecoration(
                   color: Colors.redAccent,
-                  shape: BoxShape.circle,
+                  borderRadius: BorderRadius.all(Radius.circular(999)),
                 ),
                 child: Text(
-                  badgeCount.toString(),
+                  badgeCount > 99 ? '99+' : '$badgeCount',
                   style: const TextStyle(
                     color: Colors.white,
                     fontSize: 10,
-                    fontWeight: FontWeight.bold,
+                    fontWeight: FontWeight.w900,
                   ),
                 ),
               ),

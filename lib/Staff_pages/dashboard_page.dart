@@ -2735,11 +2735,9 @@ class _Header extends StatelessWidget {
                         // Brand name + tagline
                         Expanded(child: _BrandTitle()),
 
-                        // Notification + Message buttons
+                        // Message button
                         Row(
                           children: [
-                            _HelpButton(onTap: () => _showHelpSheet(context)),
-                            const SizedBox(width: 8),
                             if ((uid ?? '').isEmpty)
                               _MessageButton(onTap: onMessage)
                             else

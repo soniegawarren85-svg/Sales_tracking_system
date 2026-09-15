@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import '../../services/branch_session.dart';
 
 // ─── Palette ────────────────────────────────────────────────────────────────
 const _primary = Color(0xFFE91E63);
@@ -51,8 +52,12 @@ class ReportsPage extends StatelessWidget {
               final coffeeRefs = _CoffeeRefs.fromDocs(
                 coffeeSnapshot.data?.docs ?? const [],
               );
+              final activeBranchId = BranchSession.instance.branchId;
+              final scopedSales = activeBranchId == null
+                  ? salesSnapshot.data!.docs
+                  : salesSnapshot.data!.docs.where((doc) => doc.data()['branchId']?.toString() == activeBranchId).toList();
               final report = _ReportData.fromDocs(
-                salesSnapshot.data!.docs,
+                scopedSales,
                 coffeeRefs,
               );
 

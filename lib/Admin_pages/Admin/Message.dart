@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -22,6 +23,8 @@ class _MessagePageState extends State<MessagePage> {
   Map<String, String>? _me;
   Set<String> _pinnedIds = {};
   String _search = '';
+  String? _selectedId;
+  Timer? _searchDebounce;
 
   @override
   void initState() {
@@ -95,6 +98,14 @@ class _MessagePageState extends State<MessagePage> {
     });
   }
 
+  void _handleSearchChanged(String value) {
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(const Duration(milliseconds: 180), () {
+      if (!mounted) return;
+      setState(() => _search = value);
+    });
+  }
+
   Future<void> _togglePinned(String id) async {
     final meId = _me?['id'] ?? '';
     if (meId.isEmpty) return;
@@ -103,6 +114,15 @@ class _MessagePageState extends State<MessagePage> {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setStringList('pinned_messages_$meId', next.toList());
     if (mounted) setState(() => _pinnedIds = next);
+  }
+
+  Future<void> _deleteConversation(String chatId) async {
+    await FirebaseFirestore.instance.collection('messages').doc(chatId).delete();
+    if (mounted) {
+      setState(() {
+        _selectedId = null;
+      });
+    }
   }
 
   static String _displayName(Map<String, dynamic> data) {
@@ -138,6 +158,12 @@ class _MessagePageState extends State<MessagePage> {
   }
 
   @override
+  void dispose() {
+    _searchDebounce?.cancel();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final me = _me;
     return Scaffold(
@@ -165,15 +191,13 @@ class _MessagePageState extends State<MessagePage> {
             elevation: 0,
             foregroundColor: Colors.white,
             centerTitle: false,
-            title: Row(
-              children: const [
-                Icon(Icons.chat_bubble_rounded, size: 22),
-                SizedBox(width: 10),
-                Text(
-                  'Messages',
-                  style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: 0.2),
-                ),
-              ],
+            title: const Text(
+              'Messages',
+              style: TextStyle(
+                fontWeight: FontWeight.w600,
+                letterSpacing: 0.2,
+                fontSize: 17,
+              ),
             ),
           ),
         ),
@@ -228,6 +252,7 @@ class _MessagePageState extends State<MessagePage> {
                           photoUrl:
                               data['photoUrl']?.toString() ??
                               data['profileImageUrl']?.toString(),
+                          lastSeenAt: (data['lastLoginAt'] as Timestamp?)?.toDate(),
                         );
                       }
 
@@ -291,57 +316,57 @@ class _MessagePageState extends State<MessagePage> {
                       if (items.isEmpty) {
                         return const _EmptyInboxState();
                       }
-                      return Center(
-                        child: ConstrainedBox(
-                          constraints: const BoxConstraints(maxWidth: 900),
-                          child: Column(
-                            children: [
-                              Padding(
-                                padding: const EdgeInsets.fromLTRB(16, 16, 16, 6),
-                                child: TextField(
-                                  onChanged: (value) => setState(() => _search = value),
-                                  decoration: InputDecoration(
-                                    hintText: 'Find or start a conversation',
-                                    prefixIcon: const Icon(Icons.search_rounded),
-                                    filled: true,
-                                    fillColor: Colors.white,
-                                    border: OutlineInputBorder(
-                                      borderRadius: BorderRadius.circular(16),
-                                      borderSide: BorderSide(color: _chatPink.withOpacity(.25)),
+                      final selected = _selectedId == null
+                          ? null
+                          : rows[_selectedId];
+                      return LayoutBuilder(
+                        builder: (context, constraints) {
+                          final compact = constraints.maxWidth < 760;
+                          final contacts = _ContactsPanel(
+                            items: items,
+                            selectedId: _selectedId,
+                            search: _search,
+                            onSearchChanged: _handleSearchChanged,
+                            onSelect: (row) => setState(() => _selectedId = row.id),
+                            onPin: _togglePinned,
+                          );
+                          if (compact) {
+                            return selected == null
+                                ? contacts
+                                : _ConversationPanel(
+                                    key: ValueKey(selected.id),
+                                    chatId: _chatId(selected.id),
+                                    me: me,
+                                    other: selected,
+                                    onBack: () => setState(() => _selectedId = null),
+                                    onDeleteConversation: () => _deleteConversation(
+                                      _chatId(selected.id),
                                     ),
-                                  ),
+                                  );
+                          }
+                          return Padding(
+                            padding: const EdgeInsets.all(16),
+                            child: Row(
+                              children: [
+                                SizedBox(width: 340, child: contacts),
+                                const SizedBox(width: 16),
+                                Expanded(
+                                  child: selected == null
+                                      ? const _SelectConversationState()
+                                      : _ConversationPanel(
+                                          key: ValueKey(selected.id),
+                                          chatId: _chatId(selected.id),
+                                          me: me,
+                                          other: selected,
+                                          onDeleteConversation: () => _deleteConversation(
+                                            _chatId(selected.id),
+                                          ),
+                                        ),
                                 ),
-                              ),
-                              Expanded(child: ListView.separated(
-                                padding: const EdgeInsets.all(16),
-                                itemCount: items.length,
-                                separatorBuilder: (_, _) => const SizedBox(height: 10),
-                                itemBuilder: (context, index) {
-                              final row = items[index];
-                              return _EntranceItem(
-                                index: index,
-                                child: _InboxTile(
-                                  row: row,
-                                  onPin: () => _togglePinned(row.id),
-                                  onTap: () => Navigator.push(
-                                    context,
-                                    MaterialPageRoute(
-                                      builder: (_) => ChatThreadPage(
-                                        chatId: _chatId(row.id),
-                                        me: me,
-                                        otherId: row.id,
-                                        otherName: row.name,
-                                        otherPhotoUrl: row.photoUrl,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              );
-                                },
-                              )),
-                            ],
-                          ),
-                        ),
+                              ],
+                            ),
+                          );
+                        },
                       );
                     },
                   );
@@ -350,6 +375,33 @@ class _MessagePageState extends State<MessagePage> {
       ),
     );
   }
+}
+
+String _formatRelativeTime(DateTime? value) {
+  if (value == null) return '';
+
+  final now = DateTime.now();
+  final diff = now.difference(value);
+
+  if (diff.inDays >= 365) {
+    final years = (diff.inDays / 365).floor();
+    return years <= 1 ? '1 year ago' : '$years years ago';
+  }
+  if (diff.inDays >= 30) {
+    final months = (diff.inDays / 30).floor();
+    return months <= 1 ? '1 month ago' : '$months months ago';
+  }
+  if (diff.inDays >= 1) {
+    return diff.inDays <= 1 ? '1 day ago' : '${diff.inDays} days ago';
+  }
+  if (diff.inHours >= 1) {
+    return diff.inHours <= 1 ? '1 hour ago' : '${diff.inHours} hours ago';
+  }
+  if (diff.inMinutes >= 1) {
+    return diff.inMinutes <= 1 ? '1 minute ago' : '${diff.inMinutes} minutes ago';
+  }
+
+  return 'just now';
 }
 
 class _InboxRow {
@@ -361,6 +413,7 @@ class _InboxRow {
   final String lastMessage;
   final String? photoUrl;
   final bool pinned;
+  final DateTime? lastSeenAt;
 
   const _InboxRow({
     required this.id,
@@ -371,6 +424,7 @@ class _InboxRow {
     this.lastMessage = '',
     this.photoUrl,
     this.pinned = false,
+    this.lastSeenAt,
   });
 
   _InboxRow copyWith({
@@ -388,6 +442,447 @@ class _InboxRow {
       lastMessage: lastMessage ?? this.lastMessage,
       photoUrl: photoUrl ?? this.photoUrl,
       pinned: pinned ?? this.pinned,
+      lastSeenAt: lastSeenAt,
+    );
+  }
+}
+
+class _ContactsPanel extends StatelessWidget {
+  final List<_InboxRow> items;
+  final String? selectedId;
+  final String search;
+  final ValueChanged<String> onSearchChanged;
+  final ValueChanged<_InboxRow> onSelect;
+  final ValueChanged<String> onPin;
+
+  const _ContactsPanel({
+    required this.items,
+    required this.selectedId,
+    required this.search,
+    required this.onSearchChanged,
+    required this.onSelect,
+    required this.onPin,
+  });
+
+  @override
+  Widget build(BuildContext context) => DecoratedBox(
+        decoration: BoxDecoration(
+          color: Colors.white.withOpacity(.62),
+          borderRadius: BorderRadius.circular(22),
+          border: Border.all(color: _chatPink.withOpacity(.14)),
+        ),
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(12),
+              child: TextField(
+                onChanged: onSearchChanged,
+                decoration: InputDecoration(
+                  hintText: 'Find or start a conversation',
+                  prefixIcon: const Icon(Icons.search_rounded),
+                  filled: true,
+                  fillColor: Colors.white,
+                  isDense: true,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: BorderSide(color: _chatPink.withOpacity(.25)),
+                  ),
+                ),
+              ),
+            ),
+            Expanded(
+              child: ListView.separated(
+                padding: const EdgeInsets.fromLTRB(10, 2, 10, 10),
+                itemCount: items.length,
+                separatorBuilder: (_, _) => const SizedBox(height: 6),
+                itemBuilder: (context, index) {
+                  final row = items[index];
+                  return _InboxTile(
+                    row: row,
+                    selected: row.id == selectedId,
+                    compact: true,
+                    onPin: () => onPin(row.id),
+                    onTap: () => onSelect(row),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      );
+}
+
+class _SelectConversationState extends StatelessWidget {
+  const _SelectConversationState();
+
+  @override
+  Widget build(BuildContext context) => DecoratedBox(
+        decoration: BoxDecoration(
+          color: const Color(0xFFFFF7F9),
+          borderRadius: BorderRadius.circular(22),
+          border: Border.all(color: _chatPink.withOpacity(.14)),
+        ),
+        child: const Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.chat_bubble_outline_rounded, size: 54, color: _chatPink),
+              SizedBox(height: 14),
+              Text('Select a conversation to start chatting',
+                  style: TextStyle(color: _chatDeep, fontWeight: FontWeight.w800, fontSize: 16)),
+            ],
+          ),
+        ),
+      );
+}
+
+class _ConversationPanel extends StatefulWidget {
+  final Map<String, String> me;
+  final _InboxRow other;
+  final String chatId;
+  final VoidCallback? onBack;
+  final Future<void> Function()? onDeleteConversation;
+
+  const _ConversationPanel({
+    super.key,
+    required this.me,
+    required this.other,
+    required this.chatId,
+    this.onBack,
+    this.onDeleteConversation,
+  });
+
+  @override
+  State<_ConversationPanel> createState() => _ConversationPanelState();
+}
+
+class _ConversationPanelState extends State<_ConversationPanel> {
+  final _controller = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    _markThreadRead();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _markThreadRead() async {
+    await FirebaseFirestore.instance
+        .collection('messages')
+        .doc(widget.chatId)
+        .set(
+          {'unreadBy': {widget.me['id']!: 0}},
+          SetOptions(merge: true),
+        );
+  }
+
+  Future<void> _send() async {
+    final text = _controller.text.trim();
+    if (text.isEmpty) return;
+
+    _controller.clear();
+    final chatRef = FirebaseFirestore.instance
+        .collection('messages')
+        .doc(widget.chatId);
+
+    await chatRef.set(
+      {
+        'participantIds': [widget.me['id'], widget.other.id],
+        'participantNames': {
+          widget.me['id']: widget.me['name'],
+          widget.other.id: widget.other.name,
+        },
+        'participantPhotos': {
+          widget.me['id']: widget.me['photoUrl'] ?? '',
+          widget.other.id: widget.other.photoUrl ?? '',
+        },
+        'lastMessage': text,
+        'updatedAt': FieldValue.serverTimestamp(),
+        'unreadBy': {widget.other.id: FieldValue.increment(1)},
+      },
+      SetOptions(merge: true),
+    );
+
+    await chatRef.collection('items').add({
+      'senderId': widget.me['id'],
+      'senderName': widget.me['name'],
+      'text': text,
+      'createdAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final other = widget.other;
+    final statusText = other.online ? 'Online' : _formatRelativeTime(other.lastSeenAt);
+
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF7F9),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: _chatPink.withOpacity(.14)),
+      ),
+      child: Column(
+        children: [
+          Container(
+            padding: const EdgeInsets.fromLTRB(16, 14, 12, 14),
+            decoration: BoxDecoration(
+              border: Border(
+                bottom: BorderSide(color: _chatPink.withOpacity(.14)),
+              ),
+            ),
+            child: Row(
+              children: [
+                if (widget.onBack != null)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: IconButton(
+                      onPressed: widget.onBack,
+                      icon: const Icon(Icons.arrow_back_rounded, color: _chatDeep),
+                    ),
+                  ),
+                _ChatAvatar(
+                  name: other.name,
+                  photoUrl: other.photoUrl,
+                  online: other.online,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        other.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Color(0xFFB5175D),
+                          fontWeight: FontWeight.w800,
+                          fontSize: 17,
+                        ),
+                      ),
+                      if (statusText.isNotEmpty)
+                        Text(
+                          statusText,
+                          style: TextStyle(
+                            color: other.online ? _chatMint : Colors.white70,
+                            fontWeight: FontWeight.w600,
+                            fontSize: 13,
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+                PopupMenuButton<String>(
+                  icon: const Icon(Icons.more_vert_rounded, color: Colors.white),
+                  color: const Color(0xFF1F2430),
+                  tooltip: 'Conversation actions',
+                  onSelected: (value) async {
+                    if (value == 'delete' && widget.onDeleteConversation != null) {
+                      final shouldDelete = await showDialog<bool>(
+                        context: context,
+                        builder: (dialogContext) => AlertDialog(
+                          backgroundColor: const Color(0xFF1F2430),
+                          title: const Text(
+                            'Delete conversation?',
+                            style: TextStyle(color: Colors.white),
+                          ),
+                          content: Text(
+                            'This will permanently delete the conversation with ${widget.other.name}.',
+                            style: const TextStyle(color: Colors.white70),
+                          ),
+                          actions: [
+                            TextButton(
+                              onPressed: () => Navigator.pop(dialogContext, false),
+                              child: const Text('Cancel', style: TextStyle(color: _chatPink)),
+                            ),
+                            TextButton(
+                              onPressed: () => Navigator.pop(dialogContext, true),
+                              child: const Text('Delete', style: TextStyle(color: Colors.redAccent)),
+                            ),
+                          ],
+                        ),
+                      );
+
+                      if (shouldDelete == true) {
+                        await widget.onDeleteConversation!.call();
+                      }
+                    }
+                  },
+                  itemBuilder: (context) => const [
+                    PopupMenuItem<String>(
+                      value: 'delete',
+                      child: Text('Delete conversation'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          Expanded(
+            child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+              stream: FirebaseFirestore.instance
+                  .collection('messages')
+                  .doc(widget.chatId)
+                  .collection('items')
+                  .orderBy('createdAt', descending: true)
+                  .snapshots(),
+              builder: (context, snapshot) {
+                final docs = snapshot.data?.docs ?? [];
+
+                if (docs.isEmpty) {
+                  return Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.chat_bubble_outline_rounded,
+                          size: 42,
+                          color: _chatPink.withOpacity(0.4),
+                        ),
+                        const SizedBox(height: 10),
+                        Text(
+                          'Say hello 👋',
+                          style: TextStyle(
+                            color: _chatDeep.withOpacity(0.7),
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                }
+
+                return ListView.builder(
+                  reverse: true,
+                  padding: const EdgeInsets.all(16),
+                  itemCount: docs.length,
+                  itemBuilder: (context, index) {
+                    final data = docs[index].data();
+                    final mine = data['senderId'] == widget.me['id'];
+                    return _BubbleEntrance(
+                      key: ValueKey(docs[index].id),
+                      mine: mine,
+                      child: Align(
+                        alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
+                        child: Container(
+                          margin: const EdgeInsets.only(bottom: 10),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 10,
+                          ),
+                          constraints: BoxConstraints(
+                            maxWidth: MediaQuery.of(context).size.width * 0.76,
+                          ),
+                          decoration: BoxDecoration(
+                            gradient: mine
+                                ? const LinearGradient(
+                                    colors: [_chatPink, _chatDeep],
+                                    begin: Alignment.topLeft,
+                                    end: Alignment.bottomRight,
+                                  )
+                                : null,
+                            color: mine ? null : Colors.white,
+                            borderRadius: BorderRadius.only(
+                              topLeft: const Radius.circular(18),
+                              topRight: const Radius.circular(18),
+                              bottomLeft: Radius.circular(mine ? 18 : 4),
+                              bottomRight: Radius.circular(mine ? 4 : 18),
+                            ),
+                            border: mine
+                                ? null
+                                : Border.all(color: _chatPink.withOpacity(0.14)),
+                            boxShadow: [
+                              BoxShadow(
+                                color: (mine ? _chatDeep : _chatPink)
+                                    .withOpacity(0.12),
+                                blurRadius: 10,
+                                offset: const Offset(0, 4),
+                              ),
+                            ],
+                          ),
+                          child: Text(
+                            data['text']?.toString() ?? '',
+                            style: TextStyle(
+                              color: mine ? Colors.white : Colors.black87,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                );
+              },
+            ),
+          ),
+          SafeArea(
+            top: false,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Expanded(
+                    child: Container(
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(20),
+                        boxShadow: [
+                          BoxShadow(
+                            color: _chatPink.withOpacity(0.08),
+                            blurRadius: 12,
+                            offset: const Offset(0, 4),
+                          ),
+                        ],
+                      ),
+                      child: TextField(
+                        controller: _controller,
+                        minLines: 1,
+                        maxLines: 4,
+                        decoration: InputDecoration(
+                          hintText: 'Type a message',
+                          filled: true,
+                          fillColor: Colors.white,
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 12,
+                          ),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(20),
+                            borderSide: BorderSide(
+                              color: _chatPink.withOpacity(0.18),
+                            ),
+                          ),
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(20),
+                            borderSide: BorderSide(
+                              color: _chatPink.withOpacity(0.18),
+                            ),
+                          ),
+                          focusedBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(20),
+                            borderSide: const BorderSide(
+                              color: _chatDeep,
+                              width: 1.6,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  _SendButton(onPressed: _send),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -442,11 +937,15 @@ class _InboxTile extends StatefulWidget {
   final _InboxRow row;
   final VoidCallback onTap;
   final VoidCallback onPin;
+  final bool selected;
+  final bool compact;
 
   const _InboxTile({
     required this.row,
     required this.onTap,
     required this.onPin,
+    this.selected = false,
+    this.compact = true,
   });
 
   @override
@@ -462,6 +961,8 @@ class _InboxTileState extends State<_InboxTile> {
   @override
   Widget build(BuildContext context) {
     final row = widget.row;
+    final timeText = row.online ? 'Online' : _formatRelativeTime(row.lastSeenAt);
+
     return AnimatedScale(
       scale: _scale,
       duration: const Duration(milliseconds: 120),
@@ -480,28 +981,39 @@ class _InboxTileState extends State<_InboxTile> {
             curve: Curves.easeOut,
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
             decoration: BoxDecoration(
-              color: Colors.white,
+              color: widget.selected ? const Color(0xFFE9D5DC) : Colors.white,
               borderRadius: BorderRadius.circular(20),
-              gradient: row.pinned
+              gradient: widget.selected
                   ? LinearGradient(
                       colors: [
-                        _chatPink.withOpacity(0.07),
-                        Colors.white,
+                        const Color(0xFFF5DDE5),
+                        const Color(0xFFEDCDD6),
                       ],
                       begin: Alignment.topLeft,
                       end: Alignment.bottomRight,
                     )
-                  : null,
+                  : row.pinned
+                      ? LinearGradient(
+                          colors: [
+                            _chatPink.withOpacity(0.07),
+                            Colors.white,
+                          ],
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                        )
+                      : null,
               border: Border.all(
-                color: row.pinned
-                    ? _chatDeep.withOpacity(0.45)
-                    : _chatPink.withOpacity(0.12),
-                width: row.pinned ? 1.4 : 1,
+                color: widget.selected
+                    ? _chatDeep.withOpacity(0.28)
+                    : row.pinned
+                        ? _chatDeep.withOpacity(0.45)
+                        : _chatPink.withOpacity(0.12),
+                width: widget.selected ? 1.3 : row.pinned ? 1.4 : 1,
               ),
               boxShadow: [
                 BoxShadow(
-                  color: _chatPink.withOpacity(row.pinned ? 0.14 : 0.06),
-                  blurRadius: row.pinned ? 20 : 14,
+                  color: _chatPink.withOpacity(widget.selected ? 0.12 : row.pinned ? 0.14 : 0.06),
+                  blurRadius: widget.selected ? 16 : row.pinned ? 20 : 14,
                   offset: const Offset(0, 6),
                 ),
               ],
@@ -525,13 +1037,22 @@ class _InboxTileState extends State<_InboxTile> {
                               row.name,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w900,
-                                fontSize: 16,
-                                color: Color(0xFF2A1A22),
+                              style: TextStyle(
+                                fontWeight: FontWeight.w600,
+                                fontSize: 15,
+                                color: widget.selected ? const Color(0xFF2F1B23) : const Color(0xFF2A1A22),
                               ),
                             ),
                           ),
+                          if (!widget.compact)
+                            Text(
+                              timeText,
+                              style: TextStyle(
+                                color: widget.selected ? Colors.white70 : Colors.grey.shade600,
+                                fontWeight: FontWeight.w700,
+                                fontSize: 12,
+                              ),
+                            ),
                           AnimatedSwitcher(
                             duration: const Duration(milliseconds: 220),
                             transitionBuilder: (child, anim) => ScaleTransition(
@@ -539,12 +1060,12 @@ class _InboxTileState extends State<_InboxTile> {
                               child: child,
                             ),
                             child: row.pinned
-                                ? const Padding(
-                                    key: ValueKey('pinned'),
-                                    padding: EdgeInsets.only(left: 4),
+                                ? Padding(
+                                    key: const ValueKey('pinned'),
+                                    padding: const EdgeInsets.only(left: 4),
                                     child: Icon(
                                       Icons.push_pin_rounded,
-                                      color: _chatDeep,
+                                      color: widget.selected ? Colors.white70 : _chatDeep,
                                       size: 16,
                                     ),
                                   )
@@ -553,17 +1074,32 @@ class _InboxTileState extends State<_InboxTile> {
                         ],
                       ),
                       const SizedBox(height: 4),
-                      Text(
-                        row.lastMessage.isNotEmpty
-                            ? row.lastMessage
-                            : '${row.role} • ${row.online ? 'Online' : 'Offline'}',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          color: Colors.grey.shade700,
-                          fontWeight: FontWeight.w600,
-                          fontSize: 13,
-                        ),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              row.lastMessage.isNotEmpty
+                                  ? row.lastMessage
+                                  : row.role,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: widget.selected ? Colors.white70 : Colors.grey.shade700,
+                                fontWeight: FontWeight.w600,
+                                fontSize: 13,
+                              ),
+                            ),
+                          ),
+                          if (widget.compact)
+                            Text(
+                              timeText,
+                              style: TextStyle(
+                                color: widget.selected ? Colors.white70 : Colors.grey.shade600,
+                                fontWeight: FontWeight.w700,
+                                fontSize: 12,
+                              ),
+                            ),
+                        ],
                       ),
                     ],
                   ),
