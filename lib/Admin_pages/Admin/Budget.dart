@@ -1,8 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/services.dart';
-import '../../services/branch_session.dart';
+import '../../services/cash_drawer_service.dart';
 
 // ── Color Palette ─────────────────────────────────────────────────
 const kPrimary = Color(0xFFE91E63);
@@ -332,8 +331,6 @@ class _BudgetPageState extends State<BudgetPage>
     double budget, {
     bool isBranch = false,
     bool replaceDailyOpening = false,
-    bool updateDrawer = true,
-    bool deferDailyDrawerReset = false,
   }) async {
     if (targetId.trim().isEmpty) {
       _showSnack('Missing target ID', Colors.red.shade600);
@@ -365,45 +362,37 @@ class _BudgetPageState extends State<BudgetPage>
         if (isBranch) 'branchName': targetName,
         'targetType': isBranch ? 'branch' : 'staff',
         'allocatedBudget': newAllocation,
-        if (replaceDailyOpening) 'dailyAllocation': budget,
         'budgetDate': dateKey,
         'updatedAt': now,
       }, SetOptions(merge: true));
 
-      if (updateDrawer) {
-        // Add to today's drawer or replace today's opening balance.
-        final cashDrawerRef = _firestore
-            .collection('staff_cash_drawer')
-            .doc(targetId);
-        await _firestore.runTransaction((transaction) async {
-          final cashDrawerSnapshot = await transaction.get(cashDrawerRef);
-          final currentBalance = cashDrawerSnapshot.exists
-              ? (cashDrawerSnapshot.data()?['balance'] as num?)?.toDouble() ??
-                    0.0
-              : 0.0;
-          final drawerDate =
-              cashDrawerSnapshot.data()?['drawerDate']?.toString() ?? '';
-          final sameDrawerDay = drawerDate == dateKey;
-          final nextBalance = deferDailyDrawerReset
-              ? currentBalance
-              : replaceDailyOpening
-              ? budget
-              : (sameDrawerDay ? currentBalance + budget : budget);
-          transaction.set(cashDrawerRef, {
-            'balance': nextBalance,
-            'openingCash': replaceDailyOpening && !deferDailyDrawerReset
-                ? budget
-                : nextBalance,
-            'dailyOpeningCash': replaceDailyOpening ? budget : nextBalance,
-            'drawerDate': dateKey,
-            'updatedAt': now,
-            'staffId': targetId,
-            if (isBranch) 'branchId': targetId,
-            if (isBranch) 'branchName': targetName,
-            'targetType': isBranch ? 'branch' : 'staff',
-          }, SetOptions(merge: true));
-        });
-      }
+      // Add to today's drawer or replace today's opening balance.
+      final cashDrawerRef = _firestore
+          .collection('staff_cash_drawer')
+          .doc(targetId);
+      await _firestore.runTransaction((transaction) async {
+        final cashDrawerSnapshot = await transaction.get(cashDrawerRef);
+        final currentBalance = cashDrawerSnapshot.exists
+            ? (cashDrawerSnapshot.data()?['balance'] as num?)?.toDouble() ?? 0.0
+            : 0.0;
+        final drawerDate =
+            cashDrawerSnapshot.data()?['drawerDate']?.toString() ?? '';
+        final sameDrawerDay = drawerDate == dateKey;
+        final nextBalance = replaceDailyOpening
+            ? budget
+            : (sameDrawerDay ? currentBalance + budget : budget);
+        transaction.set(cashDrawerRef, {
+          'balance': nextBalance,
+          'openingCash': replaceDailyOpening ? budget : nextBalance,
+          'dailyOpeningCash': replaceDailyOpening ? budget : nextBalance,
+          'drawerDate': dateKey,
+          'updatedAt': now,
+          'staffId': targetId,
+          if (isBranch) 'branchId': targetId,
+          if (isBranch) 'branchName': targetName,
+          'targetType': isBranch ? 'branch' : 'staff',
+        }, SetOptions(merge: true));
+      });
 
       // Add to budget history for audit trail
       await _firestore.collection('budget_history').add({
@@ -432,94 +421,6 @@ class _BudgetPageState extends State<BudgetPage>
       if (!mounted) return;
       _showSnack('Error saving budget: $e', Colors.red.shade600);
     }
-  }
-
-  Future<Set<String>> _branchStaffDrawerIds(String branchId) async {
-    final branch = await _firestore.collection('branches').doc(branchId).get();
-    final staffIds = (branch.data()?['staffIds'] as List<dynamic>? ?? [])
-        .map((id) => id.toString().trim())
-        .where((id) => id.isNotEmpty)
-        .toSet();
-    final requests = await _firestore.collection('staff_requests').get();
-    for (final doc in requests.docs) {
-      final data = doc.data();
-      final identifiers = <String>{
-        doc.id,
-        data['uid']?.toString() ?? '',
-        data['userId']?.toString() ?? '',
-        data['staffId']?.toString() ?? '',
-      }..removeWhere((id) => id.trim().isEmpty);
-      if (identifiers.any(staffIds.contains)) staffIds.addAll(identifiers);
-    }
-    final drawers = await _firestore.collection('staff_cash_drawer').get();
-    final drawerIds = <String>{};
-    for (final doc in drawers.docs) {
-      final data = doc.data();
-      final identifiers = <String>{
-        doc.id,
-        data['staffId']?.toString() ?? '',
-        data['userId']?.toString() ?? '',
-        data['uid']?.toString() ?? '',
-      }..removeWhere((id) => id.trim().isEmpty);
-      if (identifiers.any(staffIds.contains)) drawerIds.add(doc.id);
-    }
-    return drawerIds;
-  }
-
-  Future<void> _saveBranchBudgetToStaff(
-    String branchId,
-    String branchName,
-    double amount, {
-    required bool replaceDailyOpening,
-  }) async {
-    final drawerIds = await _branchStaffDrawerIds(branchId);
-    if (drawerIds.isEmpty) {
-      await _saveBudget(
-        branchId,
-        branchName,
-        amount,
-        isBranch: true,
-        replaceDailyOpening: replaceDailyOpening,
-        deferDailyDrawerReset: replaceDailyOpening,
-      );
-      return;
-    }
-
-    final now = DateTime.now();
-    final dateKey = _todayDateKey();
-    final share = amount / drawerIds.length;
-    for (final drawerId in drawerIds) {
-      final drawerRef = _firestore
-          .collection('staff_cash_drawer')
-          .doc(drawerId);
-      await _firestore.runTransaction((transaction) async {
-        final snapshot = await transaction.get(drawerRef);
-        final data = snapshot.data();
-        final current = (data?['balance'] as num?)?.toDouble() ?? 0;
-        final next = replaceDailyOpening ? current : current + share;
-        final existingDailyOpening =
-            (data?['dailyOpeningCash'] as num?)?.toDouble() ??
-            (data?['openingCash'] as num?)?.toDouble() ??
-            current;
-        transaction.set(drawerRef, {
-          'balance': next,
-          'openingCash': replaceDailyOpening ? current : next,
-          'dailyOpeningCash': replaceDailyOpening
-              ? share
-              : existingDailyOpening,
-          'drawerDate': dateKey,
-          'updatedAt': now,
-        }, SetOptions(merge: true));
-      });
-    }
-    await _saveBudget(
-      branchId,
-      branchName,
-      amount,
-      isBranch: true,
-      replaceDailyOpening: replaceDailyOpening,
-      updateDrawer: false,
-    );
   }
 
   int _parseInt(dynamic value, {int fallback = 0}) {
@@ -1192,8 +1093,7 @@ class _BudgetPageState extends State<BudgetPage>
                           headingRowColor: WidgetStatePropertyAll(
                             kPrimary.withOpacity(0.08),
                           ),
-                          horizontalMargin: 24,
-                          columnSpacing: 24,
+                          columnSpacing: 18,
                           columns: const [
                             DataColumn(label: Text('ID')),
                             DataColumn(label: Text('Name')),
@@ -1218,7 +1118,7 @@ class _BudgetPageState extends State<BudgetPage>
                                 cells: [
                                   DataCell(
                                     SizedBox(
-                                      width: 185,
+                                      width: 140,
                                       child: _assignedTableCell(
                                         row['id']?.toString() ?? '--',
                                       ),
@@ -1226,7 +1126,7 @@ class _BudgetPageState extends State<BudgetPage>
                                   ),
                                   DataCell(
                                     SizedBox(
-                                      width: 210,
+                                      width: 160,
                                       child: _assignedTableCell(
                                         row['name']?.toString() ?? 'Item',
                                         weight: FontWeight.w800,
@@ -1269,7 +1169,7 @@ class _BudgetPageState extends State<BudgetPage>
                                   ),
                                   DataCell(
                                     IconButton(
-                                      tooltip: 'Void assigned item',
+                                      tooltip: 'Remove assigned item',
                                       onPressed: () async {
                                         try {
                                           await _removeAssignedInventoryFromStaff(
@@ -1277,7 +1177,7 @@ class _BudgetPageState extends State<BudgetPage>
                                           );
                                           if (!mounted) return;
                                           _showSnack(
-                                            'Assigned item voided',
+                                            'Assigned item removed',
                                             Colors.green.shade600,
                                           );
                                         } catch (e) {
@@ -1289,7 +1189,7 @@ class _BudgetPageState extends State<BudgetPage>
                                         }
                                       },
                                       icon: const Icon(
-                                        Icons.block_rounded,
+                                        Icons.delete_outline_rounded,
                                         color: kDeep,
                                       ),
                                     ),
@@ -2770,7 +2670,6 @@ class _BudgetPageState extends State<BudgetPage>
     final totalSales = data['totalSales'];
     final transactionCount = data['transactionCount'];
     final transactions = data['transactions'] as List<dynamic>?;
-    final reportBranchName = data['branchName']?.toString().trim() ?? '';
     final staffPublicId = data['staffPublicId']?.toString().trim() ?? '';
     final displayStaffId = staffPublicId.isNotEmpty ? staffPublicId : staffId;
     final closingInventory =
@@ -3048,9 +2947,6 @@ class _BudgetPageState extends State<BudgetPage>
             ...transactions.map((transaction) {
               final tx = transaction as Map<String, dynamic>;
               final salesId = tx['salesId']?.toString() ?? 'Unknown';
-              final receiptStaff = tx['staffName']?.toString().trim() ?? staffName;
-                final receiptBranch = tx['branchName']?.toString().trim() ??
-                  reportBranchName;
               final transactionTotal = tx['total'] is num
                   ? (tx['total'] as num).toDouble()
                   : double.tryParse(tx['total']?.toString() ?? '') ?? 0.0;
@@ -3084,7 +2980,7 @@ class _BudgetPageState extends State<BudgetPage>
                           children: [
                             Expanded(
                               child: Text(
-                                'Sales ID: $salesId  •  $receiptStaff${receiptBranch.isNotEmpty ? '  •  Branches: $receiptBranch' : ''}',
+                                'Sales ID: $salesId',
                                 style: const TextStyle(
                                   fontWeight: FontWeight.w700,
                                   fontSize: 12,
@@ -4017,6 +3913,14 @@ class _BudgetPageState extends State<BudgetPage>
                   ],
                 ),
               ),
+              SliverPersistentHeader(
+                pinned: true,
+                delegate: _PinnedBudgetHeaderDelegate(
+                  minHeight: 142,
+                  maxHeight: 142,
+                  child: _buildPinnedBudgetControls(),
+                ),
+              ),
               SliverToBoxAdapter(child: _buildBranchManagementSection()),
               const SliverToBoxAdapter(child: SizedBox(height: 32)),
             ],
@@ -4049,61 +3953,58 @@ class _BudgetPageState extends State<BudgetPage>
       child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
         stream: _firestore.collection('branches').snapshots(),
         builder: (context, snapshot) {
-          final branchCount = (snapshot.data?.docs ?? const [])
-              .where((doc) => doc.data()['isVoided'] != true)
-              .length;
-          return Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(18),
-              border: Border.all(color: kAccent.withOpacity(0.6)),
-            ),
-            child: Row(
-              children: [
-                Container(
-                  width: 4,
-                  height: 18,
-                  decoration: BoxDecoration(
-                    color: kPrimary,
-                    borderRadius: BorderRadius.circular(4),
+          final branchCount = snapshot.data?.docs.length ?? 0;
+          return Row(
+            children: [
+              Container(
+                width: 4,
+                height: 18,
+                decoration: BoxDecoration(
+                  color: kPrimary,
+                  borderRadius: BorderRadius.circular(4),
+                ),
+              ),
+              const SizedBox(width: 10),
+              const Expanded(
+                child: Text(
+                  'Branches',
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                    color: kBannerTop,
                   ),
                 ),
-                const SizedBox(width: 10),
-                const Expanded(
-                  child: Text(
-                    'Branch budget allocation',
-                    style: TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w700,
-                      color: kBannerTop,
-                    ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 4,
+                ),
+                decoration: BoxDecoration(
+                  color: kPrimary.withOpacity(0.10),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
+                    color: kPrimary.withOpacity(0.25),
+                    width: 1,
                   ),
                 ),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 10,
-                    vertical: 4,
-                  ),
-                  decoration: BoxDecoration(
-                    color: kPrimary.withOpacity(0.10),
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(
-                      color: kPrimary.withOpacity(0.25),
-                      width: 1,
-                    ),
-                  ),
-                  child: Text(
-                    branchCount == 1 ? '1 branch' : '$branchCount branches',
-                    style: const TextStyle(
-                      fontSize: 11,
-                      color: kDeep,
-                      fontWeight: FontWeight.w700,
-                    ),
+                child: Text(
+                  branchCount == 1 ? '1 branch' : '$branchCount branches',
+                  style: const TextStyle(
+                    fontSize: 11,
+                    color: kDeep,
+                    fontWeight: FontWeight.w700,
                   ),
                 ),
-              ],
-            ),
+              ),
+              const SizedBox(width: 8),
+              TextButton.icon(
+                onPressed: _showCreateBranchDialog,
+                icon: const Icon(Icons.add_business_rounded, size: 18),
+                label: const Text('Create'),
+                style: TextButton.styleFrom(foregroundColor: kPrimary),
+              ),
+            ],
           );
         },
       ),
@@ -4155,24 +4056,15 @@ class _BudgetPageState extends State<BudgetPage>
 
   // ─── PREMIUM HEADER BANNER ───────────────────────────────────────
   Widget _buildBranchManagementSection() {
-    return _buildBranchBudgetAllocationCard();
-    /*
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
         stream: _firestore.collection('branches').orderBy('name').snapshots(),
         builder: (context, snapshot) {
-          final branches = (snapshot.data?.docs ?? [])
-              .where(
-                (doc) =>
-                    (doc.data() as Map<String, dynamic>)['isVoided'] != true,
-              )
-              .toList();
-          // Branch switching must always show every branch, even while one is active.
-          final scopedBranches = branches;
+          final branches = snapshot.data?.docs ?? [];
           final visibleBranches = _branchSearchQuery.isEmpty
-              ? scopedBranches
-              : scopedBranches.where((doc) {
+              ? branches
+              : branches.where((doc) {
                   final data = doc.data();
                   final name = data['name']?.toString().toLowerCase() ?? '';
                   final staffNames =
@@ -4226,46 +4118,7 @@ class _BudgetPageState extends State<BudgetPage>
                     ),
                   ),
                 )
-              else ...[
-                InkWell(
-                  borderRadius: BorderRadius.circular(18),
-                  onTap: () async {
-                    await BranchSession.instance.switchTo(
-                      branchId: null,
-                      branchName: 'Main Branch',
-                    );
-                    if (mounted) setState(() {});
-                  },
-                  child: Container(
-                    margin: const EdgeInsets.only(bottom: 10),
-                    padding: const EdgeInsets.all(14),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(18),
-                      border: Border.all(color: kAccent.withOpacity(.6)),
-                    ),
-                    child: Row(
-                      children: [
-                        const Icon(Icons.storefront_rounded, color: kDeep),
-                        const SizedBox(width: 12),
-                        const Expanded(
-                          child: Text(
-                            'Main Branch',
-                            style: TextStyle(
-                              fontWeight: FontWeight.w900,
-                              color: kBannerTop,
-                            ),
-                          ),
-                        ),
-                        if (BranchSession.instance.isMainBranch)
-                          const Icon(
-                            Icons.check_circle_rounded,
-                            color: kPrimary,
-                          ),
-                      ],
-                    ),
-                  ),
-                ),
+              else
                 ...visibleBranches.map((doc) {
                   final data = doc.data();
                   final name = data['name']?.toString() ?? 'Branch';
@@ -4299,6 +4152,7 @@ class _BudgetPageState extends State<BudgetPage>
                   }
                   return Container(
                     margin: const EdgeInsets.only(bottom: 10),
+                    padding: const EdgeInsets.all(14),
                     decoration: BoxDecoration(
                       color: Colors.white,
                       borderRadius: BorderRadius.circular(18),
@@ -4311,688 +4165,156 @@ class _BudgetPageState extends State<BudgetPage>
                         ),
                       ],
                     ),
-                    child: Material(
-                      color: Colors.transparent,
-                      borderRadius: BorderRadius.circular(18),
-                      child: InkWell(
-                        borderRadius: BorderRadius.circular(18),
-                        onTap: () {
-                          _showBranchAllocationSheet(
-                            branchId: branchId,
-                            branchName: name,
-                            staffIds: staffIds,
-                            staffNames: staffNames,
-                            enabled: hasAssignedStaff,
-                          );
-                        },
-                        child: Padding(
-                          padding: const EdgeInsets.all(14),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
-                                children: [
-                                  Container(
-                                    width: 40,
-                                    height: 40,
-                                    decoration: BoxDecoration(
-                                      color: kPrimary.withOpacity(0.10),
-                                      borderRadius: BorderRadius.circular(12),
-                                    ),
-                                    child: const Icon(
-                                      Icons.store_mall_directory_rounded,
-                                      color: kDeep,
-                                      size: 20,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 10),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          name,
-                                          style: const TextStyle(
-                                            color: kBannerTop,
-                                            fontSize: 15,
-                                            fontWeight: FontWeight.w900,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                  if (BranchSession.instance.branchId ==
-                                      branchId)
-                                    const Padding(
-                                      padding: EdgeInsets.only(right: 6),
-                                      child: Icon(
-                                        Icons.check_circle_rounded,
-                                        color: kPrimary,
-                                      ),
-                                    ),
-                                ],
-                              ),
-                              if (false) ...[
-                                Row(
-                                  children: [
-                                    Expanded(
-                                      child: OutlinedButton.icon(
-                                        onPressed: () =>
-                                            _showAssignBranchStaffDialog(
-                                              branchId,
-                                              name,
-                                            ),
-                                        icon: const Icon(
-                                          Icons.group_add_rounded,
-                                        ),
-                                        label: const Text('Staff'),
-                                        style: OutlinedButton.styleFrom(
-                                          foregroundColor: kDeep,
-                                          side: BorderSide(color: kAccent),
-                                          shape: RoundedRectangleBorder(
-                                            borderRadius: BorderRadius.circular(
-                                              12,
-                                            ),
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                    const SizedBox(width: 10),
-                                    Expanded(
-                                      child: ElevatedButton.icon(
-                                        onPressed: hasAssignedStaff
-                                            ? () => _showAssignInventoryDialog(
-                                                branchId,
-                                                name,
-                                                isBranch: true,
-                                              )
-                                            : null,
-                                        icon: const Icon(
-                                          Icons.inventory_2_rounded,
-                                        ),
-                                        label: const Text('Items'),
-                                        style: ElevatedButton.styleFrom(
-                                          backgroundColor: kPrimary,
-                                          foregroundColor: Colors.white,
-                                          shape: RoundedRectangleBorder(
-                                            borderRadius: BorderRadius.circular(
-                                              12,
-                                            ),
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                                const SizedBox(height: 10),
-                                SizedBox(
-                                  width: double.infinity,
-                                  child: OutlinedButton.icon(
-                                    onPressed: hasAssignedStaff
-                                        ? () => _showBranchReportDetail(
-                                            branchId: branchId,
-                                            branchName: name,
-                                            staffIds: staffIds,
-                                            staffNames: staffNames,
-                                          )
-                                        : null,
-                                    icon: const Icon(Icons.assignment_rounded),
-                                    label: const Text('View Report'),
-                                    style: OutlinedButton.styleFrom(
-                                      foregroundColor: kDeep,
-                                      side: BorderSide(color: kAccent),
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(12),
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(height: 12),
-                                _buildAssignedInventorySummary(branchId),
-                                const SizedBox(height: 12),
-                                _buildBranchAllocationPanel(
-                                  branchId: branchId,
-                                  branchName: name,
-                                  staffIds: staffIds,
-                                  controller: _budgetControllers[branchId]!,
-                                  enabled: hasAssignedStaff,
-                                ),
-                              ],
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                  );
-                }),
-              ],
-            ],
-          );
-        },
-      ),
-    );
-    */
-  }
-
-  Widget _buildBranchBudgetAllocationCard() {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-        stream: _firestore.collection('branches').snapshots(),
-        builder: (context, snapshot) {
-          final activeBranches = (snapshot.data?.docs ?? [])
-              .where((doc) => doc.data()['isVoided'] != true)
-              .toList();
-          final count = activeBranches.length;
-          return Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(20),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(color: kAccent.withOpacity(0.65)),
-              boxShadow: [
-                BoxShadow(
-                  color: kPrimary.withOpacity(0.06),
-                  blurRadius: 14,
-                  offset: const Offset(0, 5),
-                ),
-              ],
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Container(
-                      width: 44,
-                      height: 44,
-                      decoration: BoxDecoration(
-                        color: kPrimary.withOpacity(0.10),
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                      child: const Icon(Icons.payments_rounded, color: kDeep),
-                    ),
-                    const SizedBox(width: 12),
-                    const Expanded(
-                      child: Text(
-                        'Allocate branch budget',
-                        style: TextStyle(
-                          color: kBannerTop,
-                          fontSize: 17,
-                          fontWeight: FontWeight.w900,
-                        ),
-                      ),
-                    ),
-                    Text(
-                      count == 1 ? '1 branch' : '$count branches',
-                      style: const TextStyle(
-                        color: kDeep,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 10),
-                Text(
-                  count == 0
-                      ? 'Create a branch first in Branch access.'
-                      : 'Select a branch to add cash or set its daily cash drawer.',
-                  style: TextStyle(color: Colors.grey.shade600),
-                ),
-                const SizedBox(height: 16),
-                SizedBox(
-                  width: double.infinity,
-                  child: FilledButton.icon(
-                    onPressed: count == 0 ? null : _showAllocateCashDialog,
-                    icon: const Icon(Icons.account_balance_wallet_rounded),
-                    label: const Text('Allocate to branch'),
-                  ),
-                ),
-              ],
-            ),
-          );
-        },
-      ),
-    );
-  }
-
-  String _todayDateKey() {
-    final now = DateTime.now();
-    return '${now.year.toString().padLeft(4, '0')}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
-  }
-
-  Future<Map<String, dynamic>> _branchAllocationDetails(String branchId) async {
-    final branch = await _firestore.collection('branches').doc(branchId).get();
-    final staffIds = (branch.data()?['staffIds'] as List<dynamic>? ?? [])
-        .map((id) => id.toString().trim())
-        .where((id) => id.isNotEmpty)
-        .toSet();
-    final staffRequests = await _firestore.collection('staff_requests').get();
-    for (final doc in staffRequests.docs) {
-      final data = doc.data();
-      final identifiers = <String>{
-        doc.id,
-        data['uid']?.toString() ?? '',
-        data['userId']?.toString() ?? '',
-        data['staffId']?.toString() ?? '',
-      }..removeWhere((id) => id.trim().isEmpty);
-      if (identifiers.any(staffIds.contains)) staffIds.addAll(identifiers);
-    }
-
-    final drawers = await _firestore.collection('staff_cash_drawer').get();
-    var cashDrawer = 0.0;
-    var matchedStaffDrawer = false;
-    QueryDocumentSnapshot<Map<String, dynamic>>? branchDrawer;
-    for (final doc in drawers.docs) {
-      final data = doc.data();
-      if (doc.id == branchId) branchDrawer = doc;
-      final identifiers = <String>{
-        doc.id,
-        data['staffId']?.toString() ?? '',
-        data['userId']?.toString() ?? '',
-        data['uid']?.toString() ?? '',
-      }..removeWhere((id) => id.trim().isEmpty);
-      if (!identifiers.any(staffIds.contains)) continue;
-      matchedStaffDrawer = true;
-      cashDrawer +=
-          (data['balance'] as num?)?.toDouble() ??
-          (data['cashDrawer'] as num?)?.toDouble() ??
-          0;
-    }
-    if (!matchedStaffDrawer && branchDrawer != null) {
-      final data = branchDrawer.data();
-      cashDrawer =
-          (data['balance'] as num?)?.toDouble() ??
-          (data['cashDrawer'] as num?)?.toDouble() ??
-          0;
-    }
-
-    final budget = await _firestore
-        .collection('staff_budget')
-        .doc(branchId)
-        .get();
-    final dailyCashDrawer =
-        (budget.data()?['dailyAllocation'] as num?)?.toDouble() ?? 0;
-    return {'cashDrawer': cashDrawer, 'dailyCashDrawer': dailyCashDrawer};
-  }
-
-  Future<void> _showAllocateCashDialog() async {
-    String? branchId;
-    final amount = TextEditingController();
-    await showDialog<void>(
-      context: context,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (_, setDialog) => AlertDialog(
-          insetPadding: const EdgeInsets.symmetric(
-            horizontal: 24,
-            vertical: 24,
-          ),
-          title: Row(
-            children: [
-              const Expanded(child: Text('Allocate to branch')),
-              IconButton(
-                onPressed: () => Navigator.pop(dialogContext),
-                icon: const Icon(Icons.close_rounded),
-              ),
-            ],
-          ),
-          content: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 520),
-            child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-              stream: _firestore
-                  .collection('branches')
-                  .orderBy('name')
-                  .snapshots(),
-              builder: (_, snapshot) {
-                final docs = (snapshot.data?.docs ?? [])
-                    .where((doc) => doc.data()['isVoided'] != true)
-                    .toList();
-                return Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    DropdownButtonFormField<String>(
-                      value: branchId,
-                      decoration: const InputDecoration(
-                        labelText: 'Select branch',
-                      ),
-                      items: docs
-                          .map(
-                            (d) => DropdownMenuItem(
-                              value: d.id,
-                              child: Text(
-                                d.data()['name']?.toString() ?? 'Branch',
-                              ),
-                            ),
-                          )
-                          .toList(),
-                      onChanged: (value) => setDialog(() => branchId = value),
-                    ),
-                    if (branchId != null)
-                      FutureBuilder<Map<String, dynamic>>(
-                        future: _branchAllocationDetails(branchId!),
-                        builder: (_, details) {
-                          final data =
-                              details.data ?? const <String, dynamic>{};
-                          final cash =
-                              (data['cashDrawer'] as num?)?.toDouble() ?? 0;
-                          final dailyCashDrawer =
-                              (data['dailyCashDrawer'] as num?)?.toDouble() ??
-                              0;
-                          if (details.connectionState ==
-                              ConnectionState.waiting) {
-                            return const Padding(
-                              padding: EdgeInsets.only(top: 12),
-                              child: LinearProgressIndicator(),
-                            );
-                          }
-                          return Padding(
-                            padding: const EdgeInsets.only(top: 12),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  'Cash drawer: ₱${cash.toStringAsFixed(2)}',
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.w800,
-                                    color: kBannerTop,
-                                  ),
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  'Set daily cash drawer: ₱${dailyCashDrawer.toStringAsFixed(2)}',
-                                  style: TextStyle(
-                                    color: Colors.grey.shade700,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          );
-                        },
-                      ),
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: amount,
-                      keyboardType: const TextInputType.numberWithOptions(
-                        decimal: true,
-                      ),
-                      decoration: const InputDecoration(
-                        labelText: 'Allocated amount',
-                        prefixText: '₱',
-                      ),
-                    ),
-                  ],
-                );
-              },
-            ),
-          ),
-          actions: [
-            OutlinedButton(
-              onPressed: branchId == null
-                  ? null
-                  : () async {
-                      final value = double.tryParse(amount.text) ?? 0;
-                      if (value <= 0) return;
-                      final branchDoc = await _firestore
-                          .collection('branches')
-                          .doc(branchId)
-                          .get();
-                      final branchName =
-                          branchDoc.data()?['name']?.toString() ?? 'Branch';
-                      await _saveBranchBudgetToStaff(
-                        branchId!,
-                        branchName,
-                        value,
-                        replaceDailyOpening: true,
-                      );
-                      if (dialogContext.mounted) Navigator.pop(dialogContext);
-                    },
-              child: const Text('Set Daily'),
-            ),
-            FilledButton(
-              onPressed: branchId == null
-                  ? null
-                  : () async {
-                      final value = double.tryParse(amount.text) ?? 0;
-                      if (value <= 0) return;
-                      final branchDoc = await _firestore
-                          .collection('branches')
-                          .doc(branchId)
-                          .get();
-                      final branchName =
-                          branchDoc.data()?['name']?.toString() ?? 'Branch';
-                      await _saveBranchBudgetToStaff(
-                        branchId!,
-                        branchName,
-                        value,
-                        replaceDailyOpening: false,
-                      );
-                      if (dialogContext.mounted) Navigator.pop(dialogContext);
-                    },
-              child: const Text('Add Cash'),
-            ),
-          ],
-        ),
-      ),
-    );
-    amount.dispose();
-  }
-
-  void _showBranchAllocationSheet({
-    required String branchId,
-    required String branchName,
-    required List<String> staffIds,
-    required List<String> staffNames,
-    required bool enabled,
-  }) {
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (sheetContext) => DraggableScrollableSheet(
-        initialChildSize: .86,
-        minChildSize: .55,
-        maxChildSize: .95,
-        builder: (_, scrollController) => Container(
-          decoration: const BoxDecoration(
-            color: Color(0xFFFDF5F7),
-            borderRadius: BorderRadius.vertical(top: Radius.circular(26)),
-          ),
-          child: ListView(
-            controller: scrollController,
-            padding: const EdgeInsets.fromLTRB(20, 12, 20, 28),
-            children: [
-              Row(
-                children: [
-                  Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          branchName,
-                          style: const TextStyle(
-                            fontSize: 22,
-                            fontWeight: FontWeight.w900,
-                            color: kBannerTop,
-                          ),
-                        ),
-                        Text(
-                          '${staffIds.length} staff assigned',
-                          style: TextStyle(color: Colors.grey.shade600),
-                        ),
-                      ],
-                    ),
-                  ),
-                  IconButton(
-                    onPressed: () => Navigator.pop(sheetContext),
-                    icon: const Icon(Icons.close_rounded),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 14),
-              _branchCashDrawerTotal(staffIds),
-              const SizedBox(height: 14),
-              const Text(
-                'Assigned staff',
-                style: TextStyle(
-                  fontWeight: FontWeight.w800,
-                  color: kBannerTop,
-                ),
-              ),
-              const SizedBox(height: 6),
-              if (staffNames.isEmpty)
-                const Text('No staff assigned')
-              else
-                ...staffNames.map(
-                  (name) => ListTile(
-                    leading: const CircleAvatar(
-                      child: Icon(Icons.person_rounded),
-                    ),
-                    title: Text(name),
-                  ),
-                ),
-              const SizedBox(height: 8),
-              const Text(
-                'Allocated items',
-                style: TextStyle(
-                  fontWeight: FontWeight.w800,
-                  color: kBannerTop,
-                ),
-              ),
-              const SizedBox(height: 6),
-              _buildAssignedInventorySummary(branchId),
-              const SizedBox(height: 14),
-              _buildBranchAllocationPanel(
-                branchId: branchId,
-                branchName: branchName,
-                staffIds: staffIds,
-                controller: _budgetControllers[branchId] ??=
-                    TextEditingController(),
-                enabled: enabled,
-              ),
-              const SizedBox(height: 18),
-              SizedBox(
-                width: double.infinity,
-                child: FilledButton.icon(
-                  onPressed: () async {
-                    showDialog<void>(
-                      context: context,
-                      barrierDismissible: false,
-                      builder: (_) => const PopScope(
-                        canPop: false,
-                        child: Center(
-                          child: Card(
-                            child: Padding(
-                              padding: EdgeInsets.all(22),
+                        Row(
+                          children: [
+                            Container(
+                              width: 40,
+                              height: 40,
+                              decoration: BoxDecoration(
+                                color: kPrimary.withOpacity(0.10),
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: const Icon(
+                                Icons.store_mall_directory_rounded,
+                                color: kDeep,
+                                size: 20,
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
                               child: Column(
-                                mainAxisSize: MainAxisSize.min,
+                                crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  CircularProgressIndicator(),
-                                  SizedBox(height: 12),
-                                  Text('Switching branch...'),
+                                  Text(
+                                    name,
+                                    style: const TextStyle(
+                                      color: kBannerTop,
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.w900,
+                                    ),
+                                  ),
+                                  Text(
+                                    staffNames.isEmpty
+                                        ? 'No staff assigned'
+                                        : staffNames.join(', '),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      color: Colors.grey.shade600,
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
                                 ],
+                              ),
+                            ),
+                            IconButton(
+                              tooltip: 'Edit branch',
+                              onPressed: () =>
+                                  _showEditBranchDialog(branchId, name),
+                              icon: const Icon(Icons.edit_rounded),
+                              color: kDeep,
+                            ),
+                            IconButton(
+                              tooltip: 'Delete branch',
+                              onPressed: () => _deleteBranch(branchId, name),
+                              icon: const Icon(Icons.delete_outline_rounded),
+                              color: Colors.red,
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: OutlinedButton.icon(
+                                onPressed: () => _showAssignBranchStaffDialog(
+                                  branchId,
+                                  name,
+                                ),
+                                icon: const Icon(Icons.group_add_rounded),
+                                label: const Text('Staff'),
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: kDeep,
+                                  side: BorderSide(color: kAccent),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: ElevatedButton.icon(
+                                onPressed: hasAssignedStaff
+                                    ? () => _showAssignInventoryDialog(
+                                        branchId,
+                                        name,
+                                        isBranch: true,
+                                      )
+                                    : null,
+                                icon: const Icon(Icons.inventory_2_rounded),
+                                label: const Text('Items'),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: kPrimary,
+                                  foregroundColor: Colors.white,
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 10),
+                        SizedBox(
+                          width: double.infinity,
+                          child: OutlinedButton.icon(
+                            onPressed: hasAssignedStaff
+                                ? () => _showBranchReportDetail(
+                                    branchId: branchId,
+                                    branchName: name,
+                                    staffIds: staffIds,
+                                    staffNames: staffNames,
+                                  )
+                                : null,
+                            icon: const Icon(Icons.assignment_rounded),
+                            label: const Text('View Report'),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: kDeep,
+                              side: BorderSide(color: kAccent),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
                               ),
                             ),
                           ),
                         ),
-                      ),
-                    );
-                    await BranchSession.instance.switchTo(
-                      branchId: branchId,
-                      branchName: branchName,
-                    );
-                    if (!mounted) return;
-                    Navigator.of(context, rootNavigator: true).pop();
-                    Navigator.pop(sheetContext);
-                    Navigator.of(context).popUntil((route) => route.isFirst);
-                  },
-                  icon: const Icon(Icons.swap_horiz_rounded),
-                  label: Text('Switch to $branchName'),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _branchCashDrawerTotal(List<String> staffIds) {
-    final assignedIds = staffIds.map((id) => id.trim()).toSet();
-    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-      stream: _firestore.collection('staff_requests').snapshots(),
-      builder: (context, staffSnapshot) {
-        final drawerOwnerIds = <String>{...assignedIds};
-        for (final staffDoc in staffSnapshot.data?.docs ?? const []) {
-          final data = staffDoc.data();
-          final identifiers = <String>{
-            staffDoc.id,
-            data['uid']?.toString() ?? '',
-            data['userId']?.toString() ?? '',
-            data['staffId']?.toString() ?? '',
-          }..removeWhere((id) => id.trim().isEmpty);
-          if (identifiers.any(assignedIds.contains)) {
-            drawerOwnerIds.addAll(identifiers);
-          }
-        }
-
-        return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-          stream: _firestore.collection('staff_cash_drawer').snapshots(),
-          builder: (context, drawerSnapshot) {
-            var total = 0.0;
-            for (final doc in drawerSnapshot.data?.docs ?? const []) {
-              final data = doc.data();
-              final identifiers = <String>{
-                doc.id,
-                data['staffId']?.toString() ?? '',
-                data['userId']?.toString() ?? '',
-                data['uid']?.toString() ?? '',
-              }..removeWhere((id) => id.trim().isEmpty);
-              if (!identifiers.any(drawerOwnerIds.contains)) continue;
-              total +=
-                  (data['balance'] as num?)?.toDouble() ??
-                  (data['cashDrawer'] as num?)?.toDouble() ??
-                  0;
-            }
-            return Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: kAccent.withOpacity(.6)),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Cash Drawer',
-                    style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    '₱${total.toStringAsFixed(2)}',
-                    style: const TextStyle(
-                      color: kBannerTop,
-                      fontSize: 22,
-                      fontWeight: FontWeight.w900,
+                        const SizedBox(height: 12),
+                        _buildAssignedInventorySummary(branchId),
+                        const SizedBox(height: 12),
+                        _buildBranchAllocationPanel(
+                          branchId: branchId,
+                          branchName: name,
+                          controller: _budgetControllers[branchId]!,
+                          enabled: hasAssignedStaff,
+                        ),
+                      ],
                     ),
-                  ),
-                ],
-              ),
-            );
-          },
-        );
-      },
+                  );
+                }),
+            ],
+          );
+        },
+      ),
     );
   }
 
   Widget _buildBranchAllocationPanel({
     required String branchId,
     required String branchName,
-    required List<String> staffIds,
     required TextEditingController controller,
     required bool enabled,
   }) {
@@ -5068,31 +4390,21 @@ class _BudgetPageState extends State<BudgetPage>
               ),
               const SizedBox(width: 10),
               Expanded(
-                child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                child: StreamBuilder<DocumentSnapshot>(
                   stream: _firestore
                       .collection('staff_cash_drawer')
+                      .doc(branchId)
                       .snapshots(),
                   builder: (context, snapshot) {
-                    final drawerDocs = snapshot.data?.docs ?? [];
-                    final assignedDrawers = drawerDocs
-                        .where((doc) => staffIds.contains(doc.id))
-                        .toList();
-                    var cashBalance = assignedDrawers.fold<double>(
-                      0,
-                      (total, doc) =>
-                          total +
-                          ((doc.data()['balance'] as num?)?.toDouble() ?? 0),
-                    );
-                    if (assignedDrawers.isEmpty) {
-                      final branchDrawer = drawerDocs.where(
-                        (doc) => doc.id == branchId,
+                    double cashBalance = 0;
+                    if (snapshot.hasData && snapshot.data!.exists) {
+                      final data =
+                          snapshot.data!.data() as Map<String, dynamic>;
+                      Future.microtask(
+                        () =>
+                            CashDrawerService.zeroIfPast24Hours(branchId, data),
                       );
-                      if (branchDrawer.isNotEmpty) {
-                        cashBalance =
-                            (branchDrawer.first.data()['balance'] as num?)
-                                ?.toDouble() ??
-                            0;
-                      }
+                      cashBalance = (data['balance'] as num?)?.toDouble() ?? 0;
                     }
                     return Container(
                       padding: const EdgeInsets.all(12),
@@ -5289,13 +4601,10 @@ class _BudgetPageState extends State<BudgetPage>
     controller.dispose();
     if (name == null || name.isEmpty) return;
     try {
-      final user = FirebaseAuth.instance.currentUser;
       await _firestore.collection('branches').add({
         'name': name,
         'staffIds': <String>[],
         'staffNames': <String>[],
-        'createdByUid': user?.uid,
-        'createdByEmail': user?.email,
         'createdAt': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),
       });
@@ -5351,14 +4660,14 @@ class _BudgetPageState extends State<BudgetPage>
     }
   }
 
-  Future<void> _voidBranch(String branchId, String branchName) async {
+  Future<void> _deleteBranch(String branchId, String branchName) async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) {
         return AlertDialog(
-          title: const Text('Void Branch?'),
+          title: const Text('Delete Branch?'),
           content: Text(
-            'Void "$branchName"? The branch will be hidden from Resource Allocation, but its data will remain available.',
+            'Delete "$branchName"? This removes the branch from staff assignments.',
           ),
           actions: [
             TextButton(
@@ -5371,7 +4680,7 @@ class _BudgetPageState extends State<BudgetPage>
                 foregroundColor: Colors.white,
               ),
               onPressed: () => Navigator.pop(dialogContext, true),
-              child: const Text('Void'),
+              child: const Text('Delete'),
             ),
           ],
         );
@@ -5380,15 +4689,33 @@ class _BudgetPageState extends State<BudgetPage>
     if (confirmed != true) return;
 
     try {
-      await _firestore.collection('branches').doc(branchId).update({
-        'isVoided': true,
-        'voidedAt': FieldValue.serverTimestamp(),
-        'updatedAt': FieldValue.serverTimestamp(),
-      });
+      final staffSnapshot = await _firestore
+          .collection('staff_requests')
+          .where('branchIds', arrayContains: branchId)
+          .get();
+      final inventorySnapshot = await _firestore
+          .collection('staff_inventory')
+          .where('staffId', isEqualTo: branchId)
+          .get();
+      final batch = _firestore.batch();
+      for (final staffDoc in staffSnapshot.docs) {
+        batch.update(staffDoc.reference, {
+          'branchIds': FieldValue.arrayRemove([branchId]),
+        });
+      }
+      for (final inventoryDoc in inventorySnapshot.docs) {
+        batch.delete(inventoryDoc.reference);
+      }
+      batch.delete(_firestore.collection('branches').doc(branchId));
+      batch.delete(_firestore.collection('staff_budget').doc(branchId));
+      batch.delete(_firestore.collection('staff_cash_drawer').doc(branchId));
+      await batch.commit();
       if (!mounted) return;
-      _showSnack('Branch voided', Colors.green.shade600);
+      _budgetControllers.remove(branchId)?.dispose();
+      setState(() => _currentAllocations.remove(branchId));
+      _showSnack('Branch deleted', Colors.green.shade600);
     } catch (e) {
-      if (mounted) _showSnack('Error voiding branch: $e', Colors.red.shade600);
+      if (mounted) _showSnack('Error deleting branch: $e', Colors.red.shade600);
     }
   }
 
@@ -5640,25 +4967,21 @@ class _BudgetPageState extends State<BudgetPage>
     return StreamBuilder<QuerySnapshot>(
       stream: _firestore.collection('branches').snapshots(),
       builder: (context, branchSnapshot) {
-        final activeBranchId = BranchSession.instance.branchId;
-        final activeBranchDocs = (branchSnapshot.data?.docs ?? [])
-            .where(
-              (doc) => (doc.data() as Map<String, dynamic>)['isVoided'] != true,
-            )
-            .toList();
+        final branchCount = branchSnapshot.data?.docs.length ?? 0;
+
         return StreamBuilder<QuerySnapshot>(
           stream: _firestore.collection('staff_budget').snapshots(),
           builder: (context, budgetSnapshot) {
             double totalAllocated = 0;
             if (budgetSnapshot.hasData) {
-              final branchIds = activeBranchDocs.map((doc) => doc.id).toSet();
+              final branchIds = (branchSnapshot.data?.docs ?? [])
+                  .map((doc) => doc.id)
+                  .toSet();
               for (var doc in budgetSnapshot.data!.docs) {
                 final data = doc.data() as Map<String, dynamic>;
                 final targetType =
                     data['targetType']?.toString().toLowerCase() ?? '';
                 final branchId = data['branchId']?.toString() ?? doc.id;
-                if (activeBranchId != null && branchId != activeBranchId)
-                  continue;
                 if (targetType != 'branch' && !branchIds.contains(branchId)) {
                   continue;
                 }
@@ -5724,15 +5047,31 @@ class _BudgetPageState extends State<BudgetPage>
                     ),
                   ),
 
-                  _buildSummaryCard(
-                    label: 'Total Allocated',
-                    value: '₱${totalAllocated.toStringAsFixed(2)}',
-                    icon: Icons.account_balance_wallet_rounded,
-                    gradientColors: const [
-                      Color(0xFF1A8F7A),
-                      Color(0xFF26C9AE),
+                  // Cards row
+                  Row(
+                    children: [
+                      _buildSummaryCard(
+                        label: 'Total Allocated',
+                        value: '₱${totalAllocated.toStringAsFixed(2)}',
+                        icon: Icons.account_balance_wallet_rounded,
+                        gradientColors: const [
+                          Color(0xFF1A8F7A),
+                          Color(0xFF26C9AE),
+                        ],
+                        iconBg: const Color(0xFF26A69A),
+                      ),
+                      const SizedBox(width: 12),
+                      _buildSummaryCard(
+                        label: 'Total Branches',
+                        value: branchCount.toString(),
+                        icon: Icons.store_mall_directory_rounded,
+                        gradientColors: const [
+                          Color(0xFF3A4BAA),
+                          Color(0xFF6A7FD4),
+                        ],
+                        iconBg: const Color(0xFF5C6BC0),
+                      ),
                     ],
-                    iconBg: const Color(0xFF26A69A),
                   ),
                 ],
               ),
@@ -5750,68 +5089,70 @@ class _BudgetPageState extends State<BudgetPage>
     required List<Color> gradientColors,
     required Color iconBg,
   }) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: gradientColors,
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
+    return Expanded(
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            colors: gradientColors,
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+          borderRadius: BorderRadius.circular(18),
+          boxShadow: [
+            BoxShadow(
+              color: gradientColors.last.withOpacity(0.35),
+              blurRadius: 14,
+              offset: const Offset(0, 5),
+            ),
+          ],
         ),
-        borderRadius: BorderRadius.circular(18),
-        boxShadow: [
-          BoxShadow(
-            color: gradientColors.last.withOpacity(0.35),
-            blurRadius: 14,
-            offset: const Offset(0, 5),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Container(
-                width: 38,
-                height: 38,
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.2),
-                  borderRadius: BorderRadius.circular(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Container(
+                  width: 38,
+                  height: 38,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.2),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Icon(icon, color: Colors.white, size: 19),
                 ),
-                child: Icon(icon, color: Colors.white, size: 19),
-              ),
-              Icon(
-                Icons.trending_up_rounded,
-                color: Colors.white.withOpacity(0.5),
-                size: 16,
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Text(
-            label,
-            style: TextStyle(
-              fontSize: 11,
-              fontWeight: FontWeight.w500,
-              color: Colors.white.withOpacity(0.75),
-              letterSpacing: 0.3,
+                Icon(
+                  Icons.trending_up_rounded,
+                  color: Colors.white.withOpacity(0.5),
+                  size: 16,
+                ),
+              ],
             ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            value,
-            style: const TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.w800,
-              color: Colors.white,
-              letterSpacing: 0.2,
+            const SizedBox(height: 12),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w500,
+                color: Colors.white.withOpacity(0.75),
+                letterSpacing: 0.3,
+              ),
             ),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          ),
-        ],
+            const SizedBox(height: 4),
+            Text(
+              value,
+              style: const TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.w800,
+                color: Colors.white,
+                letterSpacing: 0.2,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ],
+        ),
       ),
     );
   }
