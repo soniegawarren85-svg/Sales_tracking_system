@@ -3742,6 +3742,12 @@ class _DailyStockPageState extends State<DailyStockPage>
       throw Exception('No branch cash drawer found');
     }
 
+    final branchDoc = await FirebaseFirestore.instance
+        .collection('branches')
+        .doc(branchId)
+        .get();
+    final branchName = branchDoc.data()?['name']?.toString().trim() ?? '';
+
     final day = DateTime(reportDate.year, reportDate.month, reportDate.day);
     final dateKey = _reportDateKey(day);
     final reportId = 'daily_report_${user.uid}_${branchId}_$dateKey'.replaceAll(
@@ -3817,6 +3823,10 @@ class _DailyStockPageState extends State<DailyStockPage>
         'total': (data['total'] as num?)?.toDouble() ?? 0.0,
         'paidAmount': (data['paidAmount'] as num?)?.toDouble() ?? 0.0,
         'change': (data['change'] as num?)?.toDouble() ?? 0.0,
+        'staffId': user.uid,
+        'staffName': staffName,
+        'branchId': branchId,
+        'branchName': branchName,
         'timestamp': timestamp?.toDate().toIso8601String() ?? '',
         'items': items,
       };

@@ -55,11 +55,14 @@ class ReportsPage extends StatelessWidget {
               final activeBranchId = BranchSession.instance.branchId;
               final scopedSales = activeBranchId == null
                   ? salesSnapshot.data!.docs
-                  : salesSnapshot.data!.docs.where((doc) => doc.data()['branchId']?.toString() == activeBranchId).toList();
-              final report = _ReportData.fromDocs(
-                scopedSales,
-                coffeeRefs,
-              );
+                  : salesSnapshot.data!.docs
+                        .where(
+                          (doc) =>
+                              doc.data()['branchId']?.toString() ==
+                              activeBranchId,
+                        )
+                        .toList();
+              final report = _ReportData.fromDocs(scopedSales, coffeeRefs);
 
               if (report.transactions.isEmpty) {
                 return const _EmptyState(
@@ -130,37 +133,6 @@ class _GradientAppBar extends StatelessWidget implements PreferredSizeWidget {
             ),
           ],
         ),
-        actions: [
-          Container(
-            margin: const EdgeInsets.only(right: 12),
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-            decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.2),
-              borderRadius: BorderRadius.circular(20),
-            ),
-            child: Row(
-              children: [
-                Container(
-                  width: 7,
-                  height: 7,
-                  decoration: const BoxDecoration(
-                    color: Color(0xFF69FF47),
-                    shape: BoxShape.circle,
-                  ),
-                ),
-                const SizedBox(width: 5),
-                const Text(
-                  'Live',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
       ),
     );
   }
@@ -500,10 +472,8 @@ class _AnimatedSummaryCardState extends State<_AnimatedSummaryCard>
       },
       child: AnimatedBuilder(
         animation: _scaleAnim,
-        builder: (context, child) => Transform.scale(
-          scale: _scaleAnim.value,
-          child: child,
-        ),
+        builder: (context, child) =>
+            Transform.scale(scale: _scaleAnim.value, child: child),
         child: Container(
           decoration: BoxDecoration(
             color: _cardBg,
@@ -670,8 +640,7 @@ class _SalesBarChartState extends State<_SalesBarChart>
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.end,
                   children: widget.days.map((day) {
-                    final ratio =
-                        maxValue <= 0 ? 0.0 : day.sales / maxValue;
+                    final ratio = maxValue <= 0 ? 0.0 : day.sales / maxValue;
                     final maxBar = 145.0;
                     final barHeight =
                         math.max(8.0, ratio.abs() * maxBar) * _anim.value;
@@ -743,8 +712,9 @@ class _SalesBarChartState extends State<_SalesBarChart>
                               child: Text(
                                 _shortDate(day.date),
                                 style: TextStyle(
-                                  color:
-                                      isToday ? _primaryDeep : Colors.grey.shade400,
+                                  color: isToday
+                                      ? _primaryDeep
+                                      : Colors.grey.shade400,
                                   fontSize: 10,
                                   fontWeight: isToday
                                       ? FontWeight.w900
@@ -799,8 +769,7 @@ class _TopSellingSectionState extends State<_TopSellingSection>
       duration: const Duration(milliseconds: 300),
       value: 1.0,
     );
-    _expandAnim =
-        CurvedAnimation(parent: _ctrl, curve: Curves.easeInOutCubic);
+    _expandAnim = CurvedAnimation(parent: _ctrl, curve: Curves.easeInOutCubic);
   }
 
   @override
@@ -948,7 +917,9 @@ class _TopSellingSectionState extends State<_TopSellingSection>
                             child: Text(
                               '$rank',
                               style: TextStyle(
-                                color: isTop3 ? Colors.white : Colors.grey.shade500,
+                                color: isTop3
+                                    ? Colors.white
+                                    : Colors.grey.shade500,
                                 fontWeight: FontWeight.w900,
                                 fontSize: 13,
                               ),
@@ -1420,7 +1391,10 @@ class _EmptyState extends StatelessWidget {
               height: 80,
               decoration: BoxDecoration(
                 gradient: LinearGradient(
-                  colors: [_primary.withOpacity(0.15), _primaryLight.withOpacity(0.1)],
+                  colors: [
+                    _primary.withOpacity(0.15),
+                    _primaryLight.withOpacity(0.1),
+                  ],
                 ),
                 shape: BoxShape.circle,
               ),
@@ -1497,8 +1471,11 @@ class _ReportData {
 
     final now = DateTime.now();
     for (var i = 6; i >= 0; i--) {
-      final date = DateTime(now.year, now.month, now.day)
-          .subtract(Duration(days: i));
+      final date = DateTime(
+        now.year,
+        now.month,
+        now.day,
+      ).subtract(Duration(days: i));
       daily[date] = 0;
     }
 
@@ -1548,7 +1525,8 @@ class _ReportData {
         final signedQuantity = quantity * sign;
         final signedRevenue = price * quantity * sign;
         final isBundle = item['isBundle'] == true;
-        final isCoffee = item['isCoffee'] == true ||
+        final isCoffee =
+            item['isCoffee'] == true ||
             category.contains('coffee') ||
             coffeeRefs.matches(name: name, sourceId: sourceId);
         // Use the actual coffee size in performance reports (Small, Medium,
@@ -1752,8 +1730,8 @@ String _dateTimeLabel(DateTime date) {
   final hour = date.hour == 0
       ? 12
       : date.hour > 12
-          ? date.hour - 12
-          : date.hour;
+      ? date.hour - 12
+      : date.hour;
   final minute = date.minute.toString().padLeft(2, '0');
   final period = date.hour >= 12 ? 'PM' : 'AM';
   return '${date.month}/${date.day}/${date.year} $hour:$minute $period';

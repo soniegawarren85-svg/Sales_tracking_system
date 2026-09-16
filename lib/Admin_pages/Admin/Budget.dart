@@ -2770,6 +2770,7 @@ class _BudgetPageState extends State<BudgetPage>
     final totalSales = data['totalSales'];
     final transactionCount = data['transactionCount'];
     final transactions = data['transactions'] as List<dynamic>?;
+    final reportBranchName = data['branchName']?.toString().trim() ?? '';
     final staffPublicId = data['staffPublicId']?.toString().trim() ?? '';
     final displayStaffId = staffPublicId.isNotEmpty ? staffPublicId : staffId;
     final closingInventory =
@@ -3047,6 +3048,9 @@ class _BudgetPageState extends State<BudgetPage>
             ...transactions.map((transaction) {
               final tx = transaction as Map<String, dynamic>;
               final salesId = tx['salesId']?.toString() ?? 'Unknown';
+              final receiptStaff = tx['staffName']?.toString().trim() ?? staffName;
+                final receiptBranch = tx['branchName']?.toString().trim() ??
+                  reportBranchName;
               final transactionTotal = tx['total'] is num
                   ? (tx['total'] as num).toDouble()
                   : double.tryParse(tx['total']?.toString() ?? '') ?? 0.0;
@@ -3080,7 +3084,7 @@ class _BudgetPageState extends State<BudgetPage>
                           children: [
                             Expanded(
                               child: Text(
-                                'Sales ID: $salesId',
+                                'Sales ID: $salesId  •  $receiptStaff${receiptBranch.isNotEmpty ? '  •  Branches: $receiptBranch' : ''}',
                                 style: const TextStyle(
                                   fontWeight: FontWeight.w700,
                                   fontSize: 12,
