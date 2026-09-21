@@ -57,7 +57,9 @@ class _AdminDashboardState extends State<AdminDashboard>
     BranchSession.instance.addListener(_onBranchChanged);
   }
 
-  void _onBranchChanged() { if (mounted) setState(() => _selectedIndex = 0); }
+  void _onBranchChanged() {
+    if (mounted) setState(() => _selectedIndex = 0);
+  }
 
   @override
   void dispose() {
@@ -86,6 +88,19 @@ class _AdminDashboardState extends State<AdminDashboard>
       if (item['isDeleted'] == true) return false;
       return !_isExpired(item['expirationDate']?.toString());
     }).toList();
+  }
+
+  int _availableBundleCount(Map<String, dynamic> data) {
+    final instances = (data['bundleInstances'] as List<dynamic>? ?? [])
+        .whereType<Map>()
+        .toList();
+    if (instances.isEmpty) {
+      return int.tryParse(data['bundleCount']?.toString() ?? '0') ?? 0;
+    }
+    return instances.where((instance) {
+      final status = instance['status']?.toString().trim().toLowerCase();
+      return status == null || status.isEmpty || status == 'available';
+    }).length;
   }
 
   int _calculateTotalStockFromProducts(List<QueryDocumentSnapshot> products) {
@@ -210,8 +225,9 @@ class _AdminDashboardState extends State<AdminDashboard>
                   .snapshots(),
               builder: (context, snapshot) {
                 var unreadCount = 0;
-                for (final doc in snapshot.data?.docs ??
-                    <QueryDocumentSnapshot<Map<String, dynamic>>>[]) {
+                for (final doc
+                    in snapshot.data?.docs ??
+                        <QueryDocumentSnapshot<Map<String, dynamic>>>[]) {
                   final unreadBy = doc.data()['unreadBy'];
                   if (unreadBy is Map) {
                     final value = unreadBy[adminMessageId];
@@ -417,7 +433,9 @@ class _AdminDashboardState extends State<AdminDashboard>
             ),
             const SizedBox(width: 6),
             Text(
-              BranchSession.instance.isMainBranch ? 'Cupcakes • Main Branch' : 'Cupcakes • ${BranchSession.instance.displayName}',
+              BranchSession.instance.isMainBranch
+                  ? 'Cupcakes'
+                  : 'Cupcakes • ${BranchSession.instance.displayName}',
               style: TextStyle(
                 fontSize: 12,
                 color: Color(0xFFFFD8B5),
@@ -694,9 +712,9 @@ class _AdminDashboardState extends State<AdminDashboard>
     return LayoutBuilder(
       builder: (context, constraints) {
         return StreamBuilder<QuerySnapshot>(
-          stream: activeBranchId == null
-              ? FirebaseFirestore.instance.collection('sales_inventory').snapshots()
-              : FirebaseFirestore.instance.collection('staff_inventory').where('staffId', isEqualTo: activeBranchId).snapshots(),
+            stream: FirebaseFirestore.instance
+            .collection('sales_inventory')
+            .snapshots(),
           builder: (context, salesSnapshot) {
             int totalStock = 0;
             int totalItems = 0;
@@ -704,6 +722,9 @@ class _AdminDashboardState extends State<AdminDashboard>
               final activeSalesDocs = salesSnapshot.data!.docs.where((doc) {
                 final data = doc.data() as Map<String, dynamic>;
                 if (data['isDeleted'] == true) return false;
+                if (data['isBundle'] == true) {
+                  return true;
+                }
                 final items =
                     (data['items'] as List?)?.cast<Map<String, dynamic>>() ??
                     [];
@@ -711,12 +732,12 @@ class _AdminDashboardState extends State<AdminDashboard>
                 return activeItems.isNotEmpty;
               }).toList();
 
-              // Stock = count of categories with at least one active variant
-              totalStock = activeSalesDocs.length;
-
-              // Items = count of active variants only
               for (var doc in activeSalesDocs) {
                 final data = doc.data() as Map<String, dynamic>;
+                if (data['isBundle'] == true) {
+                  totalStock += 1;
+                  continue;
+                }
                 final items =
                     (data['items'] as List?)?.cast<Map<String, dynamic>>() ??
                     [];
@@ -727,8 +748,13 @@ class _AdminDashboardState extends State<AdminDashboard>
 
             return StreamBuilder<QuerySnapshot>(
               stream: activeBranchId == null
-                  ? FirebaseFirestore.instance.collection('staff_requests').snapshots()
-                  : FirebaseFirestore.instance.collection('staff_requests').where('branchIds', arrayContains: activeBranchId).snapshots(),
+                  ? FirebaseFirestore.instance
+                        .collection('staff_requests')
+                        .snapshots()
+                  : FirebaseFirestore.instance
+                        .collection('staff_requests')
+                        .where('branchIds', arrayContains: activeBranchId)
+                        .snapshots(),
               builder: (context, staffSnapshot) {
                 final staffCount = staffSnapshot.hasData
                     ? staffSnapshot.data!.docs.where((doc) {
@@ -749,7 +775,7 @@ class _AdminDashboardState extends State<AdminDashboard>
                   _buildStatItem(
                     Icons.inventory_2_rounded,
                     totalStock.toString(),
-                    'Stock',
+                    'Bundles',
                   ),
                   _buildStatItem(
                     Icons.people_alt_rounded,
@@ -759,8 +785,10 @@ class _AdminDashboardState extends State<AdminDashboard>
                 ];
 
                 return Container(
-                  padding: const EdgeInsets.symmetric(
-                    vertical: 18,
+                  padding: EdgeInsets.symmetric(
+                    vertical: MediaQuery.of(context).size.width >= 600
+                        ? 11
+                        : 18,
                     horizontal: 12,
                   ),
                   decoration: BoxDecoration(
@@ -869,7 +897,8 @@ class _AdminDashboardState extends State<AdminDashboard>
 
   Widget _buildOptionsGrid() {
     final width = MediaQuery.of(context).size.width;
-    final childAspectRatio = width < 400 ? 1.02 : 1.08;
+    final isTablet = width >= 600;
+    final childAspectRatio = width < 400 ? 1.02 : (isTablet ? 3.2 : 1.08);
 
     final items = [
       _GridActionItem(
@@ -941,7 +970,9 @@ class _AdminDashboardState extends State<AdminDashboard>
           ],
           border: Border.all(color: item.color.withOpacity(0.12), width: 1.2),
         ),
-        padding: const EdgeInsets.all(20),
+        padding: EdgeInsets.all(
+          MediaQuery.of(context).size.width >= 600 ? 14 : 20,
+        ),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
@@ -951,9 +982,13 @@ class _AdminDashboardState extends State<AdminDashboard>
                 color: item.bgColor,
                 borderRadius: BorderRadius.circular(16),
               ),
-              child: Icon(item.icon, color: item.color, size: 28),
+              child: Icon(
+                item.icon,
+                color: item.color,
+                size: MediaQuery.of(context).size.width >= 600 ? 24 : 28,
+              ),
             ),
-            const SizedBox(height: 14),
+            SizedBox(height: MediaQuery.of(context).size.width >= 600 ? 8 : 14),
             Text(
               item.label,
               textAlign: TextAlign.center,
@@ -1069,7 +1104,10 @@ class _AdminDashboardState extends State<AdminDashboard>
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 220),
         curve: Curves.easeInOut,
-        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
+        padding: EdgeInsets.symmetric(
+          horizontal: MediaQuery.of(context).size.width >= 600 ? 12 : 18,
+          vertical: MediaQuery.of(context).size.width >= 600 ? 5 : 8,
+        ),
         decoration: BoxDecoration(
           color: selected
               ? kPrimaryBrown.withOpacity(0.12)
@@ -1084,15 +1122,15 @@ class _AdminDashboardState extends State<AdminDashboard>
               child: Icon(
                 item.icon,
                 key: ValueKey(selected),
-                size: 24,
+                size: MediaQuery.of(context).size.width >= 600 ? 21 : 24,
                 color: selected ? kPrimaryBrown : Colors.grey[400],
               ),
             ),
-            const SizedBox(height: 4),
+            SizedBox(height: MediaQuery.of(context).size.width >= 600 ? 2 : 4),
             Text(
               item.label,
               style: TextStyle(
-                fontSize: 11,
+                fontSize: MediaQuery.of(context).size.width >= 600 ? 10 : 11,
                 color: selected ? kPrimaryBrown : Colors.grey[500],
                 fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
                 letterSpacing: 0.2,

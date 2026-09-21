@@ -57,13 +57,18 @@ class _SessionGateState extends State<SessionGate> {
   Future<Widget> _resolveStartPage() async {
     final prefs = await SharedPreferences.getInstance();
     final lastRole = prefs.getString('lastRole')?.trim().toLowerCase();
-
+    final savedUserId = prefs.getString('lastUserId') ?? '';
+    final savedPublicId = prefs.getString('lastStaffPublicId') ?? '';
+    final hasOfflineSession =
+        lastRole == 'admin' || lastRole == 'staff';
     final user = FirebaseAuth.instance.currentUser;
+
     if (user == null) {
-      // Admin login supports a local session because the legacy admin flow
-      // does not always create a Firebase Auth user.
-      if (lastRole == 'admin') {
+      if (lastRole == 'admin' || savedPublicId.isNotEmpty) {
         return const AdminDashboard();
+      }
+      if (lastRole == 'staff' || savedUserId.isNotEmpty) {
+        return const BottomNav();
       }
       await prefs.remove('lastRole');
       return const LoginScreen();
@@ -75,6 +80,10 @@ class _SessionGateState extends State<SessionGate> {
     if (lastRole == 'staff') {
       unawaited(_validateStaffSession(user.uid, prefs));
       return const BottomNav();
+    }
+
+    if (hasOfflineSession) {
+      return lastRole == 'admin' ? const AdminDashboard() : const BottomNav();
     }
 
     try {

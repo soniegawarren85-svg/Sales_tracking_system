@@ -185,6 +185,8 @@ class _BranchAccessPageState extends State<BranchAccessPage> {
           final identifiers = <String>{
             doc.id,
             data['staffId']?.toString() ?? '',
+            data['employeeId']?.toString() ?? '',
+            data['staffCode']?.toString() ?? '',
             data['userId']?.toString() ?? '',
             data['uid']?.toString() ?? '',
           }..removeWhere((id) => id.trim().isEmpty);
@@ -325,6 +327,8 @@ class _BranchAccessPageState extends State<BranchAccessPage> {
                                   data['uid']?.toString() ?? '',
                                   data['userId']?.toString() ?? '',
                                   data['staffId']?.toString() ?? '',
+                                  data['employeeId']?.toString() ?? '',
+                                  data['staffCode']?.toString() ?? '',
                                 }..removeWhere((id) => id.trim().isEmpty);
                                 return identifiers.any(staffIds.contains);
                               })

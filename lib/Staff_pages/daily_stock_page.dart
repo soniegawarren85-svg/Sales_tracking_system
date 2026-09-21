@@ -530,12 +530,32 @@ class _DailyStockPageState extends State<DailyStockPage>
         .snapshots()
         .listen(
           (snapshot) {
-            double totalDrawer = 0.0;
-            for (final doc in snapshot.docs) {
-              final data = doc.data();
-              totalDrawer += (data['balance'] as num?)?.toDouble() ?? 0.0;
-            }
-            if (mounted) setState(() => _cashDrawer = totalDrawer);
+            unawaited(
+              Future<void>(() async {
+                final service = LocalDatabaseSyncService();
+                await service.mergeCashDrawerSnapshot(
+                      snapshot.docs.map(
+                        (doc) => {...doc.data(), '_localDocId': doc.id},
+                      ),
+                    );
+                // Use the same stable opening-cash + today's-receipts value
+                // as the staff dashboard, never the raw stale server balance.
+                await service.rebuildTodayCashDrawerFromReceipts();
+                final drawerById = {
+                  for (final drawer
+                      in await service.getCachedCollection('staff_cash_drawer'))
+                    drawer['_localDocId']?.toString() ??
+                        drawer['id']?.toString() ?? '': drawer,
+                };
+                final totalDrawer = ids.fold<double>(
+                  0,
+                  (total, id) =>
+                      total +
+                      ((drawerById[id]?['balance'] as num?)?.toDouble() ?? 0),
+                );
+                if (mounted) setState(() => _cashDrawer = totalDrawer);
+              }),
+            );
           },
           onError: (_) {
             if (mounted) setState(() => _cashDrawer = 0.0);
@@ -588,19 +608,25 @@ class _DailyStockPageState extends State<DailyStockPage>
         final name = item['name']?.toString() ?? '';
         final variant = item['variant']?.toString() ?? '';
         return !_latestOrderItems.any((available) {
-          final sameSource = sourceId.isNotEmpty &&
+          final sameSource =
+              sourceId.isNotEmpty &&
               available['sourceInventoryId']?.toString() == sourceId;
-          final sameItem = available['name']?.toString() == name &&
+          final sameItem =
+              available['name']?.toString() == name &&
               available['variant']?.toString() == variant;
           return sameSource || sameItem;
         });
       });
       if (!invalid) continue;
-      final items = rawItems.whereType<Map>()
-          .map((item) => Map<String, dynamic>.from(item)).toList();
+      final items = rawItems
+          .whereType<Map>()
+          .map((item) => Map<String, dynamic>.from(item))
+          .toList();
       try {
         await _recordPendingOrderHistory(
-          action: 'expired', orderId: order.id, items: items,
+          action: 'expired',
+          orderId: order.id,
+          items: items,
         );
         await order.reference.delete();
       } catch (_) {}
@@ -1242,9 +1268,7 @@ class _DailyStockPageState extends State<DailyStockPage>
               ),
               backgroundColor: Colors.transparent,
               child: Container(
-                width: availableDialogWidth > 640
-                    ? 640
-                    : availableDialogWidth,
+                width: availableDialogWidth > 640 ? 640 : availableDialogWidth,
                 constraints: BoxConstraints(
                   maxHeight: MediaQuery.of(context).size.height * 0.86,
                 ),
@@ -4128,6 +4152,14 @@ class _DailyStockPageState extends State<DailyStockPage>
         completedSalePayload,
       );
       unawaited(LocalDatabaseSyncService().syncPendingSales());
+      await LocalDatabaseSyncService().recordCashDrawerChange(
+        drawerId: drawerId,
+        cashDelta: isCashPayment ? paidAmount - change : 0.0,
+        gcashDelta: isCashPayment ? 0.0 : orderTotal,
+        staffId: _currentUserId ?? '',
+        receiptId: salesId,
+        gcashTransactionId: gcashTransactionId.trim(),
+      );
 
       if (mounted) {
         setState(() {
@@ -4150,12 +4182,16 @@ class _DailyStockPageState extends State<DailyStockPage>
       unawaited(
         Future<void>(() async {
           try {
+            // Drawer movements are committed through the durable local queue
+            // above, which prevents an online write from being counted twice.
+            final useLegacyDrawerWrite =
+                _currentUserId == '__legacy_drawer_write__';
             if (_currentUserId != null && drawerId.isNotEmpty) {
               final drawerRef = FirebaseFirestore.instance
                   .collection('staff_cash_drawer')
                   .doc(drawerId);
 
-              if (isCashPayment) {
+              if (useLegacyDrawerWrite && isCashPayment) {
                 await FirebaseFirestore.instance.runTransaction((
                   transaction,
                 ) async {
@@ -4179,7 +4215,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                     'handledByStaffId': _currentUserId,
                   }, SetOptions(merge: true));
                 });
-              } else {
+              } else if (useLegacyDrawerWrite) {
                 await FirebaseFirestore.instance.runTransaction((
                   transaction,
                 ) async {
@@ -4880,7 +4916,10 @@ class _DailyStockPageState extends State<DailyStockPage>
                       width: 260,
                       child: ElevatedButton.icon(
                         onPressed: () {
-                          Navigator.of(dialogContext, rootNavigator: true).pop();
+                          Navigator.of(
+                            dialogContext,
+                            rootNavigator: true,
+                          ).pop();
                         },
                         icon: const Icon(Icons.storefront_rounded, size: 18),
                         label: const Text('Back to Order'),
@@ -5024,11 +5063,11 @@ class _DailyStockPageState extends State<DailyStockPage>
           .get();
       final docs = snapshot.docs.toList()
         ..sort((a, b) {
-          final aTime = (a.data()['createdAt'] as Timestamp?)
-                  ?.millisecondsSinceEpoch ??
+          final aTime =
+              (a.data()['createdAt'] as Timestamp?)?.millisecondsSinceEpoch ??
               0;
-          final bTime = (b.data()['createdAt'] as Timestamp?)
-                  ?.millisecondsSinceEpoch ??
+          final bTime =
+              (b.data()['createdAt'] as Timestamp?)?.millisecondsSinceEpoch ??
               0;
           return bTime.compareTo(aTime);
         });
@@ -5111,7 +5150,10 @@ class _DailyStockPageState extends State<DailyStockPage>
         ),
       );
     } catch (e) {
-      _showStyledSnackBar('Error loading pending order history: $e', isError: true);
+      _showStyledSnackBar(
+        'Error loading pending order history: $e',
+        isError: true,
+      );
     }
   }
 
@@ -5418,10 +5460,12 @@ class _DailyStockPageState extends State<DailyStockPage>
           .get();
       final docs = snapshot.docs.toList()
         ..sort((a, b) {
-          final aTime = (a.data()['timestamp'] as Timestamp?)
-                  ?.millisecondsSinceEpoch ?? 0;
-          final bTime = (b.data()['timestamp'] as Timestamp?)
-                  ?.millisecondsSinceEpoch ?? 0;
+          final aTime =
+              (a.data()['timestamp'] as Timestamp?)?.millisecondsSinceEpoch ??
+              0;
+          final bTime =
+              (b.data()['timestamp'] as Timestamp?)?.millisecondsSinceEpoch ??
+              0;
           return bTime.compareTo(aTime);
         });
       if (!mounted) return;
@@ -5933,7 +5977,165 @@ class _DailyStockPageState extends State<DailyStockPage>
     return keys;
   }
 
+  Future<void> _showReceiptRefundDialog() async {
+    final receiptController = TextEditingController();
+    final reasonController = TextEditingController();
+    Map<String, dynamic>? receipt;
+    DocumentReference<Map<String, dynamic>>? receiptRef;
+    var searching = false;
+    var saving = false;
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => Dialog(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 680),
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(22),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.fromLTRB(18, 16, 8, 16),
+                    decoration: BoxDecoration(
+                      gradient: const LinearGradient(
+                        colors: [_AppColors.primaryDark, _AppColors.primary],
+                      ),
+                      borderRadius: BorderRadius.circular(18),
+                    ),
+                    child: Row(children: [
+                      const Icon(Icons.assignment_return_rounded, color: Colors.white),
+                      const SizedBox(width: 10),
+                      const Expanded(child: Text('Refund by Receipt', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: Colors.white))),
+                      IconButton(onPressed: saving ? null : () => Navigator.pop(dialogContext), icon: const Icon(Icons.close_rounded, color: Colors.white)),
+                    ]),
+                  ),
+                  const SizedBox(height: 14),
+                  const Text('Enter the exact receipt number, then tap Find to review the order before refunding.', style: TextStyle(color: _AppColors.textSoft)),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: receiptController,
+                    textCapitalization: TextCapitalization.characters,
+                    decoration: _refundInputDecoration('Receipt number', Icons.receipt_long_rounded).copyWith(
+                      hintText: 'Example: S-20260920-1247-972',
+                      suffixIcon: TextButton(
+                        onPressed: searching ? null : () async {
+                          final receiptId = receiptController.text.trim();
+                          if (receiptId.isEmpty) return;
+                          setDialogState(() { searching = true; receipt = null; });
+                          try {
+                            final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
+                            final snapshot = await FirebaseFirestore.instance.collection('completed_sales').where('salesId', isEqualTo: receiptId).limit(1).get();
+                            final doc = snapshot.docs.isEmpty ? null : snapshot.docs.first;
+                            if (doc == null || (uid.isNotEmpty && doc.data()['userId']?.toString() != uid)) {
+                              throw Exception('Receipt not found for this staff account');
+                            }
+                            final data = doc.data();
+                            if (data['type']?.toString().toLowerCase() == 'refund' || data['fullyRefunded'] == true) {
+                              throw Exception('This receipt has already been refunded');
+                            }
+                            setDialogState(() { receipt = data; receiptRef = doc.reference; });
+                          } catch (e) {
+                            if (mounted) _showStyledSnackBar(e.toString().replaceFirst('Exception: ', ''), isError: true);
+                          } finally { if (context.mounted) setDialogState(() => searching = false); }
+                        },
+                        child: searching ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)) : const Text('Find'),
+                      ),
+                    ),
+                  ),
+                  if (receipt != null) ...[
+                    const SizedBox(height: 16),
+                    Text('Receipt ${receipt!['salesId']}', style: const TextStyle(fontWeight: FontWeight.w900, color: _AppColors.textMid)),
+                    Text('Date: ${receipt!['timestamp'] is Timestamp ? (receipt!['timestamp'] as Timestamp).toDate().toString() : receipt!['timestamp'] ?? 'Unknown'}'),
+                    Text('Discount: ${receipt!['discountType'] ?? 'None'} • ₱${_parsePrice(receipt!['discount']).toStringAsFixed(2)}'),
+                    const SizedBox(height: 8),
+                    ...((receipt!['items'] as List<dynamic>? ?? []).whereType<Map>().map((raw) {
+                      final item = Map<String, dynamic>.from(raw);
+                      final kind = item['isBundle'] == true ? 'Bundle' : item['isCoffee'] == true ? 'Coffee' : 'Category';
+                      final qty = _parseInt(item['quantity'], fallback: 1);
+                      final originalLine = _parsePrice(item['price']) * qty;
+                      final subtotal = _parsePrice(receipt!['subtotal']);
+                      final paidTotal = _parsePrice(receipt!['total']);
+                      final refundLine = subtotal > 0
+                          ? originalLine * (paidTotal / subtotal)
+                          : originalLine;
+                      return ListTile(
+                        dense: true,
+                        title: Text('${item['name']} ${item['variant']?.toString().isNotEmpty == true ? '(${item['variant']})' : ''}'),
+                        subtitle: Text('$kind • $qty x ₱${(refundLine / qty).toStringAsFixed(2)} after discount'),
+                        trailing: Text('₱${refundLine.toStringAsFixed(2)}'),
+                      );
+                    })),
+                    const SizedBox(height: 10),
+                    TextField(controller: reasonController, minLines: 2, maxLines: 4, decoration: _refundInputDecoration('Reason', Icons.edit_note_rounded)),
+                    const SizedBox(height: 16),
+                    ElevatedButton.icon(
+                      onPressed: saving ? null : () async {
+                        final reason = reasonController.text.trim();
+                        if (reason.isEmpty) { _showStyledSnackBar('Enter refund reason', isError: true); return; }
+                        final amount = _parsePrice(receipt!['total']).abs();
+                        final proceed = await showDialog<bool>(context: dialogContext, builder: (context) => AlertDialog(title: const Text('Confirm full receipt refund?'), content: Text('Refund ₱${amount.toStringAsFixed(2)} for ${receipt!['salesId']}?'), actions: [TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')), ElevatedButton(onPressed: () => Navigator.pop(context, true), child: const Text('Proceed'))]));
+                        if (proceed != true) return;
+                        setDialogState(() => saving = true);
+                        try {
+                          final items = (receipt!['items'] as List<dynamic>? ?? []).whereType<Map>().map((raw) => Map<String, dynamic>.from(raw)).toList();
+                          await _saveRefundTransaction(source: 'Receipt ${receipt!['salesId']}', reason: reason, amount: amount, items: items);
+                          // This source-receipt marker is non-critical and is
+                          // queued when offline. The refund receipt and drawer
+                          // movement above have already been saved locally.
+                          unawaited(Future<void>(() async {
+                            try {
+                              await receiptRef!.set({'fullyRefunded': true, 'refundReason': reason, 'refundedAt': FieldValue.serverTimestamp()}, SetOptions(merge: true));
+                            } catch (_) {}
+                          }));
+                          if (dialogContext.mounted) {
+                            Navigator.of(dialogContext, rootNavigator: true).pop();
+                          }
+                          _showStyledSnackBar('Refund recorded');
+                        } catch (e) { if (mounted) _showStyledSnackBar('Refund failed: $e', isError: true); if (context.mounted) setDialogState(() => saving = false); }
+                      },
+                      icon: saving ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)) : const Icon(Icons.assignment_return_rounded),
+                      label: Text(saving ? 'Recording refund...' : 'Confirm Refund'),
+                    ),
+                  ] else ...[
+                    const SizedBox(height: 16),
+                    TextField(
+                      enabled: false,
+                      decoration: _refundInputDecoration('Reason', Icons.edit_note_rounded).copyWith(
+                        hintText: 'Find a valid receipt first',
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    SizedBox(
+                      height: 50,
+                      child: ElevatedButton.icon(
+                        onPressed: null,
+                        icon: const Icon(Icons.assignment_return_rounded),
+                        label: const Text('Confirm Refund'),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    // Delay disposal until the dialog exit animation has detached its text
+    // fields. Disposing immediately on Flutter web can deactivate an
+    // InheritedElement while it still has dependents.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      receiptController.dispose();
+      reasonController.dispose();
+    });
+  }
+
   Future<void> _showRefundDialog(List<Map<String, dynamic>> orderItems) async {
+    await _showReceiptRefundDialog();
+    return;
+    // Legacy inventory-picker flow retained below for reference.
     final userId = FirebaseAuth.instance.currentUser?.uid;
     if (userId == null) {
       _showStyledSnackBar('User not authenticated', isError: true);
@@ -6123,9 +6325,7 @@ class _DailyStockPageState extends State<DailyStockPage>
               backgroundColor: Colors.transparent,
               child: Container(
                 width: size.width < 600 ? size.width - 48 : 600,
-                constraints: BoxConstraints(
-                  maxHeight: size.height * 0.84,
-                ),
+                constraints: BoxConstraints(maxHeight: size.height * 0.84),
                 padding: const EdgeInsets.all(20),
                 decoration: BoxDecoration(
                   color: Colors.white,
@@ -6283,7 +6483,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                               Icons.undo_rounded,
                             ).copyWith(
                               helperText: maxQty > 0
-                                  ? 'Max refundable: $maxQty'
+                                  ? 'Sold quantity: ${isCategory || isCoffee ? _parseInt(selectedShelfItem?['soldQuantity'], fallback: maxQty) : _parseInt(selectedBundleOption?['originalQty'], fallback: maxQty)} • Max refundable: $maxQty'
                                   : 'No quantity available',
                             ),
                         onChanged: (_) => setDialogState(() {}),
@@ -6328,6 +6528,44 @@ class _DailyStockPageState extends State<DailyStockPage>
                                 return;
                               }
 
+                              final refundItem = selectedShelfItem ??
+                                  selectedBundleOption;
+                              final itemLabel = isCategory || isCoffee
+                                  ? _itemDisplayLabel(refundItem ?? const {})
+                                  : '${refundItem?['bundleName'] ?? 'Bundle'} (${refundItem?['itemName'] ?? 'Item'})';
+                              final unitPrice = _parsePrice(
+                                refundItem?['price'],
+                              );
+                              final proceed = await showDialog<bool>(
+                                context: dialogContext,
+                                builder: (context) => AlertDialog(
+                                  title: const Text('Proceed with refund?'),
+                                  content: Text(
+                                    '$qty x $itemLabel\nRefund amount: ₱${(unitPrice * qty).toStringAsFixed(2)}\nReason: $reason',
+                                  ),
+                                  actions: [
+                                    TextButton(
+                                      onPressed: () => Navigator.pop(context, false),
+                                      child: const Text('Cancel'),
+                                    ),
+                                    ElevatedButton(
+                                      onPressed: () => Navigator.pop(context, true),
+                                      child: const Text('Proceed'),
+                                    ),
+                                  ],
+                                ),
+                              );
+                              if (proceed != true) return;
+
+                              if (!dialogContext.mounted) return;
+                              showDialog<void>(
+                                context: dialogContext,
+                                barrierDismissible: false,
+                                builder: (_) => const Center(
+                                  child: CircularProgressIndicator(),
+                                ),
+                              );
+
                               if (isCategory || isCoffee) {
                                 if (selectedShelfItem == null ||
                                     selectedShelfItem.isEmpty) {
@@ -6359,9 +6597,15 @@ class _DailyStockPageState extends State<DailyStockPage>
                               }
 
                               if (dialogContext.mounted) {
+                                Navigator.of(dialogContext, rootNavigator: true).pop();
+                              }
+                              if (dialogContext.mounted) {
                                 Navigator.pop(dialogContext);
                               }
                             } catch (e) {
+                              if (dialogContext.mounted) {
+                                Navigator.of(dialogContext, rootNavigator: true).pop();
+                              }
                               if (!mounted) return;
                               _showStyledSnackBar(
                                 'Refund failed: $e',
@@ -6596,6 +6840,59 @@ class _DailyStockPageState extends State<DailyStockPage>
         ? displayName
         : currentUser?.email?.split('@').first ?? 'Staff';
 
+    // Persist the refund first, exactly like an offline sale. Firestore writes
+    // are attempted in the background/queued on reconnect, so a missing
+    // connection never prevents the staff member from completing a refund.
+    final offlineRefundId = _generateRefundId();
+    final refundPayload = <String, dynamic>{
+      'userId': userId,
+      'salesId': offlineRefundId,
+      'type': 'refund',
+      'source': source,
+      'reason': reason,
+      'subtotal': -refundAmount,
+      'discount': 0.0,
+      'discountType': 'None',
+      'total': -refundAmount,
+      'paidAmount': 0.0,
+      'change': 0.0,
+      'paymentMode': 'Cash',
+      'cashDrawerDelta': -refundAmount,
+      if (drawerId.isNotEmpty) 'branchId': drawerId,
+      'items': items,
+      'timestamp': DateTime.now(),
+      'status': 'Refund',
+    };
+    await LocalDatabaseSyncService().recordCompletedSale(refundPayload);
+    await LocalDatabaseSyncService().recordCashDrawerChange(
+      drawerId: drawerId.isNotEmpty ? drawerId : userId,
+      cashDelta: -refundAmount,
+      gcashDelta: 0,
+      staffId: userId,
+      receiptId: offlineRefundId,
+    );
+    if (mounted) {
+      setState(() => _cashDrawer = max(0, _cashDrawer - refundAmount));
+    }
+    unawaited(
+      firestore.collection('admin_notifications').add({
+        'title': 'Refund recorded',
+        'message': '$staffName refunded ₱${refundAmount.toStringAsFixed(2)}.',
+        'category': 'Refunds',
+        'type': 'refund',
+        'salesId': offlineRefundId,
+        'staffId': userId,
+        'staffName': staffName,
+        if (drawerId.isNotEmpty) 'branchId': drawerId,
+        'amount': refundAmount,
+        'reason': reason,
+        'source': source,
+        'isRead': false,
+        'createdAt': FieldValue.serverTimestamp(),
+      }),
+    );
+    return;
+
     final balanceAfterRefund = await firestore.runTransaction<double>((
       transaction,
     ) async {
@@ -6639,6 +6936,28 @@ class _DailyStockPageState extends State<DailyStockPage>
         _cashDrawer = balanceAfterRefund;
       });
     }
+
+    // A refund must participate in the same local receipt calculation as a
+    // sale, otherwise a reload can show the refund record but not its drawer
+    // deduction.
+    await LocalDatabaseSyncService().mergeCompletedSales([
+      {
+        '_localDocId': salesRef.id,
+        'userId': userId,
+        'salesId': refundId,
+        'type': 'refund',
+        'source': source,
+        'reason': reason,
+        'subtotal': -refundAmount,
+        'total': -refundAmount,
+        'paymentMode': 'Cash',
+        'cashDrawerDelta': -refundAmount,
+        if (drawerId.isNotEmpty) 'branchId': drawerId,
+        'items': items,
+        'timestamp': DateTime.now(),
+        'status': 'Refund',
+      },
+    ]);
 
     final itemCount = items.fold<int>(
       0,
@@ -6827,10 +7146,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                             ),
                           );
                         }),
-                        const Divider(
-                          color: _AppColors.divider,
-                          height: 24,
-                        ),
+                        const Divider(color: _AppColors.divider, height: 24),
                         _OrderRow(
                           label: 'Subtotal',
                           value: '₱${total.toStringAsFixed(2)}',
@@ -6979,12 +7295,10 @@ class _DailyStockPageState extends State<DailyStockPage>
     final paymentController = TextEditingController();
     final gcashTransactionController = TextEditingController();
     final discountProofController = TextEditingController();
-    final hasDiscount = _seniorDiscount || _pwdDiscount;
-    final discountProofLabel = _seniorDiscount ? 'Senior ID' : 'PWD ID';
     var paymentMode = 'Cash';
+    var isDiscountExpanded = _seniorDiscount || _pwdDiscount;
     double paidAmount = 0;
     double change = 0;
-    final totalDue = _discountedTotal(orderItems);
 
     final result = await showDialog<_OrderConfirmationResult>(
       context: context,
@@ -6992,6 +7306,10 @@ class _DailyStockPageState extends State<DailyStockPage>
       builder: (dialogContext) {
         return StatefulBuilder(
           builder: (context, setState) {
+            final hasDiscount = _seniorDiscount || _pwdDiscount;
+            final discountProofLabel =
+                _seniorDiscount ? 'Senior ID' : 'PWD ID';
+            final totalDue = _discountedTotal(orderItems);
             paidAmount = paymentMode == 'GCash'
                 ? totalDue
                 : double.tryParse(
@@ -7150,7 +7468,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                               value:
                                   '₱${_cartTotal(orderItems).toStringAsFixed(2)}',
                             ),
-                            if (_seniorDiscount || _pwdDiscount) ...[
+                            if (hasDiscount && !isDiscountExpanded) ...[
                               const SizedBox(height: 6),
                               _OrderRow(
                                 label: _discountLabel,
@@ -7275,6 +7593,117 @@ class _DailyStockPageState extends State<DailyStockPage>
                                   : (_) => setState(() {}),
                             ),
                             const SizedBox(height: 12),
+                            Material(
+                              color: Colors.transparent,
+                              child: InkWell(
+                                onTap: () => setState(() {
+                                  isDiscountExpanded = !isDiscountExpanded;
+                                }),
+                                borderRadius: BorderRadius.circular(14),
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 14,
+                                    vertical: 13,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: _AppColors.bg,
+                                    borderRadius: BorderRadius.circular(14),
+                                    border: Border.all(
+                                      color: _AppColors.border,
+                                    ),
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      const Icon(
+                                        Icons.discount_rounded,
+                                        color: _AppColors.primary,
+                                      ),
+                                      const SizedBox(width: 10),
+                                      const Expanded(
+                                        child: Text(
+                                          'Discount',
+                                          style: TextStyle(
+                                            color: _AppColors.primary,
+                                            fontSize: 15,
+                                            fontWeight: FontWeight.w800,
+                                          ),
+                                        ),
+                                      ),
+                                      AnimatedRotation(
+                                        duration: const Duration(
+                                          milliseconds: 180,
+                                        ),
+                                        turns: isDiscountExpanded ? 0.5 : 0,
+                                        child: const Icon(
+                                          Icons.keyboard_arrow_down_rounded,
+                                          color: _AppColors.primary,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
+                            AnimatedSize(
+                              duration: const Duration(milliseconds: 200),
+                              curve: Curves.easeInOut,
+                              child: isDiscountExpanded
+                                  ? Padding(
+                                      padding: const EdgeInsets.only(top: 10),
+                                      child: Column(
+                                        children: [
+                                          _buildDiscountToggle(
+                                            title: 'Senior Discount',
+                                            subtitle:
+                                                '20% off for senior citizens',
+                                            value: _seniorDiscount,
+                                            onChanged: (value) => setState(() {
+                                              _seniorDiscount = value;
+                                              if (value) _pwdDiscount = false;
+                                              if (paymentMode == 'GCash') {
+                                                paymentController.text =
+                                                    _discountedTotal(orderItems)
+                                                        .toStringAsFixed(2);
+                                              }
+                                            }),
+                                            icon: Icons.elderly_rounded,
+                                          ),
+                                          const SizedBox(height: 8),
+                                          _buildDiscountToggle(
+                                            title: 'PWD Discount',
+                                            subtitle:
+                                                '20% off for persons with disability',
+                                            value: _pwdDiscount,
+                                            onChanged: (value) => setState(() {
+                                              _pwdDiscount = value;
+                                              if (value) _seniorDiscount = false;
+                                              if (paymentMode == 'GCash') {
+                                                paymentController.text =
+                                                    _discountedTotal(orderItems)
+                                                        .toStringAsFixed(2);
+                                              }
+                                            }),
+                                            icon: Icons.accessible_rounded,
+                                          ),
+                                          if (hasDiscount) ...[
+                                            const SizedBox(height: 10),
+                                            _PinkTextField(
+                                              controller: discountProofController,
+                                              label:
+                                                  '$discountProofLabel / Proof ID',
+                                              hint: _seniorDiscount
+                                                  ? 'Enter senior citizen ID'
+                                                  : 'Enter PWD ID',
+                                              icon: Icons.badge_outlined,
+                                              keyboardType: TextInputType.text,
+                                              onChanged: (_) => setState(() {}),
+                                            ),
+                                          ],
+                                        ],
+                                      ),
+                                    )
+                                  : const SizedBox.shrink(),
+                            ),
                             Container(
                               padding: const EdgeInsets.symmetric(
                                 horizontal: 14,
@@ -8363,71 +8792,77 @@ class _DailyStockPageState extends State<DailyStockPage>
             bottom: false,
             child: Padding(
               padding: const EdgeInsets.only(bottom: _staffBottomNavReserve),
-                child: Column(
-                  children: [
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(20, 16, 20, 10),
-                      child: _buildTabletSalesHeader(),
-                    ),
-                    Expanded(
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: _orderReviewOnRight
-                            ? [
-                                Expanded(
-                                  child: Center(
-                                    child: ConstrainedBox(
-                                      constraints:
-                                          const BoxConstraints(maxWidth: 900),
-                                      child: SingleChildScrollView(
-                                        physics: _latestOrderItems.length <= 6
-                                            ? const NeverScrollableScrollPhysics()
-                                            : const ClampingScrollPhysics(),
-                                        padding: const EdgeInsets.fromLTRB(
-                                          20,
-                                          10,
-                                          20,
-                                          24,
-                                        ),
-                                        child: _buildOrderSection(),
+              child: Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 16, 20, 10),
+                    child: _buildTabletSalesHeader(),
+                  ),
+                  Expanded(
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: _orderReviewOnRight
+                          ? [
+                              Expanded(
+                                child: Center(
+                                  child: ConstrainedBox(
+                                    constraints: const BoxConstraints(
+                                      maxWidth: 900,
+                                    ),
+                                    child: SingleChildScrollView(
+                                      // Keep the item pane draggable on tablets
+                                      // even when the current grid is short. This
+                                      // also lets users reach the last row when
+                                      // the on-screen navigation reduces height.
+                                      physics: const AlwaysScrollableScrollPhysics(
+                                        parent: ClampingScrollPhysics(),
                                       ),
+                                      padding: const EdgeInsets.fromLTRB(
+                                        20,
+                                        10,
+                                        20,
+                                        24,
+                                      ),
+                                      child: _buildOrderSection(),
                                     ),
                                   ),
                                 ),
-                                SizedBox(
-                                  width: reviewWidth,
-                                  child: _buildTabletOrderReviewPane(),
-                                ),
-                              ]
-                            : [
-                                SizedBox(
-                                  width: reviewWidth,
-                                  child: _buildTabletOrderReviewPane(),
-                                ),
-                                Expanded(
-                                  child: Center(
-                                    child: ConstrainedBox(
-                                      constraints:
-                                          const BoxConstraints(maxWidth: 900),
-                                      child: SingleChildScrollView(
-                                        physics: _latestOrderItems.length <= 6
-                                            ? const NeverScrollableScrollPhysics()
-                                            : const ClampingScrollPhysics(),
-                                        padding: const EdgeInsets.fromLTRB(
-                                          20,
-                                          10,
-                                          20,
-                                          24,
-                                        ),
-                                        child: _buildOrderSection(),
+                              ),
+                              SizedBox(
+                                width: reviewWidth,
+                                child: _buildTabletOrderReviewPane(),
+                              ),
+                            ]
+                          : [
+                              SizedBox(
+                                width: reviewWidth,
+                                child: _buildTabletOrderReviewPane(),
+                              ),
+                              Expanded(
+                                child: Center(
+                                  child: ConstrainedBox(
+                                    constraints: const BoxConstraints(
+                                      maxWidth: 900,
+                                    ),
+                                    child: SingleChildScrollView(
+                                      physics: const AlwaysScrollableScrollPhysics(
+                                        parent: ClampingScrollPhysics(),
                                       ),
+                                      padding: const EdgeInsets.fromLTRB(
+                                        20,
+                                        10,
+                                        20,
+                                        24,
+                                      ),
+                                      child: _buildOrderSection(),
                                     ),
                                   ),
                                 ),
-                              ],
-                      ),
+                              ),
+                            ],
                     ),
-                  ],
+                  ),
+                ],
               ),
             ),
           ),
@@ -8502,9 +8937,8 @@ class _DailyStockPageState extends State<DailyStockPage>
           ),
           IconButton(
             tooltip: 'Open cashier tools',
-            onPressed: () => _showTabletToolsDrawer(
-              _knownOrderItems(_latestOrderItems),
-            ),
+            onPressed: () =>
+                _showTabletToolsDrawer(_knownOrderItems(_latestOrderItems)),
             icon: const Icon(Icons.menu_rounded),
             color: Colors.white,
             style: IconButton.styleFrom(
@@ -8574,10 +9008,10 @@ class _DailyStockPageState extends State<DailyStockPage>
         );
       },
       transitionBuilder: (context, animation, secondaryAnimation, child) {
-        final offset = Tween<Offset>(
-          begin: const Offset(1, 0),
-          end: Offset.zero,
-        ).animate(CurvedAnimation(parent: animation, curve: Curves.easeOutCubic));
+        final offset =
+            Tween<Offset>(begin: const Offset(1, 0), end: Offset.zero).animate(
+              CurvedAnimation(parent: animation, curve: Curves.easeOutCubic),
+            );
         return SlideTransition(position: offset, child: child);
       },
     );
@@ -8589,106 +9023,105 @@ class _DailyStockPageState extends State<DailyStockPage>
     // This drawer is displayed in a dialog. Keep its expansion state inside
     // the tile so the first tap rebuilds the dialog immediately.
     var isExpanded = _isDiscountExpanded;
-    return StatefulBuilder(builder: (context, setLocalState) => Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Material(
-          color: Colors.transparent,
-          child: InkWell(
-            onTap: () => setLocalState(() {
-              isExpanded = !isExpanded;
-              _isDiscountExpanded = isExpanded;
-            }),
-            borderRadius: BorderRadius.circular(18),
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 220),
-              padding: const EdgeInsets.fromLTRB(16, 12, 12, 12),
-              decoration: BoxDecoration(
-                color: _AppColors.cardBg,
-                borderRadius: BorderRadius.circular(18),
-                border: Border.all(
-                  color: _AppColors.border,
-                  width: 1,
+    return StatefulBuilder(
+      builder: (context, setLocalState) => Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: () => setLocalState(() {
+                isExpanded = !isExpanded;
+                _isDiscountExpanded = isExpanded;
+              }),
+              borderRadius: BorderRadius.circular(18),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 220),
+                padding: const EdgeInsets.fromLTRB(16, 12, 12, 12),
+                decoration: BoxDecoration(
+                  color: _AppColors.cardBg,
+                  borderRadius: BorderRadius.circular(18),
+                  border: Border.all(color: _AppColors.border, width: 1),
                 ),
-              ),
-              child: Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: const Icon(
-                      Icons.discount_rounded,
-                      size: 18,
-                      color: _AppColors.primary,
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  const Expanded(
-                    child: Text(
-                      'Discount',
-                      style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w800,
-                        color: _AppColors.textMid,
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: const Icon(
+                        Icons.discount_rounded,
+                        size: 18,
+                        color: _AppColors.primary,
                       ),
                     ),
-                  ),
-                  AnimatedRotation(
-                    duration: const Duration(milliseconds: 200),
-                    turns: isExpanded ? 0.5 : 0,
-                    child: const Icon(
-                      Icons.keyboard_arrow_down_rounded,
-                      size: 24,
-                      color: _AppColors.primary,
+                    const SizedBox(width: 12),
+                    const Expanded(
+                      child: Text(
+                        'Discount',
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w800,
+                          color: _AppColors.textMid,
+                        ),
+                      ),
                     ),
-                  ),
-                ],
+                    AnimatedRotation(
+                      duration: const Duration(milliseconds: 200),
+                      turns: isExpanded ? 0.5 : 0,
+                      child: const Icon(
+                        Icons.keyboard_arrow_down_rounded,
+                        size: 24,
+                        color: _AppColors.primary,
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
           ),
-        ),
-        AnimatedSize(
-          duration: const Duration(milliseconds: 220),
-          curve: Curves.easeInOutCubic,
-          alignment: Alignment.topCenter,
-          child: ClipRect(
-            child: isExpanded
-                ? Padding(
-                    padding: const EdgeInsets.only(top: 10),
-                    child: Column(
-                      children: [
-                        _buildDiscountToggle(
-                          title: 'Senior Discount',
-                          subtitle: '20% off for senior citizens',
-                          value: _seniorDiscount,
-                          onChanged: (value) => setLocalState(() {
-                            _seniorDiscount = value;
-                            if (value) _pwdDiscount = false;
-                          }),
-                          icon: Icons.elderly_rounded,
-                        ),
-                        const SizedBox(height: 10),
-                        _buildDiscountToggle(
-                          title: 'PWD Discount',
-                          subtitle: '20% off for persons with disability',
-                          value: _pwdDiscount,
-                          onChanged: (value) => setLocalState(() {
-                            _pwdDiscount = value;
-                            if (value) _seniorDiscount = false;
-                          }),
-                          icon: Icons.accessible_rounded,
-                        ),
-                      ],
-                    ),
-                  )
-                : const SizedBox.shrink(),
+          AnimatedSize(
+            duration: const Duration(milliseconds: 220),
+            curve: Curves.easeInOutCubic,
+            alignment: Alignment.topCenter,
+            child: ClipRect(
+              child: isExpanded
+                  ? Padding(
+                      padding: const EdgeInsets.only(top: 10),
+                      child: Column(
+                        children: [
+                          _buildDiscountToggle(
+                            title: 'Senior Discount',
+                            subtitle: '20% off for senior citizens',
+                            value: _seniorDiscount,
+                            onChanged: (value) => setLocalState(() {
+                              _seniorDiscount = value;
+                              if (value) _pwdDiscount = false;
+                            }),
+                            icon: Icons.elderly_rounded,
+                          ),
+                          const SizedBox(height: 10),
+                          _buildDiscountToggle(
+                            title: 'PWD Discount',
+                            subtitle: '20% off for persons with disability',
+                            value: _pwdDiscount,
+                            onChanged: (value) => setLocalState(() {
+                              _pwdDiscount = value;
+                              if (value) _seniorDiscount = false;
+                            }),
+                            icon: Icons.accessible_rounded,
+                          ),
+                        ],
+                      ),
+                    )
+                  : const SizedBox.shrink(),
+            ),
           ),
-        ),
-      ],
-    ));
+        ],
+      ),
+    );
   }
 
   Widget _buildAdvancedOptionsExpansionTile() {
@@ -8711,10 +9144,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                   decoration: BoxDecoration(
                     color: _AppColors.cardBg,
                     borderRadius: BorderRadius.circular(18),
-                    border: Border.all(
-                      color: _AppColors.border,
-                      width: 1,
-                    ),
+                    border: Border.all(color: _AppColors.border, width: 1),
                   ),
                   child: Row(
                     children: [
@@ -8769,7 +9199,8 @@ class _DailyStockPageState extends State<DailyStockPage>
                               child: _buildPositionOptionButton(
                                 label: 'Left',
                                 isSelected: !_orderReviewOnRight,
-                                onTap: () => setState(() => _orderReviewOnRight = false),
+                                onTap: () =>
+                                    setState(() => _orderReviewOnRight = false),
                               ),
                             ),
                             const SizedBox(width: 10),
@@ -8777,7 +9208,8 @@ class _DailyStockPageState extends State<DailyStockPage>
                               child: _buildPositionOptionButton(
                                 label: 'Right',
                                 isSelected: _orderReviewOnRight,
-                                onTap: () => setState(() => _orderReviewOnRight = true),
+                                onTap: () =>
+                                    setState(() => _orderReviewOnRight = true),
                               ),
                             ),
                           ],
@@ -8834,10 +9266,14 @@ class _DailyStockPageState extends State<DailyStockPage>
         color: const Color(0xFFFFF7FA),
         border: Border(
           left: BorderSide(
-            color: _AppColors.border.withOpacity(_orderReviewOnRight ? 0.85 : 0),
+            color: _AppColors.border.withOpacity(
+              _orderReviewOnRight ? 0.85 : 0,
+            ),
           ),
           right: BorderSide(
-            color: _AppColors.border.withOpacity(_orderReviewOnRight ? 0 : 0.85),
+            color: _AppColors.border.withOpacity(
+              _orderReviewOnRight ? 0 : 0.85,
+            ),
           ),
         ),
       ),
@@ -8847,9 +9283,7 @@ class _DailyStockPageState extends State<DailyStockPage>
             padding: const EdgeInsets.fromLTRB(14, 10, 14, 180),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                _buildCartReviewPanel(orderItems),
-              ],
+              children: [_buildCartReviewPanel(orderItems)],
             ),
           ),
           Positioned(
@@ -8941,9 +9375,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                 ? () => _showHoldOrderDialog(orderItems)
                 : null,
             icon: const Icon(Icons.bookmark_add_rounded, size: 18),
-            label: Text(
-              _isSavingPendingOrder ? 'Saving...' : 'Hold Order',
-            ),
+            label: Text(_isSavingPendingOrder ? 'Saving...' : 'Hold Order'),
             style: OutlinedButton.styleFrom(
               foregroundColor: _AppColors.primary,
               side: BorderSide(color: _AppColors.primary.withOpacity(0.4)),
@@ -9000,10 +9432,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                   decoration: BoxDecoration(
                     color: const Color(0xFFF9E7EF),
                     borderRadius: BorderRadius.circular(18),
-                    border: Border.all(
-                      color: _AppColors.border,
-                      width: 1,
-                    ),
+                    border: Border.all(color: _AppColors.border, width: 1),
                   ),
                   child: Row(
                     children: [
@@ -9222,11 +9651,11 @@ class _DailyStockPageState extends State<DailyStockPage>
             Expanded(
               child: _QuickActionButton(
                 icon: Icons.bookmark_add_rounded,
-                  label: _isSavingPendingOrder ? 'Saving...' : 'Hold\nOrder',
-                  onPressed: _cartHasValidItems(orderItems) &&
-                          !_isSavingPendingOrder
-                      ? () => _savePendingOrder(orderItems)
-                      : null,
+                label: _isSavingPendingOrder ? 'Saving...' : 'Hold\nOrder',
+                onPressed:
+                    _cartHasValidItems(orderItems) && !_isSavingPendingOrder
+                    ? () => _savePendingOrder(orderItems)
+                    : null,
                 color: _AppColors.accent,
               ),
             ),
@@ -10852,185 +11281,198 @@ class _DailyStockPageState extends State<DailyStockPage>
                   child: SingleChildScrollView(
                     child: Column(
                       children: validCartEntries.map((entry) {
-                  final item = orderItems.firstWhere(
-                    (element) => _cartKey(element) == entry.key,
-                    orElse: () => {},
-                  );
-                  final price = (item['price'] as num?)?.toDouble() ?? 0;
-                  final subtotal = price * entry.value;
-                  final variantSlot = item['variantSlot'] is int
-                      ? item['variantSlot'] as int
-                      : 0;
-                  final stock = item.isEmpty
-                      ? entry.value
-                      : _stockForItem(item, variantSlot);
-                  final qtyController = _qtyControllerFor(
-                    entry.key,
-                    entry.value,
-                  );
-                  final qtyText = entry.value.toString();
-                  if (qtyController.text != qtyText) {
-                    qtyController.value = TextEditingValue(
-                      text: qtyText,
-                      selection: TextSelection.collapsed(
-                        offset: qtyText.length,
-                      ),
-                    );
-                  }
-                  return Dismissible(
-                    key: ValueKey('review-cart-${entry.key}'),
-                    direction: DismissDirection.endToStart,
-                    background: Container(
-                      margin: const EdgeInsets.only(bottom: 10),
-                      padding: const EdgeInsets.symmetric(horizontal: 18),
-                      alignment: Alignment.centerRight,
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFB71C1C),
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                      child: const Icon(
-                        Icons.delete_outline_rounded,
-                        color: Colors.white,
-                      ),
-                    ),
-                    onDismissed: (_) => _deleteCartItem(entry.key),
-                    child: Container(
-                      margin: const EdgeInsets.only(bottom: 10),
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: _AppColors.cardBg,
-                        borderRadius: BorderRadius.circular(16),
-                        border: Border.all(color: _AppColors.border),
-                      ),
-                      child: Row(
-                        children: [
-                          SizedBox(
-                            width: 64,
-                            child: Column(
-                              children: [
-                                const Row(
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: [
-                                    Icon(
-                                      Icons.edit_rounded,
-                                      size: 12,
-                                      color: _AppColors.primary,
-                                    ),
-                                    SizedBox(width: 3),
-                                    Text(
-                                      'Edit',
-                                      style: TextStyle(
-                                        color: _AppColors.primary,
-                                        fontSize: 10,
-                                        fontWeight: FontWeight.w800,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                                const SizedBox(height: 4),
-                                TextField(
-                                  controller: qtyController,
-                                  keyboardType: TextInputType.number,
-                                  inputFormatters: [
-                                    FilteringTextInputFormatter.digitsOnly,
-                                  ],
-                                  textAlign: TextAlign.center,
-                                  decoration: InputDecoration(
-                                    isDense: true,
-                                    contentPadding: const EdgeInsets.symmetric(
-                                      horizontal: 8,
-                                      vertical: 10,
-                                    ),
-                                    enabledBorder: OutlineInputBorder(
-                                      borderRadius: BorderRadius.circular(12),
-                                      borderSide: const BorderSide(
-                                        color: _AppColors.border,
-                                      ),
-                                    ),
-                                    focusedBorder: OutlineInputBorder(
-                                      borderRadius: BorderRadius.circular(12),
-                                      borderSide: const BorderSide(
-                                        color: _AppColors.primary,
-                                        width: 1.5,
-                                      ),
-                                    ),
-                                  ),
-                                  style: const TextStyle(
-                                    color: _AppColors.primary,
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.w900,
-                                  ),
-                                  onChanged: (value) =>
-                                      _setItemQuantity(entry.key, value, stock),
-                                ),
-                              ],
+                        final item = orderItems.firstWhere(
+                          (element) => _cartKey(element) == entry.key,
+                          orElse: () => {},
+                        );
+                        final price = (item['price'] as num?)?.toDouble() ?? 0;
+                        final subtotal = price * entry.value;
+                        final variantSlot = item['variantSlot'] is int
+                            ? item['variantSlot'] as int
+                            : 0;
+                        final stock = item.isEmpty
+                            ? entry.value
+                            : _stockForItem(item, variantSlot);
+                        final qtyController = _qtyControllerFor(
+                          entry.key,
+                          entry.value,
+                        );
+                        final qtyText = entry.value.toString();
+                        if (qtyController.text != qtyText) {
+                          qtyController.value = TextEditingValue(
+                            text: qtyText,
+                            selection: TextSelection.collapsed(
+                              offset: qtyText.length,
                             ),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  _itemDisplayLabel(item),
-                                  maxLines: 2,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
-                                    color: _AppColors.textMid,
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.w800,
-                                  ),
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  '\u20B1${price.toStringAsFixed(2)} each',
-                                  style: const TextStyle(
-                                    color: _AppColors.textSoft,
-                                    fontSize: 11,
-                                  ),
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  'Line total: \u20B1${subtotal.toStringAsFixed(2)}',
-                                  style: const TextStyle(
-                                    color: _AppColors.primary,
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w800,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Container(
+                          );
+                        }
+                        return Dismissible(
+                          key: ValueKey('review-cart-${entry.key}'),
+                          direction: DismissDirection.endToStart,
+                          background: Container(
+                            margin: const EdgeInsets.only(bottom: 10),
+                            padding: const EdgeInsets.symmetric(horizontal: 18),
+                            alignment: Alignment.centerRight,
                             decoration: BoxDecoration(
+                              color: const Color(0xFFB71C1C),
+                              borderRadius: BorderRadius.circular(16),
+                            ),
+                            child: const Icon(
+                              Icons.delete_outline_rounded,
                               color: Colors.white,
-                              borderRadius: BorderRadius.circular(10),
+                            ),
+                          ),
+                          onDismissed: (_) => _deleteCartItem(entry.key),
+                          child: Container(
+                            margin: const EdgeInsets.only(bottom: 10),
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: _AppColors.cardBg,
+                              borderRadius: BorderRadius.circular(16),
                               border: Border.all(color: _AppColors.border),
                             ),
                             child: Row(
-                              mainAxisSize: MainAxisSize.min,
                               children: [
-                                _StepperButton(
-                                  icon: Icons.remove_rounded,
-                                  onPressed: entry.value > 1
-                                      ? () => _removeItem(entry.key)
-                                      : null,
+                                SizedBox(
+                                  width: 64,
+                                  child: Column(
+                                    children: [
+                                      const Row(
+                                        mainAxisAlignment:
+                                            MainAxisAlignment.center,
+                                        children: [
+                                          Icon(
+                                            Icons.edit_rounded,
+                                            size: 12,
+                                            color: _AppColors.primary,
+                                          ),
+                                          SizedBox(width: 3),
+                                          Text(
+                                            'Edit',
+                                            style: TextStyle(
+                                              color: _AppColors.primary,
+                                              fontSize: 10,
+                                              fontWeight: FontWeight.w800,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 4),
+                                      TextField(
+                                        controller: qtyController,
+                                        keyboardType: TextInputType.number,
+                                        inputFormatters: [
+                                          FilteringTextInputFormatter
+                                              .digitsOnly,
+                                        ],
+                                        textAlign: TextAlign.center,
+                                        decoration: InputDecoration(
+                                          isDense: true,
+                                          contentPadding:
+                                              const EdgeInsets.symmetric(
+                                                horizontal: 8,
+                                                vertical: 10,
+                                              ),
+                                          enabledBorder: OutlineInputBorder(
+                                            borderRadius: BorderRadius.circular(
+                                              12,
+                                            ),
+                                            borderSide: const BorderSide(
+                                              color: _AppColors.border,
+                                            ),
+                                          ),
+                                          focusedBorder: OutlineInputBorder(
+                                            borderRadius: BorderRadius.circular(
+                                              12,
+                                            ),
+                                            borderSide: const BorderSide(
+                                              color: _AppColors.primary,
+                                              width: 1.5,
+                                            ),
+                                          ),
+                                        ),
+                                        style: const TextStyle(
+                                          color: _AppColors.primary,
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.w900,
+                                        ),
+                                        onChanged: (value) => _setItemQuantity(
+                                          entry.key,
+                                          value,
+                                          stock,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
                                 ),
-                                _StepperButton(
-                                  icon: Icons.add_rounded,
-                                  onPressed: entry.value < stock
-                                      ? () => _addItem(entry.key)
-                                      : null,
-                                  isAdd: true,
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        _itemDisplayLabel(item),
+                                        maxLines: 2,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: const TextStyle(
+                                          color: _AppColors.textMid,
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.w800,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        '\u20B1${price.toStringAsFixed(2)} each',
+                                        style: const TextStyle(
+                                          color: _AppColors.textSoft,
+                                          fontSize: 11,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        'Line total: \u20B1${subtotal.toStringAsFixed(2)}',
+                                        style: const TextStyle(
+                                          color: _AppColors.primary,
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w800,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Container(
+                                  decoration: BoxDecoration(
+                                    color: Colors.white,
+                                    borderRadius: BorderRadius.circular(10),
+                                    border: Border.all(
+                                      color: _AppColors.border,
+                                    ),
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      _StepperButton(
+                                        icon: Icons.remove_rounded,
+                                        onPressed: entry.value > 1
+                                            ? () => _removeItem(entry.key)
+                                            : null,
+                                      ),
+                                      _StepperButton(
+                                        icon: Icons.add_rounded,
+                                        onPressed: entry.value < stock
+                                            ? () => _addItem(entry.key)
+                                            : null,
+                                        isAdd: true,
+                                      ),
+                                    ],
+                                  ),
                                 ),
                               ],
                             ),
                           ),
-                        ],
-                      ),
-                    ),
-                  );
+                        );
                       }).toList(),
                     ),
                   ),
@@ -11821,7 +12263,11 @@ class _DailyStockPageState extends State<DailyStockPage>
 class _DelayedFadeSlide extends StatelessWidget {
   final Widget child;
   final Duration delay;
-  const _DelayedFadeSlide({super.key, required this.child, required this.delay});
+  const _DelayedFadeSlide({
+    super.key,
+    required this.child,
+    required this.delay,
+  });
 
   @override
   Widget build(BuildContext context) {

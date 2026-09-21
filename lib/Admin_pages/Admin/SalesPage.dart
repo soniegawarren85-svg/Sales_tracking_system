@@ -8,16 +8,16 @@ import 'BranchSalesReportPage.dart';
 
 // ─── THEME ──────────────────────────────────────────────────────────
 class _C {
-  static const espresso   = Color(0xFFC2105C);
-  static const mocha      = Color(0xFFE91E63);
-  static const caramel    = Color(0xFFF48FB1);
-  static const latte      = Color(0xFFF5A0C8);
-  static const cream      = Color(0xFFF7F1EB);
-  static const milk       = Color(0xFFFDF9F5);
-  static const foam       = Color(0xFFEDE3D7);
-  static const gold       = Color(0xFFD4A853);
-  static const sage       = Color(0xFF7A9E7E);   // sold / positive
-  static const dustRose   = Color(0xFFBF7B6E);   // remaining
+  static const espresso = Color(0xFFC2105C);
+  static const mocha = Color(0xFFE91E63);
+  static const caramel = Color(0xFFF48FB1);
+  static const latte = Color(0xFFF5A0C8);
+  static const cream = Color(0xFFF7F1EB);
+  static const milk = Color(0xFFFDF9F5);
+  static const foam = Color(0xFFEDE3D7);
+  static const gold = Color(0xFFD4A853);
+  static const sage = Color(0xFF7A9E7E); // sold / positive
+  static const dustRose = Color(0xFFBF7B6E); // remaining
 }
 // ────────────────────────────────────────────────────────────────────
 
@@ -48,9 +48,12 @@ class _SalesPageState extends State<SalesPage> with TickerProviderStateMixin {
       duration: const Duration(milliseconds: 500),
     )..forward();
     // Initialize InventoryService to load data
-    InventoryService().initialize().then((_) => InventoryService().refreshFromCloud()).then((_) {
-      if (mounted) setState(() {});
-    });
+    InventoryService()
+        .initialize()
+        .then((_) => InventoryService().refreshFromCloud())
+        .then((_) {
+          if (mounted) setState(() {});
+        });
     // Listen to changes
     InventoryService().addListener(_onInventoryChanged);
     BranchSession.instance.addListener(_loadBranchStaff);
@@ -63,8 +66,13 @@ class _SalesPageState extends State<SalesPage> with TickerProviderStateMixin {
       if (mounted) setState(() => _branchStaffIds = <String>{});
       return;
     }
-    final doc = await FirebaseFirestore.instance.collection('branches').doc(branchId).get();
-    final ids = (doc.data()?['staffIds'] as List<dynamic>? ?? []).map((id) => id.toString()).toSet();
+    final doc = await FirebaseFirestore.instance
+        .collection('branches')
+        .doc(branchId)
+        .get();
+    final ids = (doc.data()?['staffIds'] as List<dynamic>? ?? [])
+        .map((id) => id.toString())
+        .toSet();
     if (mounted && BranchSession.instance.branchId == branchId) {
       setState(() {
         _branchStaffIds = ids;
@@ -85,10 +93,10 @@ class _SalesPageState extends State<SalesPage> with TickerProviderStateMixin {
   }
 
   String _inventoryEntryKey(Inventory entry) => [
-        entry.ownerId ?? '',
-        entry.sourceInventoryId ?? entry.safeItem,
-        entry.timestamp.millisecondsSinceEpoch.toString(),
-      ].join('|');
+    entry.ownerId ?? '',
+    entry.sourceInventoryId ?? entry.safeItem,
+    entry.timestamp.millisecondsSinceEpoch.toString(),
+  ].join('|');
 
   Future<void> _groupEntriesByReceipt(List<Inventory> entries) async {
     final sales = await FirebaseFirestore.instance
@@ -100,20 +108,22 @@ class _SalesPageState extends State<SalesPage> with TickerProviderStateMixin {
     // A completed_sale is the receipt source of truth.  Each one is assigned
     // to one inventory row only so a multi-item order can never be split into
     // separate cards or borrow items from a neighbouring receipt.
-    final receiptDocs = sales.docs.where((doc) {
-      final data = doc.data();
-      final timestamp = (data['timestamp'] as Timestamp?)?.toDate();
-      return timestamp != null &&
-          _isSameDay(timestamp, _selectedDate) &&
-          (BranchSession.instance.isMainBranch ||
-              _branchStaffIds.contains(data['userId']?.toString())) &&
-          (data['items'] as List<dynamic>? ?? []).whereType<Map>().isNotEmpty;
-    }).toList()
-      ..sort((a, b) {
-        final aTime = (a.data()['timestamp'] as Timestamp).toDate();
-        final bTime = (b.data()['timestamp'] as Timestamp).toDate();
-        return bTime.compareTo(aTime);
-      });
+    final receiptDocs =
+        sales.docs.where((doc) {
+          final data = doc.data();
+          final timestamp = (data['timestamp'] as Timestamp?)?.toDate();
+          return timestamp != null &&
+              _isSameDay(timestamp, _selectedDate) &&
+              (BranchSession.instance.isMainBranch ||
+                  _branchStaffIds.contains(data['userId']?.toString())) &&
+              (data['items'] as List<dynamic>? ?? [])
+                  .whereType<Map>()
+                  .isNotEmpty;
+        }).toList()..sort((a, b) {
+          final aTime = (a.data()['timestamp'] as Timestamp).toDate();
+          final bTime = (b.data()['timestamp'] as Timestamp).toDate();
+          return bTime.compareTo(aTime);
+        });
 
     for (final doc in receiptDocs) {
       final receipt = doc.data();
@@ -175,8 +185,18 @@ class _SalesPageState extends State<SalesPage> with TickerProviderStateMixin {
 
   String _formatDate(DateTime dt) {
     const months = [
-      'Jan','Feb','Mar','Apr','May','Jun',
-      'Jul','Aug','Sep','Oct','Nov','Dec'
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
     ];
     return '${months[dt.month - 1]} ${dt.day}, ${dt.year}';
   }
@@ -189,7 +209,9 @@ class _SalesPageState extends State<SalesPage> with TickerProviderStateMixin {
   }
 
   double _calcSoldValue(Inventory inv) {
-    if (inv.safeTotalSalesRevenue > 0) return inv.safeTotalSalesRevenue;
+    // Receipt totals may be negative for refunds; preserve that sign so the
+    // summary reflects net revenue instead of treating refunds as new sales.
+    if (inv.safeTotalSalesRevenue != 0) return inv.safeTotalSalesRevenue;
 
     double total = 0;
     final items = inv.safeItems;
@@ -235,33 +257,39 @@ class _SalesPageState extends State<SalesPage> with TickerProviderStateMixin {
         .toSet();
 
     for (final uid in uniqueIds) {
-      if (_staffNameCache.containsKey(uid) || _pendingStaffNameLoads.contains(uid)) {
+      if (_staffNameCache.containsKey(uid) ||
+          _pendingStaffNameLoads.contains(uid)) {
         continue;
       }
       _pendingStaffNameLoads.add(uid);
-      FirebaseFirestore.instance.collection('staff_requests').doc(uid).get().then((snapshot) {
-        final data = snapshot.data();
-        final name = data == null
-            ? ''
-            : [
-                (data['firstName'] as String?)?.trim() ?? '',
-                (data['middleName'] as String?)?.trim() ?? '',
-                (data['lastName'] as String?)?.trim() ?? '',
-              ].where((part) => part.isNotEmpty).join(' ');
-        if (mounted) {
-          setState(() {
-            _staffNameCache[uid] = name.isEmpty ? uid : name;
-            _pendingStaffNameLoads.remove(uid);
+      FirebaseFirestore.instance
+          .collection('staff_requests')
+          .doc(uid)
+          .get()
+          .then((snapshot) {
+            final data = snapshot.data();
+            final name = data == null
+                ? ''
+                : [
+                    (data['firstName'] as String?)?.trim() ?? '',
+                    (data['middleName'] as String?)?.trim() ?? '',
+                    (data['lastName'] as String?)?.trim() ?? '',
+                  ].where((part) => part.isNotEmpty).join(' ');
+            if (mounted) {
+              setState(() {
+                _staffNameCache[uid] = name.isEmpty ? uid : name;
+                _pendingStaffNameLoads.remove(uid);
+              });
+            }
+          })
+          .catchError((_) {
+            if (mounted) {
+              setState(() {
+                _staffNameCache[uid] = uid;
+                _pendingStaffNameLoads.remove(uid);
+              });
+            }
           });
-        }
-      }).catchError((_) {
-        if (mounted) {
-          setState(() {
-            _staffNameCache[uid] = uid;
-            _pendingStaffNameLoads.remove(uid);
-          });
-        }
-      });
     }
   }
 
@@ -283,7 +311,9 @@ class _SalesPageState extends State<SalesPage> with TickerProviderStateMixin {
 
   List<Inventory> _filterEntries(List<Inventory> entries) {
     return entries.where((inv) {
-      if (!BranchSession.instance.isMainBranch && !_branchStaffIds.contains(inv.ownerId)) return false;
+      if (!BranchSession.instance.isMainBranch &&
+          !_branchStaffIds.contains(inv.ownerId))
+        return false;
       if (!_isSameDay(inv.timestamp, _selectedDate)) return false;
       return _matchesSearchQuery(inv);
     }).toList();
@@ -291,10 +321,7 @@ class _SalesPageState extends State<SalesPage> with TickerProviderStateMixin {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      color: _C.cream,
-      child: _buildSalesContent(),
-    );
+    return Container(color: _C.cream, child: _buildSalesContent());
   }
 
   Widget _buildSalesContent() {
@@ -343,47 +370,53 @@ class _SalesPageState extends State<SalesPage> with TickerProviderStateMixin {
             SliverToBoxAdapter(
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(20, 24, 20, 12),
-                child: Row(children: [
-                  Container(
-                    width: 4,
-                    height: 18,
-                    decoration: BoxDecoration(
-                      gradient: const LinearGradient(
-                        colors: [_C.caramel, _C.gold],
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                      ),
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  const Text(
-                    "Sales Records",
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w800,
-                      color: _C.espresso,
-                      letterSpacing: -0.2,
-                    ),
-                  ),
-                  const Spacer(),
-                  FilledButton.icon(
-                    onPressed: () => Navigator.of(context).push(
-                      MaterialPageRoute(builder: (_) => const BranchSalesReportPage()),
-                    ),
-                    icon: const Icon(Icons.assessment_rounded, size: 17),
-                    label: const Text('Report'),
-                    style: FilledButton.styleFrom(
-                      backgroundColor: _C.espresso,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 14, vertical: 9),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(14),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 4,
+                      height: 18,
+                      decoration: BoxDecoration(
+                        gradient: const LinearGradient(
+                          colors: [_C.caramel, _C.gold],
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                        ),
+                        borderRadius: BorderRadius.circular(4),
                       ),
                     ),
-                  ),
-                ]),
+                    const SizedBox(width: 10),
+                    const Text(
+                      "Sales Records",
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w800,
+                        color: _C.espresso,
+                        letterSpacing: -0.2,
+                      ),
+                    ),
+                    const Spacer(),
+                    FilledButton.icon(
+                      onPressed: () => Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => const BranchSalesReportPage(),
+                        ),
+                      ),
+                      icon: const Icon(Icons.assessment_rounded, size: 17),
+                      label: const Text('Report'),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: _C.espresso,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 14,
+                          vertical: 9,
+                        ),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
 
@@ -401,7 +434,10 @@ class _SalesPageState extends State<SalesPage> with TickerProviderStateMixin {
                     prefixIcon: const Icon(Icons.search),
                     filled: true,
                     fillColor: _C.foam,
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 14,
+                    ),
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(14),
                       borderSide: BorderSide(color: _C.foam),
@@ -446,7 +482,10 @@ class _SalesPageState extends State<SalesPage> with TickerProviderStateMixin {
                       borderRadius: BorderRadius.circular(12),
                       border: Border.all(color: _C.caramel, width: 1.5),
                     ),
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 12,
+                    ),
                     child: Row(
                       children: [
                         Icon(Icons.calendar_today, color: _C.caramel, size: 18),
@@ -488,17 +527,16 @@ class _SalesPageState extends State<SalesPage> with TickerProviderStateMixin {
                       ),
                     )
                   : SliverList(
-                delegate: SliverChildBuilderDelegate(
-                  (_, i) {
-                    final receipt = _receiptByPrimaryKey[
-                        _inventoryEntryKey(visibleEntries[i])];
-                    return receipt == null
-                        ? const SizedBox.shrink()
-                        : _AdminReceiptCard(data: receipt);
-                  },
-                  childCount: visibleEntries.length,
-                ),
-              ),
+                      delegate: SliverChildBuilderDelegate((_, i) {
+                        final receipt =
+                            _receiptByPrimaryKey[_inventoryEntryKey(
+                              visibleEntries[i],
+                            )];
+                        return receipt == null
+                            ? const SizedBox.shrink()
+                            : _AdminReceiptCard(data: receipt);
+                      }, childCount: visibleEntries.length),
+                    ),
             ),
           ],
         ),
@@ -507,7 +545,10 @@ class _SalesPageState extends State<SalesPage> with TickerProviderStateMixin {
   }
 
   Widget _buildSummaryBanner(List<Inventory> entries) {
-    double grandTotal = entries.fold(0, (sum, inv) => sum + _calcSoldValue(inv));
+    double grandTotal = entries.fold(
+      0,
+      (sum, inv) => sum + _calcSoldValue(inv),
+    );
 
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 16, 16, 0),
@@ -530,27 +571,32 @@ class _SalesPageState extends State<SalesPage> with TickerProviderStateMixin {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(children: [
-            Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.15),
-                borderRadius: BorderRadius.circular(10),
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.15),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Icon(
+                  Icons.trending_up_rounded,
+                  color: Colors.white,
+                  size: 18,
+                ),
               ),
-              child: const Icon(Icons.trending_up_rounded,
-                  color: Colors.white, size: 18),
-            ),
-            const SizedBox(width: 10),
-            const Text(
-              "Total Revenue",
-              style: TextStyle(
-                fontSize: 13,
-                color: Colors.white60,
-                fontWeight: FontWeight.w500,
-                letterSpacing: 0.4,
+              const SizedBox(width: 10),
+              const Text(
+                "Total Revenue",
+                style: TextStyle(
+                  fontSize: 13,
+                  color: Colors.white60,
+                  fontWeight: FontWeight.w500,
+                  letterSpacing: 0.4,
+                ),
               ),
-            ),
-          ]),
+            ],
+          ),
           const SizedBox(height: 12),
           Text(
             "₱${grandTotal.toStringAsFixed(2)}",
@@ -563,10 +609,7 @@ class _SalesPageState extends State<SalesPage> with TickerProviderStateMixin {
             ),
           ),
           const SizedBox(height: 16),
-          Container(
-            height: 1,
-            color: Colors.white.withOpacity(0.15),
-          ),
+          Container(height: 1, color: Colors.white.withOpacity(0.15)),
           const SizedBox(height: 14),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
@@ -605,8 +648,11 @@ class _SalesPageState extends State<SalesPage> with TickerProviderStateMixin {
             ),
             shape: BoxShape.circle,
           ),
-          child: const Icon(Icons.receipt_long_outlined,
-              size: 54, color: _C.latte),
+          child: const Icon(
+            Icons.receipt_long_outlined,
+            size: 54,
+            color: _C.latte,
+          ),
         ),
         const SizedBox(height: 20),
         const Text(
@@ -624,11 +670,7 @@ class _SalesPageState extends State<SalesPage> with TickerProviderStateMixin {
           child: Text(
             "When staff complete their input, recorded sales will appear here.",
             textAlign: TextAlign.center,
-            style: TextStyle(
-              fontSize: 13,
-              color: _C.latte,
-              height: 1.5,
-            ),
+            style: TextStyle(fontSize: 13, color: _C.latte, height: 1.5),
           ),
         ),
       ],
@@ -657,9 +699,8 @@ class _AdminReceiptCard extends StatelessWidget {
       ? value.toDouble()
       : double.tryParse(value?.toString() ?? '') ?? 0;
 
-  int _quantity(dynamic value) => value is num
-      ? value.toInt()
-      : int.tryParse(value?.toString() ?? '') ?? 0;
+  int _quantity(dynamic value) =>
+      value is num ? value.toInt() : int.tryParse(value?.toString() ?? '') ?? 0;
 
   Future<_ReceiptStaffDetails?> _loadStaffDetails() async {
     final userId = data['userId']?.toString().trim() ?? '';
@@ -684,7 +725,9 @@ class _AdminReceiptCard extends StatelessWidget {
         if (value.isNotEmpty) identifiers.add(value);
       }
 
-      final branches = await FirebaseFirestore.instance.collection('branches').get();
+      final branches = await FirebaseFirestore.instance
+          .collection('branches')
+          .get();
       String branchName = 'Main Branch';
       for (final branch in branches.docs) {
         if (branch.data()['isVoided'] == true) continue;
@@ -707,8 +750,18 @@ class _AdminReceiptCard extends StatelessWidget {
 
   String _dateTime(DateTime value) {
     const months = [
-      'January', 'February', 'March', 'April', 'May', 'June',
-      'July', 'August', 'September', 'October', 'November', 'December',
+      'January',
+      'February',
+      'March',
+      'April',
+      'May',
+      'June',
+      'July',
+      'August',
+      'September',
+      'October',
+      'November',
+      'December',
     ];
     final hour = value.hour % 12 == 0 ? 12 : value.hour % 12;
     final minute = value.minute.toString().padLeft(2, '0');
@@ -728,9 +781,23 @@ class _AdminReceiptCard extends StatelessWidget {
     final paid = _money(data['paidAmount']);
     final change = _money(data['change']);
     final items = (data['items'] as List<dynamic>? ?? [])
-        .whereType<Map>()
-        .map((item) => Map<String, dynamic>.from(item))
-        .toList();
+      .whereType<Map>()
+      .map((item) => Map<String, dynamic>.from(item))
+      .toList();
+    final discount = _money(data['discount']);
+    final discountType = data['discountType']?.toString().trim() ?? '';
+    final discountProofId = data['discountProofId']?.toString().trim() ?? '';
+    final transactionType = data['type']?.toString().trim().toLowerCase() ?? '';
+    final status = data['status']?.toString().trim().toLowerCase() ?? '';
+    final isRefund = transactionType == 'refund' || status == 'refund';
+    final fullyRefunded = data['fullyRefunded'] == true;
+    final hasRefundedItem = items.any((item) => _quantity(item['refunded']) > 0);
+    final hasRefundActivity = isRefund || fullyRefunded || hasRefundedItem;
+    final refundReason = (data['reason'] ?? data['refundReason'])
+      ?.toString()
+      .trim() ??
+      '';
+    final refundSource = data['source']?.toString().trim() ?? '';
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 14),
@@ -761,17 +828,36 @@ class _AdminReceiptCard extends StatelessWidget {
               ),
               child: Column(
                 children: [
-                  Row(children: [
-                    const Icon(Icons.receipt_long_rounded,
-                        color: Colors.white, size: 20),
-                    const SizedBox(width: 10),
-                    Expanded(child: Text(salesId,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w900))),
-                    const SizedBox(width: 8),
-                    Text(_dateTime(timestamp),
-                        style: const TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.w700)),
-                  ]),
+                  Row(
+                    children: [
+                      const Icon(
+                        Icons.receipt_long_rounded,
+                        color: Colors.white,
+                        size: 20,
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          salesId,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        _dateTime(timestamp),
+                        style: const TextStyle(
+                          color: Colors.white70,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  ),
                   FutureBuilder<_ReceiptStaffDetails?>(
                     future: _loadStaffDetails(),
                     builder: (context, snapshot) {
@@ -779,18 +865,42 @@ class _AdminReceiptCard extends StatelessWidget {
                       if (details == null) return const SizedBox.shrink();
                       return Padding(
                         padding: const EdgeInsets.only(top: 9, left: 30),
-                        child: Row(children: [
-                          const Icon(Icons.person_outline_rounded, color: Colors.white70, size: 14),
-                          const SizedBox(width: 5),
-                          Text('${details.name} (${details.staffId})',
-                              style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w700)),
-                          const SizedBox(width: 14),
-                          const Icon(Icons.storefront_outlined, color: Colors.white70, size: 14),
-                          const SizedBox(width: 5),
-                          Expanded(child: Text(details.branch,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w700))),
-                        ]),
+                        child: Row(
+                          children: [
+                            const Icon(
+                              Icons.person_outline_rounded,
+                              color: Colors.white70,
+                              size: 14,
+                            ),
+                            const SizedBox(width: 5),
+                            Text(
+                              '${details.name} (${details.staffId})',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            const SizedBox(width: 14),
+                            const Icon(
+                              Icons.storefront_outlined,
+                              color: Colors.white70,
+                              size: 14,
+                            ),
+                            const SizedBox(width: 5),
+                            Expanded(
+                              child: Text(
+                                details.branch,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
                       );
                     },
                   ),
@@ -807,35 +917,70 @@ class _AdminReceiptCard extends StatelessWidget {
                         : item['name']?.toString() ?? 'Item';
                     final kind = item['isBundle'] == true
                         ? 'Bundle'
-                        : item['isCoffee'] == true ? 'Coffee' : '';
+                        : item['isCoffee'] == true
+                        ? 'Coffee'
+                        : '';
                     final displayName = kind.isEmpty ? name : '$name • $kind';
                     final quantity = _quantity(item['quantity']);
+                    final refundedQuantity = _quantity(item['refunded']);
                     final lineTotal = _money(item['price']) * quantity;
                     return Padding(
                       padding: const EdgeInsets.only(bottom: 8),
-                      child: Row(children: [
-                        Expanded(
-                          child: Text('${quantity}x $displayName',
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              '${quantity}x $displayName${refundedQuantity > 0 ? ' · refunded $refundedQuantity' : ''}',
                               style: const TextStyle(
-                                  color: _C.espresso,
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w700)),
-                        ),
-                        Text('₱${lineTotal.toStringAsFixed(2)}',
-                            style: const TextStyle(
                                 color: _C.espresso,
-                                fontWeight: FontWeight.w900)),
-                      ]),
+                                fontSize: 13,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                          Text(
+                            '₱${lineTotal.toStringAsFixed(2)}',
+                            style: const TextStyle(
+                              color: _C.espresso,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                        ],
+                      ),
                     );
                   }),
                   const Divider(height: 18),
-                  _adminReceiptLine('Mode of Payment',
-                      paymentMode == 'GCash' && gcashId.isNotEmpty
-                          ? 'GCash - $gcashId'
-                          : paymentMode),
-                  _adminReceiptLine('Customer Paid', '₱${paid.toStringAsFixed(2)}'),
+                  _adminReceiptLine(
+                    'Mode of Payment',
+                    paymentMode == 'GCash' && gcashId.isNotEmpty
+                        ? 'GCash - $gcashId'
+                        : paymentMode,
+                  ),
+                  if (hasRefundActivity && refundReason.isNotEmpty)
+                    _adminReceiptLine(
+                      'Refund Reason${refundSource.isNotEmpty ? ' ($refundSource)' : ''}',
+                      refundReason,
+                    ),
+                  if (discount > 0.01 && discountType.toLowerCase() != 'none')
+                    _adminReceiptLine(
+                      'Discount ($discountType)',
+                      '-₱${discount.toStringAsFixed(2)}',
+                    ),
+                  if (discountProofId.isNotEmpty)
+                    _adminReceiptLine(
+                      discountType.isEmpty ? 'Discount ID' : '$discountType ID',
+                      discountProofId,
+                    ),
+                  _adminReceiptLine(
+                    'Customer Paid',
+                    '₱${paid.toStringAsFixed(2)}',
+                  ),
                   _adminReceiptLine('Change', '₱${change.toStringAsFixed(2)}'),
-                  _adminReceiptLine('Total', '₱${total.toStringAsFixed(2)}', strong: true),
+                  _adminReceiptLine(
+                    isRefund ? 'Refund Amount' : 'Total',
+                    '₱${total.toStringAsFixed(2)}',
+                    strong: true,
+                  ),
                 ],
               ),
             ),
@@ -848,15 +993,27 @@ class _AdminReceiptCard extends StatelessWidget {
   Widget _adminReceiptLine(String label, String value, {bool strong = false}) {
     return Padding(
       padding: const EdgeInsets.only(top: 6),
-      child: Row(children: [
-        Expanded(child: Text(label,
-            style: TextStyle(color: _C.mocha, fontWeight: strong ? FontWeight.w900 : FontWeight.w700))),
-        Text(value,
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              label,
+              style: TextStyle(
+                color: _C.mocha,
+                fontWeight: strong ? FontWeight.w900 : FontWeight.w700,
+              ),
+            ),
+          ),
+          Text(
+            value,
             style: TextStyle(
-                color: strong ? const Color(0xFF388E3C) : _C.espresso,
-                fontSize: strong ? 18 : 13,
-                fontWeight: FontWeight.w900)),
-      ]),
+              color: strong ? const Color(0xFF388E3C) : _C.espresso,
+              fontSize: strong ? 18 : 13,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -912,9 +1069,11 @@ class _SalesCardState extends State<_SalesCard>
       vsync: this,
       duration: const Duration(milliseconds: 500),
     );
-    _fade  = CurvedAnimation(parent: _ctrl, curve: Curves.easeOut);
-    _slide = Tween<Offset>(begin: const Offset(0, 0.1), end: Offset.zero)
-        .animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOutCubic));
+    _fade = CurvedAnimation(parent: _ctrl, curve: Curves.easeOut);
+    _slide = Tween<Offset>(
+      begin: const Offset(0, 0.1),
+      end: Offset.zero,
+    ).animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOutCubic));
 
     _staffInfo = _loadStaffInfo(widget.inv.ownerId);
     _loadOrderedItems();
@@ -945,8 +1104,8 @@ class _SalesCardState extends State<_SalesCard>
             final kind = item['isBundle'] == true
                 ? 'Bundle'
                 : item['isCoffee'] == true
-                    ? 'Coffee'
-                    : '';
+                ? 'Coffee'
+                : '';
             final displayName = [
               variant.isNotEmpty ? '$name ($variant)' : name,
               if (kind.isNotEmpty) kind,
@@ -980,14 +1139,16 @@ class _SalesCardState extends State<_SalesCard>
       if (mounted) {
         setState(() {
           _receiptSalesId = directReceipt['salesId']?.toString().trim();
-          _receiptTotal = double.tryParse(directReceipt['total']?.toString() ?? '');
+          _receiptTotal = double.tryParse(
+            directReceipt['total']?.toString() ?? '',
+          );
           _receiptTimestamp = timestamp;
           _orderedItems = receiptItems;
           _orderedCategory = firstIsCoffee
               ? 'Coffee'
               : firstIsBundle
-                  ? 'Bundle'
-                  : firstCategory;
+              ? 'Bundle'
+              : firstCategory;
           _orderedProductName = firstVariant.isNotEmpty
               ? firstVariant
               : firstName;
@@ -1010,9 +1171,9 @@ class _SalesCardState extends State<_SalesCard>
         final sale = doc.data();
         final timestamp = (sale['timestamp'] as Timestamp?)?.toDate();
         if (timestamp == null ||
-          timestamp.year != widget.inv.timestamp.year ||
-          timestamp.month != widget.inv.timestamp.month ||
-          timestamp.day != widget.inv.timestamp.day) {
+            timestamp.year != widget.inv.timestamp.year ||
+            timestamp.month != widget.inv.timestamp.month ||
+            timestamp.day != widget.inv.timestamp.day) {
           continue;
         }
         final saleItems = sale['items'] as List<dynamic>? ?? [];
@@ -1041,8 +1202,8 @@ class _SalesCardState extends State<_SalesCard>
         final sale = selected['data'] as Map<String, dynamic>;
         final selectedItems = sale['items'] as List<dynamic>? ?? [];
         final firstReceiptItem = selectedItems.whereType<Map>().isNotEmpty
-          ? Map<String, dynamic>.from(selectedItems.whereType<Map>().first)
-          : <String, dynamic>{};
+            ? Map<String, dynamic>.from(selectedItems.whereType<Map>().first)
+            : <String, dynamic>{};
         for (final rawItem in selectedItems.whereType<Map>()) {
           final item = Map<String, dynamic>.from(rawItem);
           final name = item['name']?.toString().trim() ?? 'Item';
@@ -1051,18 +1212,19 @@ class _SalesCardState extends State<_SalesCard>
           orderedCategory ??= item['isCoffee'] == true
               ? 'Coffee'
               : item['isBundle'] == true
-                  ? 'Bundle'
-                  : (item['category']?.toString().trim().isNotEmpty == true
-                      ? item['category']?.toString().trim()
-                      : widget.inv.safeItem);
-            orderedProductName ??= item['isCoffee'] == true
+              ? 'Bundle'
+              : (item['category']?.toString().trim().isNotEmpty == true
+                    ? item['category']?.toString().trim()
+                    : widget.inv.safeItem);
+          orderedProductName ??= item['isCoffee'] == true
               ? name
               : (variant.isNotEmpty ? variant : name);
           final displayName = item['isCoffee'] == true && coffeeSize.isNotEmpty
               ? coffeeSize
               : (variant.isNotEmpty ? variant : name);
           final key = '$displayName|$variant';
-          final quantity = int.tryParse(item['quantity']?.toString() ?? '0') ?? 0;
+          final quantity =
+              int.tryParse(item['quantity']?.toString() ?? '0') ?? 0;
           final price = double.tryParse(item['price']?.toString() ?? '0') ?? 0;
           final existing = grouped[key];
           grouped[key] = {
@@ -1084,34 +1246,34 @@ class _SalesCardState extends State<_SalesCard>
             _orderedProductName = orderedProductName;
             _orderedItems = grouped.values.toList();
             _receiptTotal = receiptTotal;
-            final currentInventoryName = widget.inv.safeItem.trim().toLowerCase();
-            final firstItemName =
-              firstReceiptItem['name']?.toString().trim().toLowerCase() ?? '';
-            final firstItemCategory = firstReceiptItem['category']
-                ?.toString()
+            final currentInventoryName = widget.inv.safeItem
                 .trim()
-                .toLowerCase() ??
-              '';
-            final firstItemSource = firstReceiptItem['sourceInventoryId']
-                ?.toString()
-                .trim() ??
-              '';
+                .toLowerCase();
+            final firstItemName =
+                firstReceiptItem['name']?.toString().trim().toLowerCase() ?? '';
+            final firstItemCategory =
+                firstReceiptItem['category']?.toString().trim().toLowerCase() ??
+                '';
+            final firstItemSource =
+                firstReceiptItem['sourceInventoryId']?.toString().trim() ?? '';
             final currentSource = widget.inv.sourceInventoryId?.trim() ?? '';
-            final itemMatchesCategory = firstItemCategory.isNotEmpty &&
-              (currentInventoryName == firstItemCategory ||
-                firstItemCategory.contains(currentInventoryName) ||
-                currentInventoryName.contains(firstItemCategory));
-            final itemNameMatches = firstItemName.isNotEmpty &&
-              (currentInventoryName == firstItemName ||
-                firstItemName.contains(currentInventoryName));
+            final itemMatchesCategory =
+                firstItemCategory.isNotEmpty &&
+                (currentInventoryName == firstItemCategory ||
+                    firstItemCategory.contains(currentInventoryName) ||
+                    currentInventoryName.contains(firstItemCategory));
+            final itemNameMatches =
+                firstItemName.isNotEmpty &&
+                (currentInventoryName == firstItemName ||
+                    firstItemName.contains(currentInventoryName));
             final isPrimaryReceiptCard =
-              (currentSource.isNotEmpty &&
-                firstItemSource.isNotEmpty &&
-                currentSource == firstItemSource) ||
-              itemMatchesCategory ||
-              itemNameMatches;
-            _hideDuplicateCard = firstReceiptItem.isNotEmpty &&
-              !isPrimaryReceiptCard;
+                (currentSource.isNotEmpty &&
+                    firstItemSource.isNotEmpty &&
+                    currentSource == firstItemSource) ||
+                itemMatchesCategory ||
+                itemNameMatches;
+            _hideDuplicateCard =
+                firstReceiptItem.isNotEmpty && !isPrimaryReceiptCard;
           });
         }
       }
@@ -1143,12 +1305,14 @@ class _SalesCardState extends State<_SalesCard>
           .get();
       for (final branch in branches.docs) {
         if (branch.data()['isVoided'] == true) continue;
-        final branchStaffIds = (branch.data()['staffIds'] as List<dynamic>? ?? [])
-            .map((id) => id.toString().trim())
-            .toSet();
+        final branchStaffIds =
+            (branch.data()['staffIds'] as List<dynamic>? ?? [])
+                .map((id) => id.toString().trim())
+                .toSet();
         if (!branchStaffIds.any(identifiers.contains)) continue;
         final name = branch.data()['name']?.toString().trim() ?? '';
-        if (mounted) setState(() => _branchName = name.isEmpty ? 'Branch' : name);
+        if (mounted)
+          setState(() => _branchName = name.isEmpty ? 'Branch' : name);
         return;
       }
 
@@ -1174,9 +1338,11 @@ class _SalesCardState extends State<_SalesCard>
       final firstName = (data['firstName'] as String?)?.trim() ?? '';
       final middleName = (data['middleName'] as String?)?.trim() ?? '';
       final lastName = (data['lastName'] as String?)?.trim() ?? '';
-      final nameParts = [firstName, middleName, lastName]
-          .where((part) => part.isNotEmpty)
-          .toList();
+      final nameParts = [
+        firstName,
+        middleName,
+        lastName,
+      ].where((part) => part.isNotEmpty).toList();
       final displayName = nameParts.isEmpty ? 'Staff' : nameParts.join(' ');
 
       final role = (data['role'] as String?)?.trim().toLowerCase();
@@ -1199,9 +1365,14 @@ class _SalesCardState extends State<_SalesCard>
 
   String _buildSalesId(Inventory inv) {
     final dt = inv.timestamp.toLocal();
-    final datePart = '${dt.year}${dt.month.toString().padLeft(2, '0')}${dt.day.toString().padLeft(2, '0')}';
-    final timePart = '${dt.hour.toString().padLeft(2, '0')}${dt.minute.toString().padLeft(2, '0')}';
-    final ownerSegment = (inv.ownerId ?? '').replaceAll(RegExp(r'[^A-Za-z0-9]'), '');
+    final datePart =
+        '${dt.year}${dt.month.toString().padLeft(2, '0')}${dt.day.toString().padLeft(2, '0')}';
+    final timePart =
+        '${dt.hour.toString().padLeft(2, '0')}${dt.minute.toString().padLeft(2, '0')}';
+    final ownerSegment = (inv.ownerId ?? '').replaceAll(
+      RegExp(r'[^A-Za-z0-9]'),
+      '',
+    );
     final ownerCode = ownerSegment.length >= 4
         ? ownerSegment.substring(0, 4).toUpperCase()
         : ownerSegment.toUpperCase().padRight(4, 'X');
@@ -1211,9 +1382,9 @@ class _SalesCardState extends State<_SalesCard>
   @override
   Widget build(BuildContext context) {
     final inv = widget.inv;
-    final itemsList  = inv.safeItems;
-    final soldValue  = _receiptTotal ?? widget.calcSoldValue(inv);
-    final dt         = (_receiptTimestamp ?? inv.timestamp).toLocal();
+    final itemsList = inv.safeItems;
+    final soldValue = _receiptTotal ?? widget.calcSoldValue(inv);
+    final dt = (_receiptTimestamp ?? inv.timestamp).toLocal();
 
     if (_hideDuplicateCard) return const SizedBox.shrink();
 
@@ -1248,8 +1419,11 @@ class _SalesCardState extends State<_SalesCard>
                     padding: const EdgeInsets.fromLTRB(18, 14, 18, 0),
                     child: Row(
                       children: [
-                        const Icon(Icons.storefront_rounded,
-                            size: 16, color: _C.caramel),
+                        const Icon(
+                          Icons.storefront_rounded,
+                          size: 16,
+                          color: _C.caramel,
+                        ),
                         const SizedBox(width: 8),
                         Text(
                           'Branches: $_branchName',
@@ -1281,8 +1455,11 @@ class _SalesCardState extends State<_SalesCard>
                           ),
                           borderRadius: BorderRadius.circular(14),
                         ),
-                        child: const Icon(Icons.bakery_dining_rounded,
-                            color: Colors.white, size: 22),
+                        child: const Icon(
+                          Icons.bakery_dining_rounded,
+                          color: Colors.white,
+                          size: 22,
+                        ),
                       ),
                       const SizedBox(width: 14),
                       Expanded(
@@ -1295,8 +1472,8 @@ class _SalesCardState extends State<_SalesCard>
                                       _orderedProductName != null
                                   ? '$_orderedCategory - $_orderedProductName'
                                   : (inv.safeItem.isNotEmpty
-                                      ? inv.safeItem
-                                      : 'Product Sale'),
+                                        ? inv.safeItem
+                                        : 'Product Sale'),
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: const TextStyle(
@@ -1329,30 +1506,38 @@ class _SalesCardState extends State<_SalesCard>
                                 Row(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
-                                    const Icon(Icons.calendar_today_outlined,
-                                        size: 11, color: _C.latte),
+                                    const Icon(
+                                      Icons.calendar_today_outlined,
+                                      size: 11,
+                                      color: _C.latte,
+                                    ),
                                     const SizedBox(width: 4),
                                     Text(
                                       widget.formatDate(dt),
                                       style: const TextStyle(
-                                          fontSize: 11,
-                                          color: _C.latte,
-                                          fontWeight: FontWeight.w500),
+                                        fontSize: 11,
+                                        color: _C.latte,
+                                        fontWeight: FontWeight.w500,
+                                      ),
                                     ),
                                   ],
                                 ),
                                 Row(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
-                                    const Icon(Icons.access_time_rounded,
-                                        size: 11, color: _C.latte),
+                                    const Icon(
+                                      Icons.access_time_rounded,
+                                      size: 11,
+                                      color: _C.latte,
+                                    ),
                                     const SizedBox(width: 4),
                                     Text(
                                       widget.formatTime(dt),
                                       style: const TextStyle(
-                                          fontSize: 11,
-                                          color: _C.latte,
-                                          fontWeight: FontWeight.w500),
+                                        fontSize: 11,
+                                        color: _C.latte,
+                                        fontWeight: FontWeight.w500,
+                                      ),
                                     ),
                                   ],
                                 ),
@@ -1363,7 +1548,8 @@ class _SalesCardState extends State<_SalesCard>
                             FutureBuilder<_StaffInfo?>(
                               future: _staffInfo,
                               builder: (context, snapshot) {
-                                if (!snapshot.hasData || snapshot.data == null) {
+                                if (!snapshot.hasData ||
+                                    snapshot.data == null) {
                                   return const SizedBox.shrink();
                                 }
                                 final staff = snapshot.data!;
@@ -1372,8 +1558,11 @@ class _SalesCardState extends State<_SalesCard>
                                   children: [
                                     Row(
                                       children: [
-                                        const Icon(Icons.person_rounded,
-                                            size: 13, color: _C.espresso),
+                                        const Icon(
+                                          Icons.person_rounded,
+                                          size: 13,
+                                          color: _C.espresso,
+                                        ),
                                         const SizedBox(width: 6),
                                         Flexible(
                                           child: Text(
@@ -1419,35 +1608,37 @@ class _SalesCardState extends State<_SalesCard>
                       ),
                       // Revenue
                       Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 12, vertical: 6),
-                            decoration: BoxDecoration(
-                              gradient: const LinearGradient(
-                                colors: [_C.sage, Color(0xFF5A8260)],
-                                begin: Alignment.topLeft,
-                                end: Alignment.bottomRight,
-                              ),
-                              borderRadius: BorderRadius.circular(20),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: _C.sage.withOpacity(0.3),
-                                  blurRadius: 8,
-                                  offset: const Offset(0, 3),
-                                ),
-                              ],
-                            ),
-                            child: Text(
-                              "₱${soldValue.toStringAsFixed(2)}",
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w800,
-                                color: Colors.white,
-                                letterSpacing: 0.2,
-                              ),
-                            ),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 6,
+                        ),
+                        decoration: BoxDecoration(
+                          gradient: const LinearGradient(
+                            colors: [_C.sage, Color(0xFF5A8260)],
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
                           ),
+                          borderRadius: BorderRadius.circular(20),
+                          boxShadow: [
+                            BoxShadow(
+                              color: _C.sage.withOpacity(0.3),
+                              blurRadius: 8,
+                              offset: const Offset(0, 3),
+                            ),
+                          ],
+                        ),
+                        child: Text(
+                          "₱${soldValue.toStringAsFixed(2)}",
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w800,
+                            color: Colors.white,
+                            letterSpacing: 0.2,
+                          ),
+                        ),
+                      ),
                     ],
                   ),
                 ),
@@ -1469,11 +1660,16 @@ class _SalesCardState extends State<_SalesCard>
                       padding: const EdgeInsets.fromLTRB(18, 12, 18, 10),
                       child: Row(
                         children: [
-                          const Icon(Icons.receipt_long_rounded,
-                              size: 15, color: _C.caramel),
+                          const Icon(
+                            Icons.receipt_long_rounded,
+                            size: 15,
+                            color: _C.caramel,
+                          ),
                           const SizedBox(width: 8),
                           Text(
-                            _orderedItems.any((item) => item['isCoffee'] == true)
+                            _orderedItems.any(
+                                  (item) => item['isCoffee'] == true,
+                                )
                                 ? 'Ordered sizes'
                                 : 'Ordered items',
                             style: TextStyle(
@@ -1550,7 +1746,9 @@ class _SalesCardState extends State<_SalesCard>
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error loading reduced items: ${error.toString()}')),
+        SnackBar(
+          content: Text('Error loading reduced items: ${error.toString()}'),
+        ),
       );
       return;
     }
@@ -1568,9 +1766,13 @@ class _SalesCardState extends State<_SalesCard>
     final totalLoss = docs.fold<double>(0.0, (sum, doc) {
       final data = doc.data();
       final quantity = int.tryParse(data['quantity']?.toString() ?? '0') ?? 0;
-      final unitPrice = double.tryParse(
-          data['unitPrice']?.toString() ?? data['price']?.toString() ?? '0') ?? 0;
-      final lossAmount = double.tryParse(data['lossAmount']?.toString() ?? '0') ?? 0;
+      final unitPrice =
+          double.tryParse(
+            data['unitPrice']?.toString() ?? data['price']?.toString() ?? '0',
+          ) ??
+          0;
+      final lossAmount =
+          double.tryParse(data['lossAmount']?.toString() ?? '0') ?? 0;
       final effectiveLoss = lossAmount > 0
           ? lossAmount
           : (unitPrice > 0 ? unitPrice * quantity : 0.0);
@@ -1598,13 +1800,22 @@ class _SalesCardState extends State<_SalesCard>
                   comment.contains(query);
             }).toList();
 
-            final filteredTotalLoss = filteredDocs.fold<double>(0.0, (sum, doc) {
+            final filteredTotalLoss = filteredDocs.fold<double>(0.0, (
+              sum,
+              doc,
+            ) {
               final data = doc.data();
-              final quantity = int.tryParse(data['quantity']?.toString() ?? '0') ?? 0;
-              final unitPrice = double.tryParse(
-                      data['unitPrice']?.toString() ?? data['price']?.toString() ?? '0') ??
+              final quantity =
+                  int.tryParse(data['quantity']?.toString() ?? '0') ?? 0;
+              final unitPrice =
+                  double.tryParse(
+                    data['unitPrice']?.toString() ??
+                        data['price']?.toString() ??
+                        '0',
+                  ) ??
                   0;
-              final lossAmount = double.tryParse(data['lossAmount']?.toString() ?? '0') ?? 0;
+              final lossAmount =
+                  double.tryParse(data['lossAmount']?.toString() ?? '0') ?? 0;
               final effectiveLoss = lossAmount > 0
                   ? lossAmount
                   : (unitPrice > 0 ? unitPrice * quantity : 0.0);
@@ -1612,7 +1823,9 @@ class _SalesCardState extends State<_SalesCard>
             });
 
             return AlertDialog(
-              title: Text('Reduced items - ${widget.formatDate(widget.inv.timestamp)}'),
+              title: Text(
+                'Reduced items - ${widget.formatDate(widget.inv.timestamp)}',
+              ),
               content: SizedBox(
                 width: double.maxFinite,
                 height: filteredDocs.isEmpty ? 260 : 500,
@@ -1626,7 +1839,8 @@ class _SalesCardState extends State<_SalesCard>
                         suffixIcon: filterQuery.isNotEmpty
                             ? IconButton(
                                 icon: const Icon(Icons.clear),
-                                onPressed: () => setState(() => filterQuery = ''),
+                                onPressed: () =>
+                                    setState(() => filterQuery = ''),
                               )
                             : null,
                         border: OutlineInputBorder(
@@ -1642,7 +1856,10 @@ class _SalesCardState extends State<_SalesCard>
                     ),
                     const SizedBox(height: 12),
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 12,
+                      ),
                       margin: const EdgeInsets.only(bottom: 10),
                       decoration: BoxDecoration(
                         color: _C.milk,
@@ -1699,29 +1916,52 @@ class _SalesCardState extends State<_SalesCard>
                       Expanded(
                         child: ListView.separated(
                           itemCount: filteredDocs.length,
-                          separatorBuilder: (_, _) => const SizedBox(height: 10),
+                          separatorBuilder: (_, _) =>
+                              const SizedBox(height: 10),
                           itemBuilder: (context, index) {
                             final data = filteredDocs[index].data();
-                            final itemName = data['itemName']?.toString() ?? 'Unknown';
+                            final itemName =
+                                data['itemName']?.toString() ?? 'Unknown';
                             final variant = data['variant']?.toString();
-                            final displayQuantity = data['quantity']?.toString() ?? '0';
-                            final reason = data['reason']?.toString() ?? 'No reason';
+                            final displayQuantity =
+                                data['quantity']?.toString() ?? '0';
+                            final reason =
+                                data['reason']?.toString() ?? 'No reason';
                             final comment = data['comment']?.toString() ?? '';
-                            final createdAt = (data['createdAt'] as Timestamp?)?.toDate();
-                            final quantity = int.tryParse(data['quantity']?.toString() ?? '0') ?? 0;
-                            final unitPrice = double.tryParse(
-                                data['unitPrice']?.toString() ?? data['price']?.toString() ?? '0') ?? 0;
-                            final lossAmount = double.tryParse(
-                                data['lossAmount']?.toString() ?? '0') ?? 0;
+                            final createdAt = (data['createdAt'] as Timestamp?)
+                                ?.toDate();
+                            final quantity =
+                                int.tryParse(
+                                  data['quantity']?.toString() ?? '0',
+                                ) ??
+                                0;
+                            final unitPrice =
+                                double.tryParse(
+                                  data['unitPrice']?.toString() ??
+                                      data['price']?.toString() ??
+                                      '0',
+                                ) ??
+                                0;
+                            final lossAmount =
+                                double.tryParse(
+                                  data['lossAmount']?.toString() ?? '0',
+                                ) ??
+                                0;
                             final effectiveLoss = lossAmount > 0
                                 ? lossAmount
                                 : (unitPrice > 0 ? unitPrice * quantity : 0.0);
-                            final rowLabel = variant != null && variant.isNotEmpty
+                            final rowLabel =
+                                variant != null && variant.isNotEmpty
                                 ? '$itemName ($variant)'
                                 : itemName;
 
                             return Container(
-                              padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
+                              padding: const EdgeInsets.fromLTRB(
+                                14,
+                                14,
+                                14,
+                                14,
+                              ),
                               decoration: BoxDecoration(
                                 color: Colors.white,
                                 borderRadius: BorderRadius.circular(18),
@@ -1747,7 +1987,8 @@ class _SalesCardState extends State<_SalesCard>
                                   ),
                                   const SizedBox(height: 10),
                                   Row(
-                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                    mainAxisAlignment:
+                                        MainAxisAlignment.spaceBetween,
                                     children: [
                                       Expanded(
                                         child: Text(
@@ -1841,15 +2082,15 @@ class _SalesCardState extends State<_SalesCard>
           .where('userId', isEqualTo: staffId)
           .get();
 
-      refunds = snapshot.docs
-          .map((doc) => doc.data())
-          .where((data) {
-            final type = data['type']?.toString().toLowerCase();
-            final status = data['status']?.toString().toLowerCase();
-            return (type == 'refund' || status == 'refund') &&
-                _isSameDay((data['timestamp'] as Timestamp?)?.toDate() ?? DateTime(0), widget.inv.timestamp);
-          })
-          .toList();
+      refunds = snapshot.docs.map((doc) => doc.data()).where((data) {
+        final type = data['type']?.toString().toLowerCase();
+        final status = data['status']?.toString().toLowerCase();
+        return (type == 'refund' || status == 'refund') &&
+            _isSameDay(
+              (data['timestamp'] as Timestamp?)?.toDate() ?? DateTime(0),
+              widget.inv.timestamp,
+            );
+      }).toList();
 
       refunds.sort((a, b) {
         final aTs = (a['timestamp'] as Timestamp?)?.toDate();
@@ -1860,7 +2101,9 @@ class _SalesCardState extends State<_SalesCard>
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error loading refund items: ${error.toString()}')),
+        SnackBar(
+          content: Text('Error loading refund items: ${error.toString()}'),
+        ),
       );
       return;
     }
@@ -1869,28 +2112,42 @@ class _SalesCardState extends State<_SalesCard>
 
     final totalRefundAmount = refunds.fold<double>(0.0, (sum, data) {
       final total = double.tryParse(data['total']?.toString() ?? '0') ?? 0;
-      final delta = double.tryParse(data['cashDrawerDelta']?.toString() ?? '0') ?? 0;
-      final subtotal = double.tryParse(data['subtotal']?.toString() ?? '0') ?? 0;
-      return sum + (total.abs() > 0 ? total.abs() : delta.abs() > 0 ? delta.abs() : subtotal.abs());
+      final delta =
+          double.tryParse(data['cashDrawerDelta']?.toString() ?? '0') ?? 0;
+      final subtotal =
+          double.tryParse(data['subtotal']?.toString() ?? '0') ?? 0;
+      return sum +
+          (total.abs() > 0
+              ? total.abs()
+              : delta.abs() > 0
+              ? delta.abs()
+              : subtotal.abs());
     });
 
     await showDialog<void>(
       context: context,
       builder: (context) {
         return AlertDialog(
-          title: Text('Refund items - ${widget.formatDate(widget.inv.timestamp)}'),
+          title: Text(
+            'Refund items - ${widget.formatDate(widget.inv.timestamp)}',
+          ),
           content: SizedBox(
             width: double.maxFinite,
             height: refunds.isEmpty ? 260 : 500,
             child: refunds.isEmpty
                 ? const Center(
-                    child: Text('No refund items found for this staff on this date.'),
+                    child: Text(
+                      'No refund items found for this staff on this date.',
+                    ),
                   )
                 : Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 14,
+                          vertical: 12,
+                        ),
                         margin: const EdgeInsets.only(bottom: 10),
                         decoration: BoxDecoration(
                           color: _C.milk,
@@ -1922,22 +2179,36 @@ class _SalesCardState extends State<_SalesCard>
                       Expanded(
                         child: ListView.separated(
                           itemCount: refunds.length,
-                          separatorBuilder: (_, _) => const SizedBox(height: 10),
+                          separatorBuilder: (_, _) =>
+                              const SizedBox(height: 10),
                           itemBuilder: (context, index) {
                             final data = refunds[index];
-                            final salesId = data['salesId']?.toString() ?? 'Refund';
-                            final reason = data['reason']?.toString() ?? 'No reason';
+                            final salesId =
+                                data['salesId']?.toString() ?? 'Refund';
+                            final reason =
+                                data['reason']?.toString() ?? 'No reason';
                             final source = data['source']?.toString() ?? '';
-                            final createdAt = (data['timestamp'] as Timestamp?)?.toDate();
-                            final items = (data['items'] as List<dynamic>? ?? [])
-                                .whereType<Map<String, dynamic>>()
-                                .toList();
+                            final createdAt = (data['timestamp'] as Timestamp?)
+                                ?.toDate();
+                            final items =
+                                (data['items'] as List<dynamic>? ?? [])
+                                    .whereType<Map<String, dynamic>>()
+                                    .toList();
                             final itemCount = items.fold<int>(0, (sum, item) {
-                              return sum + (int.tryParse(item['quantity']?.toString() ?? '0') ?? 0);
+                              return sum +
+                                  (int.tryParse(
+                                        item['quantity']?.toString() ?? '0',
+                                      ) ??
+                                      0);
                             });
 
                             return Container(
-                              padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
+                              padding: const EdgeInsets.fromLTRB(
+                                14,
+                                14,
+                                14,
+                                14,
+                              ),
                               decoration: BoxDecoration(
                                 color: Colors.white,
                                 borderRadius: BorderRadius.circular(18),
@@ -1964,7 +2235,10 @@ class _SalesCardState extends State<_SalesCard>
                                   const SizedBox(height: 8),
                                   Text(
                                     'Refunded items: $itemCount',
-                                    style: const TextStyle(fontSize: 12, color: _C.espresso),
+                                    style: const TextStyle(
+                                      fontSize: 12,
+                                      color: _C.espresso,
+                                    ),
                                   ),
                                   const SizedBox(height: 4),
                                   Text(
@@ -1984,10 +2258,17 @@ class _SalesCardState extends State<_SalesCard>
                                   const SizedBox(height: 10),
                                   if (items.isNotEmpty)
                                     ...items.map((item) {
-                                      final itemName = item['name']?.toString() ?? 'Item';
-                                      final quantity = int.tryParse(item['quantity']?.toString() ?? '0') ?? 0;
+                                      final itemName =
+                                          item['name']?.toString() ?? 'Item';
+                                      final quantity =
+                                          int.tryParse(
+                                            item['quantity']?.toString() ?? '0',
+                                          ) ??
+                                          0;
                                       return Padding(
-                                        padding: const EdgeInsets.only(bottom: 4),
+                                        padding: const EdgeInsets.only(
+                                          bottom: 4,
+                                        ),
                                         child: Text(
                                           '• $itemName x$quantity',
                                           style: const TextStyle(fontSize: 12),
@@ -2020,31 +2301,40 @@ class _SalesCardState extends State<_SalesCard>
     final rems = [inv.safeRemainingA, inv.safeRemainingB, inv.safeRemainingC];
     final receiptItems = _orderedItems.isNotEmpty
         ? _orderedItems
-        : items.asMap().entries.where((entry) {
-            final index = entry.key;
-            if (index >= starts.length || index >= rems.length) return false;
-            final reduced = int.tryParse(
-                    entry.value['reducedQuantity']?.toString() ?? '') ??
-                0;
-            final sold = (starts[index] - rems[index] - reduced)
-                .clamp(0, starts[index])
-                .toInt();
-            return sold > 0;
-          }).map((entry) {
-            final index = entry.key;
-            final item = entry.value;
-            final reduced = int.tryParse(
-                    item['reducedQuantity']?.toString() ?? '') ??
-                0;
-            return <String, dynamic>{
-              'name': item['name']?.toString() ?? 'Item',
-              'quantity': (starts[index] - rems[index] - reduced)
-                  .clamp(0, starts[index])
-                  .toInt(),
-              'price': double.tryParse(item['price']?.toString() ?? '0') ?? 0,
-              'isCoffee': item['isCoffee'] == true,
-            };
-          }).toList();
+        : items
+              .asMap()
+              .entries
+              .where((entry) {
+                final index = entry.key;
+                if (index >= starts.length || index >= rems.length)
+                  return false;
+                final reduced =
+                    int.tryParse(
+                      entry.value['reducedQuantity']?.toString() ?? '',
+                    ) ??
+                    0;
+                final sold = (starts[index] - rems[index] - reduced)
+                    .clamp(0, starts[index])
+                    .toInt();
+                return sold > 0;
+              })
+              .map((entry) {
+                final index = entry.key;
+                final item = entry.value;
+                final reduced =
+                    int.tryParse(item['reducedQuantity']?.toString() ?? '') ??
+                    0;
+                return <String, dynamic>{
+                  'name': item['name']?.toString() ?? 'Item',
+                  'quantity': (starts[index] - rems[index] - reduced)
+                      .clamp(0, starts[index])
+                      .toInt(),
+                  'price':
+                      double.tryParse(item['price']?.toString() ?? '0') ?? 0,
+                  'isCoffee': item['isCoffee'] == true,
+                };
+              })
+              .toList();
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(18, 0, 18, 16),
@@ -2056,84 +2346,97 @@ class _SalesCardState extends State<_SalesCard>
             final index = entry.key;
             final item = entry.value;
             final name = item['name']?.toString() ?? 'Item';
-            final quantity = int.tryParse(item['quantity']?.toString() ?? '0') ?? 0;
-            final price = double.tryParse(item['price']?.toString() ?? '0') ?? 0;
+            final quantity =
+                int.tryParse(item['quantity']?.toString() ?? '0') ?? 0;
+            final price =
+                double.tryParse(item['price']?.toString() ?? '0') ?? 0;
             final lineTotal = quantity * price;
 
             return Padding(
-            padding: const EdgeInsets.only(bottom: 8),
-            child: Container(
-              padding: const EdgeInsets.symmetric(
-                  horizontal: 14, vertical: 12),
-              decoration: BoxDecoration(
-                color: _C.cream,
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(
-                    color: _C.latte.withOpacity(0.2)),
-              ),
-              child: Row(children: [
-                Container(
-                  width: 26,
-                  height: 26,
-                  decoration: BoxDecoration(
-                    gradient: const LinearGradient(
-                      colors: [_C.latte, _C.caramel],
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                    ),
-                    shape: BoxShape.circle,
-                  ),
-                  child: Center(
-                    child: Text('${index + 1}',
-                        style: const TextStyle(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 12,
+                ),
+                decoration: BoxDecoration(
+                  color: _C.cream,
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: _C.latte.withOpacity(0.2)),
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 26,
+                      height: 26,
+                      decoration: BoxDecoration(
+                        gradient: const LinearGradient(
+                          colors: [_C.latte, _C.caramel],
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                        ),
+                        shape: BoxShape.circle,
+                      ),
+                      child: Center(
+                        child: Text(
+                          '${index + 1}',
+                          style: const TextStyle(
                             fontSize: 11,
                             fontWeight: FontWeight.w800,
-                            color: Colors.white)),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text(name,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        name,
+                        style: const TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
+                          color: _C.espresso,
+                          letterSpacing: 0.1,
+                        ),
+                      ),
+                    ),
+                    if (quantity > 0)
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 3,
+                        ),
+                        decoration: BoxDecoration(
+                          color: _C.caramel.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(
+                          "x$quantity",
+                          style: const TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                            color: _C.caramel,
+                          ),
+                        ),
+                      ),
+                    if (quantity > 0) const SizedBox(width: 10),
+                    Text(
+                      "₱${lineTotal.toStringAsFixed(2)}",
                       style: const TextStyle(
                         fontSize: 14,
-                        fontWeight: FontWeight.w700,
-                        color: _C.espresso,
-                        letterSpacing: 0.1,
-                      )),
-                ),
-                if (quantity > 0)
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 8, vertical: 3),
-                    decoration: BoxDecoration(
-                      color: _C.caramel.withOpacity(0.1),
-                      borderRadius: BorderRadius.circular(8),
+                        fontWeight: FontWeight.w800,
+                        color: _C.mocha,
+                      ),
                     ),
-                    child: Text("x$quantity",
-                        style: const TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w700,
-                          color: _C.caramel,
-                        )),
-                  ),
-                if (quantity > 0) const SizedBox(width: 10),
-                Text(
-                  "₱${lineTotal.toStringAsFixed(2)}",
-                  style: const TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w800,
-                    color: _C.mocha,
-                  ),
+                  ],
                 ),
-              ]),
-            ),
-          );
+              ),
+            );
           }),
         ],
       ),
     );
   }
-
 }
 
 extension ColorDarken on Color {

@@ -1267,102 +1267,13 @@ class _GlassPanel extends StatelessWidget {
   }
 }
 
-// ─── Loading Shimmer ──────────────────────────────────────────────────────────
-class _LoadingShimmer extends StatefulWidget {
+// ─── Loading State ────────────────────────────────────────────────────────────
+class _LoadingShimmer extends StatelessWidget {
   const _LoadingShimmer();
 
   @override
-  State<_LoadingShimmer> createState() => _LoadingShimmerState();
-}
-
-class _LoadingShimmerState extends State<_LoadingShimmer>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _ctrl;
-  late final Animation<double> _anim;
-
-  @override
-  void initState() {
-    super.initState();
-    _ctrl = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1200),
-    )..repeat();
-    _anim = CurvedAnimation(parent: _ctrl, curve: Curves.easeInOut);
-  }
-
-  @override
-  void dispose() {
-    _ctrl.dispose();
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: _anim,
-      builder: (context, _) {
-        final shimmer = LinearGradient(
-          begin: Alignment.centerLeft,
-          end: Alignment.centerRight,
-          colors: [
-            Colors.grey.shade200,
-            Colors.grey.shade100,
-            Colors.grey.shade200,
-          ],
-          stops: [
-            (_anim.value - 0.3).clamp(0.0, 1.0),
-            _anim.value.clamp(0.0, 1.0),
-            (_anim.value + 0.3).clamp(0.0, 1.0),
-          ],
-        );
-
-        return ListView(
-          padding: EdgeInsets.fromLTRB(
-            16,
-            MediaQuery.of(context).padding.top + kToolbarHeight + 28,
-            16,
-            32,
-          ),
-          children: [
-            _shimmerBox(shimmer, height: 80, radius: 24),
-            const SizedBox(height: 16),
-            Row(
-              children: [
-                Expanded(child: _shimmerBox(shimmer, height: 80, radius: 20)),
-                const SizedBox(width: 12),
-                Expanded(child: _shimmerBox(shimmer, height: 80, radius: 20)),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                Expanded(child: _shimmerBox(shimmer, height: 80, radius: 20)),
-                const SizedBox(width: 12),
-                Expanded(child: _shimmerBox(shimmer, height: 80, radius: 20)),
-              ],
-            ),
-            const SizedBox(height: 16),
-            _shimmerBox(shimmer, height: 220, radius: 24),
-            const SizedBox(height: 16),
-            _shimmerBox(shimmer, height: 200, radius: 24),
-          ],
-        );
-      },
-    );
-  }
-
-  Widget _shimmerBox(
-    LinearGradient shimmer, {
-    required double height,
-    required double radius,
-  }) {
-    return Container(
-      height: height,
-      decoration: BoxDecoration(
-        gradient: shimmer,
-        borderRadius: BorderRadius.circular(radius),
-      ),
-    );
+    return const SizedBox.shrink();
   }
 }
 

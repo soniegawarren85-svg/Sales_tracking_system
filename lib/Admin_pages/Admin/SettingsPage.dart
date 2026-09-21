@@ -9,7 +9,6 @@ import 'package:firebase_storage/firebase_storage.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sales_tracking/Login/Login/Login.dart';
-import 'BranchAccessPage.dart';
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
@@ -321,19 +320,6 @@ class _SettingsPageState extends State<SettingsPage> {
                   const SizedBox(height: 6),
 
                   _sectionLabel("System settings"),
-                  _settingItem(
-                    icon: Icons.account_tree_rounded,
-                    title: "Branch access",
-                    subtitle: "Manage and search branches",
-                    iconColor: const Color(0xFFD81B60),
-                    iconBg: const Color(0xFFFCE4EC),
-                    onTap: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => const BranchAccessPage(),
-                      ),
-                    ),
-                  ),
                   _settingItem(
                     icon: Icons.info_rounded,
                     title: "About App",

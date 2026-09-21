@@ -14,11 +14,56 @@ const kBannerMid = Color(0xFFC2105C);
 const kBannerBot = Color(0xFFE91E63);
 // ──────────────────────────────────────────────────────────────────
 
+class _RefundBadge extends StatelessWidget {
+  const _RefundBadge();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFEBEE),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: const Text(
+        'REFUNDED',
+        style: TextStyle(
+          color: Color(0xFFC62828),
+          fontSize: 9,
+          fontWeight: FontWeight.w900,
+        ),
+      ),
+    );
+  }
+}
+
 class BudgetPage extends StatefulWidget {
   const BudgetPage({super.key});
 
   @override
   State<BudgetPage> createState() => _BudgetPageState();
+}
+
+class _AllocationTableRow {
+  const _AllocationTableRow({
+    required this.documentId,
+    required this.itemId,
+    required this.id,
+    required this.name,
+    required this.allocated,
+    required this.remaining,
+    required this.price,
+    required this.type,
+  });
+
+  final String documentId;
+  final String? itemId;
+  final String id;
+  final String name;
+  final int allocated;
+  final int remaining;
+  final double price;
+  final String type;
 }
 
 class _AssignInventoryTile extends StatelessWidget {
@@ -290,17 +335,30 @@ class _BudgetPageState extends State<BudgetPage>
     with SingleTickerProviderStateMixin {
   final _budgetControllers = <String, TextEditingController>{};
   final _branchSearchController = TextEditingController();
+  final _allocationSearchController = TextEditingController();
   final _currentAllocations = <String, double>{};
+  final _branchInventoryStreams =
+      <String, Stream<QuerySnapshot<Map<String, dynamic>>>>{};
   final _firestore = FirebaseFirestore.instance;
+  // Transaction details are shown in their own dialog to keep report cards compact.
+  final bool _showInlineTransactionDetails = false;
   String _branchSearchQuery = '';
+  String? _selectedBranchId;
+  String _allocationFilter = 'All';
+  String _allocationSearchQuery = '';
 
   late AnimationController _animController;
   late Animation<double> _fadeAnim;
   late Animation<Offset> _slideAnim;
+  late final Stream<QuerySnapshot<Map<String, dynamic>>> _branchesStream;
 
   @override
   void initState() {
     super.initState();
+    _branchesStream = _firestore
+        .collection('branches')
+        .orderBy('name')
+        .snapshots();
     _animController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 650),
@@ -319,8 +377,10 @@ class _BudgetPageState extends State<BudgetPage>
       c.dispose();
     }
     _branchSearchController.dispose();
+    _allocationSearchController.dispose();
     _budgetControllers.clear();
     _currentAllocations.clear();
+    _branchInventoryStreams.clear();
     _animController.dispose();
     super.dispose();
   }
@@ -465,6 +525,32 @@ class _BudgetPageState extends State<BudgetPage>
     } catch (_) {
       return false;
     }
+  }
+
+  String _branchCode(String sourceId) {
+    var value = 0;
+    for (final codeUnit in sourceId.codeUnits) {
+      value = (value * 31 + codeUnit) % 10000000000;
+    }
+    final digits = value.toString().padLeft(10, '0');
+    return 'BR-${digits.substring(0, 5)}-${digits.substring(5, 9)}-${digits.substring(9)}';
+  }
+
+  bool _isActiveAllocationDocument(Map<String, dynamic> data) {
+    if (data['isDeleted'] == true ||
+        _isExpiredInventoryItem(data['expirationDate']?.toString() ?? '')) {
+      return false;
+    }
+    if (data['isBundle'] == true) {
+      return !_hasExpiredAssignedBundleItem(data) &&
+          _availableAssignedBundleCount(data) > 0;
+    }
+    if (data['isCoffee'] == true || data['isAddon'] == true) return true;
+    return (data['items'] as List<dynamic>? ?? []).whereType<Map>().any((raw) {
+      final item = Map<String, dynamic>.from(raw);
+      return _parseInt(item['stock']) > 0 &&
+          !_isExpiredInventoryItem(item['expirationDate']?.toString() ?? '');
+    });
   }
 
   int _stockForAssignableItem(Map<String, dynamic> item) {
@@ -736,7 +822,7 @@ class _BudgetPageState extends State<BudgetPage>
   List<Map<String, dynamic>> _assignedInventoryRows(
     QueryDocumentSnapshot<Map<String, dynamic>> doc,
   ) {
-    final data = doc.data();
+    final data = doc.data() ?? <String, dynamic>{};
     final name = data['name']?.toString().trim() ?? 'Inventory';
     if (data['isBundle'] == true) {
       final count = _availableAssignedBundleCount(data);
@@ -809,7 +895,7 @@ class _BudgetPageState extends State<BudgetPage>
           .snapshots(),
       builder: (context, snapshot) {
         final docs = (snapshot.data?.docs ?? [])
-            .where((doc) => doc.data()['isDeleted'] != true)
+            .where((doc) => _isActiveAllocationDocument(doc.data()))
             .toList();
 
         return Container(
@@ -1236,7 +1322,8 @@ class _BudgetPageState extends State<BudgetPage>
               child: Container(
                 width: double.maxFinite,
                 constraints: BoxConstraints(
-                  maxHeight: MediaQuery.of(context).size.height * 0.82,
+                  maxWidth: 760,
+                  maxHeight: MediaQuery.of(context).size.height * 0.70,
                 ),
                 padding: const EdgeInsets.all(18),
                 child: Column(
@@ -1275,7 +1362,7 @@ class _BudgetPageState extends State<BudgetPage>
                     Flexible(
                       child: ConstrainedBox(
                         constraints: BoxConstraints(
-                          maxHeight: MediaQuery.of(context).size.height * 0.4,
+                          maxHeight: MediaQuery.of(context).size.height * 0.32,
                         ),
                         child: FutureBuilder<List<QuerySnapshot<Map<String, dynamic>>>>(
                           future: Future.wait([
@@ -1292,11 +1379,9 @@ class _BudgetPageState extends State<BudgetPage>
                           builder: (context, snapshot) {
                             if (snapshot.connectionState ==
                                 ConnectionState.waiting) {
-                              return const Center(
-                                child: CircularProgressIndicator(
-                                  color: kPrimary,
-                                ),
-                              );
+                              // Keep the dialog usable while inventory loads;
+                              // do not show the large blocking loader.
+                              return const SizedBox.shrink();
                             }
                             if (snapshot.hasError) {
                               return const Center(
@@ -2179,141 +2264,331 @@ class _BudgetPageState extends State<BudgetPage>
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(24),
           ),
-          child:
-              FutureBuilder<List<QueryDocumentSnapshot<Map<String, dynamic>>>>(
-                future: _loadBranchReportDocs(
-                  branchId: branchId,
-                  staffIds: staffIds,
-                  staffNames: staffNames,
-                ),
-                builder: (context, snapshot) {
-                  if (snapshot.connectionState == ConnectionState.waiting) {
-                    return const Padding(
-                      padding: EdgeInsets.all(32),
-                      child: CircularProgressIndicator(color: kPrimary),
-                    );
-                  }
-
-                  final reportDocs = snapshot.data ?? [];
-                  if (snapshot.hasError || reportDocs.isEmpty) {
-                    return Padding(
-                      padding: const EdgeInsets.all(24),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Icon(
-                            Icons.assignment_outlined,
-                            size: 48,
-                            color: Color(0xFFCCCCCC),
-                          ),
-                          const SizedBox(height: 16),
-                          Text(
-                            snapshot.hasError
-                                ? 'Unable to load reports'
-                                : '$branchName has no staff reports yet',
-                            style: const TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w600,
-                              color: Color(0xFF666666),
-                            ),
-                            textAlign: TextAlign.center,
-                          ),
-                          const SizedBox(height: 20),
-                          GestureDetector(
-                            onTap: () => Navigator.pop(context),
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 20,
-                                vertical: 10,
-                              ),
-                              decoration: BoxDecoration(
-                                color: kPrimary,
-                                borderRadius: BorderRadius.circular(16),
-                              ),
-                              child: const Text(
-                                'Close',
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.w600,
-                                  fontSize: 12,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    );
-                  }
-
-                  return SizedBox(
-                    width: 520,
-                    child: SingleChildScrollView(
-                      child: Padding(
+          child: FutureBuilder<List<QueryDocumentSnapshot<Map<String, dynamic>>>>(
+            future: _loadBranchReportDocs(
+              branchId: branchId,
+              staffIds: staffIds,
+              staffNames: staffNames,
+            ),
+            builder: (context, snapshot) {
+              if (snapshot.connectionState == ConnectionState.waiting) {
+                return SizedBox(
+                  width: 520,
+                  height: 650,
+                  child: Column(
+                    children: [
+                      Padding(
                         padding: const EdgeInsets.all(24),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          crossAxisAlignment: CrossAxisAlignment.start,
+                        child: Row(
                           children: [
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      const Text(
-                                        'Branch Staff Reports',
-                                        style: TextStyle(
-                                          fontSize: 18,
-                                          fontWeight: FontWeight.w800,
-                                          color: kBannerTop,
-                                        ),
-                                      ),
-                                      const SizedBox(height: 4),
-                                      Text(
-                                        branchName,
-                                        style: const TextStyle(
-                                          fontSize: 12,
-                                          fontWeight: FontWeight.w500,
-                                          color: Color(0xFF666666),
-                                        ),
-                                      ),
-                                    ],
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const Text(
+                                    'Branch Staff Reports',
+                                    style: TextStyle(
+                                      fontSize: 18,
+                                      fontWeight: FontWeight.w800,
+                                      color: kBannerTop,
+                                    ),
                                   ),
-                                ),
-                                GestureDetector(
-                                  onTap: () => Navigator.pop(context),
-                                  child: const Icon(
-                                    Icons.close_rounded,
-                                    color: Color(0xFF999999),
-                                    size: 24,
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    branchName,
+                                    style: const TextStyle(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w500,
+                                      color: Color(0xFF666666),
+                                    ),
                                   ),
-                                ),
-                              ],
+                                ],
+                              ),
                             ),
-                            const SizedBox(height: 18),
-                            Column(
-                              children: reportDocs.map((doc) {
-                                final data = doc.data();
-                                final staffId =
-                                    data['staffId']?.toString() ?? '';
-                                final staffName =
-                                    data['staffName']?.toString() ?? 'Staff';
-                                return _buildReportCard(
-                                  doc,
-                                  staffId,
-                                  staffName,
-                                );
-                              }).toList(),
+                            GestureDetector(
+                              onTap: () => Navigator.pop(context),
+                              child: const Icon(
+                                Icons.close_rounded,
+                                color: Color(0xFF999999),
+                                size: 24,
+                              ),
                             ),
                           ],
                         ),
                       ),
+                      const Expanded(
+                        child: Center(
+                          child: CircularProgressIndicator(color: kPrimary),
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              }
+
+              final reportDocs = snapshot.data ?? [];
+              if (snapshot.hasError || reportDocs.isEmpty) {
+                return Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(
+                        Icons.assignment_outlined,
+                        size: 48,
+                        color: Color(0xFFCCCCCC),
+                      ),
+                      const SizedBox(height: 16),
+                      Text(
+                        snapshot.hasError
+                            ? 'Unable to load reports'
+                            : '$branchName has no staff reports yet',
+                        style: const TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                          color: Color(0xFF666666),
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                      const SizedBox(height: 20),
+                      GestureDetector(
+                        onTap: () => Navigator.pop(context),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 20,
+                            vertical: 10,
+                          ),
+                          decoration: BoxDecoration(
+                            color: kPrimary,
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                          child: const Text(
+                            'Close',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w600,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              }
+
+              var reportQuery = '';
+              DateTime? selectedReportDate;
+              var selectedPayment = 'All';
+              return StatefulBuilder(
+                builder: (context, setDialogState) {
+                  final filteredReportDocs = reportDocs.where((doc) {
+                    final data = doc.data();
+                    final text =
+                        '${data['staffName'] ?? ''} ${data['staffId'] ?? ''} ${data['reportDate'] ?? ''}'
+                            .toLowerCase();
+                    if (!text.contains(reportQuery)) return false;
+                    if (selectedReportDate != null) {
+                      final day = _reportDayFromData(data);
+                      final matchesDate =
+                          day.year == selectedReportDate!.year &&
+                          day.month == selectedReportDate!.month &&
+                          day.day == selectedReportDate!.day;
+                      if (!matchesDate) return false;
+                    }
+                    if (selectedPayment == 'All') return true;
+                    final transactions =
+                        data['transactions'] as List<dynamic>? ?? [];
+                    return transactions.whereType<Map>().any((tx) {
+                      final mode =
+                          tx['paymentMode']?.toString().trim().toLowerCase() ??
+                          'cash';
+                      return mode == selectedPayment.toLowerCase();
+                    });
+                  }).toList();
+                  return SizedBox(
+                    width: 520,
+                    height: 650,
+                    child: Column(
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.all(24),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                mainAxisAlignment:
+                                    MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        const Text(
+                                          'Branch Staff Reports',
+                                          style: TextStyle(
+                                            fontSize: 18,
+                                            fontWeight: FontWeight.w800,
+                                            color: kBannerTop,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          branchName,
+                                          style: const TextStyle(
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w500,
+                                            color: Color(0xFF666666),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  GestureDetector(
+                                    onTap: () => Navigator.pop(context),
+                                    child: const Icon(
+                                      Icons.close_rounded,
+                                      color: Color(0xFF999999),
+                                      size: 24,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 18),
+                              TextField(
+                                onChanged: (value) => setDialogState(
+                                  () =>
+                                      reportQuery = value.trim().toLowerCase(),
+                                ),
+                                decoration: InputDecoration(
+                                  hintText: 'Search staff, ID, or report date',
+                                  prefixIcon: const Icon(
+                                    Icons.search_rounded,
+                                    color: kDeep,
+                                  ),
+                                  suffixIcon: IconButton(
+                                    tooltip: 'Filter by date',
+                                    icon: const Icon(
+                                      Icons.calendar_month_rounded,
+                                      color: kDeep,
+                                    ),
+                                    onPressed: () async {
+                                      final picked = await showDatePicker(
+                                        context: context,
+                                        initialDate:
+                                            selectedReportDate ??
+                                            DateTime.now(),
+                                        firstDate: DateTime(2020),
+                                        lastDate: DateTime.now().add(
+                                          const Duration(days: 1),
+                                        ),
+                                      );
+                                      if (picked != null) {
+                                        setDialogState(
+                                          () => selectedReportDate = picked,
+                                        );
+                                      }
+                                    },
+                                  ),
+                                  filled: true,
+                                  fillColor: Colors.white,
+                                  border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                    borderSide: const BorderSide(
+                                      color: kAccent,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              Row(
+                                children: [
+                                  if (MediaQuery.of(context).size.width < 0)
+                                    OutlinedButton.icon(
+                                      onPressed: () async {
+                                        final picked = await showDatePicker(
+                                          context: context,
+                                          initialDate:
+                                              selectedReportDate ??
+                                              DateTime.now(),
+                                          firstDate: DateTime(2020),
+                                          lastDate: DateTime.now().add(
+                                            const Duration(days: 1),
+                                          ),
+                                        );
+                                        if (picked != null)
+                                          setDialogState(
+                                            () => selectedReportDate = picked,
+                                          );
+                                      },
+                                      icon: const Icon(
+                                        Icons.calendar_month_rounded,
+                                        size: 18,
+                                      ),
+                                      label: Text(
+                                        selectedReportDate == null
+                                            ? 'Filter by date'
+                                            : '${selectedReportDate!.year}-${selectedReportDate!.month.toString().padLeft(2, '0')}-${selectedReportDate!.day.toString().padLeft(2, '0')}',
+                                      ),
+                                    ),
+                                  if (selectedReportDate != null)
+                                    TextButton(
+                                      onPressed: () => setDialogState(
+                                        () => selectedReportDate = null,
+                                      ),
+                                      child: const Text('Clear'),
+                                    ),
+                                ],
+                              ),
+                              const SizedBox(height: 10),
+                              Align(
+                                alignment: Alignment.centerLeft,
+                                child: Wrap(
+                                  spacing: 8,
+                                  children: ['All', 'Cash', 'GCash'].map((
+                                    label,
+                                  ) {
+                                    return ChoiceChip(
+                                      label: Text(label),
+                                      selected: selectedPayment == label,
+                                      onSelected: (_) => setDialogState(
+                                        () => selectedPayment = label,
+                                      ),
+                                    );
+                                  }).toList(),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        Expanded(
+                          child: ListView(
+                            padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+                            children: filteredReportDocs.map((doc) {
+                              final data = doc.data();
+                              final staffId = data['staffId']?.toString() ?? '';
+                              final staffName =
+                                  data['staffName']?.toString() ?? 'Staff';
+                              return _buildReportCard(
+                                doc,
+                                staffId,
+                                staffName,
+                                branchName: branchName,
+                                branchCode: _branchCode(branchId),
+                                paymentFilter: selectedPayment,
+                              );
+                            }).toList(),
+                          ),
+                        ),
+                      ],
                     ),
                   );
                 },
-              ),
+              );
+            },
+          ),
         );
       },
     );
@@ -2591,6 +2866,18 @@ class _BudgetPageState extends State<BudgetPage>
     return int.tryParse(value?.toString() ?? '') ?? 0;
   }
 
+  bool _isRefundTransaction(Map<String, dynamic> data) {
+    final type = data['type']?.toString().trim().toLowerCase() ?? '';
+    final status = data['status']?.toString().trim().toLowerCase() ?? '';
+    final salesId = data['salesId']?.toString().trim().toLowerCase() ?? '';
+    final items = data['items'] as List<dynamic>? ?? [];
+    return type == 'refund' ||
+        status == 'refund' ||
+        salesId.startsWith('r-') ||
+        data['fullyRefunded'] == true ||
+        items.whereType<Map>().any((item) => _parseQty(item['refunded']) > 0);
+  }
+
   Future<Map<String, dynamic>> _loadRefundDetails(
     String staffId,
     DateTime reportDay,
@@ -2647,11 +2934,218 @@ class _BudgetPageState extends State<BudgetPage>
     };
   }
 
+  void _showTransactionDetailsDialog(List<dynamic> transactions) {
+    var query = '';
+    var selectedFilter = 'All';
+    showDialog<void>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => Dialog(
+          backgroundColor: const Color(0xFFFFF8F3),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(22),
+          ),
+          child: SizedBox(
+            width: 500,
+            height: 560,
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                children: [
+                  Row(
+                    children: [
+                      const Icon(Icons.receipt_long_rounded, color: kDeep),
+                      const SizedBox(width: 10),
+                      const Expanded(
+                        child: Text(
+                          'Transaction details',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w900,
+                            color: kBannerTop,
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        onPressed: () => Navigator.pop(context),
+                        icon: const Icon(Icons.close_rounded),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  TextField(
+                    onChanged: (value) => setDialogState(
+                      () => query = value.trim().toLowerCase(),
+                    ),
+                    decoration: InputDecoration(
+                      hintText: 'Search transaction',
+                      prefixIcon: const Icon(
+                        Icons.search_rounded,
+                        color: kDeep,
+                      ),
+                      filled: true,
+                      fillColor: Colors.white,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(14),
+                        borderSide: const BorderSide(color: kAccent),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      children: ['All', 'Categories', 'Bundle', 'Coffee items']
+                          .map(
+                            (label) => Padding(
+                              padding: const EdgeInsets.only(right: 7),
+                              child: ChoiceChip(
+                                label: Text(label),
+                                selected: selectedFilter == label,
+                                selectedColor: kPrimary,
+                                labelStyle: TextStyle(
+                                  color: selectedFilter == label
+                                      ? Colors.white
+                                      : kDeep,
+                                ),
+                                onSelected: (_) => setDialogState(
+                                  () => selectedFilter = label,
+                                ),
+                              ),
+                            ),
+                          )
+                          .toList(),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Expanded(
+                    child: ListView.separated(
+                      itemCount: transactions.length,
+                      separatorBuilder: (_, __) => const SizedBox(height: 9),
+                      itemBuilder: (context, index) {
+                        final tx = Map<String, dynamic>.from(
+                          transactions[index] as Map,
+                        );
+                        final salesId =
+                            tx['salesId']?.toString() ??
+                            'Transaction ${index + 1}';
+                        final isRefund = _isRefundTransaction(tx);
+                        final total = tx['total'] is num
+                            ? (tx['total'] as num).toDouble()
+                            : double.tryParse(tx['total']?.toString() ?? '') ??
+                                  0;
+                        return FutureBuilder<Map<String, dynamic>>(
+                          future: _loadTransactionDetails(tx),
+                          builder: (context, snapshot) {
+                            final items =
+                                (snapshot.data?['items']
+                                    as List<Map<String, dynamic>>?) ??
+                                [];
+                            final summary = items.isEmpty
+                                ? 'No item details'
+                                : items
+                                      .map(
+                                        (item) =>
+                                            '${_parseQty(item['quantity'])}× ${item['name'] ?? 'Product'}',
+                                      )
+                                      .join(', ');
+                            final itemText =
+                                '$summary ${tx['category'] ?? ''} ${tx['type'] ?? ''}'
+                                    .toLowerCase();
+                            final matchesSearch =
+                                query.isEmpty ||
+                                salesId.toLowerCase().contains(query) ||
+                                itemText.contains(query);
+                            final matchesFilter =
+                                selectedFilter == 'All' ||
+                                (selectedFilter == 'Bundle' &&
+                                    itemText.contains('bundle')) ||
+                                (selectedFilter == 'Coffee items' &&
+                                    (itemText.contains('coffee') ||
+                                        itemText.contains('smoothie'))) ||
+                                (selectedFilter == 'Categories' &&
+                                    !itemText.contains('bundle') &&
+                                    !itemText.contains('coffee') &&
+                                    !itemText.contains('smoothie'));
+                            if (!matchesSearch || !matchesFilter) {
+                              return const SizedBox.shrink();
+                            }
+                            return Container(
+                              padding: const EdgeInsets.all(13),
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(14),
+                                border: Border.all(
+                                  color: kAccent.withOpacity(.7),
+                                ),
+                              ),
+                              child: Row(
+                                children: [
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Row(
+                                          children: [
+                                            Expanded(
+                                              child: Text(
+                                                salesId,
+                                                style: const TextStyle(
+                                                  fontWeight: FontWeight.w800,
+                                                  color: kBannerTop,
+                                                ),
+                                              ),
+                                            ),
+                                            if (isRefund) const _RefundBadge(),
+                                          ],
+                                        ),
+                                        const SizedBox(height: 5),
+                                        Text(
+                                          summary,
+                                          maxLines: 2,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: const TextStyle(
+                                            fontSize: 11,
+                                            color: Color(0xFF777777),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  const SizedBox(width: 10),
+                                  Text(
+                                    '₱${total.toStringAsFixed(2)}',
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w900,
+                                      color: kDeep,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            );
+                          },
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildReportCard(
     QueryDocumentSnapshot<Map<String, dynamic>> reportDoc,
     String staffId,
-    String staffName,
-  ) {
+    String staffName, {
+    String? branchName,
+    String? branchCode,
+    String paymentFilter = 'All',
+  }) {
     final data = reportDoc.data();
     final createdAt = data['createdAt'] as Timestamp?;
     final reportDate = data['reportDate'] as String?;
@@ -2667,11 +3161,29 @@ class _BudgetPageState extends State<BudgetPage>
     final drawerGainValue =
         (data['cashOverOpening'] as num?)?.toDouble() ??
         (closingCashValue - openingCashValue);
-    final totalSales = data['totalSales'];
-    final transactionCount = data['transactionCount'];
-    final transactions = data['transactions'] as List<dynamic>?;
+    final allTransactions = data['transactions'] as List<dynamic>? ?? [];
+    final transactions = paymentFilter == 'All'
+        ? allTransactions
+        : allTransactions.where((transaction) {
+            if (transaction is! Map) return false;
+            final mode =
+                transaction['paymentMode']?.toString().trim().toLowerCase() ??
+                'cash';
+            return mode == paymentFilter.toLowerCase();
+          }).toList();
+    final totalSales = paymentFilter == 'All'
+        ? data['totalSales']
+        : transactions.fold<double>(
+            0,
+            (sum, transaction) =>
+                sum + _parseMoney((transaction as Map)['total']),
+          );
+    final transactionCount = transactions.length;
     final staffPublicId = data['staffPublicId']?.toString().trim() ?? '';
     final displayStaffId = staffPublicId.isNotEmpty ? staffPublicId : staffId;
+    final branchLabel = branchName?.trim().isNotEmpty == true
+        ? '$branchName - ${branchCode ?? ''}'
+        : '$staffName${displayStaffId.isNotEmpty ? ' • $displayStaffId' : ''}';
     final closingInventory =
         (data['closingInventory'] as List<dynamic>?)
             ?.whereType<Map<String, dynamic>>()
@@ -2681,7 +3193,7 @@ class _BudgetPageState extends State<BudgetPage>
 
     return Container(
       margin: const EdgeInsets.only(bottom: 16),
-      padding: const EdgeInsets.all(18),
+      padding: EdgeInsets.zero,
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(22),
@@ -2693,527 +3205,486 @@ class _BudgetPageState extends State<BudgetPage>
           ),
         ],
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: ExpansionTile(
+        initiallyExpanded: false,
+        tilePadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 4),
+        childrenPadding: EdgeInsets.zero,
+        title: Text(
+          branchLabel,
+          style: const TextStyle(
+            color: kBannerTop,
+            fontWeight: FontWeight.w900,
+          ),
+        ),
+        subtitle: Text(
+          'Report: ${reportDate?.split('T').first ?? 'Unknown'}',
+          style: const TextStyle(fontSize: 11, color: Color(0xFF777777)),
+        ),
         children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'Report Date',
-                    style: TextStyle(
-                      fontSize: 10,
-                      fontWeight: FontWeight.w700,
-                      color: Color(0xFF999999),
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    reportDate?.split('T').first ??
-                        (createdAt != null
-                            ? createdAt
-                                  .toDate()
-                                  .toLocal()
-                                  .toString()
-                                  .split(' ')
-                                  .first
-                            : 'Unknown'),
-                    style: const TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w700,
-                      color: kBannerTop,
-                    ),
-                  ),
-                ],
-              ),
-              if (createdAt != null)
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    const Text(
-                      'Submitted At',
-                      style: TextStyle(
-                        fontSize: 10,
-                        fontWeight: FontWeight.w700,
-                        color: Color(0xFF999999),
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      createdAt.toDate().toLocal().toString().split('.').first,
-                      style: const TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                        color: Color(0xFF666666),
-                      ),
-                    ),
-                  ],
-                ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(
-              color: const Color(0xFFFFF8F3),
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: kAccent.withOpacity(0.45)),
-            ),
-            child: Row(
+          Padding(
+            padding: const EdgeInsets.fromLTRB(18, 0, 18, 18),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Icon(Icons.badge_rounded, color: kDeep, size: 20),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    '$staffName${displayStaffId.isNotEmpty ? '  •  ID: $displayStaffId' : ''}',
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w800,
-                      color: kBannerTop,
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Report Date',
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w700,
+                            color: Color(0xFF999999),
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          reportDate?.split('T').first ??
+                              (createdAt != null
+                                  ? createdAt
+                                        .toDate()
+                                        .toLocal()
+                                        .toString()
+                                        .split(' ')
+                                        .first
+                                  : 'Unknown'),
+                          style: const TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700,
+                            color: kBannerTop,
+                          ),
+                        ),
+                      ],
                     ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 14),
-          Row(
-            children: [
-              Expanded(
-                child: Container(
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFF8F2F5),
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'Total Sales',
-                        style: TextStyle(
-                          fontSize: 10,
-                          fontWeight: FontWeight.w600,
-                          color: Color(0xFF9E9E9E),
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        '₱${(totalSales as num?)?.toStringAsFixed(2) ?? '0.00'}',
-                        style: const TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w800,
-                          color: kBannerTop,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Container(
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFF8F2F5),
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    if (createdAt != null)
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.end,
                         children: [
                           const Text(
-                            'Closing Drawer',
+                            'Submitted At',
                             style: TextStyle(
                               fontSize: 10,
+                              fontWeight: FontWeight.w700,
+                              color: Color(0xFF999999),
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            createdAt
+                                .toDate()
+                                .toLocal()
+                                .toString()
+                                .split('.')
+                                .first,
+                            style: const TextStyle(
+                              fontSize: 12,
                               fontWeight: FontWeight.w600,
-                              color: Color(0xFF9E9E9E),
+                              color: Color(0xFF666666),
                             ),
                           ),
                         ],
                       ),
-                      const SizedBox(height: 8),
-                      Text(
-                        '₱${(cashDrawerTotal as num?)?.toStringAsFixed(2) ?? '0.00'}',
-                        style: const TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w800,
-                          color: kBannerTop,
-                        ),
-                      ),
-                    ],
-                  ),
+                  ],
                 ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 14),
-          Container(
-            padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(
-              color: const Color(0xFFF5F0F5),
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: Row(
-              children: [
-                Expanded(
-                  child: _buildRefundSummaryMetric(
-                    'Opening Change Fund',
-                    '₱${openingCashValue.toStringAsFixed(2)}',
+                const SizedBox(height: 16),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFFF8F3),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: kAccent.withOpacity(0.45)),
                   ),
-                ),
-                Expanded(
-                  child: _buildRefundSummaryMetric(
-                    'Drawer Gain',
-                    '₱${drawerGainValue.toStringAsFixed(2)}',
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 14),
-          Container(
-            padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(
-              color: const Color(0xFFF5F0F5),
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                  child: Row(
                     children: [
-                      const Text(
-                        'Transactions',
-                        style: TextStyle(
-                          fontSize: 10,
-                          fontWeight: FontWeight.w600,
-                          color: Color(0xFF9E9E9E),
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        transactionCount?.toString() ?? '0',
-                        style: const TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w800,
-                          color: kBannerTop,
+                      const Icon(Icons.badge_rounded, color: kDeep, size: 20),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          '$staffName${displayStaffId.isNotEmpty ? '  •  ID: $displayStaffId' : ''}',
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w800,
+                            color: kBannerTop,
+                          ),
                         ),
                       ),
                     ],
                   ),
                 ),
-                if (transactions != null && transactions.isNotEmpty)
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 8,
-                    ),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Text(
-                      '${transactions.length} details',
-                      style: const TextStyle(
-                        fontSize: 11,
-                        color: Color(0xFF999999),
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-          ),
-          if (transactions != null && transactions.isNotEmpty) ...[
-            const SizedBox(height: 16),
-            const Text(
-              'Transaction Details',
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w700,
-                color: kBannerTop,
-              ),
-            ),
-            const SizedBox(height: 10),
-            ...transactions.map((transaction) {
-              final tx = transaction as Map<String, dynamic>;
-              final salesId = tx['salesId']?.toString() ?? 'Unknown';
-              final transactionTotal = tx['total'] is num
-                  ? (tx['total'] as num).toDouble()
-                  : double.tryParse(tx['total']?.toString() ?? '') ?? 0.0;
-
-              return FutureBuilder<Map<String, dynamic>>(
-                future: _loadTransactionDetails(tx),
-                builder: (context, snapshot) {
-                  final details = snapshot.data;
-                  final items = details == null
-                      ? null
-                      : (details['items'] as List<Map<String, dynamic>>?) ?? [];
-                  final paidAmount = details == null
-                      ? 0.0
-                      : (details['paidAmount'] as double?) ?? 0.0;
-                  final change = details == null
-                      ? 0.0
-                      : (details['change'] as double?) ?? 0.0;
-
-                  return Container(
-                    margin: const EdgeInsets.only(bottom: 10),
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFF8F2F5),
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                const SizedBox(height: 14),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Container(
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFF8F2F5),
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Expanded(
-                              child: Text(
-                                'Sales ID: $salesId',
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.w700,
-                                  fontSize: 12,
-                                  color: kBannerTop,
-                                ),
+                            const Text(
+                              'Total Sales',
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w600,
+                                color: Color(0xFF9E9E9E),
                               ),
                             ),
+                            const SizedBox(height: 8),
                             Text(
-                              '₱${transactionTotal.toStringAsFixed(2)}',
+                              '₱${(totalSales as num?)?.toStringAsFixed(2) ?? '0.00'}',
                               style: const TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w600,
+                                fontSize: 18,
+                                fontWeight: FontWeight.w800,
                                 color: kBannerTop,
                               ),
                             ),
                           ],
                         ),
-                        const SizedBox(height: 10),
-                        if (snapshot.connectionState ==
-                            ConnectionState.waiting) ...[
-                          const Text(
-                            'Loading transaction details...',
-                            style: TextStyle(
-                              fontSize: 11,
-                              color: Color(0xFF999999),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Container(
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFF8F2F5),
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                const Text(
+                                  'Closing Drawer',
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w600,
+                                    color: Color(0xFF9E9E9E),
+                                  ),
+                                ),
+                              ],
                             ),
+                            const SizedBox(height: 8),
+                            Text(
+                              '₱${(cashDrawerTotal as num?)?.toStringAsFixed(2) ?? '0.00'}',
+                              style: const TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.w800,
+                                color: kBannerTop,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 14),
+                Container(
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF5F0F5),
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: _buildRefundSummaryMetric(
+                          'Opening Change Fund',
+                          '₱${openingCashValue.toStringAsFixed(2)}',
+                        ),
+                      ),
+                      Expanded(
+                        child: _buildRefundSummaryMetric(
+                          'Drawer Gain',
+                          '₱${drawerGainValue.toStringAsFixed(2)}',
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 14),
+                Container(
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF5F0F5),
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'Transactions',
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w600,
+                                color: Color(0xFF9E9E9E),
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              transactionCount?.toString() ?? '0',
+                              style: const TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.w800,
+                                color: kBannerTop,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      if (transactions != null && transactions.isNotEmpty)
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 8,
                           ),
-                        ] else if (snapshot.hasError) ...[
-                          Text(
-                            'Unable to load item details.',
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Text(
+                            '${transactions.length} details',
                             style: const TextStyle(
                               fontSize: 11,
                               color: Color(0xFF999999),
                             ),
                           ),
-                        ] else if (items == null || items.isEmpty) ...[
-                          const Text(
-                            'No item details available for this transaction.',
-                            style: TextStyle(
-                              fontSize: 11,
-                              color: Color(0xFF999999),
-                            ),
-                          ),
-                        ] else ...[
-                          ...items.map((item) {
-                            final itemName =
-                                item['name']?.toString().isNotEmpty == true
-                                ? item['name'].toString()
-                                : 'Product';
-                            final variant = item['variant']?.toString() ?? '';
-                            final category = item['category']?.toString() ?? '';
-                            final title = variant.isNotEmpty
-                                ? '$itemName • $variant'
-                                : itemName;
-                            final qty = item['quantity'] is num
-                                ? (item['quantity'] as num).toInt()
-                                : int.tryParse(
-                                        item['quantity']?.toString() ?? '',
-                                      ) ??
-                                      0;
-                            final priceValue = item['price'] is num
-                                ? (item['price'] as num).toDouble()
-                                : double.tryParse(
-                                        item['price']?.toString() ?? '',
-                                      ) ??
-                                      0.0;
-                            final categoryText = category.isNotEmpty
-                                ? ' • $category'
-                                : '';
+                        ),
+                    ],
+                  ),
+                ),
+                if (transactions != null && transactions.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: () =>
+                          _showTransactionDetailsDialog(transactions),
+                      icon: const Icon(Icons.receipt_long_rounded),
+                      label: Text(
+                        'View all ${transactions.length} transactions',
+                      ),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: kDeep,
+                        side: const BorderSide(color: kAccent),
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+                if (_showInlineTransactionDetails &&
+                    transactions != null &&
+                    transactions.isNotEmpty) ...[
+                  ...transactions.map((transaction) {
+                    final tx = transaction as Map<String, dynamic>;
+                    final salesId = tx['salesId']?.toString() ?? 'Unknown';
+                    final isRefund = _isRefundTransaction(tx);
+                    final transactionTotal = tx['total'] is num
+                        ? (tx['total'] as num).toDouble()
+                        : double.tryParse(tx['total']?.toString() ?? '') ?? 0.0;
 
-                            return Padding(
-                              padding: const EdgeInsets.only(bottom: 8),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
+                    return FutureBuilder<Map<String, dynamic>>(
+                      future: _loadTransactionDetails(tx),
+                      builder: (context, snapshot) {
+                        final details = snapshot.data;
+                        final items = details == null
+                            ? null
+                            : (details['items']
+                                      as List<Map<String, dynamic>>?) ??
+                                  [];
+                        final paidAmount = details == null
+                            ? 0.0
+                            : (details['paidAmount'] as double?) ?? 0.0;
+                        final change = details == null
+                            ? 0.0
+                            : (details['change'] as double?) ?? 0.0;
+
+                        return Container(
+                          margin: const EdgeInsets.only(bottom: 10),
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFF8F2F5),
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                mainAxisAlignment:
+                                    MainAxisAlignment.spaceBetween,
                                 children: [
+                                  Expanded(
+                                    child: Row(
+                                      children: [
+                                        Expanded(
+                                          child: Text(
+                                            'Sales ID: $salesId',
+                                            style: const TextStyle(
+                                              fontWeight: FontWeight.w700,
+                                              fontSize: 12,
+                                              color: kBannerTop,
+                                            ),
+                                          ),
+                                        ),
+                                        if (isRefund) const _RefundBadge(),
+                                      ],
+                                    ),
+                                  ),
                                   Text(
-                                    '$qty × $title$categoryText',
+                                    '₱${transactionTotal.toStringAsFixed(2)}',
                                     style: const TextStyle(
-                                      fontWeight: FontWeight.w700,
-                                      fontSize: 12,
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w600,
                                       color: kBannerTop,
                                     ),
                                   ),
-                                  const SizedBox(height: 2),
+                                ],
+                              ),
+                              const SizedBox(height: 10),
+                              if (snapshot.connectionState ==
+                                  ConnectionState.waiting) ...[
+                                const Text(
+                                  'Loading transaction details...',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    color: Color(0xFF999999),
+                                  ),
+                                ),
+                              ] else if (snapshot.hasError) ...[
+                                Text(
+                                  'Unable to load item details.',
+                                  style: const TextStyle(
+                                    fontSize: 11,
+                                    color: Color(0xFF999999),
+                                  ),
+                                ),
+                              ] else if (items == null || items.isEmpty) ...[
+                                const Text(
+                                  'No item details available for this transaction.',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    color: Color(0xFF999999),
+                                  ),
+                                ),
+                              ] else ...[
+                                ...items.map((item) {
+                                  final itemName =
+                                      item['name']?.toString().isNotEmpty ==
+                                          true
+                                      ? item['name'].toString()
+                                      : 'Product';
+                                  final variant =
+                                      item['variant']?.toString() ?? '';
+                                  final category =
+                                      item['category']?.toString() ?? '';
+                                  final title = variant.isNotEmpty
+                                      ? '$itemName • $variant'
+                                      : itemName;
+                                  final qty = item['quantity'] is num
+                                      ? (item['quantity'] as num).toInt()
+                                      : int.tryParse(
+                                              item['quantity']?.toString() ??
+                                                  '',
+                                            ) ??
+                                            0;
+                                  final priceValue = item['price'] is num
+                                      ? (item['price'] as num).toDouble()
+                                      : double.tryParse(
+                                              item['price']?.toString() ?? '',
+                                            ) ??
+                                            0.0;
+                                  final categoryText = category.isNotEmpty
+                                      ? ' • $category'
+                                      : '';
+
+                                  return Padding(
+                                    padding: const EdgeInsets.only(bottom: 8),
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          '$qty × $title$categoryText',
+                                          style: const TextStyle(
+                                            fontWeight: FontWeight.w700,
+                                            fontSize: 12,
+                                            color: kBannerTop,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 2),
+                                        Text(
+                                          'Price: ₱${priceValue.toStringAsFixed(2)}',
+                                          style: const TextStyle(
+                                            fontSize: 11,
+                                            color: Color(0xFF999999),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  );
+                                }),
+                                const SizedBox(height: 6),
+                                if (paidAmount > 0) ...[
                                   Text(
-                                    'Price: ₱${priceValue.toStringAsFixed(2)}',
+                                    'Customer Payment: ₱${paidAmount.toStringAsFixed(2)}',
                                     style: const TextStyle(
                                       fontSize: 11,
                                       color: Color(0xFF999999),
                                     ),
                                   ),
+                                  const SizedBox(height: 4),
                                 ],
-                              ),
-                            );
-                          }),
-                          const SizedBox(height: 6),
-                          if (paidAmount > 0) ...[
-                            Text(
-                              'Customer Payment: ₱${paidAmount.toStringAsFixed(2)}',
-                              style: const TextStyle(
-                                fontSize: 11,
-                                color: Color(0xFF999999),
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                          ],
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              const Text(
-                                'Change',
-                                style: TextStyle(
-                                  fontSize: 11,
-                                  color: Color(0xFF999999),
+                                Row(
+                                  mainAxisAlignment:
+                                      MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    const Text(
+                                      'Change',
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        color: Color(0xFF999999),
+                                      ),
+                                    ),
+                                    Text(
+                                      '₱${change.toStringAsFixed(2)}',
+                                      style: const TextStyle(
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w600,
+                                        color: Color(0xFF999999),
+                                      ),
+                                    ),
+                                  ],
                                 ),
-                              ),
-                              Text(
-                                '₱${change.toStringAsFixed(2)}',
-                                style: const TextStyle(
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w600,
-                                  color: Color(0xFF999999),
-                                ),
-                              ),
+                              ],
                             ],
                           ),
-                        ],
-                      ],
-                    ),
-                  );
-                },
-              );
-            }),
-          ],
-          if (closingInventory.isNotEmpty) ...[
-            const SizedBox(height: 16),
-            const Text(
-              'Closing Inventory',
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w700,
-                color: kBannerTop,
-              ),
-            ),
-            const SizedBox(height: 10),
-            ...closingInventory.map((entry) {
-              final categoryName =
-                  entry['categoryName']?.toString() ?? 'Category';
-              final startingTotal = _parseQty(entry['startingTotal']);
-              final remainingTotal = _parseQty(entry['remainingTotal']);
-              final soldTotal = _parseQty(entry['soldTotal']);
-              return Container(
-                margin: const EdgeInsets.only(bottom: 10),
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFF8F2F5),
-                  borderRadius: BorderRadius.circular(14),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      categoryName,
-                      style: const TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w800,
-                        color: kBannerTop,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: _buildRefundSummaryMetric(
-                            'Started',
-                            '$startingTotal',
-                          ),
-                        ),
-                        Expanded(
-                          child: _buildRefundSummaryMetric(
-                            'Remaining',
-                            '$remainingTotal',
-                          ),
-                        ),
-                        Expanded(
-                          child: _buildRefundSummaryMetric(
-                            'Sold',
-                            '$soldTotal',
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              );
-            }),
-          ],
-          const SizedBox(height: 16),
-          FutureBuilder<Map<String, dynamic>>(
-            future: _loadRefundDetails(staffId, reportDay),
-            builder: (context, snapshot) {
-              if (snapshot.connectionState == ConnectionState.waiting) {
-                return const Text(
-                  'Loading refund records...',
-                  style: TextStyle(fontSize: 11, color: Color(0xFF999999)),
-                );
-              }
-
-              if (snapshot.hasError) {
-                return const Text(
-                  'Unable to load refund records.',
-                  style: TextStyle(fontSize: 11, color: Color(0xFF999999)),
-                );
-              }
-
-              final details = snapshot.data ?? {};
-              final refunds = (details['refunds'] as List<dynamic>? ?? [])
-                  .whereType<Map<String, dynamic>>()
-                  .toList();
-              final totalRefundAmount =
-                  (details['totalRefundAmount'] as double?) ?? 0.0;
-              final totalRefundItems =
-                  (details['totalRefundItems'] as int?) ?? 0;
-
-              if (refunds.isEmpty) {
-                return const SizedBox.shrink();
-              }
-
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
+                        );
+                      },
+                    );
+                  }),
+                ],
+                if (closingInventory.isNotEmpty) ...[
+                  const SizedBox(height: 16),
                   const Text(
-                    'Refund Records',
+                    'Closing Inventory',
                     style: TextStyle(
                       fontSize: 12,
                       fontWeight: FontWeight.w700,
@@ -3221,49 +3692,12 @@ class _BudgetPageState extends State<BudgetPage>
                     ),
                   ),
                   const SizedBox(height: 10),
-                  Container(
-                    padding: const EdgeInsets.all(14),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFFFF0F3),
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: _buildRefundSummaryMetric(
-                            'Items Refunded',
-                            '$totalRefundItems',
-                          ),
-                        ),
-                        Expanded(
-                          child: _buildRefundSummaryMetric(
-                            'Money Deducted',
-                            '₱${totalRefundAmount.toStringAsFixed(2)}',
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  ...refunds.map((refund) {
-                    final salesId = refund['salesId']?.toString() ?? 'Refund';
-                    final reason = refund['reason']?.toString() ?? 'No reason';
-                    final source = refund['source']?.toString() ?? '';
-                    final total = _parseMoney(refund['total']).abs();
-                    final delta = _parseMoney(refund['cashDrawerDelta']).abs();
-                    final subtotal = _parseMoney(refund['subtotal']).abs();
-                    final amount = total > 0
-                        ? total
-                        : delta > 0
-                        ? delta
-                        : subtotal;
-                    final items = refund['items'] as List<dynamic>? ?? [];
-                    final itemCount = items.fold<int>(
-                      0,
-                      (sum, item) =>
-                          item is Map ? sum + _parseQty(item['quantity']) : sum,
-                    );
-
+                  ...closingInventory.map((entry) {
+                    final categoryName =
+                        entry['categoryName']?.toString() ?? 'Category';
+                    final startingTotal = _parseQty(entry['startingTotal']);
+                    final remainingTotal = _parseQty(entry['remainingTotal']);
+                    final soldTotal = _parseQty(entry['soldTotal']);
                     return Container(
                       margin: const EdgeInsets.only(bottom: 10),
                       padding: const EdgeInsets.all(12),
@@ -3274,53 +3708,202 @@ class _BudgetPageState extends State<BudgetPage>
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              Expanded(
-                                child: Text(
-                                  salesId,
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.w800,
-                                    fontSize: 12,
-                                    color: kBannerTop,
-                                  ),
-                                ),
-                              ),
-                              Text(
-                                '-₱${amount.toStringAsFixed(2)}',
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.w800,
-                                  fontSize: 12,
-                                  color: Color(0xFFC62828),
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 8),
                           Text(
-                            '$itemCount item${itemCount == 1 ? '' : 's'} refunded',
+                            categoryName,
                             style: const TextStyle(
-                              fontSize: 11,
-                              fontWeight: FontWeight.w700,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w800,
                               color: kBannerTop,
                             ),
                           ),
-                          const SizedBox(height: 4),
-                          Text(
-                            'Reason${source.isNotEmpty ? ' ($source)' : ''}: $reason',
-                            style: const TextStyle(
-                              fontSize: 11,
-                              color: Color(0xFF777777),
-                            ),
+                          const SizedBox(height: 8),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: _buildRefundSummaryMetric(
+                                  'Started',
+                                  '$startingTotal',
+                                ),
+                              ),
+                              Expanded(
+                                child: _buildRefundSummaryMetric(
+                                  'Remaining',
+                                  '$remainingTotal',
+                                ),
+                              ),
+                              Expanded(
+                                child: _buildRefundSummaryMetric(
+                                  'Sold',
+                                  '$soldTotal',
+                                ),
+                              ),
+                            ],
                           ),
                         ],
                       ),
                     );
                   }),
                 ],
-              );
-            },
+                const SizedBox(height: 16),
+                FutureBuilder<Map<String, dynamic>>(
+                  future: _loadRefundDetails(staffId, reportDay),
+                  builder: (context, snapshot) {
+                    if (snapshot.connectionState == ConnectionState.waiting) {
+                      return const Text(
+                        'Loading refund records...',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: Color(0xFF999999),
+                        ),
+                      );
+                    }
+
+                    if (snapshot.hasError) {
+                      return const Text(
+                        'Unable to load refund records.',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: Color(0xFF999999),
+                        ),
+                      );
+                    }
+
+                    final details = snapshot.data ?? {};
+                    final refunds = (details['refunds'] as List<dynamic>? ?? [])
+                        .whereType<Map<String, dynamic>>()
+                        .toList();
+                    final totalRefundAmount =
+                        (details['totalRefundAmount'] as double?) ?? 0.0;
+                    final totalRefundItems =
+                        (details['totalRefundItems'] as int?) ?? 0;
+
+                    if (refunds.isEmpty) {
+                      return const SizedBox.shrink();
+                    }
+
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Refund Records',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                            color: kBannerTop,
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        Container(
+                          padding: const EdgeInsets.all(14),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFFFF0F3),
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: _buildRefundSummaryMetric(
+                                  'Items Refunded',
+                                  '$totalRefundItems',
+                                ),
+                              ),
+                              Expanded(
+                                child: _buildRefundSummaryMetric(
+                                  'Money Deducted',
+                                  '₱${totalRefundAmount.toStringAsFixed(2)}',
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        ...refunds.map((refund) {
+                          final salesId =
+                              refund['salesId']?.toString() ?? 'Refund';
+                          final reason =
+                              refund['reason']?.toString() ?? 'No reason';
+                          final source = refund['source']?.toString() ?? '';
+                          final total = _parseMoney(refund['total']).abs();
+                          final delta = _parseMoney(
+                            refund['cashDrawerDelta'],
+                          ).abs();
+                          final subtotal = _parseMoney(
+                            refund['subtotal'],
+                          ).abs();
+                          final amount = total > 0
+                              ? total
+                              : delta > 0
+                              ? delta
+                              : subtotal;
+                          final items = refund['items'] as List<dynamic>? ?? [];
+                          final itemCount = items.fold<int>(
+                            0,
+                            (sum, item) => item is Map
+                                ? sum + _parseQty(item['quantity'])
+                                : sum,
+                          );
+
+                          return Container(
+                            margin: const EdgeInsets.only(bottom: 10),
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFF8F2F5),
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  mainAxisAlignment:
+                                      MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Expanded(
+                                      child: Text(
+                                        salesId,
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.w800,
+                                          fontSize: 12,
+                                          color: kBannerTop,
+                                        ),
+                                      ),
+                                    ),
+                                    Text(
+                                      '-₱${amount.toStringAsFixed(2)}',
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.w800,
+                                        fontSize: 12,
+                                        color: Color(0xFFC62828),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 8),
+                                Text(
+                                  '$itemCount item${itemCount == 1 ? '' : 's'} refunded',
+                                  style: const TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w700,
+                                    color: kBannerTop,
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  'Reason${source.isNotEmpty ? ' ($source)' : ''}: $reason',
+                                  style: const TextStyle(
+                                    fontSize: 11,
+                                    color: Color(0xFF777777),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          );
+                        }),
+                      ],
+                    );
+                  },
+                ),
+              ],
+            ),
           ),
         ],
       ),
@@ -3903,26 +4486,36 @@ class _BudgetPageState extends State<BudgetPage>
           child: CustomScrollView(
             physics: const BouncingScrollPhysics(),
             slivers: [
-              SliverToBoxAdapter(child: _buildHeader()),
-              SliverToBoxAdapter(
-                child: Column(
-                  children: [
-                    const SizedBox(height: 14),
-                    _buildBudgetSummary(),
-                    const SizedBox(height: 14),
-                  ],
+              if (_selectedBranchId == null)
+                SliverToBoxAdapter(child: _buildHeader())
+              else
+                SliverPersistentHeader(
+                  pinned: true,
+                  delegate: _PinnedBudgetHeaderDelegate(
+                    minHeight: 118,
+                    maxHeight: 118,
+                    child: _buildSelectedBranchHeader(),
+                  ),
                 ),
-              ),
-              SliverPersistentHeader(
-                pinned: true,
-                delegate: _PinnedBudgetHeaderDelegate(
-                  minHeight: 142,
-                  maxHeight: 142,
-                  child: _buildPinnedBudgetControls(),
+              if (_selectedBranchId == null) ...[
+                const SliverToBoxAdapter(child: SizedBox(height: 14)),
+                SliverPersistentHeader(
+                  pinned: true,
+                  delegate: _PinnedBudgetHeaderDelegate(
+                    minHeight: 142,
+                    maxHeight: 142,
+                    child: _buildPinnedBudgetControls(),
+                  ),
                 ),
-              ),
-              SliverToBoxAdapter(child: _buildBranchManagementSection()),
-              const SliverToBoxAdapter(child: SizedBox(height: 32)),
+              ],
+              if (_selectedBranchId == null) ...[
+                SliverToBoxAdapter(child: _buildBranchManagementSection()),
+                const SliverToBoxAdapter(child: SizedBox(height: 32)),
+              ] else
+                SliverFillRemaining(
+                  hasScrollBody: false,
+                  child: _buildSelectedBranchContent(),
+                ),
             ],
           ),
         ),
@@ -3953,7 +4546,11 @@ class _BudgetPageState extends State<BudgetPage>
       child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
         stream: _firestore.collection('branches').snapshots(),
         builder: (context, snapshot) {
-          final branchCount = snapshot.data?.docs.length ?? 0;
+          final branchCount =
+              snapshot.data?.docs
+                  .where((doc) => doc.data()['isVoided'] != true)
+                  .length ??
+              0;
           return Row(
             children: [
               Container(
@@ -4003,6 +4600,23 @@ class _BudgetPageState extends State<BudgetPage>
                 icon: const Icon(Icons.add_business_rounded, size: 18),
                 label: const Text('Create'),
                 style: TextButton.styleFrom(foregroundColor: kPrimary),
+              ),
+              StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                stream: _firestore
+                    .collection('branches')
+                    .where('isVoided', isEqualTo: true)
+                    .snapshots(),
+                builder: (context, voidedSnapshot) {
+                  final count = voidedSnapshot.data?.docs.length ?? 0;
+                  return TextButton.icon(
+                    onPressed: count == 0 ? null : _showVoidedBranchesDialog,
+                    icon: const Icon(Icons.inventory_2_outlined, size: 18),
+                    label: Text('Voided${count == 0 ? '' : ' ($count)'}'),
+                    style: TextButton.styleFrom(
+                      foregroundColor: Colors.orange.shade800,
+                    ),
+                  );
+                },
               ),
             ],
           );
@@ -4055,13 +4669,42 @@ class _BudgetPageState extends State<BudgetPage>
   }
 
   // ─── PREMIUM HEADER BANNER ───────────────────────────────────────
+  Widget _buildSelectedBranchContent() {
+    final branchId = _selectedBranchId!;
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: _firestore.collection('branches').doc(branchId).snapshots(),
+      builder: (context, snapshot) {
+        if (snapshot.hasError) {
+          return Center(
+            child: Text('Unable to load branch: ${snapshot.error}'),
+          );
+        }
+        if (!snapshot.hasData) {
+          return const Center(
+            child: CircularProgressIndicator(color: kPrimary),
+          );
+        }
+        final branch = snapshot.data!;
+        if (!branch.exists) {
+          return const Center(child: Text('This branch no longer exists.'));
+        }
+        return Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: _buildSelectedBranchDetail(branch),
+        );
+      },
+    );
+  }
+
   Widget _buildBranchManagementSection() {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-        stream: _firestore.collection('branches').orderBy('name').snapshots(),
+        stream: _branchesStream,
         builder: (context, snapshot) {
-          final branches = snapshot.data?.docs ?? [];
+          final branches = (snapshot.data?.docs ?? [])
+              .where((doc) => doc.data()['isVoided'] != true)
+              .toList();
           final visibleBranches = _branchSearchQuery.isEmpty
               ? branches
               : branches.where((doc) {
@@ -4118,193 +4761,85 @@ class _BudgetPageState extends State<BudgetPage>
                     ),
                   ),
                 )
-              else
+              else if (_selectedBranchId == null)
                 ...visibleBranches.map((doc) {
                   final data = doc.data();
                   final name = data['name']?.toString() ?? 'Branch';
-                  final staffNames =
-                      (data['staffNames'] as List<dynamic>? ?? [])
-                          .map((name) => name.toString())
-                          .where((name) => name.trim().isNotEmpty)
-                          .toList();
                   final staffIds = (data['staffIds'] as List<dynamic>? ?? [])
                       .map((id) => id.toString().trim())
                       .where((id) => id.isNotEmpty)
                       .toList();
-                  final hasAssignedStaff = staffIds.isNotEmpty;
                   final branchId = doc.id;
-                  if (!_budgetControllers.containsKey(branchId)) {
-                    _budgetControllers[branchId] = TextEditingController();
-                    _firestore
-                        .collection('staff_budget')
-                        .doc(branchId)
-                        .get()
-                        .then((budgetDoc) {
-                          if (!budgetDoc.exists || !mounted) return;
-                          final budget =
-                              (budgetDoc.data()?['allocatedBudget'] as num?)
-                                  ?.toDouble() ??
-                              0;
-                          setState(() {
-                            _currentAllocations[branchId] = budget;
-                          });
-                        });
-                  }
                   return Container(
                     margin: const EdgeInsets.only(bottom: 10),
-                    padding: const EdgeInsets.all(14),
-                    decoration: BoxDecoration(
+                    child: Material(
                       color: Colors.white,
                       borderRadius: BorderRadius.circular(18),
-                      border: Border.all(color: kAccent.withOpacity(0.6)),
-                      boxShadow: [
-                        BoxShadow(
-                          color: kPrimary.withOpacity(0.05),
-                          blurRadius: 12,
-                          offset: const Offset(0, 4),
-                        ),
-                      ],
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Container(
-                              width: 40,
-                              height: 40,
-                              decoration: BoxDecoration(
-                                color: kPrimary.withOpacity(0.10),
-                                borderRadius: BorderRadius.circular(12),
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(18),
+                        onTap: () =>
+                            setState(() => _selectedBranchId = branchId),
+                        child: Container(
+                          padding: const EdgeInsets.all(14),
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(18),
+                            border: Border.all(color: kAccent.withOpacity(0.6)),
+                          ),
+                          child: Row(
+                            children: [
+                              Container(
+                                width: 40,
+                                height: 40,
+                                decoration: BoxDecoration(
+                                  color: kPrimary.withOpacity(0.10),
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: const Icon(
+                                  Icons.store_mall_directory_rounded,
+                                  color: kDeep,
+                                  size: 20,
+                                ),
                               ),
-                              child: const Icon(
-                                Icons.store_mall_directory_rounded,
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      name,
+                                      style: const TextStyle(
+                                        color: kBannerTop,
+                                        fontSize: 15,
+                                        fontWeight: FontWeight.w900,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              IconButton(
+                                tooltip: 'Edit branch',
+                                onPressed: () =>
+                                    _showEditBranchDialog(branchId, name),
+                                icon: const Icon(Icons.edit_rounded),
                                 color: kDeep,
-                                size: 20,
                               ),
-                            ),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    name,
-                                    style: const TextStyle(
-                                      color: kBannerTop,
-                                      fontSize: 15,
-                                      fontWeight: FontWeight.w900,
-                                    ),
-                                  ),
-                                  Text(
-                                    staffNames.isEmpty
-                                        ? 'No staff assigned'
-                                        : staffNames.join(', '),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(
-                                      color: Colors.grey.shade600,
-                                      fontSize: 11,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                                ],
+                              IconButton(
+                                tooltip: 'Void branch',
+                                onPressed: () => _voidBranch(branchId, name),
+                                icon: const Icon(Icons.archive_outlined),
+                                color: Colors.orange.shade800,
                               ),
-                            ),
-                            IconButton(
-                              tooltip: 'Edit branch',
-                              onPressed: () =>
-                                  _showEditBranchDialog(branchId, name),
-                              icon: const Icon(Icons.edit_rounded),
-                              color: kDeep,
-                            ),
-                            IconButton(
-                              tooltip: 'Delete branch',
-                              onPressed: () => _deleteBranch(branchId, name),
-                              icon: const Icon(Icons.delete_outline_rounded),
-                              color: Colors.red,
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 12),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: OutlinedButton.icon(
-                                onPressed: () => _showAssignBranchStaffDialog(
-                                  branchId,
-                                  name,
-                                ),
-                                icon: const Icon(Icons.group_add_rounded),
-                                label: const Text('Staff'),
-                                style: OutlinedButton.styleFrom(
-                                  foregroundColor: kDeep,
-                                  side: BorderSide(color: kAccent),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: ElevatedButton.icon(
-                                onPressed: hasAssignedStaff
-                                    ? () => _showAssignInventoryDialog(
-                                        branchId,
-                                        name,
-                                        isBranch: true,
-                                      )
-                                    : null,
-                                icon: const Icon(Icons.inventory_2_rounded),
-                                label: const Text('Items'),
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: kPrimary,
-                                  foregroundColor: Colors.white,
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 10),
-                        SizedBox(
-                          width: double.infinity,
-                          child: OutlinedButton.icon(
-                            onPressed: hasAssignedStaff
-                                ? () => _showBranchReportDetail(
-                                    branchId: branchId,
-                                    branchName: name,
-                                    staffIds: staffIds,
-                                    staffNames: staffNames,
-                                  )
-                                : null,
-                            icon: const Icon(Icons.assignment_rounded),
-                            label: const Text('View Report'),
-                            style: OutlinedButton.styleFrom(
-                              foregroundColor: kDeep,
-                              side: BorderSide(color: kAccent),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                            ),
+                            ],
                           ),
                         ),
-                        const SizedBox(height: 12),
-                        _buildAssignedInventorySummary(branchId),
-                        const SizedBox(height: 12),
-                        _buildBranchAllocationPanel(
-                          branchId: branchId,
-                          branchName: name,
-                          controller: _budgetControllers[branchId]!,
-                          enabled: hasAssignedStaff,
-                        ),
-                      ],
+                      ),
                     ),
                   );
-                }),
+                })
+              else
+                ...visibleBranches
+                    .where((doc) => doc.id == _selectedBranchId)
+                    .map((doc) => _buildSelectedBranchDetail(doc)),
             ],
           );
         },
@@ -4312,10 +4847,613 @@ class _BudgetPageState extends State<BudgetPage>
     );
   }
 
+  Widget _buildSelectedBranchDetail(
+    DocumentSnapshot<Map<String, dynamic>> doc,
+  ) {
+    final data = doc.data() ?? <String, dynamic>{};
+    final branchId = doc.id;
+    final branchName = data['name']?.toString() ?? 'Branch';
+    final staffNames = (data['staffNames'] as List<dynamic>? ?? [])
+        .map((name) => name.toString())
+        .where((name) => name.trim().isNotEmpty)
+        .toList();
+    final staffIds = (data['staffIds'] as List<dynamic>? ?? [])
+        .map((id) => id.toString().trim())
+        .where((id) => id.isNotEmpty)
+        .toList();
+    final hasAssignedStaff = staffIds.isNotEmpty;
+    final controller = _budgetControllers.putIfAbsent(
+      branchId,
+      () => TextEditingController(),
+    );
+    if (!_currentAllocations.containsKey(branchId)) {
+      _firestore.collection('staff_budget').doc(branchId).get().then((budget) {
+        if (!mounted || !budget.exists) return;
+        setState(() {
+          _currentAllocations[branchId] =
+              (budget.data()?['allocatedBudget'] as num?)?.toDouble() ?? 0;
+        });
+      });
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: kAccent.withOpacity(0.6)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: [
+              _branchActionButton(
+                label: 'Staff',
+                icon: Icons.groups_rounded,
+                color: const Color(0xFF7B4BB7),
+                onPressed: () =>
+                    _showAssignBranchStaffDialog(branchId, branchName),
+              ),
+              _branchActionButton(
+                label: 'Report',
+                icon: Icons.assignment_rounded,
+                color: const Color(0xFF2476B9),
+                onPressed: hasAssignedStaff
+                    ? () => _showBranchReportDetail(
+                        branchId: branchId,
+                        branchName: branchName,
+                        staffIds: staffIds,
+                        staffNames: staffNames,
+                      )
+                    : null,
+              ),
+              _branchActionButton(
+                label: 'Add Items',
+                icon: Icons.add_box_rounded,
+                color: kPrimary,
+                onPressed: hasAssignedStaff
+                    ? () => _showAssignInventoryDialog(
+                        branchId,
+                        branchName,
+                        isBranch: true,
+                      )
+                    : null,
+              ),
+              _branchActionButton(
+                label: 'Add Cash',
+                icon: Icons.payments_rounded,
+                color: const Color(0xFF188C68),
+                onPressed: hasAssignedStaff
+                    ? () => _showBranchCashDrawerDialog(
+                        branchId,
+                        branchName,
+                        controller,
+                        staffIds,
+                      )
+                    : null,
+              ),
+            ],
+          ),
+          if (!hasAssignedStaff)
+            Padding(
+              padding: const EdgeInsets.only(top: 10),
+              child: Text(
+                'Assign staff first to allocate items or cash.',
+                style: TextStyle(
+                  color: Colors.orange.shade800,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          const SizedBox(height: 18),
+          const Text(
+            'Allocated items',
+            style: TextStyle(
+              color: kBannerTop,
+              fontSize: 15,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          const SizedBox(height: 10),
+          _buildAllocationFilters(),
+          const SizedBox(height: 8),
+          _buildBranchItemsTable(branchId),
+        ],
+      ),
+    );
+  }
+
+  Widget _branchActionButton({
+    required String label,
+    required IconData icon,
+    required Color color,
+    required VoidCallback? onPressed,
+  }) => SizedBox(
+    width: 160,
+    height: 44,
+    child: ElevatedButton.icon(
+      onPressed: onPressed,
+      icon: Icon(icon, size: 19),
+      label: Text(label),
+      style: ElevatedButton.styleFrom(
+        backgroundColor: color,
+        foregroundColor: Colors.white,
+        disabledBackgroundColor: Colors.grey.shade300,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+    ),
+  );
+
+  Widget _buildAllocationFilters() => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        children: ['All', 'Categories', 'Bundle', 'Coffee']
+            .map(
+              (filter) => ChoiceChip(
+                label: Text(filter),
+                selected: _allocationFilter == filter,
+                selectedColor: kPrimary.withOpacity(0.18),
+                labelStyle: TextStyle(
+                  color: _allocationFilter == filter
+                      ? kBannerTop
+                      : Colors.grey.shade700,
+                  fontWeight: FontWeight.w800,
+                ),
+                onSelected: (_) => setState(() => _allocationFilter = filter),
+              ),
+            )
+            .toList(),
+      ),
+      const SizedBox(height: 10),
+      TextField(
+        controller: _allocationSearchController,
+        onChanged: (value) =>
+            setState(() => _allocationSearchQuery = value.trim().toLowerCase()),
+        decoration: InputDecoration(
+          hintText:
+              'Search ID, item name, allocated, remaining, price, or type',
+          prefixIcon: const Icon(Icons.search_rounded, color: kDeep),
+          filled: true,
+          fillColor: const Color(0xFFFFFBFC),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: BorderSide(color: kAccent),
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: BorderSide(color: kAccent),
+          ),
+        ),
+      ),
+    ],
+  );
+
+  void _showBranchCashDrawerDialog(
+    String branchId,
+    String branchName,
+    TextEditingController controller,
+    List<String> staffIds,
+  ) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 390, maxWidth: 760),
+            child: Material(
+              borderRadius: BorderRadius.circular(20),
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: _buildBranchAllocationPanel(
+                  branchId: branchId,
+                  branchName: branchName,
+                  controller: controller,
+                  staffIds: staffIds,
+                  enabled: true,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildBranchItemsTable(String branchId) {
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: _branchInventoryStreams.putIfAbsent(
+        branchId,
+        () => _firestore
+            .collection('staff_inventory')
+            .where('staffId', isEqualTo: branchId)
+            .snapshots(),
+      ),
+      builder: (context, snapshot) {
+        final docs = (snapshot.data?.docs ?? [])
+            .where((doc) => doc.data()['isDeleted'] != true)
+            .toList();
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(
+            child: Padding(
+              padding: EdgeInsets.all(20),
+              child: CircularProgressIndicator(color: kPrimary),
+            ),
+          );
+        }
+        final rows = docs.expand(_allocationRowsForDocument).where((row) {
+          final matchesFilter =
+              _allocationFilter == 'All' ||
+              (_allocationFilter == 'Bundle' && row.type == 'Bundle') ||
+              (_allocationFilter == 'Coffee' && row.type == 'Coffee') ||
+              (_allocationFilter == 'Categories' && row.type == 'Category');
+          final details =
+              '${row.id} ${row.name} ${row.allocated} '
+                      '${row.remaining} ${row.price} ${row.type}'
+                  .toLowerCase();
+          return matchesFilter &&
+              (_allocationSearchQuery.isEmpty ||
+                  details.contains(_allocationSearchQuery));
+        }).toList();
+        if (rows.isEmpty)
+          return const Padding(
+            padding: EdgeInsets.all(16),
+            child: Text('No items allocated to this branch yet.'),
+          );
+        return Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: const Color(0xFFFFFBFC),
+            border: Border.all(color: kAccent.withOpacity(0.8)),
+            borderRadius: BorderRadius.circular(16),
+            boxShadow: [
+              BoxShadow(
+                color: kPrimary.withOpacity(0.06),
+                blurRadius: 14,
+                offset: const Offset(0, 5),
+              ),
+            ],
+          ),
+          child: SizedBox(
+            height: MediaQuery.of(context).size.height * 0.48,
+            child: LayoutBuilder(
+              builder: (context, constraints) => SingleChildScrollView(
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(minWidth: constraints.maxWidth),
+                    child: DataTable(
+                      headingRowColor: WidgetStatePropertyAll(
+                        kPrimary.withOpacity(0.12),
+                      ),
+                      headingTextStyle: const TextStyle(
+                        color: kBannerTop,
+                        fontWeight: FontWeight.w900,
+                      ),
+                      dataTextStyle: const TextStyle(
+                        color: Color(0xFF4A2634),
+                        fontWeight: FontWeight.w600,
+                      ),
+                      columnSpacing: 28,
+                      horizontalMargin: 18,
+                      columns: const [
+                        DataColumn(label: Text('ID')),
+                        DataColumn(label: Text('Item name')),
+                        DataColumn(label: Text('Allocated'), numeric: true),
+                        DataColumn(label: Text('Remaining'), numeric: true),
+                        DataColumn(label: Text('Price'), numeric: true),
+                        DataColumn(label: Text('Type')),
+                        DataColumn(label: Text('Action')),
+                      ],
+                      rows: rows
+                          .map(
+                            (row) => DataRow(
+                              cells: [
+                                DataCell(
+                                  SizedBox(
+                                    width: 95,
+                                    child: Text(
+                                      row.id,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                ),
+                                DataCell(
+                                  SizedBox(
+                                    width: 210,
+                                    child: Text(
+                                      row.name,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                ),
+                                DataCell(Text('${row.allocated}')),
+                                DataCell(Text('${row.remaining}')),
+                                DataCell(
+                                  Text('P${row.price.toStringAsFixed(2)}'),
+                                ),
+                                DataCell(_allocationTypeChip(row.type)),
+                                DataCell(
+                                  Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      IconButton(
+                                        tooltip: 'Edit / add allocation',
+                                        onPressed: () =>
+                                            _showEditBranchAllocationDialog(
+                                              row,
+                                              branchId,
+                                            ),
+                                        icon: const Icon(Icons.edit_rounded),
+                                        color: kDeep,
+                                      ),
+                                      IconButton(
+                                        tooltip: 'Void allocation',
+                                        onPressed: () =>
+                                            _removeBranchAllocation(row),
+                                        icon: const Icon(Icons.cancel_outlined),
+                                        color: Colors.deepOrange.shade500,
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          )
+                          .toList(),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  List<_AllocationTableRow> _allocationRowsForDocument(
+    QueryDocumentSnapshot<Map<String, dynamic>> doc,
+  ) {
+    final data = doc.data();
+    final type = data['isBundle'] == true
+        ? 'Bundle'
+        : data['isCoffee'] == true
+        ? 'Coffee'
+        : 'Category';
+    if (data['isBundle'] == true ||
+        data['isCoffee'] == true ||
+        data['isAddon'] == true) {
+      final remaining = data['isBundle'] == true
+          ? _availableAssignedBundleCount(data)
+          : _parseInt(data['stock']);
+      final allocated = _parseInt(
+        data['assignedStartingStock'],
+        fallback: remaining,
+      );
+      return [
+        _AllocationTableRow(
+          documentId: doc.id,
+          itemId: null,
+          id:
+              (data['bundleId'] ??
+                      data['productId'] ??
+                      data['sourceInventoryId'] ??
+                      doc.id)
+                  .toString(),
+          name: data['name']?.toString() ?? 'Item',
+          allocated: allocated,
+          remaining: remaining,
+          price: _parsePrice(
+            data['price'] ?? data['basePrice'] ?? data['priceDelta'],
+          ),
+          type: data['isAddon'] == true ? 'Add-on' : type,
+        ),
+      ];
+    }
+    return (data['items'] as List<dynamic>? ?? [])
+        .whereType<Map>()
+        .map(Map<String, dynamic>.from)
+        .where(
+          (item) =>
+              _parseInt(item['stock']) > 0 &&
+              !_isExpiredInventoryItem(
+                item['expirationDate']?.toString() ?? '',
+              ),
+        )
+        .map((item) {
+          final remaining = _parseInt(item['stock']);
+          final allocated = _parseInt(
+            item['assignedStartingStock'],
+            fallback: _parseInt(item['startingStock'], fallback: remaining),
+          );
+          return _AllocationTableRow(
+            documentId: doc.id,
+            itemId: item['id']?.toString(),
+            id: (item['id'] ?? doc.id).toString(),
+            name: item['name']?.toString() ?? 'Item',
+            allocated: allocated,
+            remaining: remaining,
+            price: _parsePrice(item['price']),
+            type: type,
+          );
+        })
+        .toList();
+  }
+
+  Widget _allocationTypeChip(String type) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+    decoration: BoxDecoration(
+      color: kPrimary.withOpacity(0.10),
+      borderRadius: BorderRadius.circular(20),
+    ),
+    child: Text(
+      type,
+      style: const TextStyle(
+        color: kDeep,
+        fontWeight: FontWeight.w800,
+        fontSize: 11,
+      ),
+    ),
+  );
+
+  Future<void> _showEditBranchAllocationDialog(
+    _AllocationTableRow row,
+    String branchId,
+  ) async {
+    final nameController = TextEditingController(text: row.name);
+    final priceController = TextEditingController(
+      text: row.price.toStringAsFixed(2),
+    );
+    final action = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Edit allocation'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: nameController,
+              decoration: const InputDecoration(labelText: 'Item name'),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: priceController,
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+              ),
+              decoration: const InputDecoration(labelText: 'Price'),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Cancel'),
+          ),
+          TextButton.icon(
+            onPressed: () => Navigator.pop(dialogContext, 'addStock'),
+            icon: const Icon(Icons.add_box_rounded),
+            label: const Text('Save & add stock'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(dialogContext, 'save'),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    final name = nameController.text.trim();
+    final price = _parsePrice(priceController.text);
+    nameController.dispose();
+    priceController.dispose();
+    if (action == null) return;
+    if (name.isEmpty) {
+      _showSnack('Item name is required', Colors.orange.shade700);
+      return;
+    }
+
+    final ref = _firestore.collection('staff_inventory').doc(row.documentId);
+    final priceField = row.type == 'Coffee'
+        ? 'basePrice'
+        : row.type == 'Add-on'
+        ? 'priceDelta'
+        : 'price';
+    if (row.itemId == null) {
+      await ref.update({
+        'name': name,
+        priceField: price,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+    } else {
+      await _firestore.runTransaction((transaction) async {
+        final snapshot = await transaction.get(ref);
+        final items = (snapshot.data()?['items'] as List<dynamic>? ?? [])
+            .map((item) {
+              if (item is! Map) return item;
+              final updated = Map<String, dynamic>.from(item);
+              if (updated['id']?.toString() != row.itemId) return updated;
+              return {...updated, 'name': name, 'price': price};
+            })
+            .toList();
+        transaction.update(ref, {
+          'items': items,
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
+      });
+    }
+    if (!mounted) return;
+    _showSnack('Allocation updated', Colors.green.shade600);
+    if (action == 'addStock') {
+      await _showAssignInventoryDialog(
+        branchId,
+        'Branch',
+        isBranch: true,
+      );
+    }
+  }
+
+  Future<void> _removeBranchAllocation(_AllocationTableRow row) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Remove allocation?'),
+        content: Text('Remove "${row.name}" from this branch?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    final ref = _firestore.collection('staff_inventory').doc(row.documentId);
+    if (row.itemId == null) {
+      await ref.update({
+        'isDeleted': true,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+    } else {
+      await _firestore.runTransaction((transaction) async {
+        final snapshot = await transaction.get(ref);
+        final items = (snapshot.data()?['items'] as List<dynamic>? ?? [])
+            .whereType<Map>()
+            .map(Map<String, dynamic>.from)
+            .where((item) => item['id']?.toString() != row.itemId)
+            .toList();
+        transaction.update(ref, {
+          'items': items,
+          'isDeleted': items.isEmpty,
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
+      });
+    }
+    if (mounted)
+      _showSnack('${row.name} removed from branch', Colors.green.shade600);
+  }
+
   Widget _buildBranchAllocationPanel({
     required String branchId,
     required String branchName,
     required TextEditingController controller,
+    required List<String> staffIds,
     required bool enabled,
   }) {
     return Container(
@@ -4329,6 +5467,49 @@ class _BudgetPageState extends State<BudgetPage>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          Row(
+            children: [
+              Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  color: kPrimary.withOpacity(.12),
+                  borderRadius: BorderRadius.circular(11),
+                ),
+                child: const Icon(Icons.payments_rounded, color: kDeep),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Cash Allocation',
+                      style: TextStyle(
+                        color: kBannerTop,
+                        fontSize: 17,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    Text(
+                      branchName,
+                      style: const TextStyle(
+                        color: Color(0xFF777777),
+                        fontSize: 11,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              IconButton(
+                tooltip: 'Close',
+                onPressed: () => Navigator.of(context).pop(),
+                icon: const Icon(Icons.close_rounded),
+                color: kDeep,
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
           if (!enabled) ...[
             Row(
               children: [
@@ -4390,21 +5571,38 @@ class _BudgetPageState extends State<BudgetPage>
               ),
               const SizedBox(width: 10),
               Expanded(
-                child: StreamBuilder<DocumentSnapshot>(
+                child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
                   stream: _firestore
-                      .collection('staff_cash_drawer')
-                      .doc(branchId)
+                      .collection('completed_sales')
+                      .where('branchId', isEqualTo: branchId)
                       .snapshots(),
                   builder: (context, snapshot) {
-                    double cashBalance = 0;
-                    if (snapshot.hasData && snapshot.data!.exists) {
-                      final data =
-                          snapshot.data!.data() as Map<String, dynamic>;
-                      Future.microtask(
-                        () =>
-                            CashDrawerService.zeroIfPast24Hours(branchId, data),
-                      );
-                      cashBalance = (data['balance'] as num?)?.toDouble() ?? 0;
+                    // Keep this in sync with the staff drawer: today's
+                    // allocation/opening cash plus completed cash receipts.
+                    final now = DateTime.now();
+                    var cashBalance =
+                        (_currentAllocations[branchId] ?? 0).toDouble();
+                    for (final doc in snapshot.data?.docs ?? const []) {
+                      final data = doc.data();
+                      final timestamp = data['timestamp'];
+                      final receiptDate = timestamp is Timestamp
+                          ? timestamp.toDate()
+                          : timestamp is DateTime
+                          ? timestamp
+                          : DateTime.tryParse(timestamp?.toString() ?? '');
+                      if (receiptDate == null ||
+                          receiptDate.year != now.year ||
+                          receiptDate.month != now.month ||
+                          receiptDate.day != now.day ||
+                          data['paymentMode']?.toString().toLowerCase() !=
+                              'cash') {
+                        continue;
+                      }
+                      final delta = data['cashDrawerDelta'];
+                      cashBalance += delta is num
+                          ? delta.toDouble()
+                          : ((data['paidAmount'] as num?)?.toDouble() ?? 0) -
+                              ((data['change'] as num?)?.toDouble() ?? 0);
                     }
                     return Container(
                       padding: const EdgeInsets.all(12),
@@ -4601,8 +5799,10 @@ class _BudgetPageState extends State<BudgetPage>
     controller.dispose();
     if (name == null || name.isEmpty) return;
     try {
-      await _firestore.collection('branches').add({
+      final branchRef = _firestore.collection('branches').doc();
+      await branchRef.set({
         'name': name,
+        'branchCode': _branchCode(branchRef.id),
         'staffIds': <String>[],
         'staffNames': <String>[],
         'createdAt': FieldValue.serverTimestamp(),
@@ -4660,14 +5860,14 @@ class _BudgetPageState extends State<BudgetPage>
     }
   }
 
-  Future<void> _deleteBranch(String branchId, String branchName) async {
+  Future<void> _voidBranch(String branchId, String branchName) async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) {
         return AlertDialog(
-          title: const Text('Delete Branch?'),
+          title: const Text('Void Branch?'),
           content: Text(
-            'Delete "$branchName"? This removes the branch from staff assignments.',
+            'Move "$branchName" to Voided branches? You can restore it later.',
           ),
           actions: [
             TextButton(
@@ -4676,11 +5876,11 @@ class _BudgetPageState extends State<BudgetPage>
             ),
             ElevatedButton(
               style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.red.shade600,
+                backgroundColor: Colors.orange.shade800,
                 foregroundColor: Colors.white,
               ),
               onPressed: () => Navigator.pop(dialogContext, true),
-              child: const Text('Delete'),
+              child: const Text('Void'),
             ),
           ],
         );
@@ -4689,33 +5889,150 @@ class _BudgetPageState extends State<BudgetPage>
     if (confirmed != true) return;
 
     try {
-      final staffSnapshot = await _firestore
-          .collection('staff_requests')
-          .where('branchIds', arrayContains: branchId)
-          .get();
-      final inventorySnapshot = await _firestore
-          .collection('staff_inventory')
-          .where('staffId', isEqualTo: branchId)
-          .get();
-      final batch = _firestore.batch();
-      for (final staffDoc in staffSnapshot.docs) {
-        batch.update(staffDoc.reference, {
-          'branchIds': FieldValue.arrayRemove([branchId]),
-        });
-      }
-      for (final inventoryDoc in inventorySnapshot.docs) {
-        batch.delete(inventoryDoc.reference);
-      }
-      batch.delete(_firestore.collection('branches').doc(branchId));
-      batch.delete(_firestore.collection('staff_budget').doc(branchId));
-      batch.delete(_firestore.collection('staff_cash_drawer').doc(branchId));
-      await batch.commit();
+      await _firestore.collection('branches').doc(branchId).update({
+        'isVoided': true,
+        'voidedAt': FieldValue.serverTimestamp(),
+      });
       if (!mounted) return;
-      _budgetControllers.remove(branchId)?.dispose();
-      setState(() => _currentAllocations.remove(branchId));
-      _showSnack('Branch deleted', Colors.green.shade600);
+      if (_selectedBranchId == branchId) {
+        setState(() => _selectedBranchId = null);
+      }
+      _showSnack('Branch moved to Voided', Colors.orange.shade800);
     } catch (e) {
-      if (mounted) _showSnack('Error deleting branch: $e', Colors.red.shade600);
+      if (mounted) _showSnack('Error voiding branch: $e', Colors.red.shade600);
+    }
+  }
+
+  Future<void> _showVoidedBranchesDialog() async {
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        return Dialog(
+          backgroundColor: const Color(0xFFFFF8F3),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(22),
+          ),
+          child: SizedBox(
+            width: 520,
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                stream: _firestore
+                    .collection('branches')
+                    .where('isVoided', isEqualTo: true)
+                    .snapshots(),
+                builder: (context, snapshot) {
+                  final docs = snapshot.data?.docs ?? [];
+                  return Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          const Icon(Icons.inventory_2_outlined, color: kDeep),
+                          const SizedBox(width: 10),
+                          const Expanded(
+                            child: Text(
+                              'Voided Branches',
+                              style: TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.w900,
+                                color: kBannerTop,
+                              ),
+                            ),
+                          ),
+                          IconButton(
+                            onPressed: () => Navigator.pop(dialogContext),
+                            icon: const Icon(Icons.close_rounded),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      if (docs.isEmpty)
+                        const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 24),
+                          child: Center(child: Text('No voided branches.')),
+                        )
+                      else
+                        ...docs.map((doc) {
+                          final data = doc.data();
+                          final name = data['name']?.toString() ?? 'Branch';
+                          final branchCode = data['branchCode']
+                              ?.toString()
+                              .trim();
+                          return Container(
+                            margin: const EdgeInsets.only(bottom: 10),
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(14),
+                              border: Border.all(color: Colors.orange.shade200),
+                            ),
+                            child: Row(
+                              children: [
+                                Icon(
+                                  Icons.store_mall_directory_rounded,
+                                  color: Colors.orange.shade800,
+                                ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        name,
+                                        style: const TextStyle(
+                                          color: kBannerTop,
+                                          fontWeight: FontWeight.w800,
+                                        ),
+                                      ),
+                                      Text(
+                                        'ID: ${branchCode?.isNotEmpty == true ? branchCode : _branchCode(doc.id)}',
+                                        style: const TextStyle(
+                                          color: Color(0xFF777777),
+                                          fontSize: 11,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                OutlinedButton.icon(
+                                  onPressed: () => _restoreBranch(doc.id, name),
+                                  icon: const Icon(
+                                    Icons.restore_rounded,
+                                    size: 17,
+                                  ),
+                                  label: const Text('Restore'),
+                                ),
+                              ],
+                            ),
+                          );
+                        }),
+                    ],
+                  );
+                },
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _restoreBranch(String branchId, String branchName) async {
+    try {
+      await _firestore.collection('branches').doc(branchId).update({
+        'isVoided': false,
+        'restoredAt': FieldValue.serverTimestamp(),
+      });
+      if (mounted) {
+        _showSnack('$branchName restored', Colors.green.shade600);
+      }
+    } catch (e) {
+      if (mounted) {
+        _showSnack('Error restoring branch: $e', Colors.red.shade600);
+      }
     }
   }
 
@@ -4746,112 +6063,423 @@ class _BudgetPageState extends State<BudgetPage>
     await showDialog<void>(
       context: context,
       builder: (dialogContext) {
+        var showAssigned = false;
+        var query = '';
         return StatefulBuilder(
           builder: (context, setDialogState) {
-            return AlertDialog(
-              title: Text('Assign Staff to $branchName'),
-              content: SizedBox(
-                width: double.maxFinite,
-                child: staffDocs.isEmpty
-                    ? const Text('No accepted staff available.')
-                    : ListView(
-                        shrinkWrap: true,
-                        children: staffDocs.map((doc) {
-                          final data = doc.data();
-                          final staffId =
-                              (data['uid'] ?? data['userId'] ?? doc.id)
-                                  .toString()
-                                  .trim();
-                          final firstName =
-                              data['firstName']?.toString().trim() ?? '';
-                          final lastName =
-                              data['lastName']?.toString().trim() ?? '';
-                          final fullName = '$firstName $lastName'.trim();
-                          final displayName = fullName.isEmpty
-                              ? data['email']?.toString() ?? staffId
-                              : fullName;
-                          return CheckboxListTile(
-                            value: selected.contains(staffId),
-                            onChanged: (value) {
-                              setDialogState(() {
-                                if (value == true) {
-                                  selected.add(staffId);
-                                } else {
-                                  selected.remove(staffId);
-                                }
-                              });
-                            },
-                            title: Text(displayName),
-                            subtitle: Text(
-                              data['staffId']?.toString() ?? staffId,
-                            ),
-                            activeColor: kPrimary,
-                          );
-                        }).toList(),
-                      ),
+            final assignedDocs = staffDocs.where((doc) {
+              final data = doc.data();
+              final id = (data['uid'] ?? data['userId'] ?? doc.id)
+                  .toString()
+                  .trim();
+              return selected.contains(id);
+            }).toList();
+            // Keep staff assigned to another branch visible (and blocked) so
+            // the admin immediately knows why they cannot be selected here.
+            final availableDocs = staffDocs.where((doc) {
+              final data = doc.data();
+              final id = (data['uid'] ?? data['userId'] ?? doc.id)
+                  .toString()
+                  .trim();
+              return !selected.contains(id);
+            }).toList();
+            final displayedDocs = (showAssigned ? assignedDocs : availableDocs)
+                .where((doc) {
+                  final data = doc.data();
+                  final fullName =
+                      '${data['firstName'] ?? ''} ${data['lastName'] ?? ''} ${data['email'] ?? ''} ${data['staffId'] ?? ''}'
+                          .toLowerCase();
+                  return fullName.contains(query);
+                })
+                .toList();
+            return Dialog(
+              backgroundColor: const Color(0xFFFFF8F3),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(22),
               ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(dialogContext),
-                  child: const Text('Cancel'),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(
+                  maxWidth: 620,
+                  maxHeight: 650,
                 ),
-                ElevatedButton(
-                  onPressed: () async {
-                    final selectedStaffDocs = staffDocs.where((doc) {
-                      final data = doc.data();
-                      final staffId = (data['uid'] ?? data['userId'] ?? doc.id)
-                          .toString()
-                          .trim();
-                      return selected.contains(staffId);
-                    }).toList();
-                    final selectedNames = selectedStaffDocs.map((doc) {
-                      final data = doc.data();
-                      final firstName =
-                          data['firstName']?.toString().trim() ?? '';
-                      final lastName =
-                          data['lastName']?.toString().trim() ?? '';
-                      final fullName = '$firstName $lastName'.trim();
-                      return fullName.isEmpty
-                          ? data['email']?.toString() ?? doc.id
-                          : fullName;
-                    }).toList();
+                child: Padding(
+                  padding: const EdgeInsets.all(20),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Container(
+                            width: 42,
+                            height: 42,
+                            decoration: BoxDecoration(
+                              color: kPrimary.withOpacity(.12),
+                              borderRadius: BorderRadius.circular(13),
+                            ),
+                            child: const Icon(
+                              Icons.groups_rounded,
+                              color: kDeep,
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Branch Staff',
+                                  style: const TextStyle(
+                                    color: kBannerTop,
+                                    fontSize: 20,
+                                    fontWeight: FontWeight.w900,
+                                  ),
+                                ),
+                                Text(
+                                  branchName,
+                                  style: TextStyle(
+                                    color: Colors.grey.shade600,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          IconButton(
+                            onPressed: () => Navigator.pop(dialogContext),
+                            icon: const Icon(Icons.close_rounded, color: kDeep),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 14),
+                      Row(
+                        children: [
+                          _staffCountChip(
+                            'Assigned',
+                            assignedDocs.length,
+                            kPrimary,
+                          ),
+                          const SizedBox(width: 8),
+                          _staffCountChip(
+                            'Available',
+                            availableDocs.where((doc) {
+                              final branchIds =
+                                  (doc.data()['branchIds'] as List<dynamic>? ??
+                                          [])
+                                      .map((id) => id.toString());
+                              return !branchIds.any((id) => id != branchId);
+                            }).length,
+                            const Color(0xFF188C68),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 14),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: _staffTabButton(
+                              'Available',
+                              !showAssigned,
+                              () => setDialogState(() => showAssigned = false),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: _staffTabButton(
+                              'Assigned',
+                              showAssigned,
+                              () => setDialogState(() => showAssigned = true),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      TextField(
+                        onChanged: (value) => setDialogState(
+                          () => query = value.trim().toLowerCase(),
+                        ),
+                        decoration: InputDecoration(
+                          hintText: 'Search staff name or staff ID',
+                          prefixIcon: const Icon(
+                            Icons.search_rounded,
+                            color: kDeep,
+                          ),
+                          filled: true,
+                          fillColor: Colors.white,
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide(color: kAccent),
+                          ),
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide(color: kAccent),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      Expanded(
+                        child: displayedDocs.isEmpty
+                            ? Center(
+                                child: Text(
+                                  showAssigned
+                                      ? 'No staff assigned to this branch.'
+                                      : 'No available staff found.',
+                                  style: TextStyle(color: Colors.grey.shade600),
+                                ),
+                              )
+                            : ListView.separated(
+                                itemCount: displayedDocs.length,
+                                separatorBuilder: (_, __) =>
+                                    const SizedBox(height: 7),
+                                itemBuilder: (context, index) {
+                                  final doc = displayedDocs[index];
+                                  final data = doc.data();
+                                  final staffId =
+                                      (data['uid'] ?? data['userId'] ?? doc.id)
+                                          .toString()
+                                          .trim();
+                                  final firstName =
+                                      data['firstName']?.toString().trim() ??
+                                      '';
+                                  final lastName =
+                                      data['lastName']?.toString().trim() ?? '';
+                                  final fullName = '$firstName $lastName'
+                                      .trim();
+                                  final displayName = fullName.isEmpty
+                                      ? data['email']?.toString() ?? staffId
+                                      : fullName;
+                                  final branchIds =
+                                      (data['branchIds'] as List<dynamic>? ??
+                                              [])
+                                          .map((id) => id.toString())
+                                          .toSet();
+                                  final assignedElsewhere = branchIds.any(
+                                    (id) => id != branchId,
+                                  );
+                                  return Container(
+                                    decoration: BoxDecoration(
+                                      color: assignedElsewhere
+                                          ? Colors.grey.shade100
+                                          : Colors.white,
+                                      borderRadius: BorderRadius.circular(13),
+                                      border: Border.all(
+                                        color: assignedElsewhere
+                                            ? Colors.grey.shade300
+                                            : kAccent.withOpacity(.65),
+                                      ),
+                                    ),
+                                    child: CheckboxListTile(
+                                      value: selected.contains(staffId),
+                                      onChanged:
+                                          assignedElsewhere &&
+                                              !selected.contains(staffId)
+                                          ? null
+                                          : (value) {
+                                              setDialogState(() {
+                                                if (value == true) {
+                                                  selected.add(staffId);
+                                                } else {
+                                                  selected.remove(staffId);
+                                                }
+                                              });
+                                            },
+                                      title: Text(
+                                        displayName,
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.w800,
+                                        ),
+                                      ),
+                                      subtitle: Text(
+                                        assignedElsewhere
+                                            ? 'Already assigned to another branch — unavailable'
+                                            : (data['staffId']?.toString() ??
+                                                  staffId),
+                                      ),
+                                      activeColor: kPrimary,
+                                    ),
+                                  );
+                                },
+                              ),
+                      ),
+                      const SizedBox(height: 10),
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: ElevatedButton(
+                          onPressed: () async {
+                            final selectedStaffDocs = staffDocs.where((doc) {
+                              final data = doc.data();
+                              final staffId =
+                                  (data['uid'] ?? data['userId'] ?? doc.id)
+                                      .toString()
+                                      .trim();
+                              return selected.contains(staffId);
+                            }).toList();
+                            final selectedNames = selectedStaffDocs.map((doc) {
+                              final data = doc.data();
+                              final firstName =
+                                  data['firstName']?.toString().trim() ?? '';
+                              final lastName =
+                                  data['lastName']?.toString().trim() ?? '';
+                              final fullName = '$firstName $lastName'.trim();
+                              return fullName.isEmpty
+                                  ? data['email']?.toString() ?? doc.id
+                                  : fullName;
+                            }).toList();
 
-                    final batch = _firestore.batch();
-                    batch.set(
-                      _firestore.collection('branches').doc(branchId),
-                      {
-                        'staffIds': selected.toList(),
-                        'staffNames': selectedNames,
-                        'updatedAt': FieldValue.serverTimestamp(),
-                      },
-                      SetOptions(merge: true),
-                    );
-                    for (final doc in staffDocs) {
-                      final data = doc.data();
-                      final staffId = (data['uid'] ?? data['userId'] ?? doc.id)
-                          .toString()
-                          .trim();
-                      batch.set(
-                        _firestore.collection('staff_requests').doc(staffId),
-                        {
-                          'branchIds': selected.contains(staffId)
-                              ? FieldValue.arrayUnion([branchId])
-                              : FieldValue.arrayRemove([branchId]),
-                        },
-                        SetOptions(merge: true),
-                      );
-                    }
-                    await batch.commit();
-                    if (dialogContext.mounted) Navigator.pop(dialogContext);
-                    if (mounted) {
-                      _showSnack('Branch staff updated', Colors.green.shade600);
-                    }
-                  },
-                  child: const Text('Save'),
+                            final batch = _firestore.batch();
+                            batch.set(
+                              _firestore.collection('branches').doc(branchId),
+                              {
+                                'staffIds': selected.toList(),
+                                'staffNames': selectedNames,
+                                'updatedAt': FieldValue.serverTimestamp(),
+                              },
+                              SetOptions(merge: true),
+                            );
+                            for (final doc in staffDocs) {
+                              final data = doc.data();
+                              final staffId =
+                                  (data['uid'] ?? data['userId'] ?? doc.id)
+                                      .toString()
+                                      .trim();
+                              batch.set(
+                                _firestore
+                                    .collection('staff_requests')
+                                    .doc(staffId),
+                                {
+                                  // Only change this branch. Other existing
+                                  // branch assignments must be preserved.
+                                  'branchIds': selected.contains(staffId)
+                                      ? FieldValue.arrayUnion([branchId])
+                                      : FieldValue.arrayRemove([branchId]),
+                                },
+                                SetOptions(merge: true),
+                              );
+                            }
+                            await batch.commit();
+                            if (dialogContext.mounted)
+                              Navigator.pop(dialogContext);
+                            if (mounted) {
+                              _showSnack(
+                                'Branch staff updated',
+                                Colors.green.shade600,
+                              );
+                            }
+                          },
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: kPrimary,
+                            foregroundColor: Colors.white,
+                          ),
+                          child: const Text('Save changes'),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
-              ],
+              ),
             );
           },
+        );
+      },
+    );
+  }
+
+  Widget _staffCountChip(String label, int count, Color color) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
+    decoration: BoxDecoration(
+      color: color.withOpacity(.10),
+      borderRadius: BorderRadius.circular(18),
+    ),
+    child: Text(
+      '$count $label',
+      style: TextStyle(color: color, fontWeight: FontWeight.w800, fontSize: 12),
+    ),
+  );
+  Widget _staffTabButton(String label, bool selected, VoidCallback onTap) =>
+      OutlinedButton(
+        onPressed: onTap,
+        style: OutlinedButton.styleFrom(
+          backgroundColor: selected ? kPrimary : Colors.white,
+          foregroundColor: selected ? Colors.white : kDeep,
+          side: BorderSide(color: selected ? kPrimary : kAccent),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+        ),
+        child: Text(label),
+      );
+
+  Widget _buildSelectedBranchHeader() {
+    final branchId = _selectedBranchId!;
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: _firestore.collection('branches').doc(branchId).snapshots(),
+      builder: (context, snapshot) {
+        final data = snapshot.data?.data();
+        final name = data?['name']?.toString() ?? 'Branch';
+        final code = data?['branchCode']?.toString() ?? _branchCode(branchId);
+        return Container(
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              colors: [kBannerTop, kBannerMid, kBannerBot],
+            ),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(14, 42, 20, 22),
+            child: Row(
+              children: [
+                IconButton(
+                  tooltip: 'Back to branches',
+                  onPressed: () => setState(() => _selectedBranchId = null),
+                  icon: const Icon(
+                    Icons.arrow_back_rounded,
+                    color: Colors.white,
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Container(
+                  width: 52,
+                  height: 52,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.16),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: Colors.white.withOpacity(0.26)),
+                  ),
+                  child: const Icon(
+                    Icons.store_mall_directory_rounded,
+                    color: Colors.white,
+                    size: 27,
+                  ),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '$name Branch',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 21,
+                          fontWeight: FontWeight.w800,
+                          color: Colors.white,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        'Branch ID: $code',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.white.withOpacity(0.72),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
         );
       },
     );

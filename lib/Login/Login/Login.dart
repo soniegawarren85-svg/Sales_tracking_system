@@ -1,4 +1,7 @@
+import 'dart:convert';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:crypto/crypto.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -155,6 +158,79 @@ class _LoginScreenState extends State<LoginScreen>
     });
   }
 
+  String _offlinePasswordHash(String username, String password) =>
+      sha256.convert(utf8.encode('$username:$password')).toString();
+
+  /// A user must complete one successful online login first.  We keep only a
+  /// salted digest (never the password) and the minimum session details.
+  Future<void> _rememberOfflineAccount({
+    required String username,
+    required String password,
+    required String role,
+    required String userId,
+    required String publicId,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('offlineLogin.username', username);
+    await prefs.setString(
+      'offlineLogin.passwordHash',
+      _offlinePasswordHash(username, password),
+    );
+    await prefs.setString('offlineLogin.role', role);
+    await prefs.setString('offlineLogin.userId', userId);
+    await prefs.setString('offlineLogin.publicId', publicId);
+  }
+
+  Future<bool> _tryOfflineSignIn(String username, String password) async {
+    final prefs = await SharedPreferences.getInstance();
+    final savedUsername = prefs.getString('offlineLogin.username') ?? '';
+    final savedHash = prefs.getString('offlineLogin.passwordHash') ?? '';
+    final savedRole = prefs.getString('offlineLogin.role') ?? 'staff';
+
+    final normalizedSavedUsername = _normalizeUsername(savedUsername);
+    final normalizedUsername = _normalizeUsername(username);
+
+    final usernameMatches =
+        savedUsername.isNotEmpty &&
+        (savedUsername == username ||
+            normalizedSavedUsername == normalizedUsername ||
+            savedUsername.toUpperCase() == username.toUpperCase());
+
+    if (!usernameMatches ||
+        savedHash != _offlinePasswordHash(savedUsername, password)) {
+      return false;
+    }
+
+    final role = savedRole;
+    final isAdmin = role == 'admin';
+    await prefs.setString('lastRole', role);
+    await prefs.setString(
+      'lastUserId',
+      prefs.getString('offlineLogin.userId') ?? '',
+    );
+    await prefs.setString(
+      'lastStaffDocId',
+      prefs.getString('offlineLogin.userId') ?? '',
+    );
+    await prefs.setString(
+      'lastStaffPublicId',
+      prefs.getString('offlineLogin.publicId') ?? username,
+    );
+    if (isAdmin)
+      await prefs.setString(
+        'adminId',
+        prefs.getString('offlineLogin.publicId') ?? username,
+      );
+    if (!mounted) return true;
+    _showMessage('Opened using saved offline data.');
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(
+        builder: (_) => isAdmin ? const AdminDashboard() : const BottomNav(),
+      ),
+    );
+    return true;
+  }
+
   Future<void> _signInWithFirestoreAccount(
     QueryDocumentSnapshot<Map<String, dynamic>> accountDoc,
   ) async {
@@ -171,6 +247,13 @@ class _LoginScreenState extends State<LoginScreen>
     await prefs.setString('lastStaffDocId', accountDoc.id);
     await prefs.setString('lastStaffPublicId', publicId);
     if (isAdmin) await prefs.setString('adminId', publicId);
+    await _rememberOfflineAccount(
+      username: _normalizeUsername(publicId),
+      password: _passwordController.text.trim(),
+      role: isAdmin ? 'admin' : 'staff',
+      userId: accountDoc.id,
+      publicId: publicId,
+    );
     await accountDoc.reference.update({
       'lastLoginAt': FieldValue.serverTimestamp(),
       'isOnline': true,
@@ -418,6 +501,13 @@ class _LoginScreenState extends State<LoginScreen>
               await prefs.setString('adminId', adminId);
               await prefs.setString('lastRole', 'admin');
               await prefs.setString('lastUserId', accountDoc.id);
+              await _rememberOfflineAccount(
+                username: username,
+                password: password,
+                role: 'admin',
+                userId: accountDoc.id,
+                publicId: adminId,
+              );
               _showMessage('Welcome back!');
               Future.microtask(() {
                 if (!mounted) return;
@@ -532,6 +622,15 @@ class _LoginScreenState extends State<LoginScreen>
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString('lastRole', isAdmin ? 'admin' : 'staff');
         await prefs.setString('lastUserId', uid);
+        final publicId = (data[isAdmin ? 'adminId' : 'staffId'] ?? username)
+            .toString();
+        await _rememberOfflineAccount(
+          username: username,
+          password: password,
+          role: isAdmin ? 'admin' : 'staff',
+          userId: uid,
+          publicId: publicId,
+        );
         await signedInDoc.reference.update({
           'lastLoginAt': FieldValue.serverTimestamp(),
         });
@@ -561,6 +660,7 @@ class _LoginScreenState extends State<LoginScreen>
       }
       _showMessage(message, isError: true);
     } catch (e) {
+      if (await _tryOfflineSignIn(username, password)) return;
       _showMessage('Unable to sign in. Please try again.', isError: true);
     } finally {
       if (mounted) setState(() => _isLoading = false);
@@ -903,7 +1003,7 @@ class _LoginScreenState extends State<LoginScreen>
                 color: Colors.pink.withOpacity(0.25),
               ),
             ),
-           
+
             Expanded(
               child: Divider(
                 thickness: 1,

@@ -5,6 +5,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -172,6 +173,8 @@ class _DashboardPageState extends State<DashboardPage>
   List<_CachedDoc> _cachedStaffInventoryDocs = const [];
   List<_CachedDoc> _cachedSalesInventoryDocs = const [];
   List<_CachedDoc> _cachedCashDrawerDocs = const [];
+  StreamSubscription<String>? _localCacheSubscription;
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _receiptCacheSubscription;
   String? _staffDocId;
   String _inventorySearchQuery = '';
   bool _isResolvingStaffIdentity = true;
@@ -195,6 +198,15 @@ class _DashboardPageState extends State<DashboardPage>
         .snapshots();
     _initStaffIdentity();
     _loadLocalDashboardCache();
+    _localCacheSubscription = LocalDatabaseSyncService().collectionUpdates
+        .where(
+          (collection) =>
+              collection == 'staff_cash_drawer' || collection == 'completed_sales',
+        )
+        .listen((_) => _loadLocalDashboardCache());
+    // Refreshes the on-device snapshots in the background when online.  It is
+    // intentionally not awaited: cached inventory renders first.
+    unawaited(LocalDatabaseSyncService().refreshCoreCollectionsFromFirebase());
     InventoryService().addListener(_onInventoryChanged);
 
     InventoryService().initialize().then((_) {
@@ -207,6 +219,7 @@ class _DashboardPageState extends State<DashboardPage>
 
   Future<void> _loadLocalDashboardCache() async {
     final service = LocalDatabaseSyncService();
+    await service.rebuildTodayCashDrawerFromReceipts();
     final staffInventory = await service.getCachedCollection('staff_inventory');
     final salesInventory = await service.getCachedCollection('sales_inventory');
     final cashDrawer = await service.getCachedCollection('staff_cash_drawer');
@@ -240,11 +253,24 @@ class _DashboardPageState extends State<DashboardPage>
     }
     _staffInventoryIds = const [];
     await _loadStaffInventoryIds(uid!);
+    _receiptCacheSubscription?.cancel();
+    _receiptCacheSubscription = FirebaseFirestore.instance
+        .collection('completed_sales')
+        .where('userId', isEqualTo: uid)
+        .snapshots()
+        .listen((snapshot) async {
+          await LocalDatabaseSyncService().mergeCompletedSales(
+            snapshot.docs.map((doc) => {...doc.data(), '_localDocId': doc.id}),
+          );
+          await _loadLocalDashboardCache();
+        });
   }
 
   @override
   void dispose() {
     InventoryService().removeListener(_onInventoryChanged);
+    _localCacheSubscription?.cancel();
+    _receiptCacheSubscription?.cancel();
     super.dispose();
   }
 
@@ -256,6 +282,7 @@ class _DashboardPageState extends State<DashboardPage>
 
   Future<void> _loadStaffInventoryIds(String uid) async {
     final ids = <String>{};
+    final prefs = await SharedPreferences.getInstance();
     try {
       final doc = await FirebaseFirestore.instance
           .collection('staff_requests')
@@ -279,7 +306,17 @@ class _DashboardPageState extends State<DashboardPage>
             .get();
         ids.addAll(byPublicId.docs.map((doc) => doc.id));
       }
-    } catch (_) {}
+    } catch (_) {
+      // The last resolved branch IDs are enough to open cached allocations.
+    }
+
+    if (ids.isEmpty) {
+      ids.addAll(prefs.getStringList('lastStaffBranchIds') ?? const []);
+    }
+
+    if (ids.isNotEmpty) {
+      await prefs.setStringList('lastStaffBranchIds', ids.toList());
+    }
 
     if (mounted) {
       setState(() {
@@ -1079,7 +1116,11 @@ class _DashboardPageState extends State<DashboardPage>
             background: _Header(
               onMessage: widget.onMessage,
               onNotification: widget.onNotification,
+              // A cash-drawer document is keyed by the assigned branch ID.
+              // Do not add every cached drawer here: that made a staff member's
+              // dashboard total include other staff/branch cash drawers.
               drawerIds: _staffInventoryIds,
+              cachedDrawerDocs: _cachedCashDrawerDocs,
               staffDocId: _staffDocId,
             ),
           ),
@@ -1213,6 +1254,11 @@ class _DashboardPageState extends State<DashboardPage>
             ),
           ),
         ),
+
+        // The staff navigation floats over the body. Reserve space after the
+        // receipt cards so the last card and the pager remain scrollable into
+        // view when there are several receipts.
+        const SliverToBoxAdapter(child: SizedBox(height: 180)),
       ],
     );
   }
@@ -1244,9 +1290,14 @@ class _DashboardPageState extends State<DashboardPage>
           return const _DashboardLoadingSkeleton();
         }
 
+        final liveDocs = snapshot.data?.docs
+            .map(_CachedDoc.fromFirestore)
+            .toList();
         final docs =
-            snapshot.data?.docs.map(_CachedDoc.fromFirestore).toList() ??
-            _cachedStaffInventoryDocs;
+            (liveDocs == null ||
+                (liveDocs.isEmpty && _cachedStaffInventoryDocs.isNotEmpty))
+            ? _cachedStaffInventoryDocs
+            : liveDocs!;
         if (docs.isEmpty) {
           return const _EmptyState(
             icon: Icons.inventory_2_outlined,
@@ -1275,11 +1326,15 @@ class _DashboardPageState extends State<DashboardPage>
             }
             final activeRootById = <String, Map<String, dynamic>>{};
             final activeRootByName = <String, Map<String, dynamic>>{};
+            final liveRootDocs = rootSnapshot.data?.docs
+                .map(_CachedDoc.fromFirestore)
+                .toList();
             final rootDocs =
-                rootSnapshot.data?.docs
-                    .map(_CachedDoc.fromFirestore)
-                    .toList() ??
-                _cachedSalesInventoryDocs;
+                (liveRootDocs == null ||
+                    (liveRootDocs.isEmpty &&
+                        _cachedSalesInventoryDocs.isNotEmpty))
+                ? _cachedSalesInventoryDocs
+                : liveRootDocs!;
             for (final rootDoc in rootDocs) {
               final rootData = rootDoc.data();
               if (rootData['isDeleted'] == true) continue;
@@ -1756,12 +1811,8 @@ class _DashboardPageState extends State<DashboardPage>
               final userId = data['userId']?.toString() ?? '';
               if (staffId.isNotEmpty && userId != staffId) return false;
               final dt = timestamp.toDate();
-              final status = data['status']?.toString().toLowerCase() ?? '';
-              final type = data['type']?.toString().toLowerCase() ?? '';
               return !dt.isBefore(today) &&
-                  dt.isBefore(tomorrow) &&
-                  status != 'refund' &&
-                  type != 'refund';
+                  dt.isBefore(tomorrow);
             }
 
             for (final data in [...localSales, ...firestoreSales]) {
@@ -2117,6 +2168,10 @@ class _ReceiptCard extends StatelessWidget {
     final total = _money(data['total']);
     final paid = _money(data['paidAmount']);
     final change = _money(data['change']);
+    final subtotal = _money(data['subtotal']);
+    final discount = _money(data['discount']);
+    final discountType = data['discountType']?.toString().trim() ?? '';
+    final hasDiscount = discount > 0.01;
     final items = (data['items'] as List<dynamic>? ?? [])
         .whereType<Map>()
         .map((item) => Map<String, dynamic>.from(item))
@@ -2166,6 +2221,30 @@ class _ReceiptCard extends StatelessWidget {
                         fontWeight: FontWeight.w900,
                       ),
                       overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: 'Copy receipt number',
+                    visualDensity: VisualDensity.compact,
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(
+                      minWidth: 32,
+                      minHeight: 32,
+                    ),
+                    onPressed: () async {
+                      await Clipboard.setData(ClipboardData(text: salesId));
+                      if (!context.mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Receipt number copied'),
+                          duration: Duration(seconds: 1),
+                        ),
+                      );
+                    },
+                    icon: const Icon(
+                      Icons.copy_rounded,
+                      color: Colors.white,
+                      size: 17,
                     ),
                   ),
                   if (isRefund) ...[
@@ -2251,6 +2330,18 @@ class _ReceiptCard extends StatelessWidget {
                         ? 'GCash - $gcashId'
                         : paymentMode,
                   ),
+                  if (subtotal > 0)
+                    _ReceiptLine(
+                      'Subtotal',
+                      '₱${subtotal.toStringAsFixed(2)}',
+                    ),
+                  if (hasDiscount)
+                    _ReceiptLine(
+                      discountType.isNotEmpty
+                          ? 'Discount ($discountType)'
+                          : 'Discount',
+                      '-₱${discount.toStringAsFixed(2)}',
+                    ),
                   if (!compact)
                     _ReceiptLine(
                       'Customer Paid',
@@ -2258,6 +2349,9 @@ class _ReceiptCard extends StatelessWidget {
                     ),
                   if (!compact)
                     _ReceiptLine('Change', '₱${change.toStringAsFixed(2)}'),
+                  if (isRefund &&
+                      (data['reason']?.toString().trim().isNotEmpty ?? false))
+                    _ReceiptLine('Refund reason', data['reason'].toString()),
                   _ReceiptLine(
                     'Total',
                     '₱${total.toStringAsFixed(2)}',
@@ -2317,11 +2411,13 @@ class _Header extends StatelessWidget {
   final VoidCallback onMessage;
   final VoidCallback? onNotification;
   final List<String> drawerIds;
+  final List<_CachedDoc> cachedDrawerDocs;
   final String? staffDocId;
   const _Header({
     required this.onMessage,
     this.onNotification,
     required this.drawerIds,
+    required this.cachedDrawerDocs,
     this.staffDocId,
   });
 
@@ -2556,7 +2652,7 @@ class _Header extends StatelessWidget {
                           ),
                           Expanded(
                             child: preview.isEmpty
-                    ? const Center(
+                                ? const Center(
                                     child: Text(
                                       'No people available.',
                                       style: TextStyle(
@@ -2791,12 +2887,20 @@ class _Header extends StatelessWidget {
                     StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
                       stream: _cashDrawerStream(),
                       builder: (context, cashDrawerSnapshot) {
+                        final drawerIdSet = drawerIds.toSet();
+                        final relevantCachedDrawers = cachedDrawerDocs
+                            .where((doc) => drawerIdSet.contains(doc.id))
+                            .toList();
+                        final cachedById = {
+                          for (final doc in relevantCachedDrawers)
+                            doc.id: doc.data(),
+                        };
                         final cashDrawerBalance =
                             cashDrawerSnapshot.data?.docs.fold<double>(0.0, (
                               sum,
                               doc,
                             ) {
-                              final data = doc.data();
+                              final data = cachedById[doc.id] ?? doc.data();
                               Future.microtask(
                                 () => CashDrawerService.zeroIfPast24Hours(
                                   doc.id,
@@ -2807,7 +2911,14 @@ class _Header extends StatelessWidget {
                                   ((data['balance'] as num?)?.toDouble() ??
                                       0.0);
                             }) ??
-                            0.0;
+                            relevantCachedDrawers.fold<double>(
+                              0.0,
+                              (sum, doc) =>
+                                  sum +
+                                  ((doc.data()['balance'] as num?)
+                                          ?.toDouble() ??
+                                      0.0),
+                            );
                         final gcashDrawerBalance =
                             cashDrawerSnapshot.data?.docs.fold<double>(
                               0.0,
@@ -3937,7 +4048,7 @@ class _ItemCardState extends State<_ItemCard> {
                             widget.category,
                             style: TextStyle(
                               // IDs are supporting information: smaller and
-                                // IDs are supporting information below the item name.
+                              // IDs are supporting information below the item name.
                               fontSize: 11.5,
                               fontWeight: FontWeight.w800,
                               color: widget.isLocked
@@ -4139,7 +4250,9 @@ class _HistorySheetState extends State<_HistorySheet> {
     if (timestampDate != null) return timestampDate;
 
     final salesId = data['salesId']?.toString() ?? '';
-    final match = RegExp(r'^[A-Za-z]-?(\d{4})(\d{2})(\d{2})').firstMatch(salesId);
+    final match = RegExp(
+      r'^[A-Za-z]-?(\d{4})(\d{2})(\d{2})',
+    ).firstMatch(salesId);
     if (match == null) return null;
     final year = int.tryParse(match.group(1)!);
     final month = int.tryParse(match.group(2)!);
