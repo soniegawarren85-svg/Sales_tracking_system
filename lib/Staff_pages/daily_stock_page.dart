@@ -123,6 +123,7 @@ class _DailyStockPageState extends State<DailyStockPage>
   bool _isResolvingStaffIdentity = true;
   bool _seniorDiscount = false;
   bool _pwdDiscount = false;
+  final Map<String, int> _cartStockBeforeSelectionByKey = {};
   bool _showBundleView = false;
   bool _showCoffeeView = false;
   bool _showCartReview = false;
@@ -894,33 +895,38 @@ class _DailyStockPageState extends State<DailyStockPage>
     return optimisticStock;
   }
 
-  Map<String, dynamic> _withReducedDisplayStock(
-    Map<String, dynamic> item,
-    Map<String, int> soldByKey,
-  ) {
-    final soldQty = soldByKey[_cartKey(item)] ?? 0;
-    if (soldQty <= 0) return item;
-    final currentStock = _stockForItem(item, 0);
-    final nextStock = max(0, currentStock - soldQty);
-    _optimisticStockByKey[_cartKey(item)] = nextStock;
-    return {...item, 'stock': nextStock};
-  }
-
   void _applyConfirmedStockLocally(
     Iterable<MapEntry<String, int>> soldEntries,
   ) {
-    final soldByKey = <String, int>{};
+    final confirmedStockByKey = <String, int>{};
     for (final entry in soldEntries) {
-      soldByKey[entry.key] = (soldByKey[entry.key] ?? 0) + entry.value;
+      final item = _cartItemLookup[entry.key];
+      if (item == null) continue;
+
+      // Use the stock snapshot captured when the item was added to the cart.
+      // A live Firestore update may have already reflected this sale, so
+      // subtracting from the latest snapshot can show one item too few.
+      final hasStockField = item.containsKey('stock') && item['stock'] != null;
+      final stockBeforeSale = _cartStockBeforeSelectionByKey[entry.key] ??
+          (hasStockField
+              ? _parseInt(item['stock'])
+              : _parseInt(item['startingStock']));
+      confirmedStockByKey[entry.key] = max(
+        0,
+        stockBeforeSale - entry.value,
+      );
     }
-    if (soldByKey.isEmpty) return;
+    if (confirmedStockByKey.isEmpty) return;
 
     _latestOrderItems = _latestOrderItems
-        .map((item) => _withReducedDisplayStock(item, soldByKey))
+        .map((item) {
+          final confirmedStock = confirmedStockByKey[_cartKey(item)];
+          return confirmedStock == null
+              ? item
+              : {...item, 'stock': confirmedStock};
+        })
         .toList();
-    _cartItemLookup.updateAll(
-      (_, item) => _withReducedDisplayStock(item, soldByKey),
-    );
+    _optimisticStockByKey.addAll(confirmedStockByKey);
   }
 
   List<Map<String, dynamic>> _orderItemsFromDocs(
@@ -1148,6 +1154,7 @@ class _DailyStockPageState extends State<DailyStockPage>
     HapticFeedback.selectionClick();
     setState(() {
       _cartItemLookup[key] = item;
+      _cartStockBeforeSelectionByKey.putIfAbsent(key, () => maxStock);
       _cart[key] = current + 1;
       _syncQtyController(key, _cart[key]!);
     });
@@ -1170,6 +1177,7 @@ class _DailyStockPageState extends State<DailyStockPage>
     if (!_cart.containsKey(key)) return;
     setState(() {
       _cart.remove(key);
+      _cartStockBeforeSelectionByKey.remove(key);
       _syncQtyController(key, 0);
     });
   }
@@ -1179,6 +1187,7 @@ class _DailyStockPageState extends State<DailyStockPage>
     setState(() {
       _cart.clear();
       _cartItemLookup.clear();
+      _cartStockBeforeSelectionByKey.clear();
       for (final controller in _qtyControllers.values) {
         controller.dispose();
       }
@@ -1191,6 +1200,13 @@ class _DailyStockPageState extends State<DailyStockPage>
     final key = _cartKey(item);
     setState(() {
       _cartItemLookup[key] = item;
+      _cartStockBeforeSelectionByKey.putIfAbsent(
+        key,
+        () => _stockForItem(
+          item,
+          item['variantSlot'] is num ? (item['variantSlot'] as num).toInt() : 0,
+        ),
+      );
       _cart[key] = (_cart[key] ?? 0) + quantity;
       _syncQtyController(key, _cart[key]!);
     });
@@ -3555,6 +3571,7 @@ class _DailyStockPageState extends State<DailyStockPage>
   void _cancelCurrentOrder() {
     setState(() {
       _cart.clear();
+      _cartStockBeforeSelectionByKey.clear();
       _selectedGroupName = null;
       _showCartReview = false;
       _seniorDiscount = false;
@@ -4167,9 +4184,10 @@ class _DailyStockPageState extends State<DailyStockPage>
           if (isCashPayment) {
             _cashDrawer = max(0, _cashDrawer + paidAmount - change);
           }
-          _cart.clear();
-          _cartItemLookup.clear();
-          _showCartReview = false;
+      _cart.clear();
+      _cartItemLookup.clear();
+      _cartStockBeforeSelectionByKey.clear();
+      _showCartReview = false;
           _selectedGroupName = null;
           _seniorDiscount = false;
           _pwdDiscount = false;
@@ -5015,9 +5033,10 @@ class _DailyStockPageState extends State<DailyStockPage>
         items: pendingItems,
       );
       setState(() {
-        _cart.clear();
-        _cartItemLookup.clear();
-        for (final controller in _qtyControllers.values) {
+      _cart.clear();
+      _cartItemLookup.clear();
+      _cartStockBeforeSelectionByKey.clear();
+      for (final controller in _qtyControllers.values) {
           controller.dispose();
         }
         _qtyControllers.clear();
@@ -5398,6 +5417,7 @@ class _DailyStockPageState extends State<DailyStockPage>
   }) {
     setState(() {
       _cart.clear();
+      _cartStockBeforeSelectionByKey.clear();
       final restoredOrderItems = <Map<String, dynamic>>[];
       final normalizedDiscount = discountType.trim().toLowerCase();
       _seniorDiscount = normalizedDiscount == 'senior';

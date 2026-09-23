@@ -3,7 +3,9 @@ import 'dart:convert';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:crypto/crypto.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -55,6 +57,24 @@ class _LoginScreenState extends State<LoginScreen>
     super.initState();
     _initializeAnimations();
     _animController.forward();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final shortestSide = MediaQuery.sizeOf(context).shortestSide;
+    final canLockOrientation =
+        !kIsWeb &&
+        (defaultTargetPlatform == TargetPlatform.android ||
+            defaultTargetPlatform == TargetPlatform.iOS);
+    if (canLockOrientation && shortestSide >= 600) {
+      SystemChrome.setPreferredOrientations(const [
+        DeviceOrientation.landscapeLeft,
+        DeviceOrientation.landscapeRight,
+      ]);
+    } else if (canLockOrientation) {
+      SystemChrome.setPreferredOrientations(DeviceOrientation.values);
+    }
   }
 
   @override

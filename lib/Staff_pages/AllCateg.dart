@@ -5052,12 +5052,13 @@ class _AllCategPageState extends State<AllCategPage>
         return key == selectedKey;
       }, orElse: () => categoryDocs.first);
 
-      return ListView(
-        padding: const EdgeInsets.fromLTRB(16, 20, 16, 30),
+      return Column(
         children: [
-          SizedBox(
-            height: 54,
-            child: ListView.separated(
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 20, 16, 0),
+            child: SizedBox(
+              height: 54,
+              child: ListView.separated(
               scrollDirection: Axis.horizontal,
               itemCount: categoryDocs.length + 1,
               separatorBuilder: (_, __) => const SizedBox(width: 10),
@@ -5196,15 +5197,23 @@ class _AllCategPageState extends State<AllCategPage>
                   ),
                 );
               },
+              ),
             ),
           ),
           const SizedBox(height: 10),
-          if (_showAllCategoryItems)
-            ...categoryDocs.asMap().entries.map(
-              (entry) => _buildCategoryTable(entry.value, entry.key),
-            )
-          else
-            _buildCategoryTable(selectedCategory, 0),
+          Expanded(
+            child: ListView(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 30),
+              children: [
+                if (_showAllCategoryItems)
+                  ...categoryDocs.asMap().entries.map(
+                    (entry) => _buildCategoryTable(entry.value, entry.key),
+                  )
+                else
+                  _buildCategoryTable(selectedCategory, 0),
+              ],
+            ),
+          ),
         ],
       );
     }

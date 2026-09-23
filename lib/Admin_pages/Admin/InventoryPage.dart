@@ -1569,6 +1569,35 @@ class _InventoryPageState extends State<InventoryPage>
                 _parseQuantity(itemData['startingStock']);
           }
 
+            final startingStock = _parseQuantity(itemData['startingStock']);
+            if (currentStock <= 0 && startingStock > 0) {
+              final assignedSnapshot = await FirebaseFirestore.instance
+                  .collection('staff_inventory')
+                  .where('sourceInventoryId', isEqualTo: categoryId)
+                  .get();
+              var assignedStock = 0;
+              for (final assignedDoc in assignedSnapshot.docs) {
+                final assignedItems =
+                    (assignedDoc.data()['items'] as List<dynamic>? ?? [])
+                        .whereType<Map>()
+                        .map((entry) => Map<String, dynamic>.from(entry));
+                for (final assignedItem in assignedItems) {
+                  final sameId =
+                      assignedItem['id']?.toString() == variantId;
+                  final sameName = !sameId &&
+                      assignedItem['name']?.toString() == variantId;
+                  if (sameId || sameName) {
+                    assignedStock += _parseQuantity(
+                      assignedItem['stock'] ?? assignedItem['startingStock'],
+                    );
+                  }
+                }
+              }
+              if (assignedStock > 0) {
+                currentStock = startingStock - assignedStock;
+              }
+            }
+
           if (currentStock < 0) {
             currentStock = 0;
           }
