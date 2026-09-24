@@ -11,6 +11,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/inventory.dart';
 import '../services/inventory_service.dart';
+import '../services/branch_report_schedule.dart';
 import '../services/local_database_sync_service.dart';
 import '../widgets/top_notification.dart';
 
@@ -104,7 +105,7 @@ class DailyStockPage extends StatefulWidget {
 }
 
 class _DailyStockPageState extends State<DailyStockPage>
-    with TickerProviderStateMixin {
+    with TickerProviderStateMixin, WidgetsBindingObserver {
   List<Inventory> entries = [];
   late TextEditingController _budgetRequestController;
   late TextEditingController _orderSearchController;
@@ -160,6 +161,7 @@ class _DailyStockPageState extends State<DailyStockPage>
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _budgetRequestController = TextEditingController();
     _orderSearchController = TextEditingController();
     _currentUserId = FirebaseAuth.instance.currentUser?.uid;
@@ -454,6 +456,7 @@ class _DailyStockPageState extends State<DailyStockPage>
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     InventoryService().removeListener(_onInventoryChanged);
     _budgetSubscription?.cancel();
     _cashDrawerSubscription?.cancel();
@@ -3727,38 +3730,44 @@ class _DailyStockPageState extends State<DailyStockPage>
     return '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
   }
 
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed || _isResolvingStaffIdentity) return;
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return;
+    _runAutomaticDailyReportCheck(uid);
+    _scheduleNextDailyReportCheck();
+  }
+
   Future<void> _runAutomaticDailyReportCheck(String uid) async {
     if (_autoReportCheckStarted) return;
     _autoReportCheckStarted = true;
     final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-    final yesterday = today.subtract(const Duration(days: 1));
+    final reportDay = latestClosedBranchDay(now);
     try {
       await _sendDailyReportForDate(
-        yesterday,
+        reportDay,
         automatic: true,
-        resetDrawerAfterSend: true,
+        resetDrawerAfterSend: false,
       );
     } catch (_) {
-      // Automatic report should never block the staff sales page.
+      // Retry when the app resumes if reporting was temporarily unavailable.
+    } finally {
+      _autoReportCheckStarted = false;
     }
   }
 
   void _scheduleNextDailyReportCheck() {
     _dailyReportTimer?.cancel();
     final now = DateTime.now();
-    final nextMidnight = DateTime(
-      now.year,
-      now.month,
-      now.day,
-    ).add(const Duration(days: 1, minutes: 1));
-    _dailyReportTimer = Timer(nextMidnight.difference(now), () async {
-      final reportDay = DateTime.now().subtract(const Duration(days: 1));
+    final nextClosing = nextBranchClosingTime(now);
+    _dailyReportTimer = Timer(nextClosing.difference(now), () async {
+      final reportDay = latestClosedBranchDay(DateTime.now());
       try {
         await _sendDailyReportForDate(
           reportDay,
           automatic: true,
-          resetDrawerAfterSend: true,
+          resetDrawerAfterSend: false,
         );
       } catch (_) {
         // Keep the timer alive even if the report could not be created.

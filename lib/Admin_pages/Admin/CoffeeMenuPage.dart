@@ -17,7 +17,8 @@ const _cardBg = Color(0xFFFFFFFF);
 
 // ─── Entry Point ────────────────────────────────────────────────────────────
 class CoffeeMenuPage extends StatefulWidget {
-  const CoffeeMenuPage({super.key});
+  const CoffeeMenuPage({super.key, this.initialProductId});
+  final String? initialProductId;
 
   @override
   State<CoffeeMenuPage> createState() => _CoffeeMenuPageState();
@@ -65,6 +66,17 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
     ).animate(CurvedAnimation(parent: _formFadeCtrl, curve: Curves.easeOut));
 
     _formFadeCtrl.forward();
+    if (widget.initialProductId != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        try {
+          final result = await _firestore.collection('coffee_products')
+              .where(FieldPath.documentId, isEqualTo: widget.initialProductId).limit(1).get();
+          if (mounted && result.docs.isNotEmpty) _showEditProductDialog(result.docs.first);
+        } catch (_) {
+          if (mounted) _showSnack('Unable to open this coffee item.', isError: true);
+        }
+      });
+    }
   }
 
   @override

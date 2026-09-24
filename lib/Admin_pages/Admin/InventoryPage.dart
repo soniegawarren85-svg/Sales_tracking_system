@@ -1,3 +1,5 @@
+import '../../widgets/admin_catalog.dart';
+import 'CoffeeMenuPage.dart';
 import 'dart:convert';
 import 'dart:async';
 import 'dart:math';
@@ -135,13 +137,16 @@ class _AutoImageCarouselState extends State<_AutoImageCarousel> {
 }
 
 class InventoryPage extends StatefulWidget {
-  const InventoryPage({super.key});
+  const InventoryPage({super.key, this.embedded = false, this.initialEntry});
+  final bool embedded;
+  final AdminCatalogEntry? initialEntry;
   @override
   State<InventoryPage> createState() => _InventoryPageState();
 }
 
 class _InventoryPageState extends State<InventoryPage>
     with SingleTickerProviderStateMixin {
+  String _catalogType = 'Categories';
   Uint8List? selectedImageBytes;
   final picker = ImagePicker();
   final _firestore = FirebaseFirestore.instance;
@@ -154,6 +159,12 @@ class _InventoryPageState extends State<InventoryPage>
       vsync: this,
       duration: const Duration(milliseconds: 300),
     );
+    if (widget.initialEntry != null) {
+      _catalogType = widget.initialEntry!.type;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _openCatalogEntry(widget.initialEntry!);
+      });
+    }
     ExpiryNotificationService().checkAndNotifyExpiringItems();
   }
 
@@ -3014,472 +3025,64 @@ class _InventoryPageState extends State<InventoryPage>
 
   // ─── BUILD ─────────────────────────────────────────────────────────────────
 
+  Future<void> _openCatalogEntry(AdminCatalogEntry entry) async {
+    if (entry.type == 'Categories') {
+      _showItemsModal(entry.source);
+    } else if (entry.type == 'Coffee') {
+      await Navigator.push(context, MaterialPageRoute(builder: (_) => CoffeeMenuPage(initialProductId: entry.source['id']?.toString())));
+    } else {
+      final inventory = await _getInventoryList();
+      if (!mounted) return;
+      await Navigator.push(context, MaterialPageRoute(builder: (_) => BulkInventoryPage(inventory: inventory, initialBundleId: entry.source['id']?.toString())));
+    }
+  }
+
+  Future<void> _addCatalogItem() async {
+    if (_catalogType == 'Categories') {
+      _showAddInventorySheet();
+    } else if (_catalogType == 'Coffee') {
+      await Navigator.push(context, MaterialPageRoute(builder: (_) => const CoffeeMenuPage()));
+    } else {
+      final inventory = await _getInventoryList();
+      if (!mounted) return;
+      await Navigator.push(context, MaterialPageRoute(builder: (_) => BulkInventoryPage(inventory: inventory)));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: PinkTheme.scaffoldBg,
-      body: SafeArea(
-        child: Column(
-          children: [
-            // ── ENHANCED HEADER ─────────────────────────────────────────────────
-            Container(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 18),
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  colors: [PinkTheme.primaryDark, PinkTheme.accent],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
-                borderRadius: const BorderRadius.vertical(
-                  bottom: Radius.circular(32),
-                ),
-                boxShadow: [
-                  BoxShadow(
-                    blurRadius: 24,
-                    color: PinkTheme.primary.withOpacity(0.32),
-                    offset: const Offset(0, 8),
-                  ),
-                ],
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // ── Row 1: Back + Title ──────────────────────────────────────
-                  Row(
-                    children: [
-                      GestureDetector(
-                        onTap: () => Navigator.pop(context),
-                        child: Container(
-                          padding: const EdgeInsets.all(9),
-                          decoration: BoxDecoration(
-                            color: Colors.white.withOpacity(0.18),
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: const Icon(
-                            Icons.arrow_back_ios_new_rounded,
-                            color: Colors.white,
-                            size: 20,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 14),
-                      const Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Inventory',
-                              style: TextStyle(
-                                fontSize: 24,
-                                fontWeight: FontWeight.w900,
-                                color: Colors.white,
-                                letterSpacing: -0.3,
-                              ),
-                            ),
-                            Text(
-                              'Manage your products',
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: Colors.white70,
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-
-                  const SizedBox(height: 16),
-
-                  // ── Row 2: Bulk + Removed (grouped) | Expired (separate) ─────
-                  Row(
-                    children: [
-                      // ── Grouped Pill: Bulk + Removed ─────────────────────────
-                      Expanded(
-                        child: Container(
-                          padding: const EdgeInsets.all(4),
-                          decoration: BoxDecoration(
-                            color: Colors.white.withOpacity(0.14),
-                            borderRadius: BorderRadius.circular(20),
-                            border: Border.all(
-                              color: Colors.white.withOpacity(0.18),
-                              width: 1,
-                            ),
-                          ),
-                          child: Row(
-                            children: [
-                              // ── Bulk Button ──────────────────────────────────────
-                              Expanded(
-                                child: GestureDetector(
-                                  onTap: () async {
-                                    final inventory = await _getInventoryList();
-                                    if (mounted) {
-                                      final saved = await Navigator.push<bool>(
-                                        context,
-                                        MaterialPageRoute(
-                                          builder: (_) => BulkInventoryPage(
-                                            inventory: inventory,
-                                          ),
-                                        ),
-                                      );
-                                      if (saved == true && mounted) {
-                                        setState(() {});
-                                      }
-                                    }
-                                  },
-                                  child: Container(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 10,
-                                      vertical: 10,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: Colors.white.withOpacity(0.20),
-                                      borderRadius: BorderRadius.circular(16),
-                                    ),
-                                    child: Row(
-                                      mainAxisAlignment:
-                                          MainAxisAlignment.center,
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        Container(
-                                          padding: const EdgeInsets.all(6),
-                                          decoration: BoxDecoration(
-                                            color: Colors.white.withOpacity(
-                                              0.25,
-                                            ),
-                                            borderRadius: BorderRadius.circular(
-                                              10,
-                                            ),
-                                          ),
-                                          child: const Icon(
-                                            Icons.inventory_2_rounded,
-                                            color: Colors.white,
-                                            size: 14,
-                                          ),
-                                        ),
-                                        const SizedBox(width: 6),
-                                        const Flexible(
-                                          child: Text(
-                                            'Bulk',
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
-                                            style: TextStyle(
-                                              color: Colors.white,
-                                              fontWeight: FontWeight.w800,
-                                              fontSize: 13,
-                                              letterSpacing: 0.2,
-                                            ),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ),
-                              ),
-
-                              // ── Divider ─────────────────────────────────────────
-                              Container(
-                                width: 1,
-                                height: 28,
-                                color: Colors.white.withOpacity(0.25),
-                                margin: const EdgeInsets.symmetric(
-                                  horizontal: 2,
-                                ),
-                              ),
-
-                              // ── Removed Button ────────────────────────────────────
-                              Expanded(
-                                child: GestureDetector(
-                                  onTap: () async {
-                                    final restored = await Navigator.push<bool>(
-                                      context,
-                                      MaterialPageRoute(
-                                        builder: (_) =>
-                                            const RemovedInventoryPage(),
-                                      ),
-                                    );
-                                    if (restored == true && mounted) {
-                                      setState(() {});
-                                    }
-                                  },
-                                  child: Container(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 10,
-                                      vertical: 10,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: Colors.white.withOpacity(0.20),
-                                      borderRadius: BorderRadius.circular(16),
-                                    ),
-                                    child: Row(
-                                      mainAxisAlignment:
-                                          MainAxisAlignment.center,
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        Container(
-                                          padding: const EdgeInsets.all(6),
-                                          decoration: BoxDecoration(
-                                            color: Colors.white.withOpacity(
-                                              0.25,
-                                            ),
-                                            borderRadius: BorderRadius.circular(
-                                              10,
-                                            ),
-                                          ),
-                                          child: const Icon(
-                                            Icons.restore_from_trash_rounded,
-                                            color: Colors.white,
-                                            size: 14,
-                                          ),
-                                        ),
-                                        const SizedBox(width: 6),
-                                        const Flexible(
-                                          child: Text(
-                                            'Removed',
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
-                                            style: TextStyle(
-                                              color: Colors.white,
-                                              fontWeight: FontWeight.w800,
-                                              fontSize: 13,
-                                              letterSpacing: 0.2,
-                                            ),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-
-                      const SizedBox(width: 10),
-
-                      // ── Expired Button (Standalone, Distinct) ──────────────────
-                      ConstrainedBox(
-                        constraints: const BoxConstraints(maxWidth: 124),
-                        child: GestureDetector(
-                          onTap: () async {
-                            await Navigator.push<bool>(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => const ExpiredPage(),
-                              ),
-                            );
-                          },
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 12,
-                              vertical: 11,
-                            ),
-                            decoration: BoxDecoration(
-                              gradient: LinearGradient(
-                                colors: [
-                                  const Color(0xFFFF6B35).withOpacity(0.92),
-                                  const Color(0xFFFF3D57).withOpacity(0.88),
-                                ],
-                                begin: Alignment.topLeft,
-                                end: Alignment.bottomRight,
-                              ),
-                              borderRadius: BorderRadius.circular(20),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: const Color(
-                                    0xFFFF3D57,
-                                  ).withOpacity(0.45),
-                                  blurRadius: 14,
-                                  spreadRadius: 1,
-                                  offset: const Offset(0, 5),
-                                ),
-                              ],
-                              border: Border.all(
-                                color: Colors.white.withOpacity(0.25),
-                                width: 1,
-                              ),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Container(
-                                  padding: const EdgeInsets.all(5),
-                                  decoration: BoxDecoration(
-                                    color: Colors.white.withOpacity(0.22),
-                                    borderRadius: BorderRadius.circular(9),
-                                  ),
-                                  child: const Icon(
-                                    Icons.warning_amber_rounded,
-                                    color: Colors.white,
-                                    size: 14,
-                                  ),
-                                ),
-                                const SizedBox(width: 6),
-                                const Flexible(
-                                  child: Text(
-                                    'Expired',
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(
-                                      color: Colors.white,
-                                      fontWeight: FontWeight.w900,
-                                      fontSize: 13,
-                                      letterSpacing: 0.3,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-
-            // ── LIST ──────────────────────────────────────────────────────────────
-            Expanded(
-              child: StreamBuilder<QuerySnapshot>(
-                stream: _firestore.collection('sales_inventory').snapshots(),
-                builder: (context, snapshot) {
-                  if (snapshot.connectionState == ConnectionState.waiting) {
-                    return const Center(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          CircularProgressIndicator(
-                            valueColor: AlwaysStoppedAnimation(
-                              PinkTheme.primary,
-                            ),
-                            strokeWidth: 3,
-                          ),
-                          SizedBox(height: 16),
-                          Text(
-                            'Loading inventory...',
-                            style: TextStyle(
-                              color: PinkTheme.textMid,
-                              fontWeight: FontWeight.w600,
-                              fontSize: 14,
-                            ),
-                          ),
-                        ],
-                      ),
-                    );
-                  }
-                  if (snapshot.hasError) {
-                    return Center(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          const Icon(
-                            Icons.error_rounded,
-                            color: PinkTheme.deleteRed,
-                            size: 48,
-                          ),
-                          const SizedBox(height: 16),
-                          Text(
-                            'Error: ${snapshot.error}',
-                            style: const TextStyle(
-                              color: PinkTheme.deleteRed,
-                              fontSize: 14,
-                            ),
-                            textAlign: TextAlign.center,
-                          ),
-                        ],
-                      ),
-                    );
-                  }
-                  final docs = snapshot.data?.docs ?? [];
-                  final activeItems = docs.where((doc) {
-                    final data = doc.data() as Map<String, dynamic>;
-                    if (data['isDeleted'] == true) return false;
-                    if (data['isBundle'] == true) return false;
-                    if (data.containsKey('bundleId') &&
-                        data['bundleId'] != null &&
-                        data['bundleId'].toString().isNotEmpty) {
-                      return false;
-                    }
-                    final activeVariants =
-                        ((data['items'] as List<dynamic>?) ?? []).where((e) {
-                          final variant = e as Map<String, dynamic>?;
-                          final expiryDate =
-                              variant?['expirationDate']?.toString() ?? '';
-                          return !_isExpired(expiryDate);
-                        }).toList();
-                    return activeVariants.isNotEmpty;
-                  }).toList();
-                  if (activeItems.isEmpty) return _emptyState();
-                  return ListView.builder(
-                    padding: const EdgeInsets.fromLTRB(20, 24, 20, 100),
-                    itemCount: activeItems.length,
-                    itemBuilder: (context, index) {
-                      final doc = activeItems[index];
-                      final data = doc.data() as Map<String, dynamic>;
-                      final filteredItems =
-                          ((data['items'] as List<dynamic>?) ?? [])
-                              .where((e) {
-                                final variant = e as Map<String, dynamic>?;
-                                final expiryDate =
-                                    variant?['expirationDate']?.toString() ??
-                                    '';
-                                return !_isExpired(expiryDate);
-                              })
-                              .map(
-                                (e) => Map<String, dynamic>.from(
-                                  e as Map<String, dynamic>,
-                                ),
-                              )
-                              .toList();
-                      final item = {
-                        'id': doc.id,
-                        'name': data['name'] ?? '',
-                        'price': data['price'] ?? '0',
-                        'items': filteredItems,
-                        'imageUrl': data['imageUrl'],
-                        'timestamp': data['timestamp'],
-                      };
-                      return Padding(
-                        padding: const EdgeInsets.only(bottom: 20),
-                        child: _FadeSlideIn(
-                          index: index,
-                          child: _inventoryCard(index, item),
-                        ),
-                      );
-                    },
-                  );
-                },
-              ),
-            ),
-          ],
+      body: SafeArea(child: Column(children: [
+        Container(
+          padding: const EdgeInsets.all(20),
+          decoration: const BoxDecoration(gradient: LinearGradient(colors: [PinkTheme.primaryDark, PinkTheme.accent])),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [
+              if (!widget.embedded) IconButton(onPressed: () => Navigator.pop(context), icon: const Icon(Icons.arrow_back, color: Colors.white)),
+              const Expanded(child: Text('Inventory', style: TextStyle(fontSize: 25, fontWeight: FontWeight.w900, color: Colors.white))),
+            ]),
+            const SizedBox(height: 14),
+            Wrap(spacing: 10, children: ['Categories', 'Bundle', 'Coffee'].map((type) => ChoiceChip(
+              label: Text(type == 'Bundle' ? 'Bulk' : type), selected: _catalogType == type,
+              onSelected: (_) => setState(() => _catalogType = type),
+            )).toList()),
+          ]),
         ),
-      ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _showAddInventorySheet,
-        backgroundColor: PinkTheme.primary,
-        foregroundColor: Colors.white,
-        elevation: 10,
-        extendedPadding: const EdgeInsets.symmetric(
-          horizontal: 24,
-          vertical: 0,
-        ),
-        icon: const Icon(Icons.add_rounded, size: 26),
-        label: const Text(
-          'Add Item',
-          style: TextStyle(
-            fontWeight: FontWeight.w800,
-            fontSize: 15,
-            letterSpacing: 0.3,
-          ),
-        ),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-      ),
+        Padding(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6), child: Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+          IconButton(tooltip: 'Removed inventory', icon: const Icon(Icons.delete_outline, color: PinkTheme.primary),
+            onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const RemovedInventoryPage()))),
+          IconButton(tooltip: 'Expired inventory', icon: const Icon(Icons.event_busy, color: Colors.deepOrange),
+            onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ExpiredPage()))),
+        ])),
+        Expanded(child: SingleChildScrollView(padding: const EdgeInsets.fromLTRB(20, 4, 20, 100),
+          child: AdminCatalog(type: _catalogType, onOpen: _openCatalogEntry))),
+      ])),
+      floatingActionButton: FloatingActionButton.extended(onPressed: _addCatalogItem,
+        backgroundColor: PinkTheme.primary, foregroundColor: Colors.white,
+        icon: const Icon(Icons.add), label: Text(_catalogType == 'Bundle' ? 'Build bundle' : _catalogType == 'Coffee' ? 'Add coffee' : 'Add item')),
     );
   }
-
   Future<List<Map<String, dynamic>>> _getInventoryList() async {
     try {
       final snapshot = await _firestore.collection('sales_inventory').get();
@@ -3574,7 +3177,8 @@ class _InventoryPageState extends State<InventoryPage>
 
 class BulkInventoryPage extends StatefulWidget {
   final List<Map<String, dynamic>> inventory;
-  const BulkInventoryPage({super.key, required this.inventory});
+  const BulkInventoryPage({super.key, required this.inventory, this.initialBundleId});
+  final String? initialBundleId;
 
   @override
   State<BulkInventoryPage> createState() => _BulkInventoryPageState();
@@ -3628,7 +3232,11 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
 
     _headerAnim.forward();
     _bodyAnim.forward();
-    _loadBundles();
+    _loadBundles().then((_) {
+      if (!mounted || widget.initialBundleId == null) return;
+      final matching = bundles.where((bundle) => bundle['id'] == widget.initialBundleId);
+      if (matching.isNotEmpty) _showBundleInstancesDialog(matching.first);
+    });
     bundleQuantityController.addListener(() {
       if (mounted) setState(() {});
     });

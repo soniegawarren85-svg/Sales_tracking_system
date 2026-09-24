@@ -1,4 +1,5 @@
-﻿import 'package:flutter/material.dart';
+import '../../widgets/admin_catalog.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -13,7 +14,6 @@ import 'CoffeeMenuPage.dart';
 import 'Notification.dart';
 import 'Message.dart';
 import 'Budget.dart';
-import 'SalesPage.dart';
 import 'SettingsPage.dart';
 import 'StaffPage.dart';
 import 'Reports.dart';
@@ -43,7 +43,7 @@ class _AdminDashboardState extends State<AdminDashboard>
   final _navItems = const [
     _NavItem(icon: Icons.dashboard_rounded, label: 'Home'),
     _NavItem(icon: Icons.paid_rounded, label: 'Allocation'),
-    _NavItem(icon: Icons.pie_chart_rounded, label: 'Sales'),
+    _NavItem(icon: Icons.inventory_2_rounded, label: 'Inventory'),
     _NavItem(icon: Icons.settings_rounded, label: 'Settings'),
   ];
 
@@ -156,8 +156,8 @@ class _AdminDashboardState extends State<AdminDashboard>
         // Budget page displays without the admin collapsible header
         return const BudgetPage();
       case 2:
-        // Sales page should display without the admin collapsible header
-        return const SalesPage();
+        // Inventory is part of the main admin navigation.
+        return const InventoryPage(embedded: true);
       case 3:
         return const SettingsPage();
       default:
@@ -180,20 +180,24 @@ class _AdminDashboardState extends State<AdminDashboard>
   Widget _buildHomeBody() {
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
+      child: Center(child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 1120),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           _buildStatsCard(),
           const SizedBox(height: 20),
           _buildSectionLabel('Quick Actions'),
           const SizedBox(height: 12),
           _buildOptionsGrid(),
           const SizedBox(height: 24),
-        ],
-      ),
+          _buildSectionLabel('Our Items'),
+          const SizedBox(height: 12),
+          AdminCatalog(gallery: true, onOpen: (entry) => Navigator.push(context,
+            MaterialPageRoute(builder: (_) => InventoryPage(initialEntry: entry)))),
+          const SizedBox(height: 24),
+        ]),
+      )),
     );
   }
-
   // ══════════════════════════════════════════════════════════════════════════
   //  SLIVER APP BAR  –  Collapsing header with real image + admin badge
   // ══════════════════════════════════════════════════════════════════════════
@@ -237,7 +241,7 @@ class _AdminDashboardState extends State<AdminDashboard>
                   }
                 }
                 return _buildIconButton(
-                  Icons.message_rounded,
+                  Icons.mail_outline_rounded,
                   () {
                     Navigator.push(
                       context,
@@ -307,7 +311,7 @@ class _AdminDashboardState extends State<AdminDashboard>
           fit: StackFit.expand,
           children: [
             Image.asset(
-              'Assets/Image/Bg.jpg',
+              'Assets/Image/Final_bg.jpg',
               fit: BoxFit.cover,
               errorBuilder: (_, _, _) => Container(color: kDeepBrown),
             ),
@@ -316,7 +320,7 @@ class _AdminDashboardState extends State<AdminDashboard>
                 gradient: LinearGradient(
                   begin: Alignment.topLeft,
                   end: Alignment.bottomRight,
-                  colors: [kDeepBrown, kLightBrown, kAccentBrown],
+                  colors: [Color.fromARGB(155, 145, 0, 75), Color.fromARGB(130, 235, 55, 145), Color.fromARGB(165, 175, 0, 95)],
                   stops: [0.0, 0.55, 1.0],
                 ),
               ),
@@ -777,6 +781,11 @@ class _AdminDashboardState extends State<AdminDashboard>
                     totalStock.toString(),
                     'Bundles',
                   ),
+                  StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                    stream: FirebaseFirestore.instance.collection('coffee_products').snapshots(),
+                    builder: (context, coffee) => _buildStatItem(Icons.coffee_rounded,
+                      coffee.hasData ? coffee.data!.docs.where((doc) => doc.data()['isDeleted'] != true).length.toString() : '—', 'Coffee'),
+                  ),
                   _buildStatItem(
                     Icons.people_alt_rounded,
                     staffCount.toString(),
@@ -813,6 +822,8 @@ class _AdminDashboardState extends State<AdminDashboard>
                       Expanded(child: statsWidgets[1]),
                       _buildStatDivider(),
                       Expanded(child: statsWidgets[2]),
+                      _buildStatDivider(),
+                      Expanded(child: statsWidgets[3]),
                     ],
                   ),
                 );
@@ -898,7 +909,7 @@ class _AdminDashboardState extends State<AdminDashboard>
   Widget _buildOptionsGrid() {
     final width = MediaQuery.of(context).size.width;
     final isTablet = width >= 600;
-    final childAspectRatio = width < 400 ? 1.02 : (isTablet ? 3.2 : 1.08);
+
 
     final items = [
       _GridActionItem(
@@ -909,15 +920,6 @@ class _AdminDashboardState extends State<AdminDashboard>
         onTap: () => Navigator.of(
           context,
         ).push(MaterialPageRoute(builder: (_) => const StaffPage())),
-      ),
-      _GridActionItem(
-        icon: Icons.inventory_2_rounded,
-        label: 'Cakes Inventory',
-        color: const Color(0xFF26A69A),
-        bgColor: const Color(0xFFE0F2F1),
-        onTap: () => Navigator.of(
-          context,
-        ).push(MaterialPageRoute(builder: (_) => const InventoryPage())),
       ),
       _GridActionItem(
         icon: Icons.coffee_rounded,
@@ -944,10 +946,10 @@ class _AdminDashboardState extends State<AdminDashboard>
       physics: const NeverScrollableScrollPhysics(),
       itemCount: items.length,
       gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 2,
+        crossAxisCount: isTablet ? 3 : 2,
         mainAxisSpacing: 14,
         crossAxisSpacing: 14,
-        childAspectRatio: childAspectRatio,
+        mainAxisExtent: isTablet ? 136 : 160,
       ),
       itemBuilder: (context, i) => _buildGridItem(items[i]),
     );
@@ -1070,6 +1072,23 @@ class _AdminDashboardState extends State<AdminDashboard>
   }
 
   Widget _buildBottomNavigationBar() {
+    if (MediaQuery.of(context).size.width >= 600) {
+      return SafeArea(child: SizedBox(height: 88, child: Center(child: Container(
+        width: 380, height: 66,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+        decoration: BoxDecoration(color: kLightBrown, borderRadius: BorderRadius.circular(28),
+          boxShadow: [BoxShadow(color: kPrimaryBrown.withOpacity(.18), blurRadius: 20)]),
+        child: Row(mainAxisAlignment: MainAxisAlignment.spaceAround, children: List.generate(_navItems.length, (index) => Tooltip(
+          message: _navItems[index].label,
+          child: Semantics(label: _navItems[index].label, selected: _selectedIndex == index, button: true,
+            child: Material(color: _selectedIndex == index ? kPrimaryBrown : Colors.white.withOpacity(.14),
+              borderRadius: BorderRadius.circular(18),
+              child: InkWell(borderRadius: BorderRadius.circular(18), onTap: () => setState(() => _selectedIndex = index),
+                child: SizedBox(width: 56, height: 52, child: Icon(_navItems[index].icon, color: Colors.white, size: 26))),
+            )),
+        ))),
+      ))));
+    }
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,

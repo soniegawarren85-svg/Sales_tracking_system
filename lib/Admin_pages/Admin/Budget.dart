@@ -1,3 +1,5 @@
+import '../../widgets/branch_loss_records_dialog.dart';
+import '../../widgets/branch_analytics_bars.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/services.dart';
@@ -33,50 +35,6 @@ class _RefundBadge extends StatelessWidget {
           fontWeight: FontWeight.w900,
         ),
       ),
-    );
-  }
-}
-
-class _BranchAnalyticsBars extends StatelessWidget {
-  final List<double> values;
-  final List<String> labels;
-  final List<Color> colors;
-  final List<double>? refunds;
-  final List<double>? reduced;
-  final String selectedStatus;
-
-  const _BranchAnalyticsBars({required this.values, required this.labels, this.colors = const [kDeep, kPrimary], this.refunds, this.reduced, this.selectedStatus = 'All'});
-
-  @override
-  Widget build(BuildContext context) {
-    final maximum = values.fold<double>(0, (max, value) => value > max ? value : max);
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.end,
-      children: List.generate(values.length, (index) {
-        // Keep a non-zero sales bucket visible even while the stream updates.
-        final height = values[index] <= 0
-            ? 0.0
-            : (96 * values[index] / (maximum <= 0 ? 1 : maximum)).clamp(8.0, 96.0);
-        return Expanded(
-          child: Padding(
-            padding: EdgeInsets.symmetric(horizontal: values.length > 12 ? 1 : 3),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                SizedBox(
-                  height: 100,
-                  child: Align(
-                    alignment: Alignment.bottomCenter,
-                    child: GestureDetector(onTap: () { final completed = (values[index] - (refunds?[index] ?? 0) - (reduced?[index] ?? 0)).clamp(0, double.infinity); final details = selectedStatus == 'All' ? 'Completed: ${completed.toStringAsFixed(0)} items\nRefund: ${(refunds?[index] ?? 0).toStringAsFixed(0)} items\nReduced: ${(reduced?[index] ?? 0).toStringAsFixed(0)} items' : '$selectedStatus: ${values[index].toStringAsFixed(0)} items'; showDialog<void>(context: context, builder: (_) => AlertDialog(title: Text(labels[index]), content: Text(details))); }, child: Container(height: height, decoration: BoxDecoration(gradient: LinearGradient(begin: Alignment.bottomCenter, end: Alignment.topCenter, colors: colors), borderRadius: const BorderRadius.vertical(top: Radius.circular(5))), child: refunds == null && reduced == null ? null : Column(mainAxisAlignment: MainAxisAlignment.end, children: [if ((refunds?[index] ?? 0) > 0) Container(height: height * (refunds![index] / values[index]), color: const Color(0xFFF9A825)), if ((reduced?[index] ?? 0) > 0) Container(height: height * (reduced![index] / values[index]), color: const Color(0xFF1976D2))]))),
-                  ),
-                ),
-                const SizedBox(height: 5),
-                Text(labels[index], textAlign: TextAlign.center, maxLines: 2, overflow: TextOverflow.clip, style: TextStyle(fontSize: values.length > 12 ? 6 : 8, color: Colors.black54, height: 1.05)),
-              ],
-            ),
-          ),
-        );
-      }),
     );
   }
 }
@@ -2325,21 +2283,21 @@ class _BudgetPageState extends State<BudgetPage>
     for (final staffId in staffIds) {
       final docs = await _loadReportDocs(staffId, '');
       for (final doc in docs) {
-        allDocs['${doc.reference.path}:${doc.id}'] = doc;
+        allDocs[doc.id.replaceFirst(RegExp(r'^notification_'), '')] = doc;
       }
     }
 
     for (final staffName in staffNames) {
       final docs = await _loadReportDocs('', staffName);
       for (final doc in docs) {
-        allDocs['${doc.reference.path}:${doc.id}'] = doc;
+        allDocs[doc.id.replaceFirst(RegExp(r'^notification_'), '')] = doc;
       }
     }
 
     Future<void> collectBranchReports(Query<Map<String, dynamic>> query) async {
       final snapshot = await query.get();
       for (final doc in snapshot.docs) {
-        allDocs['${doc.reference.path}:${doc.id}'] = doc;
+        allDocs[doc.id.replaceFirst(RegExp(r'^notification_'), '')] = doc;
       }
     }
 
@@ -2374,12 +2332,42 @@ class _BudgetPageState extends State<BudgetPage>
     return docs;
   }
 
+  Widget _buildUnsubmittedBranchReport(String branchId, String branchName, DateTime day) {
+    return SizedBox(width: 720, height: 650, child: Column(children: [
+      Padding(padding: const EdgeInsets.all(20), child: Row(children: [
+        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text('Branch Staff Reports', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: kDeep)),
+          Text('$branchName · ${_reportDateLabel(day)}'),
+          const SizedBox(height: 8),
+          const Text('No saved closing report yet. Sales records for this date are shown below.'),
+        ])),
+        IconButton(onPressed: () => Navigator.pop(context), icon: const Icon(Icons.close)),
+      ])),
+      Expanded(child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+        stream: _firestore.collection('completed_sales').where('branchId', isEqualTo: branchId).snapshots(),
+        builder: (context, snapshot) {
+          if (snapshot.hasError) return const Center(child: Text('Unable to load sales records.'));
+          if (!snapshot.hasData) return const Center(child: CircularProgressIndicator(color: kPrimary));
+          final records = snapshot.data!.docs.where((doc) => DateUtils.isSameDay(_dateValue(doc.data()['timestamp']), day)).toList()
+            ..sort((a, b) => _dateValue(b.data()['timestamp']).compareTo(_dateValue(a.data()['timestamp'])));
+          if (records.isEmpty) return const Center(child: Text('No sales records for this date.'));
+          return ListView.separated(
+            padding: const EdgeInsets.all(16), itemCount: records.length,
+            separatorBuilder: (_, __) => const SizedBox(height: 12),
+            itemBuilder: (context, index) => _buildBranchReceiptCard(records[index].data(), records[index].id),
+          );
+        },
+      )),
+    ]));
+  }
+
   void _showBranchReportDetail({
     required String branchId,
     required String branchName,
     required List<String> staffIds,
     required List<String> staffNames,
   }) {
+    final reportDay = _analyticsDate ?? DateTime.now();
     showDialog<void>(
       context: context,
       barrierDismissible: true,
@@ -2451,8 +2439,16 @@ class _BudgetPageState extends State<BudgetPage>
                 );
               }
 
-              final reportDocs = snapshot.data ?? [];
-              if (snapshot.hasError || reportDocs.isEmpty) {
+              final reportDocs = (snapshot.data ?? []).where((doc) {
+                final data = doc.data();
+                final savedBranch = data['branchId']?.toString() ?? '';
+                return (savedBranch.isEmpty || savedBranch == branchId) &&
+                    DateUtils.isSameDay(_reportDayFromData(data), reportDay);
+              }).toList();
+              if (!snapshot.hasError && reportDocs.isEmpty) {
+                return _buildUnsubmittedBranchReport(branchId, branchName, reportDay);
+              }
+              if (snapshot.hasError) {
                 return Padding(
                   padding: const EdgeInsets.all(24),
                   child: Column(
@@ -2467,7 +2463,7 @@ class _BudgetPageState extends State<BudgetPage>
                       Text(
                         snapshot.hasError
                             ? 'Unable to load reports'
-                            : '$branchName has no staff reports yet',
+                            : '$branchName has no reports for ${_reportDateLabel(reportDay)}',
                         style: const TextStyle(
                           fontSize: 14,
                           fontWeight: FontWeight.w600,
@@ -2502,35 +2498,8 @@ class _BudgetPageState extends State<BudgetPage>
                 );
               }
 
-              var reportQuery = '';
-              DateTime? selectedReportDate;
-              var selectedPayment = 'All';
-              return StatefulBuilder(
-                builder: (context, setDialogState) {
-                  final filteredReportDocs = reportDocs.where((doc) {
-                    final data = doc.data();
-                    final text =
-                        '${data['staffName'] ?? ''} ${data['staffId'] ?? ''} ${data['reportDate'] ?? ''}'
-                            .toLowerCase();
-                    if (!text.contains(reportQuery)) return false;
-                    if (selectedReportDate != null) {
-                      final day = _reportDayFromData(data);
-                      final matchesDate =
-                          day.year == selectedReportDate!.year &&
-                          day.month == selectedReportDate!.month &&
-                          day.day == selectedReportDate!.day;
-                      if (!matchesDate) return false;
-                    }
-                    if (selectedPayment == 'All') return true;
-                    final transactions =
-                        data['transactions'] as List<dynamic>? ?? [];
-                    return transactions.whereType<Map>().any((tx) {
-                      final mode =
-                          tx['paymentMode']?.toString().trim().toLowerCase() ??
-                          'cash';
-                      return mode == selectedPayment.toLowerCase();
-                    });
-                  }).toList();
+              return Builder(builder: (context) {
+                  final filteredReportDocs = reportDocs;
                   return SizedBox(
                     width: 520,
                     height: 650,
@@ -2581,110 +2550,7 @@ class _BudgetPageState extends State<BudgetPage>
                                   ),
                                 ],
                               ),
-                              const SizedBox(height: 18),
-                              TextField(
-                                onChanged: (value) => setDialogState(
-                                  () =>
-                                      reportQuery = value.trim().toLowerCase(),
-                                ),
-                                decoration: InputDecoration(
-                                  hintText: 'Search staff, ID, or report date',
-                                  prefixIcon: const Icon(
-                                    Icons.search_rounded,
-                                    color: kDeep,
-                                  ),
-                                  suffixIcon: IconButton(
-                                    tooltip: 'Filter by date',
-                                    icon: const Icon(
-                                      Icons.calendar_month_rounded,
-                                      color: kDeep,
-                                    ),
-                                    onPressed: () async {
-                                      final picked = await showDatePicker(
-                                        context: context,
-                                        initialDate:
-                                            selectedReportDate ??
-                                            DateTime.now(),
-                                        firstDate: DateTime(2020),
-                                        lastDate: DateTime.now().add(
-                                          const Duration(days: 1),
-                                        ),
-                                      );
-                                      if (picked != null) {
-                                        setDialogState(
-                                          () => selectedReportDate = picked,
-                                        );
-                                      }
-                                    },
-                                  ),
-                                  filled: true,
-                                  fillColor: Colors.white,
-                                  border: OutlineInputBorder(
-                                    borderRadius: BorderRadius.circular(12),
-                                    borderSide: const BorderSide(
-                                      color: kAccent,
-                                    ),
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(height: 8),
-                              Row(
-                                children: [
-                                  if (MediaQuery.of(context).size.width < 0)
-                                    OutlinedButton.icon(
-                                      onPressed: () async {
-                                        final picked = await showDatePicker(
-                                          context: context,
-                                          initialDate:
-                                              selectedReportDate ??
-                                              DateTime.now(),
-                                          firstDate: DateTime(2020),
-                                          lastDate: DateTime.now().add(
-                                            const Duration(days: 1),
-                                          ),
-                                        );
-                                        if (picked != null)
-                                          setDialogState(
-                                            () => selectedReportDate = picked,
-                                          );
-                                      },
-                                      icon: const Icon(
-                                        Icons.calendar_month_rounded,
-                                        size: 18,
-                                      ),
-                                      label: Text(
-                                        selectedReportDate == null
-                                            ? 'Filter by date'
-                                            : '${selectedReportDate!.year}-${selectedReportDate!.month.toString().padLeft(2, '0')}-${selectedReportDate!.day.toString().padLeft(2, '0')}',
-                                      ),
-                                    ),
-                                  if (selectedReportDate != null)
-                                    TextButton(
-                                      onPressed: () => setDialogState(
-                                        () => selectedReportDate = null,
-                                      ),
-                                      child: const Text('Clear'),
-                                    ),
-                                ],
-                              ),
-                              const SizedBox(height: 10),
-                              Align(
-                                alignment: Alignment.centerLeft,
-                                child: Wrap(
-                                  spacing: 8,
-                                  children: ['All', 'Cash', 'GCash'].map((
-                                    label,
-                                  ) {
-                                    return ChoiceChip(
-                                      label: Text(label),
-                                      selected: selectedPayment == label,
-                                      onSelected: (_) => setDialogState(
-                                        () => selectedPayment = label,
-                                      ),
-                                    );
-                                  }).toList(),
-                                ),
-                              ),
+                              Text(_reportDateLabel(reportDay)),
                             ],
                           ),
                         ),
@@ -2703,7 +2569,7 @@ class _BudgetPageState extends State<BudgetPage>
                                 branchName: branchName,
                                 branchId: branchId,
                                 branchCode: _branchCode(branchId),
-                                paymentFilter: selectedPayment,
+
                               );
                             }).toList(),
                           ),
@@ -4648,9 +4514,24 @@ class _BudgetPageState extends State<BudgetPage>
                 SliverPersistentHeader(
                   pinned: true,
                   delegate: _PinnedBudgetHeaderDelegate(
-                    minHeight: 118,
-                    maxHeight: 118,
+                    minHeight: 118, maxHeight: 118,
                     child: _buildSelectedBranchHeader(),
+                  ),
+                ),
+              if (_selectedBranchId != null)
+                SliverPersistentHeader(
+                  pinned: true,
+                  delegate: _PinnedBudgetHeaderDelegate(
+                    minHeight: 80,
+                    maxHeight: 80,
+                    child: Material(
+                      color: Colors.white,
+                      elevation: 2,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 12),
+                        child: _buildAllocationSearch(),
+                      ),
+                    ),
                   ),
                 ),
               if (_selectedBranchId == null) ...[
@@ -5049,7 +4930,7 @@ class _BudgetPageState extends State<BudgetPage>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _buildBranchSalesSummary(branchId),
+
           if (!hasAssignedStaff)
             Padding(
               padding: const EdgeInsets.only(top: 10),
@@ -5062,7 +4943,9 @@ class _BudgetPageState extends State<BudgetPage>
               ),
             ),
           const SizedBox(height: 10),
-          _buildAllocationFilters(),
+          _buildBranchSalesSummary(branchId),
+          const SizedBox(height: 8),
+          _buildAllocationCategories(),
           const SizedBox(height: 8),
           _buildBranchItemsTable(branchId),
           const SizedBox(height: 12),
@@ -5097,11 +4980,44 @@ class _BudgetPageState extends State<BudgetPage>
     ),
   );
 
+  Widget _buildDatedCashDrawer(String branchId, DateTime day, double currentCash) {
+    Widget amount(String label, String value) => Column(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        Text(label, style: const TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.w700)),
+        Text(value, style: const TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.w900)),
+      ],
+    );
+    if (DateUtils.isSameDay(day, DateTime.now())) {
+      return amount('Current Cash Drawer', '₱${currentCash.toStringAsFixed(2)}');
+    }
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: _firestore.collection('daily_reports').where('branchId', isEqualTo: branchId).snapshots(),
+      builder: (context, snapshot) {
+        if (snapshot.hasError) return amount('Closing Cash Drawer', 'Unable to load');
+        if (!snapshot.hasData) return amount('Closing Cash Drawer', 'Loading…');
+        final reports = snapshot.data!.docs.where((doc) {
+          final data = doc.data();
+          return DateUtils.isSameDay(_reportDayFromData(data), day) &&
+              (data['closingCash'] != null || data['cashDrawerTotal'] != null);
+        }).toList()
+          ..sort((a, b) => _dateValue(b.data()['createdAt']).compareTo(_dateValue(a.data()['createdAt'])));
+        // Each report is a snapshot of the shared branch drawer, not an
+        // amount to add across staff. Use the latest closing snapshot.
+        if (reports.isEmpty) return amount('Closing Cash Drawer', 'No closing record');
+        final report = reports.first.data();
+        final closing = _parsePrice(report['closingCash'] ?? report['cashDrawerTotal']);
+        return amount('Closing Cash Drawer', '₱${closing.toStringAsFixed(2)}');
+      },
+    );
+  }
+
   Widget _buildBranchSalesSummary(String branchId) => StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
     stream: _firestore.collection('completed_sales').where('branchId', isEqualTo: branchId).snapshots(),
     builder: (context, snapshot) {
       var revenue = 0.0;
       final now = DateTime.now();
+      final selectedDay = _analyticsDate ?? now;
       for (final doc in snapshot.data?.docs ?? const []) {
         final sale = doc.data();
         final timestamp = sale['timestamp'];
@@ -5110,7 +5026,7 @@ class _BudgetPageState extends State<BudgetPage>
             : timestamp is DateTime
             ? timestamp
             : DateTime.tryParse(timestamp?.toString() ?? '');
-        if (soldAt == null || soldAt.year != now.year || soldAt.month != now.month || soldAt.day != now.day) continue;
+        if (soldAt == null || soldAt.year != selectedDay.year || soldAt.month != selectedDay.month || soldAt.day != selectedDay.day) continue;
         revenue += _parsePrice(sale['total']);
       }
       return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
@@ -5156,13 +5072,10 @@ class _BudgetPageState extends State<BudgetPage>
           const Icon(Icons.insights_rounded, color: Colors.white, size: 30),
           const SizedBox(width: 12),
           Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            const Text("Today's Total Revenue", style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w700)),
+            Text("${_reportDateLabel(selectedDay)} Total Revenue", style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.w700)),
             Text('₱${revenue.toStringAsFixed(2)}', style: const TextStyle(color: Colors.white, fontSize: 25, fontWeight: FontWeight.w900)),
           ])),
-          Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
-            const Text('Current Cash Drawer', style: TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.w700)),
-            Text('₱${cashDrawer.toStringAsFixed(2)}', style: const TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.w900)),
-          ]),
+          _buildDatedCashDrawer(branchId, selectedDay, cashDrawer),
         ]),
               ),
               const SizedBox(height: 10),
@@ -5189,23 +5102,31 @@ class _BudgetPageState extends State<BudgetPage>
     required String branchId,
     required String branchName,
   }) {
-    final now = DateTime.now();
+    final now = _analyticsDate ?? DateTime.now();
+    var receiptQuery = '';
+    var paymentFilter = 'All';
+    final receiptsStream = _firestore
+        .collection('completed_sales')
+        .where('branchId', isEqualTo: branchId)
+        .snapshots();
     showDialog<void>(
       context: context,
-      builder: (context) => Dialog(
+      builder: (context) => StatefulBuilder(builder: (context, setDialogState) => Dialog(
         backgroundColor: const Color(0xFFFFF8FB),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
         child: SizedBox(
           width: 720,
           height: 700,
           child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-            stream: _firestore
-                .collection('completed_sales')
-                .where('branchId', isEqualTo: branchId)
-                .snapshots(),
+            stream: receiptsStream,
             builder: (context, snapshot) {
               final receipts = (snapshot.data?.docs ?? []).where((doc) {
-                final value = doc.data()['timestamp'];
+                final sale = doc.data();
+                final payment = _receiptPayment(sale);
+                final searchable = [doc.id, sale['salesId'], sale['staffName'], sale['staffFullName'], sale['total'], payment, sale['items']].join(' ').toLowerCase();
+                if (paymentFilter != 'All' && payment != paymentFilter.toLowerCase()) return false;
+                if (receiptQuery.isNotEmpty && !searchable.contains(receiptQuery)) return false;
+                final value = sale['timestamp'];
                 final date = value is Timestamp
                     ? value.toDate()
                     : value is DateTime
@@ -5240,12 +5161,36 @@ class _BudgetPageState extends State<BudgetPage>
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              const Text('Today\'s receipts', style: TextStyle(color: kBannerTop, fontSize: 20, fontWeight: FontWeight.w900)),
+                              Text("${_reportDateLabel(now)} receipts", style: const TextStyle(color: kBannerTop, fontSize: 20, fontWeight: FontWeight.w900)),
                               Text(branchName, style: const TextStyle(color: Colors.grey, fontWeight: FontWeight.w600)),
                             ],
                           ),
                         ),
                         IconButton(onPressed: () => Navigator.pop(context), icon: const Icon(Icons.close_rounded)),
+                      ],
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        TextField(
+                          onChanged: (value) => setDialogState(() => receiptQuery = value.trim().toLowerCase()),
+                          textInputAction: TextInputAction.search,
+                          decoration: InputDecoration(
+                            hintText: 'Search receipt ID, staff, item, or total',
+                            prefixIcon: const Icon(Icons.search_rounded, color: kDeep),
+                            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Wrap(spacing: 8, children: ['All', 'Cash', 'GCash'].map((payment) => ChoiceChip(
+                          label: Text(payment),
+                          selected: paymentFilter == payment,
+                          onSelected: (_) => setDialogState(() => paymentFilter = payment),
+                        )).toList()),
+                        const SizedBox(height: 8),
                       ],
                     ),
                   ),
@@ -5260,9 +5205,9 @@ class _BudgetPageState extends State<BudgetPage>
                           children: [
                             Icon(Icons.receipt_long_outlined, size: 54, color: Color(0xFFFFB6CC)),
                             SizedBox(height: 12),
-                            Text('No records today', style: TextStyle(color: kDeep, fontSize: 17, fontWeight: FontWeight.w800)),
+                            Text('No matching receipts', style: TextStyle(color: kDeep, fontSize: 17, fontWeight: FontWeight.w800)),
                             SizedBox(height: 4),
-                            Text('Receipts created by staff will appear here.', style: TextStyle(color: Colors.grey)),
+                            Text('Try another search, payment filter, or date.', style: TextStyle(color: Colors.grey)),
                           ],
                         ),
                       ),
@@ -5281,9 +5226,14 @@ class _BudgetPageState extends State<BudgetPage>
             },
           ),
         ),
-      ),
+      )),
     );
   }
+
+  String _reportDateLabel(DateTime date) => '${date.month}/${date.day}/${date.year}';
+
+  String _receiptPayment(Map<String, dynamic> sale) =>
+      (sale['paymentMethod'] ?? sale['paymentMode'] ?? 'cash').toString().trim().toLowerCase();
 
   DateTime _dateValue(dynamic value) => value is Timestamp
       ? value.toDate()
@@ -5339,6 +5289,9 @@ class _BudgetPageState extends State<BudgetPage>
   ) {
     final date = _dateValue(sale['timestamp']);
     final receiptId = sale['salesId']?.toString() ?? documentId;
+    final activityStatus = _activityStatus(sale);
+    final staffId = (sale['staffPublicId'] ?? sale['staffId'] ?? sale['userId'] ?? '').toString();
+    final cardTitle = activityStatus == 'Reduced' ? staff : receiptId;
     final payment = sale['paymentMethod']?.toString() ?? sale['paymentMode']?.toString() ?? 'Cash';
     final total = _parsePrice(sale['total']);
     final paid = _parsePrice(sale['paidAmount']);
@@ -5352,17 +5305,29 @@ class _BudgetPageState extends State<BudgetPage>
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
           const Icon(Icons.receipt_rounded, color: kPrimary), const SizedBox(width: 10),
-          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(receiptId, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16)), Text('${date.hour % 12 == 0 ? 12 : date.hour % 12}:${date.minute.toString().padLeft(2, '0')} ${date.hour >= 12 ? 'PM' : 'AM'} · $staff', style: const TextStyle(color: Colors.grey, fontSize: 12))])),
-          Column(crossAxisAlignment: CrossAxisAlignment.end, children: [Text('₱${total.toStringAsFixed(2)}', style: const TextStyle(color: kDeep, fontWeight: FontWeight.w900, fontSize: 18)), Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3), decoration: BoxDecoration(color: const Color(0xFFE1F5EA), borderRadius: BorderRadius.circular(10)), child: const Text('Completed', style: TextStyle(color: Color(0xFF16834A), fontSize: 11, fontWeight: FontWeight.w800)))])
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(cardTitle, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16)), Text('${date.hour % 12 == 0 ? 12 : date.hour % 12}:${date.minute.toString().padLeft(2, '0')} ${date.hour >= 12 ? 'PM' : 'AM'} · $staff', style: const TextStyle(color: Colors.grey, fontSize: 12))])),
+          Column(crossAxisAlignment: CrossAxisAlignment.end, children: [Text('₱${total.toStringAsFixed(2)}', style: const TextStyle(color: kDeep, fontWeight: FontWeight.w900, fontSize: 18)), Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3), decoration: BoxDecoration(color: const Color(0xFFE1F5EA), borderRadius: BorderRadius.circular(10)), child: Text(activityStatus, style: const TextStyle(color: Color(0xFF16834A), fontSize: 11, fontWeight: FontWeight.w800)))])
         ]),
         const Padding(padding: EdgeInsets.symmetric(vertical: 12), child: Divider(height: 1)),
         ...items.map((item) { final quantity = _parseInt(item['quantity'], fallback: 1); final name = item['name']?.toString() ?? 'Item'; final variant = item['variant']?.toString() ?? item['coffeeSize']?.toString() ?? ''; final price = _parsePrice(item['price']) * quantity; return Padding(padding: const EdgeInsets.only(bottom: 6), child: Row(children: [Container(padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3), decoration: BoxDecoration(color: kPrimary.withOpacity(.10), borderRadius: BorderRadius.circular(8)), child: Text('${quantity}x', style: const TextStyle(color: kDeep, fontWeight: FontWeight.w800))), const SizedBox(width: 10), Expanded(child: Text(variant.isEmpty ? name : '$name · $variant', style: const TextStyle(fontWeight: FontWeight.w700))), Text('₱${price.toStringAsFixed(2)}', style: const TextStyle(fontWeight: FontWeight.w700))])); }),
         Container(margin: const EdgeInsets.only(top: 6), padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: const Color(0xFFFFF6F9), borderRadius: BorderRadius.circular(12)), child: Column(children: [
-          _receiptDetail('Staff', staff), _receiptDetail('Payment', payment),
+          _receiptDetail('Staff', staff),
+          if (activityStatus == 'Reduced') _receiptDetail('Staff ID', staffId.isEmpty ? 'Not recorded' : staffId),
+          if (sale['_filteredItems'] == true) const Align(alignment: Alignment.centerLeft, child: Text('Matching items shown; loss below is the full record total.', style: TextStyle(fontSize: 11, color: Colors.grey))),
+          if (activityStatus != 'Reduced') _receiptDetail('Payment', payment),
+          if (activityStatus != 'Completed') ...[
+            _receiptDetail('Date', _reportDateLabel(date)),
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              child: Align(alignment: Alignment.centerLeft, child: Text('Reason: ${sale['reason'] ?? "Not recorded"}')),
+            ),
+            if ((sale['comment']?.toString().trim() ?? '').isNotEmpty)
+              Align(alignment: Alignment.centerLeft, child: Text('Comment: ${sale['comment']}')),
+          ],
           if (discount > 0) _receiptDetail(discountType.isEmpty ? 'Discount' : 'Discount ($discountType)', '-₱${discount.toStringAsFixed(2)}'),
           if (paid > 0) _receiptDetail('Customer paid', '₱${paid.toStringAsFixed(2)}'),
           if (change > 0) _receiptDetail('Change', '₱${change.toStringAsFixed(2)}'),
-          _receiptDetail('Total', '₱${total.toStringAsFixed(2)}', isTotal: true),
+          _receiptDetail(activityStatus == 'Completed' ? 'Total' : 'Loss', '₱${total.abs().toStringAsFixed(2)}', isTotal: true),
         ])),
       ]),
     );
@@ -5410,17 +5375,133 @@ class _BudgetPageState extends State<BudgetPage>
     },
   );
 
-  Widget _buildPeriodBranchAnalytics(String branchId, String branchName) => StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-    stream: _firestore.collection('completed_sales').where('branchId', isEqualTo: branchId).snapshots(),
-    builder: (context, snapshot) {
+  Widget _buildBranchActivity(String branchId,
+      Widget Function(List<Map<String, dynamic>>) builder) {
+    // Each activity view owns stable subscriptions; nested rebuilds must not
+    // replace streams or reuse another widget's single-subscription stream.
+    final salesStream = _firestore.collection('completed_sales').where('branchId', isEqualTo: branchId).snapshots();
+    final inventoryStream = _firestore.collection('staff_inventory').where('staffId', isEqualTo: branchId).snapshots();
+    final adjustmentsStream = _firestore.collection('stock_adjustments').snapshots();
+    return
+      StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+        stream: salesStream,
+        builder: (context, sales) => StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+          stream: inventoryStream,
+          builder: (context, inventory) => StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+            stream: adjustmentsStream,
+            builder: (context, adjustments) {
+              if (sales.hasError || inventory.hasError || adjustments.hasError) {
+                return const Padding(padding: EdgeInsets.all(16), child: Text('Unable to load branch activity.'));
+              }
+              if (!sales.hasData || !inventory.hasData || !adjustments.hasData) {
+                return const Center(child: CircularProgressIndicator(color: kPrimary));
+              }
+              final sources = {for (final doc in inventory.data!.docs) doc.id: doc.data()};
+              final records = sales.data!.docs.map((doc) => <String, dynamic>{...doc.data(), '_id': doc.id}).toList();
+              for (final doc in adjustments.data!.docs) {
+                final data = doc.data();
+                final savedBranch = data['branchId']?.toString() ?? '';
+                final source = sources[data['categoryId']?.toString()];
+                if (savedBranch.isNotEmpty ? savedBranch != branchId : source == null) continue;
+                final quantity = _parseInt(data['quantity']);
+                if (quantity <= 0) continue;
+                final price = _parsePrice(data['unitPrice'] ?? data['bundlePrice'] ?? source?['price']);
+                final loss = data['lossAmount'] == null ? price * quantity : _parsePrice(data['lossAmount']).abs();
+                records.add({
+                  ...data,
+                  '_id': doc.id,
+                  'salesId': doc.id,
+                  'type': 'reduced',
+                  'status': 'Reduced',
+                  'timestamp': data['createdAt'],
+                  'total': loss,
+                  'items': [{
+                    'name': data['itemName'] ?? data['categoryName'] ?? 'Item',
+                    'variant': data['variant'] ?? '',
+                    'quantity': quantity,
+                    'price': price,
+                    'isBundle': source?['isBundle'] == true || data['type']?.toString().contains('bundle') == true,
+                    'isCoffee': source?['isCoffee'] == true || data['type']?.toString().contains('coffee') == true,
+                  }],
+                });
+              }
+              return builder(records);
+            },
+          ),
+        ),
+      );
+  }
+
+  String _activityStatus(Map<String, dynamic> data) {
+    final type = data['type']?.toString().toLowerCase();
+    final status = data['status']?.toString().toLowerCase();
+    if (type == 'refund' || status == 'refund') return 'Refund';
+    if (type == 'reduce' || type == 'reduced' || status == 'reduce' || status == 'reduced') return 'Reduced';
+    return 'Completed';
+  }
+
+  Future<List<Map<String, dynamic>>> _loadLossRecordStaff(List<Map<String, dynamic>> records) async {
+    final staffLookups = <String, Future<Map<String, dynamic>>>{};
+    Future<Map<String, dynamic>> lookup(String id) async {
+      if (id.isEmpty) return {};
+      try {
+        final doc = await _firestore.collection('staff_requests').doc(id).get()
+            .timeout(const Duration(seconds: 10));
+        if (doc.exists) return doc.data() ?? {};
+        final byPublicId = await _firestore.collection('staff_requests')
+            .where('staffId', isEqualTo: id).limit(1).get()
+            .timeout(const Duration(seconds: 10));
+        return byPublicId.docs.isEmpty ? {} : byPublicId.docs.first.data();
+      } catch (_) {
+        return {};
+      }
+    }
+    return Future.wait(records.map((record) async {
+      final id = (record['userId'] ?? record['staffId'] ?? '').toString();
+      final data = await staffLookups.putIfAbsent(id, () => lookup(id));
+      final fullName = [data['firstName'], data['middleName'], data['lastName']]
+          .map((part) => part?.toString().trim() ?? '').where((part) => part.isNotEmpty).join(' ');
+      final savedName = (record['staffName'] ?? record['cashierName'] ?? record['userName'] ?? '').toString().trim();
+      return <String, dynamic>{
+        ...record,
+        'staffName': savedName.isNotEmpty ? savedName
+            : fullName.isNotEmpty ? fullName : data['name'] ?? 'Staff not recorded',
+        'staffPublicId': record['staffPublicId'] ?? data['staffId'] ?? record['staffId'] ?? record['userId'] ?? '',
+      };
+    }));
+  }
+
+  void _showBranchLossItems(String branchId, String status, List<Map<String, dynamic>> records) {
+    final day = _analyticsDate ?? DateTime.now();
+    final range = _analyticsRange;
+    final period = lossRecordPeriod(day, range);
+    final matching = records.where((record) {
+      final date = _dateValue(record['timestamp']);
+      return _activityStatus(record) == status && !date.isBefore(period.start) && date.isBefore(period.end);
+    }).map((record) => <String, dynamic>{...record, 'timestamp': _dateValue(record['timestamp'])}).toList();
+    final staffRecords = _loadLossRecordStaff(matching);
+    showDialog<void>(context: context, builder: (context) => BranchLossRecordsDialog(
+      status: status, anchor: day, range: range, records: matching, staffRecords: staffRecords,
+      cardBuilder: (record) => _buildBranchReceiptCardContent(
+        record, record['_id']?.toString() ?? '', record['staffName']?.toString() ?? 'Loading staff…',
+      ),
+    ));
+  }
+  Widget _buildPeriodBranchAnalytics(String branchId, String branchName) => _buildBranchActivity(branchId,
+    (records) {
       final now = _analyticsDate ?? DateTime.now();
+      final isRefundView = _analyticsStatus == 'Refund';
+      final isReducedView = _analyticsStatus == 'Reduced';
+      final rankingTitle = isRefundView ? (_sellingRank == 'Low Selling' ? 'Low refund items' : 'High refund items') : isReducedView ? (_sellingRank == 'Low Selling' ? 'Low reduced items' : 'High reduced items') : 'Best-selling items';
+      final itemAction = isRefundView ? 'refunded' : isReducedView ? 'reduced' : 'sold';
+      String rankLabel(String rank) => rank == 'All' ? 'All'
+          : isRefundView ? (rank == 'Top Selling' ? 'High refund items' : 'Low refund items')
+          : isReducedView ? (rank == 'Top Selling' ? 'High reduced items' : 'Low reduced items')
+          : rank;
       final today = DateTime(now.year, now.month, now.day);
       final weekStart = today.subtract(Duration(days: today.weekday - 1));
-      final isSmDagupan = branchName.trim().toLowerCase().contains('sm dagupan');
-      // SM Dagupan operates from 8:00 AM to 7:00 PM, so its daily report
-      // only shows sales within those business hours.
-      final dayStartHour = isSmDagupan ? 8 : 0;
-      final dayEndHour = isSmDagupan ? 19 : 23;
+      const dayStartHour = 10;
+      const dayEndHour = 19;
       final count = _analyticsRange == 'Day'
           ? dayEndHour - dayStartHour + 1
           : _analyticsRange == 'Week'
@@ -5442,12 +5523,10 @@ class _BudgetPageState extends State<BudgetPage>
           : _analyticsRange == 'Week'
           ? !DateTime(date.year, date.month, date.day).isBefore(weekStart) && DateTime(date.year, date.month, date.day).isBefore(weekStart.add(const Duration(days: 7)))
           : date.year == now.year;
-      for (final doc in snapshot.data?.docs ?? const []) {
-        final data = doc.data();
-        final type = data['type']?.toString().toLowerCase() ?? '';
-        final status = data['status']?.toString().toLowerCase() ?? '';
-        final isRefund = type == 'refund' || status == 'refund';
-        final isReduced = type == 'reduce' || type == 'reduced' || status == 'reduced';
+      for (final data in records) {
+        final status = _activityStatus(data);
+        final isRefund = status == 'Refund';
+        final isReduced = status == 'Reduced';
         final isCompleted = !isRefund && !isReduced;
         if ((_analyticsStatus == 'Refund' && !isRefund) ||
             (_analyticsStatus == 'Reduced' && !isReduced) ||
@@ -5465,6 +5544,9 @@ class _BudgetPageState extends State<BudgetPage>
             ? DateTime(date.year, date.month, date.day).difference(weekStart).inDays
             : date.month - 1;
         final value = _analyticsSaleValue(data);
+        amounts[bucket] += value;
+        if (isRefund) refundAmounts[bucket] += value;
+        if (isReduced) reducedAmounts[bucket] += value;
         if (isRefund) {
           totalRefund += value;
         } else if (isReduced) {
@@ -5485,11 +5567,12 @@ class _BudgetPageState extends State<BudgetPage>
               : item['name']?.toString().trim() ?? '';
           if (name.isEmpty) continue;
           final quantity = _parseInt(item['quantity'], fallback: 1);
-          // Use the exact same per-item quantity as Best Selling.  This
-          // keeps the graph bucket and ranking in sync for every period.
-          amounts[bucket] += quantity;
-          if (isRefund) refundAmounts[bucket] += quantity;
-          if (isReduced) reducedAmounts[bucket] += quantity;
+          // Quantities are used only for the best-selling item ranking.
+          // The graph aggregates each receipt total once, above.
+
+
+
+          if (_analyticsStatus == 'All' && !isCompleted) continue;
           final category = item['category']?.toString().toLowerCase() ?? '';
           final isBundle = item['isBundle'] == true;
           final isCoffee = item['isCoffee'] == true || category.contains('coffee');
@@ -5528,7 +5611,7 @@ class _BudgetPageState extends State<BudgetPage>
             ? a.value.compareTo(b.value)
             : b.value.compareTo(a.value));
       final rangeLabel = _analyticsRange == 'Day'
-          ? '${now.month}/${now.day}/${now.year} hourly sales${isSmDagupan ? ' (8AM–7PM)' : ''}'
+          ? '${now.month}/${now.day}/${now.year} hourly sales (10AM–7PM)'
           : _analyticsRange == 'Week'
           ? '${weekStart.month}/${weekStart.day} - ${weekStart.add(const Duration(days: 6)).month}/${weekStart.add(const Duration(days: 6)).day}/${now.year}'
           : 'January - December ${now.year}';
@@ -5579,35 +5662,21 @@ class _BudgetPageState extends State<BudgetPage>
             ],
           ),
           if (_analyticsStatus == 'All') Padding(padding: const EdgeInsets.only(top: 8), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('Total Completed: ₱${totalCompleted.toStringAsFixed(2)}', style: const TextStyle(color: Color(0xFFE53935), fontSize: 12, fontWeight: FontWeight.w800)), Text('Total Reduced: ₱${totalReduced.toStringAsFixed(2)}', style: const TextStyle(color: Color(0xFF1976D2), fontSize: 12, fontWeight: FontWeight.w800)), Text('Total Refund: ₱${totalRefund.toStringAsFixed(2)}', style: const TextStyle(color: Color(0xFFF9A825), fontSize: 12, fontWeight: FontWeight.w800))])),
-          if ((_analyticsStatus == 'Refund' || _analyticsStatus == 'Reduced') && totalLoss > 0) Padding(padding: const EdgeInsets.only(top: 8), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('Total loss: ₱${totalLoss.toStringAsFixed(2)}', style: const TextStyle(color: Color(0xFFD32F2F), fontWeight: FontWeight.w900)), TextButton.icon(onPressed: () => _showBranchReceipts(branchId: branchId, branchName: branchName), icon: const Icon(Icons.visibility_outlined, size: 16), label: const Text('View all items'), style: TextButton.styleFrom(foregroundColor: kDeep, textStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800)))])),
-          const SizedBox(height: 14), SizedBox(height: 142, child: _BranchAnalyticsBars(values: amounts, labels: labels, colors: graphColors, refunds: _analyticsStatus == 'All' ? refundAmounts : null, reduced: _analyticsStatus == 'All' ? reducedAmounts : null, selectedStatus: _analyticsStatus)),
-          const SizedBox(height: 16), const Text('Best-selling items', style: TextStyle(color: kDeep, fontWeight: FontWeight.w900)), const SizedBox(height: 8),
+          if (_analyticsStatus == 'Refund' || _analyticsStatus == 'Reduced') Padding(padding: const EdgeInsets.only(top: 8), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('Total loss: ₱${totalLoss.toStringAsFixed(2)}', style: const TextStyle(color: Color(0xFFD32F2F), fontWeight: FontWeight.w900)), TextButton.icon(onPressed: () => _showBranchLossItems(branchId, _analyticsStatus, records), icon: const Icon(Icons.visibility_outlined, size: 16), label: Text(_analyticsStatus == 'Refund' ? 'View Refund items' : 'View Reduced items'), style: TextButton.styleFrom(foregroundColor: kDeep, textStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800)))])),
+          const SizedBox(height: 14), SizedBox(height: 240, child: BranchAnalyticsBars(values: amounts, labels: labels, colors: graphColors, refunds: _analyticsStatus == 'All' ? refundAmounts : null, reduced: _analyticsStatus == 'All' ? reducedAmounts : null, selectedStatus: _analyticsStatus)),
+          const SizedBox(height: 16), Text(rankingTitle, style: const TextStyle(color: kDeep, fontWeight: FontWeight.w900)), const SizedBox(height: 8),
           Wrap(spacing: 8, runSpacing: 8, children: ['All', 'Categories', 'Bundle', 'Coffee Items'].map((type) => ChoiceChip(label: Text(type), selected: _sellingType == type, selectedColor: kPrimary, labelStyle: TextStyle(color: _sellingType == type ? Colors.white : kDeep, fontWeight: FontWeight.w800), onSelected: (_) => setState(() => _sellingType = type))).toList()),
           const SizedBox(height: 8),
-          Wrap(spacing: 8, children: ['All', 'Top Selling', 'Low Selling'].map((rank) => ChoiceChip(label: Text(rank), selected: _sellingRank == rank, selectedColor: kPrimary, labelStyle: TextStyle(color: _sellingRank == rank ? Colors.white : kDeep, fontWeight: FontWeight.w800), onSelected: (_) => setState(() => _sellingRank = rank))).toList()),
+          Wrap(spacing: 8, children: ['All', 'Top Selling', 'Low Selling'].map((rank) => ChoiceChip(label: Text(rankLabel(rank)), selected: _sellingRank == rank, selectedColor: kPrimary, labelStyle: TextStyle(color: _sellingRank == rank ? Colors.white : kDeep, fontWeight: FontWeight.w800), onSelected: (_) => setState(() => _sellingRank = rank))).toList()),
           const SizedBox(height: 8),
-          if (ranked.isEmpty) const Text('No completed sales in this period yet.', style: TextStyle(color: Colors.grey)) else ...ranked.take(5).map((e) => Padding(padding: const EdgeInsets.symmetric(vertical: 3), child: Row(children: [Icon(_sellingRank == 'Low Selling' ? Icons.trending_down_rounded : Icons.star_rounded, color: _sellingRank == 'Low Selling' ? Colors.orange : const Color(0xFFFFB300), size: 18), const SizedBox(width: 8), Expanded(child: Text(e.key, style: const TextStyle(fontWeight: FontWeight.w700))), Text('${e.value} sold', style: const TextStyle(color: kDeep, fontWeight: FontWeight.w900))]))),
+          if (ranked.isEmpty) Text('No $itemAction items in this period yet.', style: const TextStyle(color: Colors.grey)) else ...(_sellingRank == 'All' ? ranked : ranked.take(5)).map((e) => Padding(padding: const EdgeInsets.symmetric(vertical: 3), child: Row(children: [Icon(_sellingRank == 'Low Selling' ? Icons.trending_down_rounded : Icons.star_rounded, color: _sellingRank == 'Low Selling' ? Colors.orange : const Color(0xFFFFB300), size: 18), const SizedBox(width: 8), Expanded(child: Text(e.key, style: const TextStyle(fontWeight: FontWeight.w700))), Text('${e.value} $itemAction', style: const TextStyle(color: kDeep, fontWeight: FontWeight.w900))]))),
         ]),
       );
     },
   );
 
-  Widget _buildBranchQuickActions({required String branchId, required String branchName, required List<String> staffIds, required List<String> staffNames, required TextEditingController controller, required bool enabled}) => Transform.translate(
-    offset: const Offset(0, 18),
-    child: Align(
-    alignment: Alignment.centerRight,
-    child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.end, children: [
+  Widget _buildBranchQuickActions({required String branchId, required String branchName, required List<String> staffIds, required List<String> staffNames, required TextEditingController controller, required bool enabled}) => Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.end, children: [
       if (_branchFabExpanded) ...[
-        _animatedQuickAction(
-        FloatingActionButton.small(heroTag: 'staff_$branchId', onPressed: () => _showAssignBranchStaffDialog(branchId, branchName), child: const Icon(Icons.groups_rounded)),
-          delay: 0,
-        ),
-        const SizedBox(height: 8),
-        _animatedQuickAction(
-        FloatingActionButton.small(heroTag: 'report_$branchId', onPressed: enabled ? () => _showBranchReportDetail(branchId: branchId, branchName: branchName, staffIds: staffIds, staffNames: staffNames) : null, child: const Icon(Icons.assignment_rounded)),
-          delay: 45,
-        ),
-        const SizedBox(height: 8),
         _animatedQuickAction(
         FloatingActionButton.small(heroTag: 'items_$branchId', onPressed: enabled ? () => _showAssignInventoryDialog(branchId, branchName, isBranch: true) : null, child: const Icon(Icons.add_box_rounded)),
           delay: 90,
@@ -5620,9 +5689,8 @@ class _BudgetPageState extends State<BudgetPage>
         const SizedBox(height: 8),
       ],
       FloatingActionButton(heroTag: 'quick_$branchId', backgroundColor: kPrimary, onPressed: () => setState(() => _branchFabExpanded = !_branchFabExpanded), child: Icon(_branchFabExpanded ? Icons.close_rounded : Icons.add_rounded)),
-    ]),
-    ),
-  );
+    ]);
+
 
   Widget _animatedQuickAction(Widget child, {required int delay}) => TweenAnimationBuilder<double>(
     duration: Duration(milliseconds: 220 + delay),
@@ -5631,10 +5699,13 @@ class _BudgetPageState extends State<BudgetPage>
     builder: (context, value, _) => Opacity(opacity: value.clamp(0, 1), child: Transform.translate(offset: Offset(0, 18 * (1 - value)), child: Transform.scale(scale: value, child: child))),
   );
 
-  Widget _buildAllocationFilters() => Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      Wrap(
+  Widget _buildAllocationFilters() => Column(children: [
+    _buildAllocationSearch(),
+    const SizedBox(height: 10),
+    _buildAllocationCategories(),
+  ]);
+
+  Widget _buildAllocationCategories() => Wrap(
         spacing: 8,
         runSpacing: 8,
         children: ['All', 'Categories', 'Bundle', 'Coffee']
@@ -5653,18 +5724,18 @@ class _BudgetPageState extends State<BudgetPage>
               ),
             )
             .toList(),
-      ),
-      const SizedBox(height: 10),
-      TextField(
+      );
+
+  Widget _buildAllocationSearch() => TextField(
         controller: _allocationSearchController,
         onChanged: (value) =>
             setState(() => _allocationSearchQuery = value.trim().toLowerCase()),
         decoration: InputDecoration(
           hintText:
-              'Search ID, item name, allocated, remaining, price, or type',
+              'Search',
           prefixIcon: const Icon(Icons.search_rounded, color: kDeep),
           suffixIcon: IconButton(
-            tooltip: 'Filter sales analytics by date',
+            tooltip: 'Filter sales, revenue, and receipts by date',
             icon: Icon(
               Icons.calendar_month_rounded,
               color: _analyticsDate == null ? kDeep : kPrimary,
@@ -5692,9 +5763,7 @@ class _BudgetPageState extends State<BudgetPage>
             borderSide: BorderSide(color: kAccent),
           ),
         ),
-      ),
-    ],
-  );
+      );
 
   void _showBranchCashDrawerDialog(
     String branchId,
@@ -6430,47 +6499,6 @@ class _BudgetPageState extends State<BudgetPage>
           Row(
             children: [
               Expanded(
-                child: ElevatedButton.icon(
-                  onPressed: () {
-                    if (!enabled) {
-                      _showSnack(
-                        'Assign staff to this branch first.',
-                        Colors.orange.shade700,
-                      );
-                      return;
-                    }
-                    final budgetText = controller.text.trim();
-                    if (budgetText.isEmpty) {
-                      _showSnack(
-                        'Please enter an allocation amount',
-                        Colors.orange.shade700,
-                      );
-                      return;
-                    }
-                    final budget = double.tryParse(budgetText);
-                    if (budget == null || budget < 0) {
-                      _showSnack(
-                        'Invalid allocation amount',
-                        Colors.red.shade600,
-                      );
-                      return;
-                    }
-                    _saveBudget(branchId, branchName, budget, isBranch: true);
-                  },
-                  icon: const Icon(Icons.add_rounded),
-                  label: const Text('Add Cash'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: kBannerTop,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 13),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
                 child: OutlinedButton.icon(
                   onPressed: () {
                     if (!enabled) {
@@ -6505,7 +6533,7 @@ class _BudgetPageState extends State<BudgetPage>
                     );
                   },
                   icon: const Icon(Icons.edit_rounded),
-                  label: const Text('Set Daily'),
+                  label: const Text('Set Daily Cash'),
                   style: OutlinedButton.styleFrom(
                     foregroundColor: kBannerTop,
                     side: const BorderSide(color: kBannerTop),
@@ -6823,7 +6851,7 @@ class _BudgetPageState extends State<BudgetPage>
     await showDialog<void>(
       context: context,
       builder: (dialogContext) {
-        var showAssigned = false;
+        var showAssigned = true;
         var query = '';
         return StatefulBuilder(
           builder: (context, setDialogState) {
@@ -6937,17 +6965,17 @@ class _BudgetPageState extends State<BudgetPage>
                         children: [
                           Expanded(
                             child: _staffTabButton(
-                              'Available',
-                              !showAssigned,
-                              () => setDialogState(() => showAssigned = false),
+                              'Assigned',
+                              showAssigned,
+                              () => setDialogState(() => showAssigned = true),
                             ),
                           ),
                           const SizedBox(width: 8),
                           Expanded(
                             child: _staffTabButton(
-                              'Assigned',
-                              showAssigned,
-                              () => setDialogState(() => showAssigned = true),
+                              'Available',
+                              !showAssigned,
+                              () => setDialogState(() => showAssigned = false),
                             ),
                           ),
                         ],
@@ -7235,6 +7263,21 @@ class _BudgetPageState extends State<BudgetPage>
                         ),
                       ),
                     ],
+                  ),
+                ),
+                IconButton(
+                  tooltip: 'Staff',
+                  icon: const Icon(Icons.groups_rounded, color: Colors.white),
+                  onPressed: () => _showAssignBranchStaffDialog(branchId, name),
+                ),
+                IconButton(
+                  tooltip: 'Reports',
+                  icon: const Icon(Icons.assignment_rounded, color: Colors.white),
+                  onPressed: () => _showBranchReportDetail(
+                    branchId: branchId,
+                    branchName: name,
+                    staffIds: (data?['staffIds'] as List<dynamic>? ?? []).map((id) => id.toString()).toList(),
+                    staffNames: (data?['staffNames'] as List<dynamic>? ?? []).map((name) => name.toString()).toList(),
                   ),
                 ),
               ],
