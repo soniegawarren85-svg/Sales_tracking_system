@@ -1,3 +1,4 @@
+import '../services/staff_login_session.dart';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -78,6 +79,19 @@ class _ProfilePageState extends State<ProfilePage>
     final navigator = Navigator.of(context);
     final shouldLogout = await _showLogoutConfirmation(context);
     if (shouldLogout != true || !mounted) return;
+    try {
+      await StaffLoginSession.close();
+    } catch (_) {
+      if (mounted)
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Unable to save logout time. Please reconnect and try again.',
+            ),
+          ),
+        );
+      return;
+    }
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('lastRole');
     await prefs.remove('lastUserId');

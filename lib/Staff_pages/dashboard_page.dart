@@ -1,3 +1,4 @@
+import '../services/staff_login_session.dart';
 // dashboard_page.dart
 
 import 'dart:async';
@@ -193,6 +194,7 @@ class _DashboardPageState extends State<DashboardPage>
   @override
   void initState() {
     super.initState();
+    StaffLoginSession.flush();
     _rootInventoryStream = FirebaseFirestore.instance
         .collection('sales_inventory')
         .snapshots();
@@ -1098,9 +1100,18 @@ class _DashboardPageState extends State<DashboardPage>
     final horizontalPadding = isTablet ? 24.0 : 16.0;
     final headerHeight = isTablet ? 260.0 : 300.0;
 
-    return CustomScrollView(
+    return RefreshIndicator(onRefresh: () async {
+      try {
+        await Future.wait([
+          FirebaseFirestore.instance.collection('sales_inventory').get(const GetOptions(source: Source.server)),
+          if (_staffDocId != null) FirebaseFirestore.instance.collection('completed_sales').where('userId', isEqualTo: _staffDocId).get(const GetOptions(source: Source.server)),
+        ]).timeout(const Duration(seconds: 15));
+        await _initStaffIdentity(); await _loadLocalDashboardCache();
+        if (mounted) setState(() { _staffInventoryStreamCache = null; });
+      } catch (_) { if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Unable to refresh. Please check your connection.'))); }
+    }, child: CustomScrollView(
       controller: widget.scrollController,
-      physics: const ClampingScrollPhysics(),
+      physics: const AlwaysScrollableScrollPhysics(parent: ClampingScrollPhysics()),
       slivers: [
         // ── Header ────────────────────────────────────────────────────────
         SliverAppBar(
@@ -1260,7 +1271,7 @@ class _DashboardPageState extends State<DashboardPage>
         // view when there are several receipts.
         const SliverToBoxAdapter(child: SizedBox(height: 180)),
       ],
-    );
+    ));
   }
 
   // ── Admin inventory list ──────────────────────────────────────────────────
@@ -4134,7 +4145,7 @@ class _ItemCardState extends State<_ItemCard> {
     if (sources.length < 2) return _buildImageSource(sources.first);
     return PageView.builder(
       controller: _imageController,
-      physics: const BouncingScrollPhysics(),
+      physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
       itemCount: sources.length,
       onPageChanged: (page) => _imageIndex = page,
       itemBuilder: (context, index) => _buildImageSource(sources[index]),
@@ -5647,6 +5658,7 @@ class _DashboardLoadingSkeleton extends StatelessWidget {
       padding: const EdgeInsets.symmetric(vertical: 18),
       child: Column(
         children: [
+          const Padding(padding: EdgeInsets.all(12), child: SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2))),
           Container(
             width: double.infinity,
             height: compact ? 128 : 166,

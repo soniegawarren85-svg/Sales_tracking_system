@@ -1,3 +1,4 @@
+import '../services/public_item_id.dart';
 import 'dart:async';
 import 'dart:convert';
 
@@ -3861,12 +3862,12 @@ class _AllCategPageState extends State<AllCategPage>
     return DataCell(
       SizedBox(
         width: width,
-        child: Text(
+        child: Tooltip(message: value, child: Text(
           value,
           maxLines: 2,
           overflow: TextOverflow.ellipsis,
           style: TextStyle(fontSize: 12, fontWeight: weight, color: color),
-        ),
+        )),
       ),
     );
   }
@@ -3990,7 +3991,7 @@ class _AllCategPageState extends State<AllCategPage>
   String _displayItemId(Map<String, dynamic> item, {String? fallback}) {
     for (final key in ['id', 'itemId', 'variantId', 'sourceItemId']) {
       final value = item[key]?.toString().trim() ?? '';
-      if (value.isNotEmpty) return value;
+      if (value.isNotEmpty) return publicItemId(value);
     }
     final safeFallback = fallback?.trim() ?? '';
     return safeFallback.isNotEmpty ? safeFallback : '--';

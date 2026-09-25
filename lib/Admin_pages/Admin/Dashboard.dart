@@ -1,6 +1,7 @@
-import '../../widgets/admin_catalog.dart';
+﻿import '../../Login/Login/Login.dart';
+import '../../widgets/admin_sales_overview.dart';
+import '../../widgets/admin_recent_sales.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -10,20 +11,20 @@ import '../../services/expiry_notification_service.dart';
 import '../../services/branch_session.dart';
 
 import 'InventoryPage.dart';
-import 'CoffeeMenuPage.dart';
-import 'Notification.dart';
 import 'Message.dart';
 import 'Budget.dart';
 import 'SettingsPage.dart';
 import 'StaffPage.dart';
 import 'Reports.dart';
 
-// ─── Color Palette ────────────────────────────────────────────────────────────
-const kPrimaryBrown = Color(0xFFE91E63); // Pink
-const kLightBrown = Color(0xFFF48FB1); // Light Pink
-const kAccentBrown = Color(0xFFF8BBD0); // Accent Pink
-const kCreamWhite = Color(0xFFFFF8F3);
-const kDeepBrown = Color(0xFFC2105C); // Deep Pink
+// ─── Color Palette (Professional / Refined) ───────────────────────────────
+// A deeper, more premium magenta-plum palette instead of flat pink.
+const kPrimaryBrown = Color(0xFFE91E63); // Deep magenta (primary)
+const kLightBrown = Color(0xFFF48FB1); // Muted rose (secondary)
+const kAccentBrown = Color(0xFFF8BBD0); // Soft blush accent
+const kCreamWhite = Color(0xFFFFF8F5); // Cool off-white background
+const kDeepBrown = Color(0xFFC2105C); // Deep plum for text/icons
+const kSurfaceDark = Color(0xFFC2105C); // Near-black plum for dark surfaces
 
 class AdminDashboard extends StatefulWidget {
   const AdminDashboard({super.key});
@@ -37,15 +38,19 @@ class _AdminDashboardState extends State<AdminDashboard>
   int _selectedIndex = 0;
 
   static const String kShopLogoAsset = 'Assets/Image/ob.jpg';
-  static const String kAdminAvatarUrl =
-      'https://i.imgur.com/placeholder_admin.png'; // Replace with your real image
-
   final _navItems = const [
-    _NavItem(icon: Icons.dashboard_rounded, label: 'Home'),
+    _NavItem(icon: Icons.dashboard_rounded, label: 'Dashboard'),
     _NavItem(icon: Icons.paid_rounded, label: 'Allocation'),
     _NavItem(icon: Icons.inventory_2_rounded, label: 'Inventory'),
+    _NavItem(icon: Icons.people_rounded, label: 'Staff'),
+    _NavItem(icon: Icons.bar_chart_rounded, label: 'Reports'),
     _NavItem(icon: Icons.settings_rounded, label: 'Settings'),
   ];
+
+  // ── Entrance animation controller for the home page content ──────────────
+  late final AnimationController _entranceController;
+  late final Animation<double> _fadeIn;
+  late final Animation<Offset> _slideUp;
 
   @override
   void initState() {
@@ -55,15 +60,38 @@ class _AdminDashboardState extends State<AdminDashboard>
     ExpiryNotificationService().checkAndNotifyExpiringItems();
     BranchSession.instance.load();
     BranchSession.instance.addListener(_onBranchChanged);
+
+    _entranceController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 650),
+    );
+    _fadeIn = CurvedAnimation(
+      parent: _entranceController,
+      curve: Curves.easeOut,
+    );
+    _slideUp = Tween<Offset>(begin: const Offset(0, 0.06), end: Offset.zero)
+        .animate(
+          CurvedAnimation(
+            parent: _entranceController,
+            curve: Curves.easeOutCubic,
+          ),
+        );
+    _entranceController.forward();
   }
 
   void _onBranchChanged() {
-    if (mounted) setState(() => _selectedIndex = 0);
+    if (mounted) {
+      setState(() => _selectedIndex = 0);
+      _entranceController
+        ..reset()
+        ..forward();
+    }
   }
 
   @override
   void dispose() {
     BranchSession.instance.removeListener(_onBranchChanged);
+    _entranceController.dispose();
     super.dispose();
   }
 
@@ -90,63 +118,41 @@ class _AdminDashboardState extends State<AdminDashboard>
     }).toList();
   }
 
-  int _availableBundleCount(Map<String, dynamic> data) {
-    final instances = (data['bundleInstances'] as List<dynamic>? ?? [])
-        .whereType<Map>()
-        .toList();
-    if (instances.isEmpty) {
-      return int.tryParse(data['bundleCount']?.toString() ?? '0') ?? 0;
-    }
-    return instances.where((instance) {
-      final status = instance['status']?.toString().trim().toLowerCase();
-      return status == null || status.isEmpty || status == 'available';
-    }).length;
-  }
-
-  int _calculateTotalStockFromProducts(List<QueryDocumentSnapshot> products) {
-    int total = 0;
-    for (var doc in products) {
-      try {
-        final data = doc.data() as Map<String, dynamic>;
-        if (data['isDeleted'] == true) continue;
-        final items =
-            (data['items'] as List?)?.cast<Map<String, dynamic>>() ?? [];
-        final activeItems = _activeItemVariants(items);
-        if (activeItems.isEmpty) continue;
-        // Sum the actual starting stock quantities, not the count of items
-        for (var item in activeItems) {
-          final stock =
-              int.tryParse(item['startingStock']?.toString() ?? '0') ?? 0;
-          total += stock;
-        }
-      } catch (e) {
-        print('Error calculating stock for product: $e');
-      }
-    }
-    return total;
-  }
-
-  String _extractAdminName(Map<String, dynamic>? data) {
-    if (data == null) return 'Admin Name';
-
-    final firstName = (data['firstName'] as String?)?.trim() ?? '';
-    final middleName = (data['middleName'] as String?)?.trim() ?? '';
-    final lastName = (data['lastName'] as String?)?.trim() ?? '';
-    final fullName = [
-      firstName,
-      middleName,
-      lastName,
-    ].where((part) => part.isNotEmpty).join(' ');
-
-    return fullName.isEmpty ? 'Admin Name' : fullName;
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: kCreamWhite,
-      body: SafeArea(child: _buildBody()),
-      bottomNavigationBar: _buildBottomNavigationBar(),
+      body: SafeArea(
+        child: Row(
+          children: [
+            if (MediaQuery.sizeOf(context).width >= 600) _buildSidebar(),
+            Expanded(
+              child: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 320),
+                switchInCurve: Curves.easeOut,
+                switchOutCurve: Curves.easeIn,
+                transitionBuilder: (child, animation) => FadeTransition(
+                  opacity: animation,
+                  child: SlideTransition(
+                    position: Tween<Offset>(
+                      begin: const Offset(0, 0.02),
+                      end: Offset.zero,
+                    ).animate(animation),
+                    child: child,
+                  ),
+                ),
+                child: KeyedSubtree(
+                  key: ValueKey(_selectedIndex),
+                  child: _buildBody(),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+      bottomNavigationBar: MediaQuery.sizeOf(context).width >= 600
+          ? null
+          : _buildBottomNavigationBar(),
     );
   }
 
@@ -159,6 +165,10 @@ class _AdminDashboardState extends State<AdminDashboard>
         // Inventory is part of the main admin navigation.
         return const InventoryPage(embedded: true);
       case 3:
+        return const StaffPage();
+      case 4:
+        return const ReportsPage();
+      case 5:
         return const SettingsPage();
       default:
         return _buildHomePage();
@@ -169,45 +179,105 @@ class _AdminDashboardState extends State<AdminDashboard>
   //  HOME PAGE  –  NestedScrollView + SliverAppBar (collapsing header)
   // ══════════════════════════════════════════════════════════════════════════
   Widget _buildHomePage() {
-    return NestedScrollView(
-      headerSliverBuilder: (context, innerBoxScrolled) => [
-        _buildSliverAppBar(showFullHeader: true),
-      ],
-      body: _buildHomeBody(),
+    return RefreshIndicator(
+      notificationPredicate: (_) => true,
+      onRefresh: () async {
+        try {
+          await Future.wait(
+            [
+              'completed_sales',
+              'sales_inventory',
+              'coffee_products',
+              'staff_requests',
+            ].map(
+              (name) => FirebaseFirestore.instance
+                  .collection(name)
+                  .get(const GetOptions(source: Source.server)),
+            ),
+          ).timeout(const Duration(seconds: 15));
+          if (mounted) setState(() {});
+        } catch (_) {
+          if (mounted)
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text(
+                  'Unable to refresh. Please check your connection.',
+                ),
+              ),
+            );
+        }
+      },
+      child: NestedScrollView(
+        headerSliverBuilder: (context, innerBoxScrolled) => [
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+            sliver: _buildSliverAppBar(showFullHeader: true),
+          ),
+        ],
+        body: _buildHomeBody(),
+      ),
     );
   }
 
   Widget _buildHomeBody() {
     return SingleChildScrollView(
+      physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-      child: Center(child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 1120),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          _buildStatsCard(),
-          const SizedBox(height: 20),
-          _buildSectionLabel('Quick Actions'),
-          const SizedBox(height: 12),
-          _buildOptionsGrid(),
-          const SizedBox(height: 24),
-          _buildSectionLabel('Our Items'),
-          const SizedBox(height: 12),
-          AdminCatalog(gallery: true, onOpen: (entry) => Navigator.push(context,
-            MaterialPageRoute(builder: (_) => InventoryPage(initialEntry: entry)))),
-          const SizedBox(height: 24),
-        ]),
-      )),
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 1120),
+          child: FadeTransition(
+            opacity: _fadeIn,
+            child: SlideTransition(
+              position: _slideUp,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _buildStatsCard(),
+                  const SizedBox(height: 16),
+                  const AdminSalesOverview(todayOnly: true),
+                  const SizedBox(height: 20),
+                  AdminRecentSales(
+                    key: ValueKey(BranchSession.instance.branchId),
+                  ),
+                  const SizedBox(height: 24),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
+
   // ══════════════════════════════════════════════════════════════════════════
   //  SLIVER APP BAR  –  Collapsing header with real image + admin badge
   // ══════════════════════════════════════════════════════════════════════════
   SliverAppBar _buildSliverAppBar({required bool showFullHeader}) {
     return SliverAppBar(
-      expandedHeight: showFullHeader ? 270.0 : 80.0,
+      expandedHeight: showFullHeader
+          ? (MediaQuery.sizeOf(context).width < 600 ? 252.0 : 232.0)
+          : 80.0,
       pinned: true,
+      clipBehavior: Clip.antiAlias,
       stretch: true,
       elevation: 0,
       backgroundColor: kPrimaryBrown,
+      title: Row(
+        children: [
+          _buildShopLogoMini(),
+          const SizedBox(width: 10),
+          const Text(
+            "Angel'z Bites",
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 20,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.2,
+            ),
+          ),
+        ],
+      ),
       automaticallyImplyLeading: false,
 
       // ── Collapsed bar: show the sticky shop name in the toolbar
@@ -268,7 +338,7 @@ class _AdminDashboardState extends State<AdminDashboard>
 
       // ── Smooth curved bottom shape ────────────────────────────────────
       shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(bottom: Radius.circular(28)),
+        borderRadius: BorderRadius.all(Radius.circular(28)),
       ),
     );
   }
@@ -299,349 +369,89 @@ class _AdminDashboardState extends State<AdminDashboard>
   }
 
   // ── Full expanded header content ─────────────────────────────────────────
-  Widget _buildExpandedHeader() {
-    return Container(
-      decoration: const BoxDecoration(
-        borderRadius: BorderRadius.vertical(bottom: Radius.circular(28)),
-      ),
-      child: ClipRRect(
-        borderRadius: const BorderRadius.vertical(bottom: Radius.circular(28)),
-        child: Stack(
-          clipBehavior: Clip.hardEdge,
-          fit: StackFit.expand,
-          children: [
-            Image.asset(
-              'Assets/Image/Final_bg.jpg',
-              fit: BoxFit.cover,
-              errorBuilder: (_, _, _) => Container(color: kDeepBrown),
-            ),
-            Container(
-              decoration: const BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [Color.fromARGB(155, 145, 0, 75), Color.fromARGB(130, 235, 55, 145), Color.fromARGB(165, 175, 0, 95)],
-                  stops: [0.0, 0.55, 1.0],
-                ),
-              ),
-            ),
-            Positioned(
-              top: -30,
-              right: -30,
-              child: Container(
-                width: 130,
-                height: 130,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: Colors.white.withOpacity(0.06),
-                ),
-              ),
-            ),
-            Positioned(
-              bottom: 20,
-              left: -20,
-              child: Container(
-                width: 90,
-                height: 90,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: Colors.white.withOpacity(0.05),
-                ),
-              ),
-            ),
-            SafeArea(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(20, 10, 20, 20),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        _buildShopLogoBig(),
-                        const SizedBox(width: 14),
-                        Expanded(child: _buildShopTitle()),
-                      ],
-                    ),
-                    const SizedBox(height: 20),
-                    _buildAdminProfileCard(),
-                  ],
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  // ── Large shop logo ───────────────────────────────────────────────────────
-  Widget _buildShopLogoBig() {
-    return Container(
-      width: 60,
-      height: 60,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        border: Border.all(color: Colors.white, width: 3),
-        boxShadow: const [
-          BoxShadow(
-            color: Colors.black26,
-            blurRadius: 10,
-            offset: Offset(0, 4),
-          ),
-        ],
-      ),
-      child: ClipOval(
-        child: Image.asset(
-          kShopLogoAsset,
-          fit: BoxFit.cover,
-          errorBuilder: (_, _, _) => Container(
-            color: Colors.white,
-            child: const Icon(Icons.cake_rounded, color: kLightBrown, size: 34),
-          ),
-        ),
-      ),
-    );
-  }
-
-  // ── Shop title + subtitle ─────────────────────────────────────────────────
-  Widget _buildShopTitle() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      mainAxisSize: MainAxisSize.min,
+  Widget _buildExpandedHeader() => ClipRRect(
+    borderRadius: const BorderRadius.all(Radius.circular(28)),
+    child: Stack(
+      fit: StackFit.expand,
       children: [
-        ShaderMask(
-          shaderCallback: (bounds) => const LinearGradient(
-            colors: [Color(0xFFFFD166), Color(0xFFFF8C42)],
-          ).createShader(bounds),
-          child: const Text(
-            "Angel Bite'z",
-            style: TextStyle(
-              fontSize: 26,
-              fontWeight: FontWeight.w900,
-              color: Colors.white,
-              letterSpacing: -0.5,
-              height: 1.1,
+        Image.asset('Assets/Image/Final_bg.jpg', fit: BoxFit.cover),
+        // Deeper, more refined gradient (adds a near-black plum layer for contrast)
+        const DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.bottomLeft,
+              end: Alignment.topRight,
+              colors: [Color(0xC2C2105C), Color(0x99E91E63), Color(0x40F48FB1)],
             ),
           ),
         ),
-        const SizedBox(height: 3),
-        Row(
-          children: [
-            Container(
-              width: 5,
-              height: 5,
-              decoration: const BoxDecoration(
-                shape: BoxShape.circle,
-                color: Color(0xFFFFD166),
-              ),
-            ),
-            const SizedBox(width: 6),
-            Text(
-              BranchSession.instance.isMainBranch
-                  ? 'Cupcakes'
-                  : 'Cupcakes • ${BranchSession.instance.displayName}',
-              style: TextStyle(
-                fontSize: 12,
-                color: Color(0xFFFFD8B5),
-                fontWeight: FontWeight.w500,
-                letterSpacing: 0.9,
-              ),
-            ),
-          ],
-        ),
-      ],
-    );
-  }
-
-  // ── Admin profile card (glassmorphic style) ───────────────────────────────
-  Widget _buildAdminProfileCard() {
-    final userEmail = FirebaseAuth.instance.currentUser?.email;
-
-    final adminDocStream = userEmail != null
-        ? FirebaseFirestore.instance
-              .collection('staff_requests')
-              .where('email', isEqualTo: userEmail)
-              .limit(1)
-              .snapshots()
-        : Stream<QuerySnapshot<Map<String, dynamic>>>.empty();
-
-    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-      stream: adminDocStream,
-      builder: (context, snapshot) {
-        Map<String, dynamic>? data;
-        if (snapshot.hasData && snapshot.data!.docs.isNotEmpty) {
-          data = snapshot.data!.docs.first.data();
-        }
-
-        final fullName = _extractAdminName(data);
-        final role = data?['role']?.toString().trim().toLowerCase() ?? 'admin';
-        String displayId;
-        if (data == null) {
-          displayId = '#0001';
-        } else {
-          final primaryId = role == 'admin' ? data['adminId'] : data['staffId'];
-          final fallbackId = role == 'admin'
-              ? data['staffId']
-              : data['adminId'];
-          displayId = (primaryId ?? fallbackId)?.toString() ?? '#0001';
-        }
-
-        final isNarrow = MediaQuery.of(context).size.width < 360;
-        final avatarStack = Stack(
-          alignment: Alignment.bottomRight,
-          children: [
-            Container(
-              width: 74,
-              height: 74,
-              decoration: const BoxDecoration(
-                shape: BoxShape.circle,
-                gradient: LinearGradient(
-                  colors: [Color(0xFFFFD166), Color(0xFFFF8C42)],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
-                boxShadow: [
-                  BoxShadow(
-                    color: Color(0x77FF8C42),
-                    blurRadius: 18,
-                    spreadRadius: 3,
-                  ),
-                ],
-              ),
-              padding: const EdgeInsets.all(3),
-              child: ClipOval(
-                child: Image.network(
-                  kAdminAvatarUrl,
-                  width: 74,
-                  height: 74,
-                  fit: BoxFit.cover,
-                  errorBuilder: (_, _, _) => Container(
-                    width: 74,
-                    height: 74,
-                    color: Colors.white.withOpacity(0.25),
-                    child: const Icon(
-                      Icons.person_rounded,
-                      color: Colors.white,
-                      size: 38,
-                    ),
-                  ),
-                ),
-              ),
-            ),
-            Container(
-              width: 17,
-              height: 17,
-              decoration: BoxDecoration(
-                color: const Color(0xFF43A047),
-                shape: BoxShape.circle,
-                border: Border.all(color: Colors.white, width: 2.5),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.green.withOpacity(0.55),
-                    blurRadius: 6,
-                  ),
-                ],
-              ),
-            ),
-          ],
-        );
-
-        final profileDetails = Expanded(
+        Padding(
+          padding: const EdgeInsets.fromLTRB(22, 74, 22, 20),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 4,
-                ),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFFFD166).withOpacity(0.18),
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(
-                    color: const Color(0xFFFFD166).withOpacity(0.50),
-                    width: 1,
+              TweenAnimationBuilder<double>(
+                tween: Tween(begin: 0, end: 1),
+                duration: const Duration(milliseconds: 500),
+                curve: Curves.easeOut,
+                builder: (context, value, child) => Opacity(
+                  opacity: value,
+                  child: Transform.translate(
+                    offset: Offset(0, (1 - value) * 10),
+                    child: child,
                   ),
                 ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Icon(
-                      Icons.workspace_premium_rounded,
-                      color: Color(0xFFFFD166),
-                      size: 12,
-                    ),
-                    const SizedBox(width: 5),
-                    const Text(
-                      'ADMIN',
-                      style: TextStyle(
-                        fontSize: 10,
-                        fontWeight: FontWeight.w800,
-                        color: Color(0xFFFFD166),
-                        letterSpacing: 1.0,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 7),
-              Text(
-                fullName,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 22,
-                  fontWeight: FontWeight.w900,
-                  letterSpacing: -0.4,
-                  height: 1.1,
+                child: const Text(
+                  'Good day, Admin!',
+                  style: TextStyle(
+                    fontSize: 26,
+                    fontWeight: FontWeight.w800,
+                    color: Colors.white,
+                  ),
                 ),
               ),
               const SizedBox(height: 8),
+              const Text(
+                'Manage your products, sales, and inventory all in one place.',
+                style: TextStyle(color: Colors.white70),
+              ),
+              const SizedBox(height: 14),
               Container(
                 padding: const EdgeInsets.symmetric(
-                  horizontal: 11,
-                  vertical: 5,
+                  horizontal: 12,
+                  vertical: 10,
                 ),
                 decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.12),
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(
-                    color: Colors.white.withOpacity(0.22),
-                    width: 1,
-                  ),
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(12),
+                  boxShadow: const [
+                    BoxShadow(
+                      color: Colors.black26,
+                      blurRadius: 8,
+                      offset: Offset(0, 3),
+                    ),
+                  ],
                 ),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     const Icon(
-                      Icons.badge_outlined,
-                      color: Color(0xFFFFD8B5),
-                      size: 14,
+                      Icons.calendar_today_outlined,
+                      size: 17,
+                      color: kDeepBrown,
                     ),
-                    const SizedBox(width: 6),
-                    const Text(
-                      'ID',
-                      style: TextStyle(
-                        fontSize: 10,
-                        fontWeight: FontWeight.w600,
-                        color: Color(0xFFFFB380),
-                        letterSpacing: 0.8,
-                      ),
-                    ),
-                    const SizedBox(width: 5),
-                    Container(
-                      width: 1,
-                      height: 12,
-                      color: Colors.white.withOpacity(0.25),
-                    ),
-                    const SizedBox(width: 5),
-                    Text(
-                      displayId,
-                      style: const TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w800,
-                        color: Color(0xFFFFD8B5),
-                        letterSpacing: 1.2,
+                    const SizedBox(width: 8),
+                    Flexible(
+                      child: Text(
+                        MaterialLocalizations.of(
+                          context,
+                        ).formatFullDate(DateTime.now()),
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: kDeepBrown,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
                     ),
                   ],
@@ -649,76 +459,135 @@ class _AdminDashboardState extends State<AdminDashboard>
               ),
             ],
           ),
-        );
+        ),
+      ],
+    ),
+  );
 
-        final editButton = GestureDetector(
-          onTap: () {
-            setState(() => _selectedIndex = 3);
-          },
-          child: Container(
-            padding: const EdgeInsets.all(13),
-            decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.18),
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: const Icon(
-              Icons.edit_rounded,
-              color: Colors.white,
-              size: 22,
-            ),
+  Future<void> _logout() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Logging out'),
+        content: const Text('Are you sure you want to log out?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
           ),
-        );
-
-        return Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-          decoration: BoxDecoration(
-            color: Colors.white.withOpacity(0.15),
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(
-              color: Colors.white.withOpacity(0.3),
-              width: 1.2,
-            ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Logout'),
           ),
-          child: isNarrow
-              ? Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.center,
-                      children: [
-                        avatarStack,
-                        const SizedBox(width: 14),
-                        profileDetails,
-                      ],
-                    ),
-                    const SizedBox(height: 14),
-                    Align(alignment: Alignment.centerRight, child: editButton),
-                  ],
-                )
-              : Row(
-                  children: [
-                    avatarStack,
-                    const SizedBox(width: 14),
-                    profileDetails,
-                    editButton,
-                  ],
-                ),
-        );
-      },
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    final prefs = await SharedPreferences.getInstance();
+    for (final key in ['lastRole', 'lastUserId', 'adminId']) {
+      await prefs.remove(key);
+    }
+    await FirebaseAuth.instance.signOut();
+    if (!mounted) return;
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const LoginScreen()),
+      (_) => false,
     );
   }
 
   // ══════════════════════════════════════════════════════════════════════════
-  //  STATS CARD
+  //  SIDEBAR  –  refined dark-plum surface with hover + selection animation
+  // ══════════════════════════════════════════════════════════════════════════
+  Widget _buildSidebar() => Container(
+    width: 192,
+    decoration: const BoxDecoration(
+      color: kSurfaceDark,
+      boxShadow: [
+        BoxShadow(color: Colors.black26, blurRadius: 12, offset: Offset(3, 0)),
+      ],
+    ),
+    child: Column(
+      children: [
+        const SizedBox(height: 24),
+        _buildShopLogoMini(),
+        const SizedBox(height: 10),
+        const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 12),
+          child: Text(
+            'Angelz Bites Cupcakes',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: Color(0xFFF8BBD0),
+              fontSize: 20,
+              fontWeight: FontWeight.w600,
+              fontStyle: FontStyle.italic,
+            ),
+          ),
+        ),
+        const SizedBox(height: 28),
+        Expanded(
+          child: ListView(
+            children: List.generate(
+              _navItems.length,
+              (index) => Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 3,
+                ),
+                child: _SidebarTile(
+                  item: _navItems[index],
+                  selected: _selectedIndex == index,
+                  onTap: () => setState(() => _selectedIndex = index),
+                ),
+              ),
+            ),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            children: [
+              const ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: CircleAvatar(
+                  backgroundColor: Colors.white24,
+                  child: Icon(Icons.person, color: Colors.white),
+                ),
+                title: Text(
+                  'Admin',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+              TextButton.icon(
+                onPressed: _logout,
+                style: TextButton.styleFrom(
+                  foregroundColor: Colors.white,
+                  overlayColor: kPrimaryBrown.withOpacity(0.3),
+                ),
+                icon: const Icon(Icons.logout, size: 18),
+                label: const Text('Logout'),
+              ),
+            ],
+          ),
+        ),
+      ],
+    ),
+  );
+
+  // ══════════════════════════════════════════════════════════════════════════
+  //  STATS CARD  –  animated count-up numbers
   // ══════════════════════════════════════════════════════════════════════════
   Widget _buildStatsCard() {
     final activeBranchId = BranchSession.instance.branchId;
     return LayoutBuilder(
       builder: (context, constraints) {
         return StreamBuilder<QuerySnapshot>(
-            stream: FirebaseFirestore.instance
-            .collection('sales_inventory')
-            .snapshots(),
+          stream: FirebaseFirestore.instance
+              .collection('sales_inventory')
+              .snapshots(),
           builder: (context, salesSnapshot) {
             int totalStock = 0;
             int totalItems = 0;
@@ -770,33 +639,10 @@ class _AdminDashboardState extends State<AdminDashboard>
                       }).length
                     : 0;
 
-                final statsWidgets = [
-                  _buildStatItem(
-                    Icons.point_of_sale_rounded,
-                    totalItems.toString(),
-                    'Items',
-                  ),
-                  _buildStatItem(
-                    Icons.inventory_2_rounded,
-                    totalStock.toString(),
-                    'Bundles',
-                  ),
-                  StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                    stream: FirebaseFirestore.instance.collection('coffee_products').snapshots(),
-                    builder: (context, coffee) => _buildStatItem(Icons.coffee_rounded,
-                      coffee.hasData ? coffee.data!.docs.where((doc) => doc.data()['isDeleted'] != true).length.toString() : '—', 'Coffee'),
-                  ),
-                  _buildStatItem(
-                    Icons.people_alt_rounded,
-                    staffCount.toString(),
-                    'Staff',
-                  ),
-                ];
-
                 return Container(
                   padding: EdgeInsets.symmetric(
                     vertical: MediaQuery.of(context).size.width >= 600
-                        ? 11
+                        ? 12
                         : 18,
                     horizontal: 12,
                   ),
@@ -809,21 +655,58 @@ class _AdminDashboardState extends State<AdminDashboard>
                     borderRadius: BorderRadius.circular(22),
                     boxShadow: [
                       BoxShadow(
-                        color: kPrimaryBrown.withOpacity(0.35),
-                        blurRadius: 14,
-                        offset: const Offset(0, 6),
+                        color: kPrimaryBrown.withOpacity(0.32),
+                        blurRadius: 16,
+                        offset: const Offset(0, 8),
                       ),
                     ],
                   ),
                   child: Row(
                     children: [
-                      Expanded(child: statsWidgets[0]),
+                      Expanded(
+                        child: _buildStatItem(
+                          Icons.point_of_sale_rounded,
+                          totalItems,
+                          'Items',
+                        ),
+                      ),
                       _buildStatDivider(),
-                      Expanded(child: statsWidgets[1]),
+                      Expanded(
+                        child: _buildStatItem(
+                          Icons.inventory_2_rounded,
+                          totalStock,
+                          'Bundles',
+                        ),
+                      ),
                       _buildStatDivider(),
-                      Expanded(child: statsWidgets[2]),
+                      Expanded(
+                        child:
+                            StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                              stream: FirebaseFirestore.instance
+                                  .collection('coffee_products')
+                                  .snapshots(),
+                              builder: (context, coffee) => _buildStatItem(
+                                Icons.coffee_rounded,
+                                coffee.hasData
+                                    ? coffee.data!.docs
+                                          .where(
+                                            (doc) =>
+                                                doc.data()['isDeleted'] != true,
+                                          )
+                                          .length
+                                    : null,
+                                'Coffee',
+                              ),
+                            ),
+                      ),
                       _buildStatDivider(),
-                      Expanded(child: statsWidgets[3]),
+                      Expanded(
+                        child: _buildStatItem(
+                          Icons.people_alt_rounded,
+                          staffCount,
+                          'Staff',
+                        ),
+                      ),
                     ],
                   ),
                 );
@@ -835,27 +718,51 @@ class _AdminDashboardState extends State<AdminDashboard>
     );
   }
 
-  Widget _buildStatItem(IconData icon, String value, String label) {
+  /// Animated count-up stat item. Pass `null` for value while data is loading
+  /// to show an "—" placeholder instead of animating from zero.
+  Widget _buildStatItem(IconData icon, int? value, String label) {
     return Column(
       children: [
-        Container(
-          padding: const EdgeInsets.all(9),
-          decoration: BoxDecoration(
-            color: Colors.white.withOpacity(0.18),
-            borderRadius: BorderRadius.circular(12),
+        TweenAnimationBuilder<double>(
+          tween: Tween(begin: 0.8, end: 1),
+          duration: const Duration(milliseconds: 400),
+          curve: Curves.easeOutBack,
+          builder: (context, scale, child) =>
+              Transform.scale(scale: scale, child: child),
+          child: Container(
+            padding: const EdgeInsets.all(9),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.18),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Icon(icon, color: Colors.white, size: 20),
           ),
-          child: Icon(icon, color: Colors.white, size: 20),
         ),
         const SizedBox(height: 8),
-        Text(
-          value,
-          style: const TextStyle(
-            color: Colors.white,
-            fontSize: 24,
-            fontWeight: FontWeight.w900,
-            height: 1,
-          ),
-        ),
+        value == null
+            ? const Text(
+                '—',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 24,
+                  fontWeight: FontWeight.w900,
+                  height: 1,
+                ),
+              )
+            : TweenAnimationBuilder<int>(
+                tween: IntTween(begin: 0, end: value),
+                duration: const Duration(milliseconds: 700),
+                curve: Curves.easeOutCubic,
+                builder: (context, animatedValue, _) => Text(
+                  '$animatedValue',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 24,
+                    fontWeight: FontWeight.w900,
+                    height: 1,
+                  ),
+                ),
+              ),
         const SizedBox(height: 3),
         Text(
           label,
@@ -881,135 +788,6 @@ class _AdminDashboardState extends State<AdminDashboard>
   // ══════════════════════════════════════════════════════════════════════════
   //  QUICK ACTIONS GRID
   // ══════════════════════════════════════════════════════════════════════════
-  Widget _buildSectionLabel(String label) {
-    return Row(
-      children: [
-        Container(
-          width: 4,
-          height: 18,
-          decoration: BoxDecoration(
-            color: kPrimaryBrown,
-            borderRadius: BorderRadius.circular(4),
-          ),
-        ),
-        const SizedBox(width: 8),
-        Text(
-          label,
-          style: const TextStyle(
-            fontSize: 15,
-            fontWeight: FontWeight.w800,
-            color: kDeepBrown,
-            letterSpacing: 0.2,
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildOptionsGrid() {
-    final width = MediaQuery.of(context).size.width;
-    final isTablet = width >= 600;
-
-
-    final items = [
-      _GridActionItem(
-        icon: Icons.people_alt_rounded,
-        label: 'Staff',
-        color: const Color(0xFF5C6BC0),
-        bgColor: const Color(0xFFEDE7F6),
-        onTap: () => Navigator.of(
-          context,
-        ).push(MaterialPageRoute(builder: (_) => const StaffPage())),
-      ),
-      _GridActionItem(
-        icon: Icons.coffee_rounded,
-        label: 'Coffee',
-        color: const Color(0xFF8D6E63),
-        bgColor: const Color(0xFFFFF3E0),
-        onTap: () => Navigator.of(
-          context,
-        ).push(MaterialPageRoute(builder: (_) => const CoffeeMenuPage())),
-      ),
-      _GridActionItem(
-        icon: Icons.assessment_rounded,
-        label: 'Reports',
-        color: const Color(0xFFD81B60),
-        bgColor: const Color(0xFFFFE4EF),
-        onTap: () => Navigator.of(
-          context,
-        ).push(MaterialPageRoute(builder: (_) => const ReportsPage())),
-      ),
-    ];
-
-    return GridView.builder(
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      itemCount: items.length,
-      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: isTablet ? 3 : 2,
-        mainAxisSpacing: 14,
-        crossAxisSpacing: 14,
-        mainAxisExtent: isTablet ? 136 : 160,
-      ),
-      itemBuilder: (context, i) => _buildGridItem(items[i]),
-    );
-  }
-
-  Widget _buildGridItem(_GridActionItem item) {
-    return GestureDetector(
-      onTap: item.onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 150),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(20),
-          boxShadow: [
-            BoxShadow(
-              color: item.color.withOpacity(0.15),
-              blurRadius: 12,
-              offset: const Offset(0, 4),
-            ),
-          ],
-          border: Border.all(color: item.color.withOpacity(0.12), width: 1.2),
-        ),
-        padding: EdgeInsets.all(
-          MediaQuery.of(context).size.width >= 600 ? 14 : 20,
-        ),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Container(
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                color: item.bgColor,
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: Icon(
-                item.icon,
-                color: item.color,
-                size: MediaQuery.of(context).size.width >= 600 ? 24 : 28,
-              ),
-            ),
-            SizedBox(height: MediaQuery.of(context).size.width >= 600 ? 8 : 14),
-            Text(
-              item.label,
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w700,
-                color: kDeepBrown,
-                letterSpacing: 0.2,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  // ══════════════════════════════════════════════════════════════════════════
-  //  BOTTOM NAV BAR
-  // ══════════════════════════════════════════════════════════════════════════
   Widget _buildIconButton(
     IconData icon,
     VoidCallback onTap, {
@@ -1017,93 +795,47 @@ class _AdminDashboardState extends State<AdminDashboard>
     double iconSize = 19,
     EdgeInsets? padding,
   }) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Stack(
-        clipBehavior: Clip.none,
-        children: [
-          Container(
-            width: 40,
-            height: 40,
-            margin: const EdgeInsets.only(top: 4, bottom: 10),
-            padding: padding ?? const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.14),
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(
-                color: Colors.white.withOpacity(0.28),
-                width: 1.5,
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+      child: Center(
+        child: Badge(
+          isLabelVisible: badgeCount > 0,
+          label: Text(badgeCount > 99 ? '99+' : '$badgeCount'),
+          child: IconButton.filled(
+            tooltip: 'Messages',
+            onPressed: onTap,
+            style: IconButton.styleFrom(
+              backgroundColor: Colors.white,
+              foregroundColor: kDeepBrown,
+              fixedSize: const Size(36, 36),
+              minimumSize: const Size(36, 36),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              padding: EdgeInsets.zero,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(14),
               ),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.15),
-                  blurRadius: 10,
-                  offset: const Offset(0, 4),
-                ),
-              ],
             ),
-            child: Icon(icon, color: Colors.white, size: iconSize),
+            icon: Icon(icon, size: 20),
           ),
-          if (badgeCount > 0)
-            Positioned(
-              right: -3,
-              top: 0,
-              child: Container(
-                constraints: const BoxConstraints(minWidth: 18, minHeight: 18),
-                padding: const EdgeInsets.symmetric(horizontal: 5),
-                alignment: Alignment.center,
-                decoration: const BoxDecoration(
-                  color: Colors.redAccent,
-                  borderRadius: BorderRadius.all(Radius.circular(999)),
-                ),
-                child: Text(
-                  badgeCount > 99 ? '99+' : '$badgeCount',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 10,
-                    fontWeight: FontWeight.w900,
-                  ),
-                ),
-              ),
-            ),
-        ],
+        ),
       ),
     );
   }
 
-  Widget _buildBottomNavigationBar() {
-    if (MediaQuery.of(context).size.width >= 600) {
-      return SafeArea(child: SizedBox(height: 88, child: Center(child: Container(
-        width: 380, height: 66,
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-        decoration: BoxDecoration(color: kLightBrown, borderRadius: BorderRadius.circular(28),
-          boxShadow: [BoxShadow(color: kPrimaryBrown.withOpacity(.18), blurRadius: 20)]),
-        child: Row(mainAxisAlignment: MainAxisAlignment.spaceAround, children: List.generate(_navItems.length, (index) => Tooltip(
-          message: _navItems[index].label,
-          child: Semantics(label: _navItems[index].label, selected: _selectedIndex == index, button: true,
-            child: Material(color: _selectedIndex == index ? kPrimaryBrown : Colors.white.withOpacity(.14),
-              borderRadius: BorderRadius.circular(18),
-              child: InkWell(borderRadius: BorderRadius.circular(18), onTap: () => setState(() => _selectedIndex = index),
-                child: SizedBox(width: 56, height: 52, child: Icon(_navItems[index].icon, color: Colors.white, size: 26))),
-            )),
-        ))),
-      ))));
-    }
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(26)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.10),
-            blurRadius: 20,
-            offset: const Offset(0, -4),
+  Widget _buildBottomNavigationBar() => Container(
+    decoration: const BoxDecoration(
+      color: Colors.white,
+      boxShadow: [
+        BoxShadow(color: Colors.black12, blurRadius: 10, offset: Offset(0, -2)),
+      ],
+    ),
+    child: SafeArea(
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            minWidth: MediaQuery.sizeOf(context).width,
           ),
-        ],
-      ),
-      child: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceAround,
             children: List.generate(
@@ -1113,8 +845,8 @@ class _AdminDashboardState extends State<AdminDashboard>
           ),
         ),
       ),
-    );
-  }
+    ),
+  );
 
   Widget _buildNavItem(_NavItem item, int index) {
     final selected = _selectedIndex == index;
@@ -1138,6 +870,10 @@ class _AdminDashboardState extends State<AdminDashboard>
           children: [
             AnimatedSwitcher(
               duration: const Duration(milliseconds: 200),
+              transitionBuilder: (child, animation) => ScaleTransition(
+                scale: animation,
+                child: FadeTransition(opacity: animation, child: child),
+              ),
               child: Icon(
                 item.icon,
                 key: ValueKey(selected),
@@ -1146,16 +882,90 @@ class _AdminDashboardState extends State<AdminDashboard>
               ),
             ),
             SizedBox(height: MediaQuery.of(context).size.width >= 600 ? 2 : 4),
-            Text(
-              item.label,
+            AnimatedDefaultTextStyle(
+              duration: const Duration(milliseconds: 200),
               style: TextStyle(
                 fontSize: MediaQuery.of(context).size.width >= 600 ? 10 : 11,
                 color: selected ? kPrimaryBrown : Colors.grey[500],
                 fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
                 letterSpacing: 0.2,
               ),
+              child: Text(item.label),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─── Sidebar tile with hover + selection animation ─────────────────────────
+class _SidebarTile extends StatefulWidget {
+  final _NavItem item;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _SidebarTile({
+    required this.item,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  State<_SidebarTile> createState() => _SidebarTileState();
+}
+
+class _SidebarTileState extends State<_SidebarTile> {
+  bool _hovering = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final bg = widget.selected
+        ? kPrimaryBrown
+        : (_hovering ? Colors.white.withOpacity(0.08) : Colors.transparent);
+
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovering = true),
+      onExit: (_) => setState(() => _hovering = false),
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOut,
+          decoration: BoxDecoration(
+            color: bg,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+          child: Row(
+            children: [
+              AnimatedScale(
+                scale: widget.selected ? 1.08 : 1.0,
+                duration: const Duration(milliseconds: 180),
+                child: Icon(
+                  widget.item.icon,
+                  size: 21,
+                  color: widget.selected
+                      ? Colors.white
+                      : const Color(0xFFF8BBD0),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  widget.item.label,
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: widget.selected ? Colors.white : Colors.white70,
+                    fontWeight: widget.selected
+                        ? FontWeight.w700
+                        : FontWeight.w400,
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -1168,20 +978,4 @@ class _NavItem {
   final IconData icon;
   final String label;
   const _NavItem({required this.icon, required this.label});
-}
-
-class _GridActionItem {
-  final IconData icon;
-  final String label;
-  final Color color;
-  final Color bgColor;
-  final VoidCallback onTap;
-
-  const _GridActionItem({
-    required this.icon,
-    required this.label,
-    required this.color,
-    required this.bgColor,
-    required this.onTap,
-  });
 }

@@ -104,6 +104,7 @@ class _GradientAppBar extends StatelessWidget implements PreferredSizeWidget {
         ],
       ),
       child: AppBar(
+        automaticallyImplyLeading: false,
         backgroundColor: Colors.transparent,
         foregroundColor: Colors.white,
         elevation: 0,

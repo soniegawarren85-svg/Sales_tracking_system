@@ -37,6 +37,12 @@ void main() {
     expect(entries.map((entry) => entry.id), ['VAR-001', 'VAR-002']);
     expect(entries.first.stock, 7);
     expect(entries.last.available, isFalse);
+    // Editing a visible item must not discard expired or voided siblings.
+    expect(entries.first.source['items'], hasLength(4));
+    expect(entries.first.details['id'], 'VAR-001');
+    // A category's cover photo must not replace this item's own picture.
+    expect(entries.first.images, ['pistachio.jpg']);
+    expect(entries.last.images, isEmpty);
   });
 
   test('Home groups active variants and includes their carousel images', () {

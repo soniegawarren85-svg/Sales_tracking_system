@@ -1,3 +1,6 @@
+import '../../widgets/admin_category_sheet.dart';
+import '../../widgets/admin_item_editor.dart';
+import '../../widgets/admin_void_inventory.dart';
 import '../../widgets/admin_catalog.dart';
 import 'CoffeeMenuPage.dart';
 import 'dart:convert';
@@ -10,7 +13,6 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import '../../services/expiry_notification_service.dart';
 import 'pink_theme.dart';
-import 'Expired.dart';
 
 // ──────────────────────────────────────────────────────────────────────────────
 
@@ -558,7 +560,7 @@ class _InventoryPageState extends State<InventoryPage>
         'deletedAt': Timestamp.now(),
       });
       await _markStaffInventoryDeleted(itemId);
-      if (mounted) _showSuccessSnack('Item removed.');
+      if (mounted) _showSuccessSnack('Item voided.');
     } catch (e) {
       debugPrint('Error removing: $e');
       if (mounted) _showErrorSnack('Error removing: $e');
@@ -792,15 +794,11 @@ class _InventoryPageState extends State<InventoryPage>
                   color: PinkTheme.deleteRed.withOpacity(0.1),
                   shape: BoxShape.circle,
                 ),
-                child: Icon(
-                  Icons.delete_rounded,
-                  color: PinkTheme.deleteRed,
-                  size: 38,
-                ),
+                child: Icon(Icons.block, color: PinkTheme.deleteRed, size: 38),
               ),
               const SizedBox(height: 18),
               const Text(
-                'Remove Item?',
+                'Void Item?',
                 style: TextStyle(
                   fontSize: 20,
                   fontWeight: FontWeight.w800,
@@ -809,7 +807,7 @@ class _InventoryPageState extends State<InventoryPage>
               ),
               const SizedBox(height: 10),
               Text(
-                'This will remove "${item['name']}" from inventory. You can restore it later from the removed items screen within 30 days.',
+                'This will void "${item['name']}" from inventory. You can restore it later from the Void records screen.',
                 textAlign: TextAlign.center,
                 style: const TextStyle(
                   fontSize: 14,
@@ -854,7 +852,7 @@ class _InventoryPageState extends State<InventoryPage>
                         elevation: 0,
                       ),
                       child: const Text(
-                        'Remove',
+                        'Void',
                         style: TextStyle(fontWeight: FontWeight.w700),
                       ),
                     ),
@@ -1356,7 +1354,7 @@ class _InventoryPageState extends State<InventoryPage>
                                                       BorderRadius.circular(8),
                                                 ),
                                                 child: Icon(
-                                                  Icons.delete_rounded,
+                                                  Icons.block,
                                                   color: PinkTheme.deleteRed,
                                                   size: 16,
                                                 ),
@@ -1580,34 +1578,33 @@ class _InventoryPageState extends State<InventoryPage>
                 _parseQuantity(itemData['startingStock']);
           }
 
-            final startingStock = _parseQuantity(itemData['startingStock']);
-            if (currentStock <= 0 && startingStock > 0) {
-              final assignedSnapshot = await FirebaseFirestore.instance
-                  .collection('staff_inventory')
-                  .where('sourceInventoryId', isEqualTo: categoryId)
-                  .get();
-              var assignedStock = 0;
-              for (final assignedDoc in assignedSnapshot.docs) {
-                final assignedItems =
-                    (assignedDoc.data()['items'] as List<dynamic>? ?? [])
-                        .whereType<Map>()
-                        .map((entry) => Map<String, dynamic>.from(entry));
-                for (final assignedItem in assignedItems) {
-                  final sameId =
-                      assignedItem['id']?.toString() == variantId;
-                  final sameName = !sameId &&
-                      assignedItem['name']?.toString() == variantId;
-                  if (sameId || sameName) {
-                    assignedStock += _parseQuantity(
-                      assignedItem['stock'] ?? assignedItem['startingStock'],
-                    );
-                  }
+          final startingStock = _parseQuantity(itemData['startingStock']);
+          if (currentStock <= 0 && startingStock > 0) {
+            final assignedSnapshot = await FirebaseFirestore.instance
+                .collection('staff_inventory')
+                .where('sourceInventoryId', isEqualTo: categoryId)
+                .get();
+            var assignedStock = 0;
+            for (final assignedDoc in assignedSnapshot.docs) {
+              final assignedItems =
+                  (assignedDoc.data()['items'] as List<dynamic>? ?? [])
+                      .whereType<Map>()
+                      .map((entry) => Map<String, dynamic>.from(entry));
+              for (final assignedItem in assignedItems) {
+                final sameId = assignedItem['id']?.toString() == variantId;
+                final sameName =
+                    !sameId && assignedItem['name']?.toString() == variantId;
+                if (sameId || sameName) {
+                  assignedStock += _parseQuantity(
+                    assignedItem['stock'] ?? assignedItem['startingStock'],
+                  );
                 }
               }
-              if (assignedStock > 0) {
-                currentStock = startingStock - assignedStock;
-              }
             }
+            if (assignedStock > 0) {
+              currentStock = startingStock - assignedStock;
+            }
+          }
 
           if (currentStock < 0) {
             currentStock = 0;
@@ -1626,7 +1623,10 @@ class _InventoryPageState extends State<InventoryPage>
 
   // ─── ITEMS DETAIL MODAL ────────────────────────────────────────────────────
 
-  void _showItemsModal(Map<String, dynamic> item) {
+  void _showItemsModal(
+    Map<String, dynamic> item, {
+    bool addImmediately = false,
+  }) {
     final categoryId = item['id']?.toString() ?? '';
     bool shouldSaveMissingIds = false;
     final List<Map<String, dynamic>> itemsList =
@@ -2034,14 +2034,14 @@ class _InventoryPageState extends State<InventoryPage>
                       shape: BoxShape.circle,
                     ),
                     child: Icon(
-                      Icons.delete_rounded,
+                      Icons.block,
                       color: PinkTheme.deleteRed,
                       size: 38,
                     ),
                   ),
                   const SizedBox(height: 18),
                   const Text(
-                    'Remove Category?',
+                    'Void Category?',
                     style: TextStyle(
                       fontSize: 20,
                       fontWeight: FontWeight.w800,
@@ -2050,7 +2050,7 @@ class _InventoryPageState extends State<InventoryPage>
                   ),
                   const SizedBox(height: 10),
                   const Text(
-                    'Removing the last variant will remove the entire category.',
+                    'Voiding the last item will also void this category. You can restore it from Void records.',
                     textAlign: TextAlign.center,
                     style: TextStyle(
                       fontSize: 14,
@@ -2095,7 +2095,7 @@ class _InventoryPageState extends State<InventoryPage>
                             elevation: 0,
                           ),
                           child: const Text(
-                            'Remove',
+                            'Void',
                             style: TextStyle(fontWeight: FontWeight.w700),
                           ),
                         ),
@@ -2119,23 +2119,17 @@ class _InventoryPageState extends State<InventoryPage>
         await _firestore.collection('sales_inventory').doc(item['id']).update({
           'items': itemsList,
           'removedItems': FieldValue.arrayUnion([
-            {
-              'name': removedVariant['name'] ?? '',
-              'price': removedVariant['price'] ?? '0',
-              'startingStock': removedVariant['startingStock'] ?? '0',
-              'expirationDate': removedVariant['expirationDate'] ?? '',
-              'removedAt': Timestamp.now(),
-            },
+            {...removedVariant, 'removedAt': Timestamp.now()},
           ]),
         });
         await _removeStaffInventoryVariant(
           sourceInventoryId: item['id']?.toString() ?? '',
           removedVariant: removedVariant,
         );
-        _showSuccessSnack('Variant removed.');
+        _showSuccessSnack('Item voided.');
       } catch (e) {
         debugPrint('Variant remove error: $e');
-        _showErrorSnack('Failed to remove variant: $e');
+        _showErrorSnack('Failed to void item: $e');
       }
     }
 
@@ -2146,6 +2140,12 @@ class _InventoryPageState extends State<InventoryPage>
       builder: (_) {
         return StatefulBuilder(
           builder: (context, setModalState) {
+            if (addImmediately) {
+              addImmediately = false;
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (mounted) addVariant(setModalState);
+              });
+            }
             return DraggableScrollableSheet(
               initialChildSize: 0.55,
               minChildSize: 0.4,
@@ -3025,27 +3025,169 @@ class _InventoryPageState extends State<InventoryPage>
 
   // ─── BUILD ─────────────────────────────────────────────────────────────────
 
-  Future<void> _openCatalogEntry(AdminCatalogEntry entry) async {
-    if (entry.type == 'Categories') {
-      _showItemsModal(entry.source);
-    } else if (entry.type == 'Coffee') {
-      await Navigator.push(context, MaterialPageRoute(builder: (_) => CoffeeMenuPage(initialProductId: entry.source['id']?.toString())));
-    } else {
-      final inventory = await _getInventoryList();
-      if (!mounted) return;
-      await Navigator.push(context, MaterialPageRoute(builder: (_) => BulkInventoryPage(inventory: inventory, initialBundleId: entry.source['id']?.toString())));
+  Future<void> _openCatalogEntry(AdminCatalogEntry entry) =>
+      showAdminItemEditor(
+        context,
+        entry: entry,
+        upload: (bytes) =>
+            _uploadInventoryImage(bytes, folder: 'inventory_item_images'),
+      );
+
+  Future<void> _viewBundle(AdminCatalogEntry entry) => showDialog<void>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: Text(entry.name),
+      content: SizedBox(
+        width: 480,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: catalogBundleContents(entry.source)
+                .map(
+                  (item) => ListTile(
+                    title: Text('${item['name'] ?? 'Item'}'),
+                    subtitle: Text(
+                      'Expires: ${item['expirationDate'] ?? 'Not recorded'}',
+                    ),
+                    trailing: Text('x${item['quantity'] ?? 1}'),
+                  ),
+                )
+                .toList(),
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Close'),
+        ),
+      ],
+    ),
+  );
+
+  Future<void> _voidCatalogEntry(AdminCatalogEntry entry) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Void ${entry.name}?'),
+        content: const Text(
+          'This item will move to Void records and can be restored.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Void'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    try {
+      final ref = _firestore
+          .collection(
+            entry.type == 'Coffee' ? 'coffee_products' : 'sales_inventory',
+          )
+          .doc('${entry.source['id']}');
+      await _firestore.runTransaction((tx) async {
+        final snapshot = await tx.get(ref);
+        final data = snapshot.data();
+        if (data == null) throw StateError('Record no longer exists');
+        if (entry.type != 'Categories') {
+          tx.update(ref, {'isDeleted': true, 'deletedAt': Timestamp.now()});
+        } else {
+          final items = (data['items'] as List? ?? [])
+              .map((item) => Map<String, dynamic>.from(item as Map))
+              .toList();
+          final index = catalogItemIndex(items, entry.details);
+          if (index < 0) throw StateError('Item no longer exists');
+          final removed = items.removeAt(index);
+          tx.update(ref, {
+            'items': items,
+            'removedItems': FieldValue.arrayUnion([
+              {...removed, 'removedAt': Timestamp.now()},
+            ]),
+          });
+        }
+      });
+      if (entry.type == 'Categories') {
+        await _removeStaffInventoryVariant(
+          sourceInventoryId: '${entry.source['id']}',
+          removedVariant: entry.details,
+        );
+      } else {
+        await _markStaffInventoryDeleted('${entry.source['id']}');
+      }
+      if (mounted) _showSuccessSnack('Item voided.');
+    } catch (_) {
+      if (mounted)
+        _showErrorSnack('Unable to void item. Please refresh and try again.');
     }
   }
 
+  Future<void> _showCategorySheet() async {
+    final createdCategory = await showAdminCategorySheet(
+      context,
+      save: (name) async {
+        final data = <String, dynamic>{
+          'name': name,
+          'items': <Map<String, dynamic>>[],
+          'isBundle': false,
+          'isDeleted': false,
+          'timestamp': Timestamp.now(),
+        };
+        final ref = await _firestore.collection('sales_inventory').add(data);
+        return {...data, 'id': ref.id};
+      },
+    );
+    if (createdCategory != null && mounted) {
+      await showAdminItemEditor(
+        context,
+        category: createdCategory,
+        upload: (bytes) =>
+            _uploadInventoryImage(bytes, folder: 'inventory_item_images'),
+      );
+    }
+  }
+
+  Map<String, dynamic>? _selectedCategory;
+
+  Future<void> _openCreateSheet(Widget form) => showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    useSafeArea: true,
+    showDragHandle: true,
+    clipBehavior: Clip.antiAlias,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+    ),
+    builder: (_) =>
+        SizedBox(height: MediaQuery.sizeOf(context).height * .62, child: form),
+  );
+
   Future<void> _addCatalogItem() async {
     if (_catalogType == 'Categories') {
-      _showAddInventorySheet();
+      if (_selectedCategory == null) {
+        _showCategorySheet();
+        return;
+      }
+      await showAdminItemEditor(
+        context,
+        category: _selectedCategory,
+        upload: (bytes) =>
+            _uploadInventoryImage(bytes, folder: 'inventory_item_images'),
+      );
     } else if (_catalogType == 'Coffee') {
-      await Navigator.push(context, MaterialPageRoute(builder: (_) => const CoffeeMenuPage()));
+      await _openCreateSheet(const CoffeeMenuPage(createOnly: true));
     } else {
       final inventory = await _getInventoryList();
       if (!mounted) return;
-      await Navigator.push(context, MaterialPageRoute(builder: (_) => BulkInventoryPage(inventory: inventory)));
+      await _openCreateSheet(
+        BulkInventoryPage(inventory: inventory, createOnly: true),
+      );
     }
   }
 
@@ -3053,36 +3195,146 @@ class _InventoryPageState extends State<InventoryPage>
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: PinkTheme.scaffoldBg,
-      body: SafeArea(child: Column(children: [
-        Container(
-          padding: const EdgeInsets.all(20),
-          decoration: const BoxDecoration(gradient: LinearGradient(colors: [PinkTheme.primaryDark, PinkTheme.accent])),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Row(children: [
-              if (!widget.embedded) IconButton(onPressed: () => Navigator.pop(context), icon: const Icon(Icons.arrow_back, color: Colors.white)),
-              const Expanded(child: Text('Inventory', style: TextStyle(fontSize: 25, fontWeight: FontWeight.w900, color: Colors.white))),
-            ]),
-            const SizedBox(height: 14),
-            Wrap(spacing: 10, children: ['Categories', 'Bundle', 'Coffee'].map((type) => ChoiceChip(
-              label: Text(type == 'Bundle' ? 'Bulk' : type), selected: _catalogType == type,
-              onSelected: (_) => setState(() => _catalogType = type),
-            )).toList()),
-          ]),
+      body: SafeArea(
+        child: Column(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(20),
+              decoration: const BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [PinkTheme.primaryDark, PinkTheme.accent],
+                ),
+                borderRadius: BorderRadius.vertical(
+                  bottom: Radius.circular(24),
+                ),
+              ),
+              child: Row(
+                children: [
+                  if (!widget.embedded)
+                    IconButton(
+                      onPressed: () => Navigator.pop(context),
+                      icon: const Icon(Icons.arrow_back, color: Colors.white),
+                    ),
+                  const Expanded(
+                    child: Text(
+                      'Inventory',
+                      style: TextStyle(
+                        fontSize: 25,
+                        fontWeight: FontWeight.w900,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Wrap(
+                  spacing: 10,
+                  children: ['Categories', 'Bundle', 'Coffee']
+                      .map(
+                        (type) => ChoiceChip(
+                          label: Text(type == 'Bundle' ? 'Bulk' : type),
+                          selected: _catalogType == type,
+                          onSelected: (_) =>
+                              setState(() => _catalogType = type),
+                        ),
+                      )
+                      .toList(),
+                ),
+              ),
+            ),
+            Expanded(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(20, 4, 20, 160),
+                child: AdminCatalog(
+                  type: _catalogType,
+                  onOpen: _openCatalogEntry,
+                  onVoid: _voidCatalogEntry,
+                  onView: _viewBundle,
+                  onCategorySelected: (category) =>
+                      _selectedCategory = category,
+                  actions: Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      IconButton(
+                        tooltip: 'Void records',
+                        icon: const Icon(Icons.block, color: PinkTheme.primary),
+                        onPressed: () => Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => AdminVoidInventory(
+                              type: _catalogType,
+                              categoryId: _catalogType == 'Categories'
+                                  ? (_selectedCategory?['id'])?.toString()
+                                  : null,
+                            ),
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: 'Expired inventory',
+                        icon: const Icon(
+                          Icons.event_busy,
+                          color: Colors.deepOrange,
+                        ),
+                        onPressed: () => Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => AdminVoidInventory(
+                              type: _catalogType,
+                              categoryId: _catalogType == 'Categories'
+                                  ? (_selectedCategory?['id'])?.toString()
+                                  : null,
+                              expired: true,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ],
         ),
-        Padding(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6), child: Row(mainAxisAlignment: MainAxisAlignment.end, children: [
-          IconButton(tooltip: 'Removed inventory', icon: const Icon(Icons.delete_outline, color: PinkTheme.primary),
-            onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const RemovedInventoryPage()))),
-          IconButton(tooltip: 'Expired inventory', icon: const Icon(Icons.event_busy, color: Colors.deepOrange),
-            onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ExpiredPage()))),
-        ])),
-        Expanded(child: SingleChildScrollView(padding: const EdgeInsets.fromLTRB(20, 4, 20, 100),
-          child: AdminCatalog(type: _catalogType, onOpen: _openCatalogEntry))),
-      ])),
-      floatingActionButton: FloatingActionButton.extended(onPressed: _addCatalogItem,
-        backgroundColor: PinkTheme.primary, foregroundColor: Colors.white,
-        icon: const Icon(Icons.add), label: Text(_catalogType == 'Bundle' ? 'Build bundle' : _catalogType == 'Coffee' ? 'Add coffee' : 'Add item')),
+      ),
+      floatingActionButton: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          FloatingActionButton(
+            heroTag: 'addInventoryItem',
+            tooltip: _catalogType == 'Bundle'
+                ? 'Add bundle'
+                : _catalogType == 'Coffee'
+                ? 'Add coffee'
+                : 'Add item',
+            onPressed: _addCatalogItem,
+            backgroundColor: PinkTheme.primary,
+            foregroundColor: Colors.white,
+            shape: const CircleBorder(),
+            child: const Icon(Icons.add),
+          ),
+          if (_catalogType == 'Categories') ...[
+            const SizedBox(height: 12),
+            FloatingActionButton.extended(
+              heroTag: 'addCategory',
+              onPressed: _showCategorySheet,
+              backgroundColor: PinkTheme.primary,
+              foregroundColor: Colors.white,
+              icon: const Icon(Icons.category_outlined),
+              label: const Text('Add Categories'),
+            ),
+          ],
+        ],
+      ),
     );
   }
+
   Future<List<Map<String, dynamic>>> _getInventoryList() async {
     try {
       final snapshot = await _firestore.collection('sales_inventory').get();
@@ -3177,8 +3429,14 @@ class _InventoryPageState extends State<InventoryPage>
 
 class BulkInventoryPage extends StatefulWidget {
   final List<Map<String, dynamic>> inventory;
-  const BulkInventoryPage({super.key, required this.inventory, this.initialBundleId});
+  const BulkInventoryPage({
+    super.key,
+    required this.inventory,
+    this.initialBundleId,
+    this.createOnly = false,
+  });
   final String? initialBundleId;
+  final bool createOnly;
 
   @override
   State<BulkInventoryPage> createState() => _BulkInventoryPageState();
@@ -3234,7 +3492,9 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
     _bodyAnim.forward();
     _loadBundles().then((_) {
       if (!mounted || widget.initialBundleId == null) return;
-      final matching = bundles.where((bundle) => bundle['id'] == widget.initialBundleId);
+      final matching = bundles.where(
+        (bundle) => bundle['id'] == widget.initialBundleId,
+      );
       if (matching.isNotEmpty) _showBundleInstancesDialog(matching.first);
     });
     bundleQuantityController.addListener(() {
@@ -3637,16 +3897,33 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
 
               selectedItems.add({
                 'parentName': docNames[itemId] ?? '',
+                'sourceInventoryId': itemId,
+                'variantId': variant['id'],
                 'name': variant['name']?.toString() ?? '',
                 'price': variant['price']?.toString() ?? '0',
+                'imageUrl': variant['imageUrl'] ?? '',
+                'expirationDate': variant['expirationDate'] ?? '',
                 'quantity': quantity.toString(),
               });
             }
 
+            final expirations =
+                selectedItems
+                    .map(
+                      (item) =>
+                          DateTime.tryParse('${item['expirationDate'] ?? ''}'),
+                    )
+                    .whereType<DateTime>()
+                    .toList()
+                  ..sort();
+            final expirationDate = expirations.isEmpty
+                ? ''
+                : expirations.first.toIso8601String();
             final bundleInstances = List.generate(bundleQty, (index) {
               return {
                 'number': index + 1,
                 'id': _bundleInstanceId(bundleId, index),
+                'expirationDate': expirationDate,
                 'status': 'available',
                 'items': selectedItems.map((item) {
                   final quantity = _parseQuantity(item['quantity']);
@@ -3671,6 +3948,7 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
             transaction.set(bundleRef, {
               'name': name,
               'price': price.isEmpty ? '0' : price,
+              'expirationDate': expirationDate,
               'items': selectedItems,
               'bundleCount': bundleQty,
               'bundleId': bundleId,
@@ -3733,6 +4011,7 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
           margin: const EdgeInsets.all(16),
         ),
       );
+      if (widget.createOnly && mounted) Navigator.pop(context);
     } catch (e) {
       debugPrint('Bulk save error: $e');
       _showErrorSnack('Failed to create bundle: $e');
@@ -3807,15 +4086,11 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
                   color: PinkTheme.deleteRed.withOpacity(0.1),
                   shape: BoxShape.circle,
                 ),
-                child: Icon(
-                  Icons.delete_rounded,
-                  color: PinkTheme.deleteRed,
-                  size: 38,
-                ),
+                child: Icon(Icons.block, color: PinkTheme.deleteRed, size: 38),
               ),
               const SizedBox(height: 18),
               Text(
-                'Remove Bundle?',
+                'Void Bundle?',
                 style: const TextStyle(
                   fontSize: 20,
                   fontWeight: FontWeight.w800,
@@ -3824,7 +4099,7 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
               ),
               const SizedBox(height: 10),
               Text(
-                'This will remove "${bundle['name'] ?? 'bundle'}" from Bundles.',
+                'This will void "${bundle['name'] ?? 'bundle'}" from Bundles.',
                 textAlign: TextAlign.center,
                 style: const TextStyle(
                   fontSize: 14,
@@ -3869,7 +4144,7 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
                         elevation: 0,
                       ),
                       child: const Text(
-                        'Remove',
+                        'Void',
                         style: TextStyle(fontWeight: FontWeight.w700),
                       ),
                     ),
@@ -3889,7 +4164,7 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
         );
         await _markStaffInventoryDeleted(bundle['id'].toString());
         await _loadBundles();
-        _showSuccessSnack('Bundle removed.');
+        _showSuccessSnack('Bundle voided.');
       } catch (e) {
         debugPrint('Bundle delete error: $e');
         _showErrorSnack('Failed to remove bundle: $e');
@@ -4209,6 +4484,22 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
 
   @override
   Widget build(BuildContext context) {
+    if (widget.createOnly)
+      return Scaffold(
+        backgroundColor: PinkTheme.scaffoldBg,
+        appBar: AppBar(
+          automaticallyImplyLeading: false,
+          title: const Text('Add bundle'),
+          actions: [
+            IconButton(
+              tooltip: 'Close',
+              onPressed: () => Navigator.pop(context),
+              icon: const Icon(Icons.close),
+            ),
+          ],
+        ),
+        body: _buildBuildTab(),
+      );
     final selectedCount = _selectedVariantCount;
     return Scaffold(
       backgroundColor: PinkTheme.scaffoldBg,
@@ -4330,8 +4621,9 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
                                   final restored = await Navigator.push<bool>(
                                     context,
                                     MaterialPageRoute(
-                                      builder: (_) =>
-                                          const RemovedInventoryPage(),
+                                      builder: (_) => const AdminVoidInventory(
+                                        type: 'Bundle',
+                                      ),
                                     ),
                                   );
                                   if (restored == true && mounted) {
@@ -4342,7 +4634,7 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
                                 child: const Padding(
                                   padding: EdgeInsets.all(10),
                                   child: Icon(
-                                    Icons.delete_outline_rounded,
+                                    Icons.block_rounded,
                                     color: Colors.white,
                                     size: 20,
                                   ),
@@ -5762,11 +6054,11 @@ class _RemovedInventoryPageState extends State<RemovedInventoryPage>
         }
       }
     } catch (e) {
-      debugPrint('Error loading removed inventory: $e');
+      debugPrint('Error loading void inventory: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Failed to load removed inventory: $e'),
+            content: Text('Failed to load void inventory: $e'),
             backgroundColor: PinkTheme.deleteRed,
           ),
         );
@@ -5969,7 +6261,7 @@ class _RemovedInventoryPageState extends State<RemovedInventoryPage>
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   Text(
-                                    'Removed Inventory',
+                                    'Void Inventory',
                                     style: TextStyle(
                                       fontSize: 22,
                                       fontWeight: FontWeight.w900,
@@ -5978,7 +6270,7 @@ class _RemovedInventoryPageState extends State<RemovedInventoryPage>
                                     ),
                                   ),
                                   Text(
-                                    'Items removed within 30 days',
+                                    'Voided inventory records',
                                     style: TextStyle(
                                       fontSize: 12,
                                       color: Colors.white70,
@@ -6066,7 +6358,7 @@ class _RemovedInventoryPageState extends State<RemovedInventoryPage>
                         ),
                         SizedBox(height: 16),
                         Text(
-                          'Loading removed items...',
+                          'Loading void records...',
                           style: TextStyle(
                             color: PinkTheme.textMid,
                             fontWeight: FontWeight.w600,
@@ -6161,7 +6453,7 @@ class _RemovedInventoryPageState extends State<RemovedInventoryPage>
     if (_removedCategories.isEmpty) {
       return _emptySection(
         icon: Icons.folder_off_rounded,
-        subtitle: 'Deleted product categories will appear here for 30 days.',
+        subtitle: 'Voided product categories will appear here for 30 days.',
       );
     }
     return ListView.builder(
@@ -6243,7 +6535,7 @@ class _RemovedInventoryPageState extends State<RemovedInventoryPage>
                               ),
                               const SizedBox(height: 3),
                               Text(
-                                'Removed on ${_formatTimestamp(deletedAt)}',
+                                'Voided on ${_formatTimestamp(deletedAt)}',
                                 style: const TextStyle(
                                   fontSize: 12,
                                   color: PinkTheme.textLight,
@@ -6252,7 +6544,7 @@ class _RemovedInventoryPageState extends State<RemovedInventoryPage>
                               if (category['type'] == 'bundle') ...[
                                 const SizedBox(height: 4),
                                 Text(
-                                  'Removed bulk bundle. Restore to recover it.',
+                                  'Voided bulk bundle. Restore to recover it.',
                                   style: const TextStyle(
                                     fontSize: 12,
                                     color: PinkTheme.textLight,
@@ -6365,7 +6657,7 @@ class _RemovedInventoryPageState extends State<RemovedInventoryPage>
     if (_removedBundles.isEmpty) {
       return _emptySection(
         icon: Icons.inventory_2_rounded,
-        subtitle: 'Removed bulk bundles will appear here for 30 days.',
+        subtitle: 'Voided bulk bundles will appear here for 30 days.',
       );
     }
     return ListView.builder(
@@ -6446,7 +6738,7 @@ class _RemovedInventoryPageState extends State<RemovedInventoryPage>
                               Text(
                                 bundleId.isNotEmpty
                                     ? 'Bundle ID: $bundleId'
-                                    : 'Removed bulk bundle',
+                                    : 'Voided bulk bundle',
                                 style: const TextStyle(
                                   fontSize: 12,
                                   color: PinkTheme.textLight,
@@ -6489,7 +6781,7 @@ class _RemovedInventoryPageState extends State<RemovedInventoryPage>
                         const SizedBox(width: 6),
                         Expanded(
                           child: Text(
-                            'Removed on ${_formatTimestamp(deletedAt)}',
+                            'Voided on ${_formatTimestamp(deletedAt)}',
                             style: const TextStyle(
                               fontSize: 12,
                               color: PinkTheme.textLight,
@@ -6650,7 +6942,7 @@ class _RemovedInventoryPageState extends State<RemovedInventoryPage>
     if (_removedVariants.isEmpty) {
       return _emptySection(
         icon: Icons.remove_shopping_cart_rounded,
-        subtitle: 'Individually removed product variants will appear here.',
+        subtitle: 'Individually voided product variants will appear here.',
       );
     }
     return ListView.builder(
@@ -6811,7 +7103,7 @@ class _RemovedInventoryPageState extends State<RemovedInventoryPage>
                         ),
                         const SizedBox(width: 5),
                         Text(
-                          'Removed on ${_formatTimestamp(removedAt)}',
+                          'Voided on ${_formatTimestamp(removedAt)}',
                           style: const TextStyle(
                             fontSize: 12,
                             color: PinkTheme.textLight,

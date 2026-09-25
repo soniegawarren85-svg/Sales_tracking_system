@@ -1,3 +1,4 @@
+import '../../../services/staff_login_session.dart';
 import 'dart:convert';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -242,6 +243,23 @@ class _LoginScreenState extends State<LoginScreen>
         prefs.getString('offlineLogin.publicId') ?? username,
       );
     if (!mounted) return true;
+    if (!isAdmin) {
+      try {
+        final uid = prefs.getString('offlineLogin.userId') ?? '';
+        final staff = await FirebaseFirestore.instance
+            .collection('staff_requests')
+            .doc(uid)
+            .get(const GetOptions(source: Source.cache));
+        if (mounted)
+          await StaffLoginSession.start(context, uid, staff.data() ?? {});
+      } catch (_) {
+        _showMessage(
+          'Offline login opened; session details are unavailable.',
+          isError: true,
+        );
+      }
+    }
+    if (!mounted) return true;
     _showMessage('Opened using saved offline data.');
     Navigator.of(context).pushReplacement(
       MaterialPageRoute(
@@ -278,7 +296,11 @@ class _LoginScreenState extends State<LoginScreen>
       'lastLoginAt': FieldValue.serverTimestamp(),
       'isOnline': true,
     });
-    _showMessage('Welcome back!');
+    if (!isAdmin && mounted)
+      await StaffLoginSession.start(context, accountDoc.id, data);
+    _showMessage(
+      'Welcome back, ${_welcomeName(data, isAdmin ? 'Admin' : 'Staff')}!',
+    );
     Future.microtask(() {
       if (!mounted) return;
       Navigator.of(context).pushReplacement(
@@ -294,7 +316,7 @@ class _LoginScreenState extends State<LoginScreen>
     await prefs.setString('adminId', _emergencyAdminId);
     await prefs.setString('lastRole', 'admin');
     await prefs.setString('lastUserId', 'emergency-admin');
-    _showMessage('Welcome back!');
+    _showMessage('Welcome back, Admin!');
     Future.microtask(() {
       if (!mounted) return;
       Navigator.of(context).pushReplacement(
@@ -528,7 +550,9 @@ class _LoginScreenState extends State<LoginScreen>
                 userId: accountDoc.id,
                 publicId: adminId,
               );
-              _showMessage('Welcome back!');
+              _showMessage(
+                'Welcome back, ${_welcomeName(accountData, 'Admin')}!',
+              );
               Future.microtask(() {
                 if (!mounted) return;
                 Navigator.of(context).pushReplacement(
@@ -654,7 +678,11 @@ class _LoginScreenState extends State<LoginScreen>
         await signedInDoc.reference.update({
           'lastLoginAt': FieldValue.serverTimestamp(),
         });
-        _showMessage('Welcome back!');
+        if (!isAdmin && mounted)
+          await StaffLoginSession.start(context, uid, data);
+        _showMessage(
+          'Welcome back, ${_welcomeName(data, isAdmin ? 'Admin' : 'Staff')}!',
+        );
         Future.microtask(() {
           if (!mounted) return;
           Navigator.of(context).pushReplacement(
@@ -1210,4 +1238,14 @@ class _WavePainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+String _welcomeName(Map<String, dynamic> data, String fallback) {
+  final name = ['firstName', 'middleName', 'lastName']
+      .map((key) => '${data[key] ?? ''}'.trim())
+      .where((part) => part.isNotEmpty)
+      .join(' ');
+  if (name.isNotEmpty) return name;
+  final display = (data['name'] ?? data['displayName'] ?? '').toString().trim();
+  return display.isEmpty ? fallback : display;
 }

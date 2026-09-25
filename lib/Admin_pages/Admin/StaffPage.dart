@@ -1,3 +1,4 @@
+import '../../widgets/admin_staff_branches.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -24,6 +25,8 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
 
   bool _showAdminPanel = false;
   bool _isCreatingStaff = false;
+  final _creating = ValueNotifier(false);
+  BuildContext? _createSheetContext;
   final _createStaffFormKey = GlobalKey<FormState>();
   final _firstNameController = TextEditingController();
   final _middleNameController = TextEditingController();
@@ -50,13 +53,17 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
       vsync: this,
       duration: const Duration(milliseconds: 700),
     );
-    _headerFade =
-        CurvedAnimation(parent: _headerAnimController, curve: Curves.easeOut);
-    _headerSlide = Tween<Offset>(
-      begin: const Offset(0, -0.18),
-      end: Offset.zero,
-    ).animate(
-        CurvedAnimation(parent: _headerAnimController, curve: Curves.easeOutCubic));
+    _headerFade = CurvedAnimation(
+      parent: _headerAnimController,
+      curve: Curves.easeOut,
+    );
+    _headerSlide =
+        Tween<Offset>(begin: const Offset(0, -0.18), end: Offset.zero).animate(
+          CurvedAnimation(
+            parent: _headerAnimController,
+            curve: Curves.easeOutCubic,
+          ),
+        );
 
     // Button animation
     _buttonAnimController = AnimationController(
@@ -64,22 +71,29 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
       duration: const Duration(milliseconds: 600),
     );
     _buttonScale = Tween<double>(begin: 0.85, end: 1.0).animate(
-        CurvedAnimation(parent: _buttonAnimController, curve: Curves.elasticOut));
-    _buttonFade =
-        CurvedAnimation(parent: _buttonAnimController, curve: Curves.easeOut);
+      CurvedAnimation(parent: _buttonAnimController, curve: Curves.elasticOut),
+    );
+    _buttonFade = CurvedAnimation(
+      parent: _buttonAnimController,
+      curve: Curves.easeOut,
+    );
 
     // Admin panel slide animation
     _adminPanelController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 420),
     );
-    _adminPanelSlide = Tween<Offset>(
-      begin: const Offset(1.0, 0.0),
-      end: Offset.zero,
-    ).animate(
-        CurvedAnimation(parent: _adminPanelController, curve: Curves.easeOutCubic));
-    _adminPanelFade =
-        CurvedAnimation(parent: _adminPanelController, curve: Curves.easeOut);
+    _adminPanelSlide =
+        Tween<Offset>(begin: const Offset(1.0, 0.0), end: Offset.zero).animate(
+          CurvedAnimation(
+            parent: _adminPanelController,
+            curve: Curves.easeOutCubic,
+          ),
+        );
+    _adminPanelFade = CurvedAnimation(
+      parent: _adminPanelController,
+      curve: Curves.easeOut,
+    );
 
     _headerAnimController.forward();
     Future.delayed(const Duration(milliseconds: 300), () {
@@ -91,6 +105,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
   void dispose() {
     _tabController.removeListener(_handleStaffTabChanged);
     _tabController.dispose();
+    _creating.dispose();
     _firstNameController.dispose();
     _middleNameController.dispose();
     _lastNameController.dispose();
@@ -123,135 +138,122 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
     }
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      resizeToAvoidBottomInset: true,
-      backgroundColor: const Color(0xFFFDF6F9),
-      body: Stack(
-        children: [
-          // ── Background decorative blobs ──
-          Positioned(
-            top: -60,
-            right: -40,
-            child: Container(
-              width: 220,
-              height: 220,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: const Color(0xFFF48FB1).withOpacity(0.08),
+  Future<void> _showCreateStaffSheet() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      showDragHandle: true,
+      builder: (sheetContext) {
+        _createSheetContext = sheetContext;
+        return ValueListenableBuilder<bool>(
+          valueListenable: _creating,
+          builder: (context, creating, _) => SizedBox(
+            height: MediaQuery.sizeOf(context).height * .7,
+            child: SingleChildScrollView(
+              padding: EdgeInsets.fromLTRB(
+                16,
+                0,
+                16,
+                MediaQuery.viewInsetsOf(context).bottom + 24,
               ),
+              child: _buildCreateStaffForm(),
             ),
           ),
-          Positioned(
-            bottom: 80,
-            left: -50,
-            child: Container(
-              width: 180,
-              height: 180,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: const Color(0xFFFFCDD2).withOpacity(0.15),
-              ),
-            ),
-          ),
-
-          // ── Main Staff Content ──
-          Column(
-            children: [
-              FadeTransition(
-                opacity: _headerFade,
-                child: SlideTransition(
-                  position: _headerSlide,
-                  child: _buildHeader(context),
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
-                child: FadeTransition(
-                  opacity: _buttonFade,
-                  child: ScaleTransition(
-                    scale: _buttonScale,
-                    child: _buildStaffManagementButton(context),
-                  ),
-                ),
-              ),
-              StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                stream: _staffStream,
-                builder: (context, snapshot) {
-                  final docs = snapshot.data?.docs ?? [];
-                  final pendingCount = docs
-                      .map((doc) => StaffApplicant.fromDoc(doc))
-                      .where(
-                        (a) =>
-                            a.status == 'pending' &&
-                            a.role.toLowerCase() == 'staff',
-                      )
-                      .length;
-                  return _buildTabBar(pendingCount: pendingCount);
-                },
-              ),
-              const SizedBox(height: 10),
-              Expanded(
-                child: _tabController.index == 0
-                    ? SingleChildScrollView(
-                        keyboardDismissBehavior:
-                            ScrollViewKeyboardDismissBehavior.onDrag,
-                        padding: EdgeInsets.fromLTRB(
-                          16,
-                          0,
-                          16,
-                          24 + MediaQuery.of(context).viewInsets.bottom,
-                        ),
-                        child: _buildCreateStaffForm(),
-                      )
-                    : StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                        stream: _staffStream,
-                        builder: (context, snapshot) {
-                          if (snapshot.connectionState ==
-                                  ConnectionState.waiting &&
-                              !snapshot.hasData) {
-                            return const Center(
-                              child: CircularProgressIndicator(
-                                color: Color(0xFFF48FB1),
-                                strokeWidth: 2.5,
-                              ),
-                            );
-                          }
-
-                          final docs = snapshot.data?.docs ?? [];
-                          final accepted = docs
-                              .map((doc) => StaffApplicant.fromDoc(doc))
-                              .where(
-                                (a) =>
-                                    a.status == 'accepted' &&
-                                    a.role.toLowerCase() == 'staff',
-                              )
-                              .toList();
-                          return _buildAcceptedTab(accepted);
-                        },
-                      ),
-              ),
-            ],
-          ),
-
-          // ── Staff Panel Overlay (slide from right) ──
-          if (_showAdminPanel)
-            SlideTransition(
-              position: _adminPanelSlide,
-              child: FadeTransition(
-                opacity: _adminPanelFade,
-                child: _buildAdminPanel(context),
-              ),
-            ),
-        ],
-      ),
+        );
+      },
     );
+    _createSheetContext = null;
   }
 
-  // ═══════════════════════════════════════════════════════════
-  // ─── ADMIN PANEL (Full overlay inside same page) ────────
-  // ═══════════════════════════════════════════════════════════
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    backgroundColor: const Color(0xFFFFF4F8),
+    floatingActionButton: FloatingActionButton(
+      tooltip: 'Create staff account',
+      shape: const CircleBorder(),
+      backgroundColor: const Color(0xFFE91E63),
+      foregroundColor: Colors.white,
+      onPressed: _showCreateStaffSheet,
+      child: const Icon(Icons.add),
+    ),
+    body: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: _staffStream,
+      builder: (context, snapshot) {
+        if (snapshot.hasError)
+          return const Center(child: Text('Unable to load staff.'));
+        if (!snapshot.hasData)
+          return const Center(child: CircularProgressIndicator());
+        final staff = snapshot.data!.docs
+            .map(AdminModel.fromDoc)
+            .where((member) => member.isValidStaff)
+            .toList();
+        final accepted = staff
+            .where((member) => member.status == 'accepted')
+            .toList();
+        final deactivated = staff
+            .where((member) => member.status == 'deactivated')
+            .toList();
+        final inactive = accepted
+            .where((member) => member.isInactiveByLogin)
+            .length;
+        return ListView(
+          padding: const EdgeInsets.only(bottom: 100),
+          children: [
+            _buildHeader(context),
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: _buildStatsRow(
+                total: staff.length,
+                active: accepted.length - inactive,
+                pending: deactivated.length,
+                deactivated: inactive,
+                onDeactivated: () => _showDeactivatedStaffSheet(deactivated),
+              ),
+            ),
+
+            const Padding(
+              padding: EdgeInsets.all(16),
+              child: AdminStaffBranches(),
+            ),
+            const Padding(
+              padding: EdgeInsets.all(16),
+              child: Text(
+                'Staff Accounts',
+                style: TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFFAD1457),
+                ),
+              ),
+            ),
+            if (accepted.isEmpty)
+              const Padding(
+                padding: EdgeInsets.all(24),
+                child: Text('No active staff accounts. Tap + to create one.'),
+              ),
+            ...accepted.asMap().entries.map(
+              (entry) => Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 6,
+                ),
+                child: _AnimatedAdminCard(
+                  index: entry.key,
+                  admin: entry.value,
+                  isInactiveByLogin: entry.value.isInactiveByLogin,
+                  onDeactivate: () =>
+                      _updateAdminStatus(entry.value, 'deactivated'),
+                  onActivate: () => _updateAdminStatus(entry.value, 'accepted'),
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    ),
+  );
+
   Widget _buildAdminPanel(BuildContext context) {
     return Container(
       color: const Color(0xFFF5F0FF),
@@ -290,7 +292,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                   height: 260,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    color: const Color(0xFF7C3AED).withOpacity(0.07),
+                    color: const Color(0xFFAD1457).withOpacity(0.07),
                   ),
                 ),
               ),
@@ -339,7 +341,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                           height: 18,
                           decoration: BoxDecoration(
                             gradient: const LinearGradient(
-                              colors: [Color(0xFF6A11CB), Color(0xFFBC2B8A)],
+                              colors: [Color(0xFFAD1457), Color(0xFFBC2B8A)],
                               begin: Alignment.topCenter,
                               end: Alignment.bottomCenter,
                             ),
@@ -350,7 +352,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                         const Text(
                           'All Staff',
                           style: TextStyle(
-                            color: Color(0xFF2D1B5E),
+                            color: Color(0xFF880E4F),
                             fontWeight: FontWeight.w800,
                             fontSize: 16,
                             letterSpacing: 0.2,
@@ -363,7 +365,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                             height: 16,
                             child: CircularProgressIndicator(
                               strokeWidth: 2,
-                              color: Color(0xFF7C3AED),
+                              color: Color(0xFFAD1457),
                             ),
                           ),
                       ],
@@ -373,7 +375,8 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
 
                   // Admin list
                   Expanded(
-                    child: visibleStaff.isEmpty &&
+                    child:
+                        visibleStaff.isEmpty &&
                             snapshot.connectionState != ConnectionState.waiting
                         ? _buildAdminEmptyState()
                         : ListView.builder(
@@ -385,10 +388,14 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                                 admin: visibleStaff[index],
                                 isInactiveByLogin:
                                     visibleStaff[index].isInactiveByLogin,
-                                onDeactivate: () =>
-                                    _updateAdminStatus(visibleStaff[index], 'deactivated'),
-                                onActivate: () =>
-                                    _updateAdminStatus(visibleStaff[index], 'accepted'),
+                                onDeactivate: () => _updateAdminStatus(
+                                  visibleStaff[index],
+                                  'deactivated',
+                                ),
+                                onActivate: () => _updateAdminStatus(
+                                  visibleStaff[index],
+                                  'accepted',
+                                ),
                               );
                             },
                           ),
@@ -409,7 +416,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
       width: double.infinity,
       decoration: BoxDecoration(
         gradient: const LinearGradient(
-          colors: [Color(0xFF6A11CB), Color(0xFF9C27B0), Color(0xFFBC2B8A)],
+          colors: [Color(0xFFAD1457), Color(0xFFE91E63), Color(0xFFBC2B8A)],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
@@ -419,7 +426,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
         ),
         boxShadow: [
           BoxShadow(
-            color: const Color(0xFF7C3AED).withOpacity(0.38),
+            color: const Color(0xFFAD1457).withOpacity(0.38),
             blurRadius: 28,
             offset: const Offset(0, 14),
           ),
@@ -497,8 +504,10 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                   ),
                   const SizedBox(height: 26),
                   Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 5,
+                    ),
                     decoration: BoxDecoration(
                       color: Colors.white.withOpacity(0.18),
                       borderRadius: BorderRadius.circular(20),
@@ -547,34 +556,36 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
     required int active,
     required int pending,
     required int deactivated,
+    VoidCallback? onDeactivated,
   }) {
     return Row(
       children: [
         _buildStatCard(
           label: 'Total',
           count: total,
-          colors: [const Color(0xFF6A11CB), const Color(0xFFBC2B8A)],
+          colors: [const Color(0xFFAD1457), const Color(0xFFBC2B8A)],
           icon: Icons.groups_rounded,
         ),
         const SizedBox(width: 10),
         _buildStatCard(
           label: 'Active',
           count: active,
-          colors: [const Color(0xFF11998E), const Color(0xFF38EF7D)],
+          colors: [const Color(0xFFAD1457), const Color(0xFFF06292)],
           icon: Icons.verified_user_rounded,
         ),
         const SizedBox(width: 10),
         _buildStatCard(
-          label: 'Create',
+          label: 'Deactivated',
+          onTap: onDeactivated,
           count: pending,
-          colors: [const Color(0xFFF7971E), const Color(0xFFFFD200)],
+          colors: [const Color(0xFFAD1457), const Color(0xFFF06292)],
           icon: Icons.pending_rounded,
         ),
         const SizedBox(width: 10),
         _buildStatCard(
           label: 'Inactive',
           count: deactivated,
-          colors: [const Color(0xFFB71C1C), const Color(0xFFEF5350)],
+          colors: [const Color(0xFFAD1457), const Color(0xFFF06292)],
           icon: Icons.block_rounded,
         ),
       ],
@@ -586,13 +597,18 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
     required int count,
     required List<Color> colors,
     required IconData icon,
+    VoidCallback? onTap,
   }) {
     return Expanded(
-      child: _AnimatedCountCard(
-        label: label,
-        count: count,
-        colors: colors,
-        icon: icon,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(18),
+        child: _AnimatedCountCard(
+          label: label,
+          count: count,
+          colors: colors,
+          icon: icon,
+        ),
       ),
     );
   }
@@ -609,10 +625,10 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(18),
-          border: Border.all(color: const Color(0xFFE1C8FF), width: 1.2),
+          border: Border.all(color: const Color(0xFFF8BBD0), width: 1.2),
           boxShadow: [
             BoxShadow(
-              color: const Color(0xFF7C3AED).withOpacity(0.08),
+              color: const Color(0xFFAD1457).withOpacity(0.08),
               blurRadius: 14,
               offset: const Offset(0, 6),
             ),
@@ -629,7 +645,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
               ),
               child: const Icon(
                 Icons.restore_rounded,
-                color: Color(0xFFEF5350),
+                color: Color(0xFFF06292),
                 size: 20,
               ),
             ),
@@ -641,7 +657,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                   Text(
                     'Deactivated Staff',
                     style: TextStyle(
-                      color: Color(0xFF2D1B5E),
+                      color: Color(0xFF880E4F),
                       fontSize: 14,
                       fontWeight: FontWeight.w800,
                     ),
@@ -667,7 +683,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
               child: Text(
                 '${deactivatedStaff.length}',
                 style: const TextStyle(
-                  color: Color(0xFFEF5350),
+                  color: Color(0xFFF06292),
                   fontWeight: FontWeight.w900,
                   fontSize: 13,
                 ),
@@ -701,7 +717,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                 width: 46,
                 height: 5,
                 decoration: BoxDecoration(
-                  color: const Color(0xFFE1C8FF),
+                  color: const Color(0xFFF8BBD0),
                   borderRadius: BorderRadius.circular(10),
                 ),
               ),
@@ -710,7 +726,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                 children: [
                   const Icon(
                     Icons.restore_rounded,
-                    color: Color(0xFF7C3AED),
+                    color: Color(0xFFAD1457),
                     size: 22,
                   ),
                   const SizedBox(width: 10),
@@ -718,7 +734,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                     child: Text(
                       'Deactivated Staff',
                       style: TextStyle(
-                        color: Color(0xFF2D1B5E),
+                        color: Color(0xFF880E4F),
                         fontSize: 18,
                         fontWeight: FontWeight.w900,
                       ),
@@ -727,7 +743,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                   IconButton(
                     onPressed: () => Navigator.of(sheetContext).pop(),
                     icon: const Icon(Icons.close_rounded),
-                    color: const Color(0xFF2D1B5E),
+                    color: const Color(0xFF880E4F),
                   ),
                 ],
               ),
@@ -746,7 +762,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                         borderRadius: BorderRadius.circular(18),
                         boxShadow: [
                           BoxShadow(
-                            color: const Color(0xFF7C3AED).withOpacity(0.08),
+                            color: const Color(0xFFAD1457).withOpacity(0.08),
                             blurRadius: 14,
                             offset: const Offset(0, 6),
                           ),
@@ -756,7 +772,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                         children: [
                           CircleAvatar(
                             radius: 24,
-                            backgroundColor: const Color(0xFF9C27B0),
+                            backgroundColor: const Color(0xFFE91E63),
                             child: Text(
                               staff.initials,
                               style: const TextStyle(
@@ -773,7 +789,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                                 Text(
                                   '${staff.firstName} ${staff.lastName}',
                                   style: const TextStyle(
-                                    color: Color(0xFF2D1B5E),
+                                    color: Color(0xFF880E4F),
                                     fontSize: 14,
                                     fontWeight: FontWeight.w800,
                                   ),
@@ -801,7 +817,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                             icon: const Icon(Icons.restore_rounded, size: 16),
                             label: const Text('Restore'),
                             style: TextButton.styleFrom(
-                              foregroundColor: const Color(0xFF11998E),
+                              foregroundColor: const Color(0xFFAD1457),
                               textStyle: const TextStyle(
                                 fontWeight: FontWeight.w800,
                               ),
@@ -831,7 +847,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
             decoration: BoxDecoration(
               gradient: LinearGradient(
                 colors: [
-                  const Color(0xFF6A11CB).withOpacity(0.10),
+                  const Color(0xFFAD1457).withOpacity(0.10),
                   const Color(0xFFBC2B8A).withOpacity(0.15),
                 ],
               ),
@@ -840,7 +856,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
             child: Icon(
               Icons.groups_2_outlined,
               size: 55,
-              color: const Color(0xFF7C3AED).withOpacity(0.45),
+              color: const Color(0xFFAD1457).withOpacity(0.45),
             ),
           ),
           const SizedBox(height: 22),
@@ -849,7 +865,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
             style: TextStyle(
               fontSize: 20,
               fontWeight: FontWeight.w800,
-              color: Color(0xFF2D1B5E),
+              color: Color(0xFF880E4F),
             ),
           ),
           const SizedBox(height: 10),
@@ -877,11 +893,13 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-              newStatus == 'accepted' ? 'Staff activated.' : 'Staff deactivated.'),
+            newStatus == 'accepted' ? 'Staff activated.' : 'Staff deactivated.',
+          ),
           behavior: SnackBarBehavior.floating,
-          backgroundColor: const Color(0xFF7C3AED),
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          backgroundColor: const Color(0xFFAD1457),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+          ),
         ),
       );
     } catch (e) {
@@ -890,7 +908,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
         const SnackBar(
           content: Text('Failed to update staff status.'),
           behavior: SnackBarBehavior.floating,
-          backgroundColor: Color(0xFFB71C1C),
+          backgroundColor: Color(0xFFAD1457),
         ),
       );
     }
@@ -904,11 +922,13 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
       stream: _staffStream,
       builder: (context, snapshot) {
-        final staffCount = snapshot.data?.docs
+        final staffCount =
+            snapshot.data?.docs
                 .map((d) => AdminModel.fromDoc(d))
-                .where((member) =>
-                    member.isValidStaff &&
-                    member.status == 'accepted')
+                .where(
+                  (member) =>
+                      member.isValidStaff && member.status == 'accepted',
+                )
                 .length ??
             0;
 
@@ -921,9 +941,9 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
             decoration: BoxDecoration(
               gradient: const LinearGradient(
                 colors: [
-                  Color(0xFF6A11CB),
+                  Color(0xFFAD1457),
                   Color(0xFFBC2B8A),
-                  Color(0xFFFF6B9D)
+                  Color(0xFFFF6B9D),
                 ],
                 begin: Alignment.centerLeft,
                 end: Alignment.centerRight,
@@ -931,7 +951,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
               borderRadius: BorderRadius.circular(20),
               boxShadow: [
                 BoxShadow(
-                  color: const Color(0xFF9C27B0).withOpacity(0.30),
+                  color: const Color(0xFFE91E63).withOpacity(0.30),
                   blurRadius: 20,
                   offset: const Offset(0, 8),
                 ),
@@ -987,12 +1007,16 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                   children: [
                     Container(
                       padding: const EdgeInsets.symmetric(
-                          horizontal: 10, vertical: 5),
+                        horizontal: 10,
+                        vertical: 5,
+                      ),
                       decoration: BoxDecoration(
                         color: Colors.white.withOpacity(0.22),
                         borderRadius: BorderRadius.circular(20),
                         border: Border.all(
-                            color: Colors.white.withOpacity(0.35), width: 1),
+                          color: Colors.white.withOpacity(0.35),
+                          width: 1,
+                        ),
                       ),
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
@@ -1109,30 +1133,11 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  GestureDetector(
-                    onTap: () => Navigator.pop(context),
-                    child: Container(
-                      width: 40,
-                      height: 40,
-                      decoration: BoxDecoration(
-                        color: Colors.white.withOpacity(0.20),
-                        borderRadius: BorderRadius.circular(13),
-                        border: Border.all(
-                          color: Colors.white.withOpacity(0.35),
-                          width: 1,
-                        ),
-                      ),
-                      child: const Icon(
-                        Icons.arrow_back_ios_new_rounded,
-                        color: Colors.white,
-                        size: 17,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 28),
                   Container(
                     padding: const EdgeInsets.symmetric(
-                        horizontal: 12, vertical: 5),
+                      horizontal: 12,
+                      vertical: 5,
+                    ),
                     decoration: BoxDecoration(
                       color: Colors.white.withOpacity(0.20),
                       borderRadius: BorderRadius.circular(20),
@@ -1204,9 +1209,14 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
           dividerColor: Colors.transparent,
           labelColor: Colors.white,
           unselectedLabelColor: const Color(0xFFF06292),
-          labelStyle: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
-          unselectedLabelStyle:
-              const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+          labelStyle: const TextStyle(
+            fontWeight: FontWeight.w700,
+            fontSize: 13,
+          ),
+          unselectedLabelStyle: const TextStyle(
+            fontWeight: FontWeight.w600,
+            fontSize: 13,
+          ),
           onTap: (_) => setState(() {}),
           tabs: [
             Tab(
@@ -1313,8 +1323,9 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
               keyboardType: TextInputType.emailAddress,
               validator: (value) {
                 final email = value?.trim() ?? '';
-                if (!RegExp(r'^[\w\-.]+@([\w-]+\.)+[\w-]{2,}$')
-                    .hasMatch(email)) {
+                if (!RegExp(
+                  r'^[\w\-.]+@([\w-]+\.)+[\w-]{2,}$',
+                ).hasMatch(email)) {
                   return 'Enter a valid email address.';
                 }
                 return null;
@@ -1326,8 +1337,9 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
               obscureText: true,
               validator: (value) {
                 final password = value?.trim() ?? '';
-                if (!RegExp(r'^(?=.*[0-9])(?=.*[!@#\$%^&*]).{8,}$')
-                    .hasMatch(password)) {
+                if (!RegExp(
+                  r'^(?=.*[0-9])(?=.*[!@#\$%^&*]).{8,}$',
+                ).hasMatch(password)) {
                   return 'Use 8+ chars with a number and special character.';
                 }
                 return null;
@@ -1386,8 +1398,8 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
     final effectiveMaxLines = obscureText ? 1 : maxLines;
     final effectiveKeyboardType =
         effectiveMaxLines > 1 && keyboardType == TextInputType.text
-            ? TextInputType.multiline
-            : keyboardType;
+        ? TextInputType.multiline
+        : keyboardType;
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
@@ -1397,9 +1409,11 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
         obscureText: obscureText,
         maxLines: effectiveMaxLines,
         keyboardType: effectiveKeyboardType,
-        textInputAction:
-            effectiveMaxLines > 1 ? TextInputAction.newline : TextInputAction.next,
-        validator: validator ??
+        textInputAction: effectiveMaxLines > 1
+            ? TextInputAction.newline
+            : TextInputAction.next,
+        validator:
+            validator ??
             (value) {
               if (requiredField && (value?.trim().isEmpty ?? true)) {
                 return '$label is required.';
@@ -1601,12 +1615,16 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                       const SizedBox(height: 5),
                       Container(
                         padding: const EdgeInsets.symmetric(
-                            horizontal: 8, vertical: 3),
+                          horizontal: 8,
+                          vertical: 3,
+                        ),
                         decoration: BoxDecoration(
                           color: Colors.orange.shade50,
                           borderRadius: BorderRadius.circular(20),
-                          border:
-                              Border.all(color: Colors.orange.shade200, width: 1),
+                          border: Border.all(
+                            color: Colors.orange.shade200,
+                            width: 1,
+                          ),
                         ),
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
@@ -1655,8 +1673,11 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                       child: Row(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          Icon(Icons.close_rounded,
-                              color: Colors.red.shade400, size: 16),
+                          Icon(
+                            Icons.close_rounded,
+                            color: Colors.red.shade400,
+                            size: 16,
+                          ),
                           const SizedBox(width: 5),
                           Text(
                             'Decline',
@@ -1694,8 +1715,11 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                       child: const Row(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          Icon(Icons.check_rounded,
-                              color: Colors.white, size: 16),
+                          Icon(
+                            Icons.check_rounded,
+                            color: Colors.white,
+                            size: 16,
+                          ),
                           SizedBox(width: 5),
                           Text(
                             'Accept',
@@ -1811,8 +1835,10 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
             if (applicant.role.isNotEmpty)
               Container(
                 margin: const EdgeInsets.symmetric(horizontal: 12),
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 3,
+                ),
                 decoration: BoxDecoration(
                   color: gradient[0].withOpacity(0.12),
                   borderRadius: BorderRadius.circular(20),
@@ -1836,7 +1862,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                 gradient: LinearGradient(
                   colors: [
                     gradient[0].withOpacity(0.10),
-                    gradient[1].withOpacity(0.15)
+                    gradient[1].withOpacity(0.15),
                   ],
                 ),
                 borderRadius: BorderRadius.circular(12),
@@ -1844,8 +1870,11 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(Icons.remove_red_eye_outlined,
-                      size: 13, color: gradient[1]),
+                  Icon(
+                    Icons.remove_red_eye_outlined,
+                    size: 13,
+                    color: gradient[1],
+                  ),
                   const SizedBox(width: 4),
                   Text(
                     'View Profile',
@@ -1865,7 +1894,9 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
   }
 
   Future<void> _updateApplicantStatus(
-      StaffApplicant applicant, String newStatus) async {
+    StaffApplicant applicant,
+    String newStatus,
+  ) async {
     try {
       await FirebaseFirestore.instance
           .collection('staff_requests')
@@ -1878,13 +1909,14 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
             newStatus == 'accepted'
                 ? 'Applicant accepted.'
                 : newStatus == 'deactivated'
-                    ? 'Applicant deactivated.'
-                    : 'Applicant declined.',
+                ? 'Applicant deactivated.'
+                : 'Applicant declined.',
           ),
           behavior: SnackBarBehavior.floating,
           backgroundColor: const Color(0xFFE91E63),
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+          ),
         ),
       );
     } catch (e) {
@@ -1923,7 +1955,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
   }
 
   Future<void> _createStaffAccount() async {
-    if (!mounted) return;
+    if (!mounted || _isCreatingStaff) return;
     if (!(_createStaffFormKey.currentState?.validate() ?? false)) return;
     final password = _passwordController.text.trim();
     final confirmPassword = _confirmPasswordController.text.trim();
@@ -1933,7 +1965,10 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
     }
 
     FocusScope.of(context).unfocus();
-    setState(() => _isCreatingStaff = true);
+    setState(() {
+      _isCreatingStaff = true;
+      _creating.value = true;
+    });
     FirebaseApp? secondaryApp;
     UserCredential? createdCredential;
     try {
@@ -1950,31 +1985,40 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
       final uid = createdCredential.user?.uid;
       if (uid == null) throw Exception('Unable to create auth account.');
 
-      await FirebaseFirestore.instance.collection('staff_requests').doc(uid).set({
-        'email': _emailController.text.trim(),
-        'role': 'staff',
-        'firstName': _firstNameController.text.trim(),
-        'middleName': _middleNameController.text.trim(),
-        'lastName': _lastNameController.text.trim(),
-        'age': int.tryParse(_ageController.text.trim()) ?? 0,
-        'phone': _phoneController.text.trim(),
-        'address': _addressController.text.trim(),
-        'status': 'accepted',
-        'uid': uid,
-        'userId': uid,
-        'staffId': staffId,
-        'username': staffId,
-        'loginPassword': password,
-        'mustChangePassword': false,
-        'createdBy': FirebaseAuth.instance.currentUser?.uid,
-        'createdAt': FieldValue.serverTimestamp(),
-      });
+      await FirebaseFirestore.instance
+          .collection('staff_requests')
+          .doc(uid)
+          .set({
+            'email': _emailController.text.trim(),
+            'role': 'staff',
+            'firstName': _firstNameController.text.trim(),
+            'middleName': _middleNameController.text.trim(),
+            'lastName': _lastNameController.text.trim(),
+            'age': int.tryParse(_ageController.text.trim()) ?? 0,
+            'phone': _phoneController.text.trim(),
+            'address': _addressController.text.trim(),
+            'status': 'accepted',
+            'uid': uid,
+            'userId': uid,
+            'staffId': staffId,
+            'username': staffId,
+            'loginPassword': password,
+            'mustChangePassword': false,
+            'createdBy': FirebaseAuth.instance.currentUser?.uid,
+            'createdAt': FieldValue.serverTimestamp(),
+          });
 
       await secondaryAuth.signOut();
-      _clearCreateStaffForm();
-      setState(() => _isCreatingStaff = false);
       if (!mounted) return;
-      _tabController.animateTo(1);
+      _clearCreateStaffForm();
+      setState(() {
+        _isCreatingStaff = false;
+        _creating.value = false;
+      });
+      if (!mounted) return;
+      if (_createSheetContext?.mounted == true) {
+        Navigator.pop(_createSheetContext!);
+      }
       _showStaffCreateSnack('Staff account created: $staffId');
     } on FirebaseAuthException catch (e) {
       if (createdCredential?.user != null) {
@@ -1987,14 +2031,21 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
           : e.message ?? 'Unable to create staff account.';
       _showStaffCreateSnack(message, isError: true);
     } catch (e) {
-      _showStaffCreateSnack('Unable to create staff account: $e', isError: true);
+      _showStaffCreateSnack(
+        'Unable to create staff account: $e',
+        isError: true,
+      );
     } finally {
       if (secondaryApp != null) {
         try {
           await secondaryApp.delete();
         } catch (_) {}
       }
-      if (mounted) setState(() => _isCreatingStaff = false);
+      if (mounted)
+        setState(() {
+          _isCreatingStaff = false;
+          _creating.value = false;
+        });
     }
   }
 
@@ -2016,8 +2067,9 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
       SnackBar(
         content: Text(message),
         behavior: SnackBarBehavior.floating,
-        backgroundColor:
-            isError ? const Color(0xFFC2105C) : const Color(0xFF4A7C59),
+        backgroundColor: isError
+            ? const Color(0xFFC2105C)
+            : const Color(0xFF4A7C59),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
       ),
     );
@@ -2040,16 +2092,20 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
       transitionDuration: const Duration(milliseconds: 350),
       pageBuilder: (_, _, _) => const SizedBox.shrink(),
       transitionBuilder: (context, animation, _, _) {
-        final curved =
-            CurvedAnimation(parent: animation, curve: Curves.easeOutBack);
+        final curved = CurvedAnimation(
+          parent: animation,
+          curve: Curves.easeOutBack,
+        );
         return ScaleTransition(
           scale: Tween<double>(begin: 0.88, end: 1.0).animate(curved),
           child: FadeTransition(
             opacity: animation,
             child: Dialog(
               backgroundColor: Colors.transparent,
-              insetPadding:
-                  const EdgeInsets.symmetric(horizontal: 20, vertical: 40),
+              insetPadding: const EdgeInsets.symmetric(
+                horizontal: 20,
+                vertical: 40,
+              ),
               child: Container(
                 constraints: BoxConstraints(
                   maxHeight: MediaQuery.of(context).size.height * 0.85,
@@ -2075,8 +2131,9 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                         Container(
                           width: double.infinity,
                           padding: const EdgeInsets.fromLTRB(20, 30, 20, 26),
-                          decoration:
-                              BoxDecoration(gradient: LinearGradient(colors: gradient)),
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(colors: gradient),
+                          ),
                           child: Column(
                             children: [
                               Container(
@@ -2106,7 +2163,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                                 [
                                   applicant.firstName,
                                   applicant.middleName,
-                                  applicant.lastName
+                                  applicant.lastName,
                                 ].where((s) => s.isNotEmpty).join(' '),
                                 textAlign: TextAlign.center,
                                 style: const TextStyle(
@@ -2119,7 +2176,9 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                                 const SizedBox(height: 8),
                                 Container(
                                   padding: const EdgeInsets.symmetric(
-                                      horizontal: 14, vertical: 5),
+                                    horizontal: 14,
+                                    vertical: 5,
+                                  ),
                                   decoration: BoxDecoration(
                                     color: Colors.white.withOpacity(0.22),
                                     borderRadius: BorderRadius.circular(20),
@@ -2142,59 +2201,68 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                           child: Column(
                             children: [
                               _buildDetailRow(
-                                  icon: Icons.badge_outlined,
-                                  label: 'Staff ID',
-                                  value: applicant.staffId.isEmpty
-                                      ? 'N/A'
-                                      : applicant.staffId,
-                                  gradient: gradient),
+                                icon: Icons.badge_outlined,
+                                label: 'Staff ID',
+                                value: applicant.staffId.isEmpty
+                                    ? 'N/A'
+                                    : applicant.staffId,
+                                gradient: gradient,
+                              ),
                               _buildDetailRow(
-                                  icon: Icons.cake_outlined,
-                                  label: 'Age',
-                                  value: applicant.age.isEmpty
-                                      ? 'N/A'
-                                      : applicant.age,
-                                  gradient: gradient),
+                                icon: Icons.cake_outlined,
+                                label: 'Age',
+                                value: applicant.age.isEmpty
+                                    ? 'N/A'
+                                    : applicant.age,
+                                gradient: gradient,
+                              ),
                               _buildDetailRow(
-                                  icon: Icons.phone_outlined,
-                                  label: 'Phone',
-                                  value: applicant.phone.isEmpty
-                                      ? 'N/A'
-                                      : applicant.phone,
-                                  gradient: gradient),
+                                icon: Icons.phone_outlined,
+                                label: 'Phone',
+                                value: applicant.phone.isEmpty
+                                    ? 'N/A'
+                                    : applicant.phone,
+                                gradient: gradient,
+                              ),
                               _buildDetailRow(
-                                  icon: Icons.mail_outline_rounded,
-                                  label: 'Email',
-                                  value: applicant.email.isEmpty
-                                      ? 'N/A'
-                                      : applicant.email,
-                                  gradient: gradient),
+                                icon: Icons.mail_outline_rounded,
+                                label: 'Email',
+                                value: applicant.email.isEmpty
+                                    ? 'N/A'
+                                    : applicant.email,
+                                gradient: gradient,
+                              ),
                               _buildDetailRow(
-                                  icon: Icons.location_on_outlined,
-                                  label: 'Address',
-                                  value: applicant.address.isEmpty
-                                      ? 'N/A'
-                                      : applicant.address,
-                                  gradient: gradient),
+                                icon: Icons.location_on_outlined,
+                                label: 'Address',
+                                value: applicant.address.isEmpty
+                                    ? 'N/A'
+                                    : applicant.address,
+                                gradient: gradient,
+                              ),
                               const SizedBox(height: 8),
                               if (applicant.isAccepted)
                                 GestureDetector(
                                   onTap: () async {
                                     Navigator.pop(context);
                                     await _updateApplicantStatus(
-                                        applicant, 'deactivated');
+                                      applicant,
+                                      'deactivated',
+                                    );
                                   },
                                   child: Container(
                                     width: double.infinity,
-                                    padding:
-                                        const EdgeInsets.symmetric(vertical: 14),
+                                    padding: const EdgeInsets.symmetric(
+                                      vertical: 14,
+                                    ),
                                     decoration: BoxDecoration(
                                       color: const Color(0xFFC2105C),
                                       borderRadius: BorderRadius.circular(16),
                                       boxShadow: [
                                         BoxShadow(
-                                          color: const Color(0xFFC2105C)
-                                              .withOpacity(0.30),
+                                          color: const Color(
+                                            0xFFC2105C,
+                                          ).withOpacity(0.30),
                                           blurRadius: 12,
                                           offset: const Offset(0, 5),
                                         ),
@@ -2217,8 +2285,9 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                                 onTap: () => Navigator.pop(context),
                                 child: Container(
                                   width: double.infinity,
-                                  padding:
-                                      const EdgeInsets.symmetric(vertical: 14),
+                                  padding: const EdgeInsets.symmetric(
+                                    vertical: 14,
+                                  ),
                                   decoration: BoxDecoration(
                                     gradient: LinearGradient(colors: gradient),
                                     borderRadius: BorderRadius.circular(16),
@@ -2341,7 +2410,9 @@ class _AnimatedListItemState extends State<_AnimatedListItem>
   void initState() {
     super.initState();
     _ctrl = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 450));
+      vsync: this,
+      duration: const Duration(milliseconds: 450),
+    );
     _fade = CurvedAnimation(parent: _ctrl, curve: Curves.easeOut);
     _slide = Tween<Offset>(
       begin: const Offset(0, 0.15),
@@ -2398,11 +2469,17 @@ class _AnimatedCountCardState extends State<_AnimatedCountCard>
   void initState() {
     super.initState();
     _ctrl = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 900));
-    _countAnim = IntTween(begin: 0, end: widget.count)
-        .animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOutCubic));
-    _scaleAnim = Tween<double>(begin: 0.75, end: 1.0)
-        .animate(CurvedAnimation(parent: _ctrl, curve: Curves.elasticOut));
+      vsync: this,
+      duration: const Duration(milliseconds: 900),
+    );
+    _countAnim = IntTween(
+      begin: 0,
+      end: widget.count,
+    ).animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOutCubic));
+    _scaleAnim = Tween<double>(
+      begin: 0.75,
+      end: 1.0,
+    ).animate(CurvedAnimation(parent: _ctrl, curve: Curves.elasticOut));
 
     Future.delayed(const Duration(milliseconds: 200), () {
       if (mounted) _ctrl.forward();
@@ -2413,8 +2490,10 @@ class _AnimatedCountCardState extends State<_AnimatedCountCard>
   void didUpdateWidget(_AnimatedCountCard oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.count != widget.count) {
-      _countAnim = IntTween(begin: oldWidget.count, end: widget.count)
-          .animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOutCubic));
+      _countAnim = IntTween(
+        begin: oldWidget.count,
+        end: widget.count,
+      ).animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOutCubic));
       _ctrl
         ..reset()
         ..forward();
@@ -2474,13 +2553,15 @@ class _AnimatedCountCardState extends State<_AnimatedCountCard>
               ),
             ),
             const SizedBox(height: 3),
-            Text(
-              widget.label,
-              style: TextStyle(
-                color: Colors.white.withOpacity(0.82),
-                fontSize: 11,
-                fontWeight: FontWeight.w600,
-                letterSpacing: 0.3,
+            FittedBox(
+              child: Text(
+                widget.label,
+                style: TextStyle(
+                  color: Colors.white.withOpacity(0.82),
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: 0.3,
+                ),
               ),
             ),
           ],
@@ -2523,7 +2604,9 @@ class _AnimatedAdminCardState extends State<_AnimatedAdminCard>
   void initState() {
     super.initState();
     _ctrl = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 450));
+      vsync: this,
+      duration: const Duration(milliseconds: 450),
+    );
     _fade = CurvedAnimation(parent: _ctrl, curve: Curves.easeOut);
     _slide = Tween<Offset>(
       begin: const Offset(0, 0.14),
@@ -2544,10 +2627,10 @@ class _AnimatedAdminCardState extends State<_AnimatedAdminCard>
   @override
   Widget build(BuildContext context) {
     final List<List<Color>> gradients = [
-      [const Color(0xFF6A11CB), const Color(0xFFBC2B8A)],
-      [const Color(0xFF7C3AED), const Color(0xFFE91E8C)],
-      [const Color(0xFF5C6BC0), const Color(0xFF7C3AED)],
-      [const Color(0xFF9C27B0), const Color(0xFFFF5F96)],
+      [const Color(0xFFAD1457), const Color(0xFFBC2B8A)],
+      [const Color(0xFFAD1457), const Color(0xFFE91E8C)],
+      [const Color(0xFF5C6BC0), const Color(0xFFAD1457)],
+      [const Color(0xFFE91E63), const Color(0xFFFF5F96)],
     ];
     final gradient = gradients[widget.index % gradients.length];
 
@@ -2556,17 +2639,20 @@ class _AnimatedAdminCardState extends State<_AnimatedAdminCard>
     final isPending = widget.admin.status == 'pending';
 
     final Color statusColor = isActive
-        ? const Color(0xFF11998E)
+        ? const Color(0xFFAD1457)
         : isPending
-            ? const Color(0xFFF7971E)
-            : const Color(0xFFEF5350);
-    final String statusLabel =
-        isActive ? 'Active' : isPending ? 'Pending' : 'Inactive';
+        ? const Color(0xFFAD1457)
+        : const Color(0xFFF06292);
+    final String statusLabel = isActive
+        ? 'Active'
+        : isPending
+        ? 'Pending'
+        : 'Inactive';
     final IconData statusIcon = isActive
         ? Icons.verified_rounded
         : isPending
-            ? Icons.pending_rounded
-            : Icons.block_rounded;
+        ? Icons.pending_rounded
+        : Icons.block_rounded;
 
     return FadeTransition(
       opacity: _fade,
@@ -2646,7 +2732,7 @@ class _AnimatedAdminCardState extends State<_AnimatedAdminCard>
                             Text(
                               '${widget.admin.firstName} ${widget.admin.lastName}',
                               style: const TextStyle(
-                                color: Color(0xFF2D1B5E),
+                                color: Color(0xFF880E4F),
                                 fontWeight: FontWeight.w800,
                                 fontSize: 15,
                               ),
@@ -2665,19 +2751,25 @@ class _AnimatedAdminCardState extends State<_AnimatedAdminCard>
                             const SizedBox(height: 5),
                             Container(
                               padding: const EdgeInsets.symmetric(
-                                  horizontal: 8, vertical: 3),
+                                horizontal: 8,
+                                vertical: 3,
+                              ),
                               decoration: BoxDecoration(
                                 color: statusColor.withOpacity(0.10),
                                 borderRadius: BorderRadius.circular(20),
                                 border: Border.all(
-                                    color: statusColor.withOpacity(0.30),
-                                    width: 1),
+                                  color: statusColor.withOpacity(0.30),
+                                  width: 1,
+                                ),
                               ),
                               child: Row(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
-                                  Icon(statusIcon,
-                                      size: 11, color: statusColor),
+                                  Icon(
+                                    statusIcon,
+                                    size: 11,
+                                    color: statusColor,
+                                  ),
                                   const SizedBox(width: 4),
                                   Text(
                                     statusLabel,
@@ -2724,27 +2816,75 @@ class _AnimatedAdminCardState extends State<_AnimatedAdminCard>
                           color: gradient[0].withOpacity(0.10),
                           margin: const EdgeInsets.only(bottom: 14),
                         ),
-                        if (widget.admin.staffId.isNotEmpty)
-                          _buildDetailTile(
-                            icon: Icons.badge_outlined,
-                            label: 'Staff ID',
-                            value: widget.admin.staffId,
+                        ...<String, String>{
+                          'Full name': [
+                            widget.admin.firstName,
+                            '${widget.admin.details['middleName'] ?? ''}',
+                            widget.admin.lastName,
+                          ].where((value) => value.trim().isNotEmpty).join(' '),
+                          'Staff ID': widget.admin.staffId,
+                          'Username':
+                              '${widget.admin.details['username'] ?? widget.admin.staffId}',
+                          'Age':
+                              '${widget.admin.details['age'] ?? 'Not provided'}',
+                          'Email': widget.admin.email,
+                          'Phone': widget.admin.phone,
+                          'Address': widget.admin.address,
+                          'Role': widget.admin.role,
+                          'Account status': widget.admin.status == 'accepted'
+                              ? 'Active account'
+                              : widget.admin.status,
+                          'Created': _staffDate(
+                            widget.admin.details['createdAt'],
+                          ),
+                          'Last login': _staffDate(
+                            widget.admin.details['lastLoginAt'],
+                          ),
+                        }.entries.map(
+                          (detail) => _buildDetailTile(
+                            icon: Icons.info_outline,
+                            label: detail.key,
+                            value: detail.value.trim().isEmpty
+                                ? 'Not provided'
+                                : detail.value,
                             color: gradient[0],
                           ),
-                        if (widget.admin.phone.isNotEmpty)
-                          _buildDetailTile(
-                            icon: Icons.phone_outlined,
-                            label: 'Phone',
-                            value: widget.admin.phone,
-                            color: gradient[0],
-                          ),
-                        if (widget.admin.address.isNotEmpty)
-                          _buildDetailTile(
-                            icon: Icons.location_on_outlined,
-                            label: 'Address',
-                            value: widget.admin.address,
-                            color: gradient[0],
-                          ),
+                        ),
+                        StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                          stream: FirebaseFirestore.instance
+                              .collection('branches')
+                              .snapshots(),
+                          builder: (context, snapshot) {
+                            final ids = [
+                              widget.admin.id,
+                              widget.admin.details['uid'],
+                              widget.admin.details['userId'],
+                            ].whereType<String>().toSet();
+                            final branches = snapshot.data?.docs
+                                .where(
+                                  (doc) =>
+                                      doc.data()['isVoided'] != true &&
+                                      (doc.data()['staffIds'] as List? ?? [])
+                                          .any(ids.contains),
+                                )
+                                .map(
+                                  (doc) => '${doc.data()['name'] ?? 'Branch'}',
+                                )
+                                .join(', ');
+                            return _buildDetailTile(
+                              icon: Icons.store_outlined,
+                              label: 'Assigned branches',
+                              value: snapshot.hasError
+                                  ? 'Unable to load'
+                                  : !snapshot.hasData
+                                  ? 'Loading...'
+                                  : branches == null || branches.isEmpty
+                                  ? 'Unassigned'
+                                  : branches,
+                              color: gradient[0],
+                            );
+                          },
+                        ),
                         const SizedBox(height: 6),
 
                         // Action buttons
@@ -2753,18 +2893,20 @@ class _AnimatedAdminCardState extends State<_AnimatedAdminCard>
                             onTap: widget.onActivate,
                             child: Container(
                               width: double.infinity,
-                              padding:
-                                  const EdgeInsets.symmetric(vertical: 11),
+                              padding: const EdgeInsets.symmetric(vertical: 11),
                               decoration: BoxDecoration(
-                                gradient: const LinearGradient(colors: [
-                                  Color(0xFF11998E),
-                                  Color(0xFF38EF7D)
-                                ]),
+                                gradient: const LinearGradient(
+                                  colors: [
+                                    Color(0xFFAD1457),
+                                    Color(0xFFF06292),
+                                  ],
+                                ),
                                 borderRadius: BorderRadius.circular(13),
                                 boxShadow: [
                                   BoxShadow(
-                                    color: const Color(0xFF11998E)
-                                        .withOpacity(0.30),
+                                    color: const Color(
+                                      0xFFAD1457,
+                                    ).withOpacity(0.30),
                                     blurRadius: 8,
                                     offset: const Offset(0, 3),
                                   ),
@@ -2773,8 +2915,11 @@ class _AnimatedAdminCardState extends State<_AnimatedAdminCard>
                               child: const Row(
                                 mainAxisAlignment: MainAxisAlignment.center,
                                 children: [
-                                  Icon(Icons.check_circle_outline,
-                                      color: Colors.white, size: 15),
+                                  Icon(
+                                    Icons.check_circle_outline,
+                                    color: Colors.white,
+                                    size: 15,
+                                  ),
                                   SizedBox(width: 5),
                                   Text(
                                     'Activate Staff',
@@ -2793,19 +2938,20 @@ class _AnimatedAdminCardState extends State<_AnimatedAdminCard>
                             onTap: widget.onDeactivate,
                             child: Container(
                               width: double.infinity,
-                              padding:
-                                  const EdgeInsets.symmetric(vertical: 11),
+                              padding: const EdgeInsets.symmetric(vertical: 11),
                               decoration: BoxDecoration(
                                 color: const Color(0xFFFFF0F3),
                                 borderRadius: BorderRadius.circular(13),
-                                border:
-                                    Border.all(color: Colors.red.shade100),
+                                border: Border.all(color: Colors.red.shade100),
                               ),
                               child: Row(
                                 mainAxisAlignment: MainAxisAlignment.center,
                                 children: [
-                                  Icon(Icons.block_rounded,
-                                      color: Colors.red.shade400, size: 15),
+                                  Icon(
+                                    Icons.block_rounded,
+                                    color: Colors.red.shade400,
+                                    size: 15,
+                                  ),
                                   const SizedBox(width: 5),
                                   Text(
                                     'Deactivate Staff',
@@ -2866,7 +3012,7 @@ class _AnimatedAdminCardState extends State<_AnimatedAdminCard>
                 Text(
                   value,
                   style: const TextStyle(
-                    color: Color(0xFF2D1B5E),
+                    color: Color(0xFF880E4F),
                     fontSize: 13,
                     fontWeight: FontWeight.w600,
                   ),
@@ -2908,8 +3054,9 @@ class _StaffSectionHeaderDelegate extends SliverPersistentHeaderDelegate {
     double shrinkOffset,
     bool overlapsContent,
   ) {
-    final progress =
-        (shrinkOffset / (maxExtent - minExtent)).clamp(0.0, 1.0).toDouble();
+    final progress = (shrinkOffset / (maxExtent - minExtent))
+        .clamp(0.0, 1.0)
+        .toDouble();
     final expandedOpacity = (1.0 - progress).clamp(0.0, 1.0).toDouble();
     final radius = 36.0 - (18.0 * progress);
 
@@ -3138,7 +3285,8 @@ class StaffApplicant {
   });
 
   factory StaffApplicant.fromDoc(
-      QueryDocumentSnapshot<Map<String, dynamic>> doc) {
+    QueryDocumentSnapshot<Map<String, dynamic>> doc,
+  ) {
     final data = doc.data();
     return StaffApplicant(
       id: doc.id,
@@ -3166,6 +3314,7 @@ class StaffApplicant {
 }
 
 class AdminModel {
+  final Map<String, dynamic> details;
   final String id;
   final String firstName;
   final String lastName;
@@ -3179,6 +3328,7 @@ class AdminModel {
   final DateTime? lastLoginAt;
 
   AdminModel({
+    this.details = const {},
     required this.id,
     required this.firstName,
     required this.lastName,
@@ -3192,10 +3342,10 @@ class AdminModel {
     required this.lastLoginAt,
   });
 
-  factory AdminModel.fromDoc(
-      QueryDocumentSnapshot<Map<String, dynamic>> doc) {
+  factory AdminModel.fromDoc(QueryDocumentSnapshot<Map<String, dynamic>> doc) {
     final data = doc.data();
     return AdminModel(
+      details: data,
       id: doc.id,
       firstName: data['firstName'] as String? ?? '',
       lastName: data['lastName'] as String? ?? '',
@@ -3227,4 +3377,12 @@ class AdminModel {
     if (lastName.isNotEmpty) i += lastName[0];
     return i.toUpperCase();
   }
+}
+
+String _staffDate(dynamic value) {
+  final date = value is Timestamp
+      ? value.toDate()
+      : DateTime.tryParse('$value');
+  if (date == null) return 'Not recorded';
+  return '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')} ${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')}';
 }

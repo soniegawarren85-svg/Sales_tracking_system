@@ -1,3 +1,6 @@
+import '../../widgets/branch_daily_summary.dart';
+import '../../widgets/historical_cash_drawer.dart';
+import '../../widgets/admin_sales_overview.dart';
 import '../../widgets/branch_loss_records_dialog.dart';
 import '../../widgets/branch_analytics_bars.dart';
 import 'package:flutter/material.dart';
@@ -2368,222 +2371,13 @@ class _BudgetPageState extends State<BudgetPage>
     required List<String> staffNames,
   }) {
     final reportDay = _analyticsDate ?? DateTime.now();
-    showDialog<void>(
-      context: context,
-      barrierDismissible: true,
-      builder: (context) {
-        return Dialog(
-          backgroundColor: const Color(0xFFFFF8F3),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(24),
-          ),
-          child: FutureBuilder<List<QueryDocumentSnapshot<Map<String, dynamic>>>>(
-            future: _loadBranchReportDocs(
-              branchId: branchId,
-              staffIds: staffIds,
-              staffNames: staffNames,
-            ),
-            builder: (context, snapshot) {
-              if (snapshot.connectionState == ConnectionState.waiting) {
-                return SizedBox(
-                  width: 520,
-                  height: 650,
-                  child: Column(
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.all(24),
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  const Text(
-                                    'Branch Staff Reports',
-                                    style: TextStyle(
-                                      fontSize: 18,
-                                      fontWeight: FontWeight.w800,
-                                      color: kBannerTop,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    branchName,
-                                    style: const TextStyle(
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w500,
-                                      color: Color(0xFF666666),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            GestureDetector(
-                              onTap: () => Navigator.pop(context),
-                              child: const Icon(
-                                Icons.close_rounded,
-                                color: Color(0xFF999999),
-                                size: 24,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const Expanded(
-                        child: Center(
-                          child: CircularProgressIndicator(color: kPrimary),
-                        ),
-                      ),
-                    ],
-                  ),
-                );
-              }
-
-              final reportDocs = (snapshot.data ?? []).where((doc) {
-                final data = doc.data();
-                final savedBranch = data['branchId']?.toString() ?? '';
-                return (savedBranch.isEmpty || savedBranch == branchId) &&
-                    DateUtils.isSameDay(_reportDayFromData(data), reportDay);
-              }).toList();
-              if (!snapshot.hasError && reportDocs.isEmpty) {
-                return _buildUnsubmittedBranchReport(branchId, branchName, reportDay);
-              }
-              if (snapshot.hasError) {
-                return Padding(
-                  padding: const EdgeInsets.all(24),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Icon(
-                        Icons.assignment_outlined,
-                        size: 48,
-                        color: Color(0xFFCCCCCC),
-                      ),
-                      const SizedBox(height: 16),
-                      Text(
-                        snapshot.hasError
-                            ? 'Unable to load reports'
-                            : '$branchName has no reports for ${_reportDateLabel(reportDay)}',
-                        style: const TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                          color: Color(0xFF666666),
-                        ),
-                        textAlign: TextAlign.center,
-                      ),
-                      const SizedBox(height: 20),
-                      GestureDetector(
-                        onTap: () => Navigator.pop(context),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 20,
-                            vertical: 10,
-                          ),
-                          decoration: BoxDecoration(
-                            color: kPrimary,
-                            borderRadius: BorderRadius.circular(16),
-                          ),
-                          child: const Text(
-                            'Close',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.w600,
-                              fontSize: 12,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                );
-              }
-
-              return Builder(builder: (context) {
-                  final filteredReportDocs = reportDocs;
-                  return SizedBox(
-                    width: 520,
-                    height: 650,
-                    child: Column(
-                      children: [
-                        Padding(
-                          padding: const EdgeInsets.all(24),
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
-                                mainAxisAlignment:
-                                    MainAxisAlignment.spaceBetween,
-                                children: [
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        const Text(
-                                          'Branch Staff Reports',
-                                          style: TextStyle(
-                                            fontSize: 18,
-                                            fontWeight: FontWeight.w800,
-                                            color: kBannerTop,
-                                          ),
-                                        ),
-                                        const SizedBox(height: 4),
-                                        Text(
-                                          branchName,
-                                          style: const TextStyle(
-                                            fontSize: 12,
-                                            fontWeight: FontWeight.w500,
-                                            color: Color(0xFF666666),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                  GestureDetector(
-                                    onTap: () => Navigator.pop(context),
-                                    child: const Icon(
-                                      Icons.close_rounded,
-                                      color: Color(0xFF999999),
-                                      size: 24,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              Text(_reportDateLabel(reportDay)),
-                            ],
-                          ),
-                        ),
-                        Expanded(
-                          child: ListView(
-                            padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
-                            children: filteredReportDocs.map((doc) {
-                              final data = doc.data();
-                              final staffId = data['staffId']?.toString() ?? '';
-                              final staffName =
-                                  data['staffName']?.toString() ?? 'Staff';
-                              return _buildReportCard(
-                                doc,
-                                staffId,
-                                staffName,
-                                branchName: branchName,
-                                branchId: branchId,
-                                branchCode: _branchCode(branchId),
-
-                              );
-                            }).toList(),
-                          ),
-                        ),
-                      ],
-                    ),
-                  );
-                },
-              );
-            },
-          ),
-        );
-      },
-    );
+    showDialog<void>(context: context, builder: (dialogContext) => AlertDialog(
+      title: Row(children: [Expanded(child: Text('$branchName Daily Report')), IconButton(onPressed: () => Navigator.pop(dialogContext), icon: const Icon(Icons.close))]),
+      content: SizedBox(width: 620, child: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(_reportDateLabel(reportDay)), const SizedBox(height: 16),
+        BranchDailySummary(branchId: branchId, day: reportDay),
+      ]))),
+    ));
   }
 
   void _showReportDetail(String staffId, String staffName) {
@@ -2823,7 +2617,8 @@ class _BudgetPageState extends State<BudgetPage>
   }
 
   DateTime _reportDayFromData(Map<String, dynamic> data) {
-    final reportDate = data['reportDate']?.toString();
+    final rawDate = data['reportDateKey'] ?? data['reportDate'];
+    final reportDate = rawDate is Timestamp ? rawDate.toDate().toIso8601String() : rawDate?.toString();
     final parsedReportDate = reportDate == null
         ? null
         : DateTime.tryParse(reportDate);
@@ -4489,7 +4284,11 @@ class _BudgetPageState extends State<BudgetPage>
       backgroundColor: const Color(0xFFF5EEF0),
       floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
       floatingActionButton: _selectedBranchId == null
-          ? null
+          ? FloatingActionButton(
+              tooltip: 'Create branch', shape: const CircleBorder(),
+              backgroundColor: kPrimary, foregroundColor: Colors.white,
+              onPressed: _showCreateBranchDialog, child: const Icon(Icons.add),
+            )
           : _buildBranchQuickActions(
               branchId: _selectedBranchId!,
               branchName: _activeBranchName,
@@ -4546,6 +4345,15 @@ class _BudgetPageState extends State<BudgetPage>
                 ),
               ],
               if (_selectedBranchId == null) ...[
+                SliverToBoxAdapter(child: Padding(
+                  padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    TextButton.icon(icon: const Icon(Icons.calendar_month), label: Text(_analyticsDate == null ? 'Today' : _reportDateLabel(_analyticsDate!)), onPressed: () async {
+                      final picked = await showDatePicker(context: context, initialDate: _analyticsDate ?? DateTime.now(), firstDate: DateTime(2020), lastDate: DateTime.now());
+                      if (picked != null && mounted) setState(() { _analyticsDate = picked; _analyticsRange = 'Day'; });
+                    }),
+                    AdminSalesOverview(branches: true, todayOnly: true, selectedDate: _analyticsDate),
+                  ]),
+                )),
                 SliverToBoxAdapter(child: _buildBranchManagementSection()),
                 const SliverToBoxAdapter(child: SizedBox(height: 32)),
               ] else
@@ -4632,11 +4440,10 @@ class _BudgetPageState extends State<BudgetPage>
                 ),
               ),
               const SizedBox(width: 8),
-              TextButton.icon(
-                onPressed: _showCreateBranchDialog,
-                icon: const Icon(Icons.add_business_rounded, size: 18),
-                label: const Text('Create'),
-                style: TextButton.styleFrom(foregroundColor: kPrimary),
+              IconButton(
+                tooltip: 'View branch report',
+                onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AdminBranchRanking())),
+                icon: const Icon(Icons.bar_chart_rounded, color: kPrimary),
               ),
               StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
                 stream: _firestore
@@ -4645,13 +4452,9 @@ class _BudgetPageState extends State<BudgetPage>
                     .snapshots(),
                 builder: (context, voidedSnapshot) {
                   final count = voidedSnapshot.data?.docs.length ?? 0;
-                  return TextButton.icon(
-                    onPressed: count == 0 ? null : _showVoidedBranchesDialog,
-                    icon: const Icon(Icons.inventory_2_outlined, size: 18),
-                    label: Text('Voided${count == 0 ? '' : ' ($count)'}'),
-                    style: TextButton.styleFrom(
-                      foregroundColor: Colors.orange.shade800,
-                    ),
+                  return IconButton(
+                    tooltip: 'Void branches ($count)', onPressed: _showVoidedBranchesDialog,
+                    icon: const Icon(Icons.block, color: kDeep),
                   );
                 },
               ),
@@ -4868,7 +4671,7 @@ class _BudgetPageState extends State<BudgetPage>
                               IconButton(
                                 tooltip: 'Void branch',
                                 onPressed: () => _voidBranch(branchId, name),
-                                icon: const Icon(Icons.archive_outlined),
+                                icon: const Icon(Icons.block),
                                 color: Colors.orange.shade800,
                               ),
                             ],
@@ -5004,7 +4807,7 @@ class _BudgetPageState extends State<BudgetPage>
           ..sort((a, b) => _dateValue(b.data()['createdAt']).compareTo(_dateValue(a.data()['createdAt'])));
         // Each report is a snapshot of the shared branch drawer, not an
         // amount to add across staff. Use the latest closing snapshot.
-        if (reports.isEmpty) return amount('Closing Cash Drawer', 'No closing record');
+        if (reports.isEmpty) return HistoricalCashDrawer(branchId: branchId, day: day);
         final report = reports.first.data();
         final closing = _parsePrice(report['closingCash'] ?? report['cashDrawerTotal']);
         return amount('Closing Cash Drawer', '₱${closing.toStringAsFixed(2)}');
@@ -5075,7 +4878,7 @@ class _BudgetPageState extends State<BudgetPage>
             Text("${_reportDateLabel(selectedDay)} Total Revenue", style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.w700)),
             Text('₱${revenue.toStringAsFixed(2)}', style: const TextStyle(color: Colors.white, fontSize: 25, fontWeight: FontWeight.w900)),
           ])),
-          _buildDatedCashDrawer(branchId, selectedDay, cashDrawer),
+          BranchDailySummary(key: ValueKey('$branchId-$selectedDay-$revenue-$cashDrawer'), branchId: branchId, day: selectedDay, compact: true),
         ]),
               ),
               const SizedBox(height: 10),
@@ -5085,7 +4888,7 @@ class _BudgetPageState extends State<BudgetPage>
                   branchName: _activeBranchName,
                 ),
                 icon: const Icon(Icons.receipt_long_rounded),
-                label: const Text('View all records'),
+                label: const Text('View Receipt'),
                 style: OutlinedButton.styleFrom(
                   foregroundColor: kDeep,
                   side: const BorderSide(color: kAccent),

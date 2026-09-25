@@ -970,6 +970,7 @@ class _DailyStockPageState extends State<DailyStockPage>
           'categoryImageUrl': data['imageUrl']?.toString() ?? '',
           'isBundle': true,
           'bundleId': data['bundleId']?.toString() ?? '',
+          'bundleContentNames': (data['items'] as List? ?? []).whereType<Map>().map((part) => ((part['variant']?.toString().isNotEmpty ?? false) ? part['variant'] : part['name'] ?? '').toString()).where((name) => name.isNotEmpty).toSet().join(', '),
           'variantSlot': 0,
         };
         continue;
@@ -4160,6 +4161,7 @@ class _DailyStockPageState extends State<DailyStockPage>
             'isCoffee': item['isCoffee'] == true,
             'coffeeSize': item['coffeeSize'] ?? '',
             'coffeeId': item['coffeeId'] ?? '',
+            'itemId': item['itemId'] ?? item['id'] ?? '',
             'basePrice': item['basePrice'] ?? 0,
             'sizePriceDelta': item['sizePriceDelta'] ?? 0,
             'addonName': item['addonName'] ?? '',
@@ -7321,7 +7323,8 @@ class _DailyStockPageState extends State<DailyStockPage>
     }
     final validCartEntries = _validCartEntries(orderItems);
     final salesId = _generateSalesId();
-    final paymentController = TextEditingController();
+    final paymentController = TextEditingController(text: _discountedTotal(orderItems).toStringAsFixed(2));
+    var paidManuallyEdited = false;
     final gcashTransactionController = TextEditingController();
     final discountProofController = TextEditingController();
     var paymentMode = 'Cash';
@@ -7336,12 +7339,9 @@ class _DailyStockPageState extends State<DailyStockPage>
         return StatefulBuilder(
           builder: (context, setState) {
             final hasDiscount = _seniorDiscount || _pwdDiscount;
-            final discountProofLabel =
-                _seniorDiscount ? 'Senior ID' : 'PWD ID';
             final totalDue = _discountedTotal(orderItems);
-            paidAmount = paymentMode == 'GCash'
-                ? totalDue
-                : double.tryParse(
+            if (!paidManuallyEdited) paymentController.text = totalDue.toStringAsFixed(2);
+            paidAmount = double.tryParse(
                         paymentController.text.trim().replaceAll(
                           RegExp(r'[^0-9.]'),
                           '',
@@ -7349,19 +7349,12 @@ class _DailyStockPageState extends State<DailyStockPage>
                       ) ??
                       0;
             change = paidAmount - totalDue;
-            final hasRequiredProof =
-                !hasDiscount || discountProofController.text.trim().isNotEmpty;
-            final hasGcashProof =
-                paymentMode != 'GCash' ||
-                gcashTransactionController.text.trim().isNotEmpty;
             final hasEnoughCashForChange =
                 paymentMode == 'GCash' ||
                 change <= 0 ||
                 _cashDrawer + 0.001 >= change;
             final canConfirm =
                 paidAmount >= totalDue &&
-                hasRequiredProof &&
-                hasGcashProof &&
                 hasEnoughCashForChange;
             return Dialog(
               shape: RoundedRectangleBorder(
@@ -7506,16 +7499,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                                 isDiscount: true,
                               ),
                               const SizedBox(height: 14),
-                              _PinkTextField(
-                                controller: discountProofController,
-                                label: '$discountProofLabel / Proof ID',
-                                hint: _seniorDiscount
-                                    ? 'Enter senior citizen ID'
-                                    : 'Enter PWD ID',
-                                icon: Icons.badge_outlined,
-                                keyboardType: TextInputType.text,
-                                onChanged: (_) => setState(() {}),
-                              ),
+                              
                             ],
                             const SizedBox(height: 8),
                             Container(
@@ -7589,7 +7573,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                               ],
                               onChanged: (value) => setState(() {
                                 paymentMode = value ?? 'Cash';
-                                if (paymentMode == 'GCash') {
+                                if (!paidManuallyEdited) {
                                   paymentController.text = totalDue
                                       .toStringAsFixed(2);
                                 }
@@ -7597,31 +7581,9 @@ class _DailyStockPageState extends State<DailyStockPage>
                             ),
                             const SizedBox(height: 12),
                             if (paymentMode == 'GCash') ...[
-                              _PinkTextField(
-                                controller: gcashTransactionController,
-                                label: 'GCash Transaction ID',
-                                hint: 'Enter reference number',
-                                icon: Icons.confirmation_number_outlined,
-                                keyboardType: TextInputType.text,
-                                onChanged: (_) => setState(() {}),
-                              ),
+                              Center(child: Container(width: 280, height: 280, decoration: BoxDecoration(color: _AppColors.bg, borderRadius: BorderRadius.circular(16), border: Border.all(color: _AppColors.border)), child: const Column(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(Icons.image_outlined, size: 64, color: _AppColors.primaryLight), SizedBox(height: 12), Text('No picture yet'), Text('GCash QR code', style: TextStyle(fontSize: 12))]))),
                               const SizedBox(height: 12),
                             ],
-                            _PinkTextField(
-                              controller: paymentController,
-                              label: 'Customer Paid',
-                              hint: '0.00',
-                              icon: Icons.payments_outlined,
-                              keyboardType:
-                                  const TextInputType.numberWithOptions(
-                                    decimal: true,
-                                  ),
-                              prefixText: '₱',
-                              onChanged: paymentMode == 'GCash'
-                                  ? null
-                                  : (_) => setState(() {}),
-                            ),
-                            const SizedBox(height: 12),
                             Material(
                               color: Colors.transparent,
                               child: InkWell(
@@ -7689,7 +7651,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                                             onChanged: (value) => setState(() {
                                               _seniorDiscount = value;
                                               if (value) _pwdDiscount = false;
-                                              if (paymentMode == 'GCash') {
+                                              if (!paidManuallyEdited) {
                                                 paymentController.text =
                                                     _discountedTotal(orderItems)
                                                         .toStringAsFixed(2);
@@ -7706,7 +7668,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                                             onChanged: (value) => setState(() {
                                               _pwdDiscount = value;
                                               if (value) _seniorDiscount = false;
-                                              if (paymentMode == 'GCash') {
+                                              if (!paidManuallyEdited) {
                                                 paymentController.text =
                                                     _discountedTotal(orderItems)
                                                         .toStringAsFixed(2);
@@ -7716,23 +7678,26 @@ class _DailyStockPageState extends State<DailyStockPage>
                                           ),
                                           if (hasDiscount) ...[
                                             const SizedBox(height: 10),
-                                            _PinkTextField(
-                                              controller: discountProofController,
-                                              label:
-                                                  '$discountProofLabel / Proof ID',
-                                              hint: _seniorDiscount
-                                                  ? 'Enter senior citizen ID'
-                                                  : 'Enter PWD ID',
-                                              icon: Icons.badge_outlined,
-                                              keyboardType: TextInputType.text,
-                                              onChanged: (_) => setState(() {}),
-                                            ),
+                                            
                                           ],
                                         ],
                                       ),
                                     )
                                   : const SizedBox.shrink(),
                             ),
+                            _PinkTextField(
+                              controller: paymentController,
+                              label: 'Customer Paid',
+                              hint: '0.00',
+                              icon: Icons.payments_outlined,
+                              keyboardType:
+                                  const TextInputType.numberWithOptions(
+                                    decimal: true,
+                                  ),
+                              prefixText: '₱',
+                              onChanged: (_) => setState(() { paidManuallyEdited = true; }),
+                            ),
+                            const SizedBox(height: 12),
                             Container(
                               padding: const EdgeInsets.symmetric(
                                 horizontal: 14,
@@ -10231,7 +10196,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                 physics: const NeverScrollableScrollPhysics(),
                 gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
                   maxCrossAxisExtent: constraints.maxWidth >= 700 ? 240 : 230,
-                  mainAxisExtent: 220,
+                  mainAxisExtent: _showBundleView ? 290 : 220,
                   crossAxisSpacing: 12,
                   mainAxisSpacing: 12,
                 ),
@@ -10304,6 +10269,8 @@ class _DailyStockPageState extends State<DailyStockPage>
                                           : _AppColors.textMid,
                                     ),
                                   ),
+                                  if (item['isBundle'] == true && (item['bundleContentNames']?.toString().isNotEmpty ?? false))
+                                    Padding(padding: const EdgeInsets.only(top: 4), child: ConstrainedBox(constraints: const BoxConstraints(maxHeight: 64), child: SingleChildScrollView(child: Text(item['bundleContentNames'].toString(), style: const TextStyle(fontSize: 11, color: _AppColors.textSoft))))),
                                   const SizedBox(height: 6),
                                   Wrap(
                                     spacing: 6,

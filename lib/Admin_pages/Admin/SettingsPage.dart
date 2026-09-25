@@ -46,6 +46,7 @@ class _SettingsPageState extends State<SettingsPage> {
           slivers: [
             /// ===== PREMIUM HEADER =====
             SliverAppBar(
+              automaticallyImplyLeading: false,
               expandedHeight: 200,
               floating: false,
               pinned: true,
@@ -344,7 +345,7 @@ class _SettingsPageState extends State<SettingsPage> {
                   const SizedBox(height: 28),
 
                   /// ===== LOGOUT BUTTON =====
-                  _LogoutButton(),
+                  const SizedBox.shrink(),
 
                   const SizedBox(height: 10),
 

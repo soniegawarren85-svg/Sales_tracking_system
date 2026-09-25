@@ -17,8 +17,13 @@ const _cardBg = Color(0xFFFFFFFF);
 
 // ─── Entry Point ────────────────────────────────────────────────────────────
 class CoffeeMenuPage extends StatefulWidget {
-  const CoffeeMenuPage({super.key, this.initialProductId});
+  const CoffeeMenuPage({
+    super.key,
+    this.initialProductId,
+    this.createOnly = false,
+  });
   final String? initialProductId;
+  final bool createOnly;
 
   @override
   State<CoffeeMenuPage> createState() => _CoffeeMenuPageState();
@@ -69,11 +74,16 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
     if (widget.initialProductId != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) async {
         try {
-          final result = await _firestore.collection('coffee_products')
-              .where(FieldPath.documentId, isEqualTo: widget.initialProductId).limit(1).get();
-          if (mounted && result.docs.isNotEmpty) _showEditProductDialog(result.docs.first);
+          final result = await _firestore
+              .collection('coffee_products')
+              .where(FieldPath.documentId, isEqualTo: widget.initialProductId)
+              .limit(1)
+              .get();
+          if (mounted && result.docs.isNotEmpty)
+            _showEditProductDialog(result.docs.first);
         } catch (_) {
-          if (mounted) _showSnack('Unable to open this coffee item.', isError: true);
+          if (mounted)
+            _showSnack('Unable to open this coffee item.', isError: true);
         }
       });
     }
@@ -316,6 +326,7 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
 
         return coffeeId;
       });
+      if (!mounted) return;
       setState(() {
         _flavorNameController.clear();
         _flavorPriceController.clear();
@@ -324,6 +335,7 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
         _resetSizes();
       });
       _showSnack('Coffee product saved! ID: $coffeeId');
+      if (widget.createOnly) Navigator.pop(context);
     } catch (e) {
       _showSnack('Failed: $e', isError: true);
     } finally {
@@ -903,6 +915,30 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
 
   @override
   Widget build(BuildContext context) {
+    if (widget.createOnly)
+      return Scaffold(
+        backgroundColor: _bg,
+        appBar: AppBar(
+          automaticallyImplyLeading: false,
+          title: const Text('Add coffee'),
+          actions: [
+            IconButton(
+              tooltip: 'Close',
+              onPressed: () => Navigator.pop(context),
+              icon: const Icon(Icons.close),
+            ),
+          ],
+        ),
+        body: ListView(
+          padding: EdgeInsets.fromLTRB(
+            16,
+            12,
+            16,
+            24 + MediaQuery.viewInsetsOf(context).bottom,
+          ),
+          children: [_buildProductForm()],
+        ),
+      );
     return DefaultTabController(
       length: 3,
       child: Scaffold(
