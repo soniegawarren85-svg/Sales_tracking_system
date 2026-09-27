@@ -1,3 +1,4 @@
+import 'package:sales_tracking/theme/app_colors.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'historical_cash_drawer.dart';
@@ -34,6 +35,7 @@ Map<String, double> branchDayTotals(
   }
   var revenue = 0.0;
   var refunds = 0.0;
+  var cashMovement = 0.0;
   for (final row in sales) {
     if (!DateUtils.isSameDay(cashRecordDate(row['timestamp']), day) ||
         row['isDeleted'] == true ||
@@ -46,9 +48,20 @@ Map<String, double> branchDayTotals(
         ].contains('${row['status']}'.toLowerCase()))
       continue;
     final total = number(row['total']);
-    if (total < 0 ||
+    final isRefund =
+        total < 0 ||
         '${row['type']}'.toLowerCase() == 'refund' ||
-        '${row['salesId']}'.startsWith('R-')) {
+        '${row['salesId']}'.toUpperCase().startsWith('R-');
+    if ('${row['paymentMode'] ?? row['paymentMethod'] ?? 'Cash'}'
+            .toLowerCase() ==
+        'cash') {
+      cashMovement += row['cashDrawerDelta'] != null
+          ? number(row['cashDrawerDelta'])
+          : isRefund
+          ? -total.abs()
+          : total;
+    }
+    if (isRefund) {
       refunds += total.abs();
     } else {
       revenue += total;
@@ -60,7 +73,7 @@ Map<String, double> branchDayTotals(
     'Total revenue': revenue,
     'Refunds': refunds,
     'Total gain (net sales)': gain,
-    'Closing cash drawer': opening + gain,
+    'Closing cash drawer': opening + cashMovement,
   };
 }
 
@@ -116,7 +129,10 @@ class _BranchDailySummaryState extends State<BranchDailySummary> {
             (a, b) => (cashRecordDate(b['createdAt']) ?? DateTime(1970))
                 .compareTo(cashRecordDate(a['createdAt']) ?? DateTime(1970)),
           );
-    final opening = reports.isNotEmpty
+    final isToday = DateUtils.isSameDay(widget.day, DateTime.now());
+    final opening = isToday
+        ? drawer['dailyOpeningCash'] ?? drawer['openingCash']
+        : reports.isNotEmpty
         ? reports.first['openingCash'] ?? reports.first['allocatedBudget']
         : null;
     final configured =
@@ -131,9 +147,11 @@ class _BranchDailySummaryState extends State<BranchDailySummary> {
       configured,
     );
     if (opening != null) {
-      result['Starting fund'] = configured;
       result['Closing cash drawer'] =
-          configured + result['Total gain (net sales)']!;
+          result['Closing cash drawer']! +
+          configured -
+          result['Starting fund']!;
+      result['Starting fund'] = configured;
     }
     return result;
   }
@@ -150,11 +168,11 @@ class _BranchDailySummaryState extends State<BranchDailySummary> {
           crossAxisAlignment: CrossAxisAlignment.end,
           children: [
             const Text(
-              'Closing Cash Drawer',
+              'Cash Drawer',
               style: TextStyle(color: Colors.white70),
             ),
             Text(
-              'PHP ${snapshot.data!['Closing cash drawer']!.toStringAsFixed(2)}',
+              '₱${snapshot.data!['Closing cash drawer']!.toStringAsFixed(2)}',
               style: const TextStyle(
                 color: Colors.white,
                 fontSize: 18,
@@ -171,17 +189,17 @@ class _BranchDailySummaryState extends State<BranchDailySummary> {
               margin: const EdgeInsets.only(bottom: 10),
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
-                color: const Color(0xFFFCE4EC),
+                color: AppColors.blush,
                 borderRadius: BorderRadius.circular(14),
               ),
               child: Row(
                 children: [
                   Expanded(child: Text(entry.key)),
                   Text(
-                    'PHP ${entry.value.toStringAsFixed(2)}',
+                    '₱${entry.value.toStringAsFixed(2)}',
                     style: const TextStyle(
                       fontWeight: FontWeight.bold,
-                      color: Color(0xFFC2105C),
+                      color: AppColors.primaryDark,
                     ),
                   ),
                 ],

@@ -1,3 +1,9 @@
+import '../services/transaction_settings.dart';
+import '../widgets/bundle_beverage_dialog.dart';
+import 'package:sales_tracking/theme/app_colors.dart';
+import '../services/inventory_display_ids.dart';
+import '../services/staff_allocation_scope.dart';
+import '../widgets/staff_refund_dialog.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
@@ -17,15 +23,15 @@ import '../widgets/top_notification.dart';
 
 // ─── Theme Constants ─────────────────────────────────────────────────────────
 class _AppColors {
-  static const primary = Color(0xFFC2105C);
-  static const primaryDark = Color(0xFF8B0035);
-  static const primaryLight = Color(0xFFE91E8C);
+  static const primary = AppColors.primaryDark;
+  static const primaryDark = AppColors.primaryDeep;
+  static const primaryLight = AppColors.primary;
   static const accent = Color(0xFFFF6E9D);
-  static const bg = Color(0xFFFFF0F6);
-  static const cardBg = Color(0xFFFFF4F8);
-  static const border = Color(0xFFF8BBD0);
+  static const bg = AppColors.background;
+  static const cardBg = AppColors.surfaceTint;
+  static const border = AppColors.blush;
   static const textMid = Color(0xFF7A1F5C);
-  static const textSoft = Color(0xFF8B496B);
+  static const textSoft = AppColors.textMuted;
   static const divider = Color(0xFFF1CDE0);
 }
 
@@ -122,6 +128,29 @@ class _DailyStockPageState extends State<DailyStockPage>
   List<_CachedDoc> _cachedStaffRequestDocs = const [];
   List<_CachedDoc> _cachedBranchDocs = const [];
   bool _isResolvingStaffIdentity = true;
+  Map<String,dynamic> _transactionSettings = {};
+  bool _settingsReady = false;
+  final _settingsRevision = ValueNotifier<int>(0);
+  StreamSubscription? _settingsSubscription;
+  String? _selectedDiscountId;
+  bool get _discountsAllowed => _settingsReady && _transactionSettings['discountsEnabled'] != false && _transactionSettings['allowDiscounts'] != false;
+  List<Map<String,dynamic>> get _discountOptions => settingRows(_transactionSettings,'discounts').where((row)=>row['isVoided'] != true).toList();
+  List<Map<String,dynamic>> get _paymentOptions => settingRows(_transactionSettings,'payments').where((row)=>row['isVoided'] != true).toList();
+  Map<String,dynamic> get _chosenDiscount => _discountOptions.firstWhere((row)=>row['id']==_selectedDiscountId,orElse:()=>{});
+  double get _discountRate => _discountsAllowed && (_seniorDiscount || _pwdDiscount) ? discountFraction(_transactionSettings, _selectedDiscountId) : 0;
+  String get _discountName => _discountRate > 0 ? '${_chosenDiscount['name']}' : 'None';
+  bool _staffCan(String key) {
+    if (!_settingsReady) { _showStyledSnackBar('Wait for staff permissions to load.', isError: true); return false; }
+    if(_transactionSettings[key] != false) return true;
+    _showStyledSnackBar('This action has been disabled by the administrator.',isError:true);return false;
+  }
+  Widget _paymentQr(String name) {
+    final method=_paymentOptions.firstWhere((row)=>row['name']==name,orElse:()=>{});
+    final url='${method['qrUrl'] ?? ''}';
+    if(url.isEmpty)return const Center(child:Text('No QR code uploaded'));
+    if(url.startsWith('data:image/'))return Image.memory(base64Decode(url.split(',').last),fit:BoxFit.contain);
+    return Image.network(url,fit:BoxFit.contain,errorBuilder:(_,__,___)=>const Text('Unable to load QR code'));
+  }
   bool _seniorDiscount = false;
   bool _pwdDiscount = false;
   final Map<String, int> _cartStockBeforeSelectionByKey = {};
@@ -145,7 +174,10 @@ class _DailyStockPageState extends State<DailyStockPage>
   String _staffPublicId = '';
   String _staffDisplayName = 'Staff';
   bool _autoReportCheckStarted = false;
+  Timer? _drawerDayTimer;
   Timer? _dailyReportTimer;
+  StreamSubscription? _branchHoursSubscription;
+  int _branchClosingMinutes = 1140;
   StreamSubscription? _budgetSubscription;
   StreamSubscription? _cashDrawerSubscription;
   bool _tabletOrientationLocked = false;
@@ -158,9 +190,19 @@ class _DailyStockPageState extends State<DailyStockPage>
   late Animation<double> _budgetCardFade;
   late Animation<Offset> _budgetCardSlide;
 
+  StreamSubscription<String>? _localDataSubscription;
+  StreamSubscription<StaffAllocationScope>? _allocationScopeSubscription;
   @override
   void initState() {
     super.initState();
+    _settingsSubscription = transactionSettings.snapshots().listen((snapshot) {
+      if(!mounted)return;
+      setState(() { _settingsReady=true; _transactionSettings=snapshot.data() ?? {}; if(!_discountsAllowed || _chosenDiscount.isEmpty) {_seniorDiscount=false;_pwdDiscount=false;_selectedDiscountId=null;} });
+      _settingsRevision.value++;
+    }, onError:(Object error) => debugPrint('Transaction settings: $error'));
+    _drawerDayTimer = Timer.periodic(const Duration(seconds: 15), (_) => LocalDatabaseSyncService().rolloverCashDrawers());
+    unawaited(LocalDatabaseSyncService().rolloverCashDrawers());
+    _localDataSubscription = LocalDatabaseSyncService().collectionUpdates.where((name) => ['staff_inventory', 'staff_cash_drawer', 'sales_inventory'].contains(name)).listen((_) => _loadLocalOrderCache());
     WidgetsBinding.instance.addObserver(this);
     _budgetRequestController = TextEditingController();
     _orderSearchController = TextEditingController();
@@ -283,9 +325,11 @@ class _DailyStockPageState extends State<DailyStockPage>
       );
       final staffRequests = await service.getCachedCollection('staff_requests');
       final branches = await service.getCachedCollection('branches');
+      final drawers = await service.getCachedCollection('staff_cash_drawer');
       if (!mounted) return;
       setState(() {
         _cachedStaffInventoryDocs = staffInventory
+            .where((row) => allocationBelongsTo(row, _staffInventoryIds))
             .map(_CachedDoc.fromMap)
             .toList();
         _cachedSalesInventoryDocs = salesInventory
@@ -295,7 +339,7 @@ class _DailyStockPageState extends State<DailyStockPage>
             .map(_CachedDoc.fromMap)
             .toList();
         _cachedBranchDocs = branches.map(_CachedDoc.fromMap).toList();
-        _staffInventoryStreamCache = null;
+        _cashDrawer = drawers.where((d) => _staffInventoryIds.contains(d['_localDocId'])).fold<double>(0, (sum, d) => sum + ((d['balance'] as num?)?.toDouble() ?? 0));
       });
     } catch (e) {
       debugPrint('Local order cache load failed: $e');
@@ -303,115 +347,36 @@ class _DailyStockPageState extends State<DailyStockPage>
   }
 
   Future<void> _loadStaffInventoryIds(String uid) async {
-    final ids = <String>{};
-    try {
-      final doc = await FirebaseFirestore.instance
-          .collection('staff_requests')
-          .doc(uid)
-          .get();
-      final data = doc.data();
-      final publicStaffId = data?['staffId']?.toString().trim() ?? '';
-      final firstName = data?['firstName']?.toString().trim() ?? '';
-      final lastName = data?['lastName']?.toString().trim() ?? '';
-      final fullName = data?['fullName']?.toString().trim() ?? '';
-      final name = data?['name']?.toString().trim() ?? '';
-      _staffPublicId = publicStaffId;
-      _staffDisplayName = [
-        firstName,
-        lastName,
-      ].where((part) => part.isNotEmpty).join(' ').trim();
-      if (_staffDisplayName.isEmpty) {
-        _staffDisplayName = fullName.isNotEmpty
-            ? fullName
-            : (name.isNotEmpty ? name : 'Staff');
+    await _allocationScopeSubscription?.cancel();
+    _allocationScopeSubscription = watchStaffAllocationScope(uid).listen((scope) {
+      if (!mounted) return;
+      final changed = _staffInventoryIds.join('|') != scope.targets.join('|');
+      final data = scope.profile;
+      setState(() {
+        _staffInventoryIds = scope.targets;
+        _isResolvingStaffIdentity = false;
+        if (changed) _staffInventoryStreamCache = null;
+        _staffPublicId = data['staffId']?.toString() ?? _staffPublicId;
+        final full = [data['firstName'], data['lastName']].where((v) => v != null && v.toString().isNotEmpty).join(' ');
+        if (full.isNotEmpty) _staffDisplayName = full;
+      });
+      if (changed) {
+        _branchHoursSubscription?.cancel();
+        final branchId = _activeDrawerId();
+        _branchHoursSubscription = FirebaseFirestore.instance.collection('branches').doc(branchId).snapshots().listen((snapshot) {
+          if (!mounted || !snapshot.exists) return;
+          _branchClosingMinutes = (snapshot.data()?['closingMinutes'] as num?)?.toInt() ?? 1140;
+          _runAutomaticDailyReportCheck(uid);
+          _scheduleNextDailyReportCheck();
+        }, onError: (Object error) { debugPrint('Unable to refresh branch hours: $error'); });
+        _subscribeToStaffBudget(uid);
+        _subscribeToCashDrawer(uid);
+        unawaited(_loadLocalOrderCache());
       }
-      final branchIds = (data?['branchIds'] as List<dynamic>? ?? [])
-          .map((id) => id.toString().trim())
-          .where((id) => id.isNotEmpty);
-      ids.addAll(branchIds);
-      final byUid = await FirebaseFirestore.instance
-          .collection('branches')
-          .where('staffIds', arrayContains: uid)
-          .get();
-      ids.addAll(byUid.docs.map((doc) => doc.id));
-      if (publicStaffId.isNotEmpty) {
-        final byPublicId = await FirebaseFirestore.instance
-            .collection('branches')
-            .where('staffIds', arrayContains: publicStaffId)
-            .get();
-        ids.addAll(byPublicId.docs.map((doc) => doc.id));
-      }
-    } catch (_) {}
-
-    if (ids.isEmpty) {
-      ids.addAll(await _staffInventoryIdsFromCache(uid));
-    }
-
-    if (!mounted) return;
-    setState(() {
-      _staffInventoryIds = ids.toList();
-      _staffInventoryStreamCache = null;
-      _isResolvingStaffIdentity = false;
+    }, onError: (Object error) {
+      debugPrint('Staff allocation lookup: $error');
+      if (mounted) setState(() => _isResolvingStaffIdentity = false);
     });
-    _subscribeToStaffBudget(uid);
-    _subscribeToCashDrawer(uid);
-    _runAutomaticDailyReportCheck(uid);
-    _scheduleNextDailyReportCheck();
-  }
-
-  Future<Set<String>> _staffInventoryIdsFromCache(String uid) async {
-    var staffRequests = _cachedStaffRequestDocs;
-    var branches = _cachedBranchDocs;
-    var staffInventory = _cachedStaffInventoryDocs;
-    if (staffRequests.isEmpty || branches.isEmpty || staffInventory.isEmpty) {
-      final service = LocalDatabaseSyncService();
-      staffRequests = (await service.getCachedCollection(
-        'staff_requests',
-      )).map(_CachedDoc.fromMap).toList();
-      branches = (await service.getCachedCollection(
-        'branches',
-      )).map(_CachedDoc.fromMap).toList();
-      staffInventory = (await service.getCachedCollection(
-        'staff_inventory',
-      )).map(_CachedDoc.fromMap).toList();
-    }
-
-    final ids = <String>{};
-    Map<String, dynamic>? staffData;
-    for (final doc in staffRequests) {
-      final data = doc.data();
-      final matchesDoc = doc.id == uid;
-      final matchesUid =
-          data['uid']?.toString() == uid || data['userId']?.toString() == uid;
-      if (matchesDoc || matchesUid) {
-        staffData = data;
-        break;
-      }
-    }
-
-    final publicStaffId = staffData?['staffId']?.toString().trim() ?? '';
-    final branchIds = (staffData?['branchIds'] as List<dynamic>? ?? [])
-        .map((id) => id.toString().trim())
-        .where((id) => id.isNotEmpty);
-    ids.addAll(branchIds);
-
-    for (final doc in branches) {
-      final data = doc.data();
-      final staffIds = data['staffIds'];
-      if (staffIds is! List) continue;
-      final normalized = staffIds.map((id) => id.toString().trim()).toSet();
-      if (normalized.contains(uid) ||
-          (publicStaffId.isNotEmpty && normalized.contains(publicStaffId))) {
-        ids.add(doc.id);
-      }
-    }
-
-    for (final doc in staffInventory) {
-      final data = doc.data();
-      final staffId = data['staffId']?.toString().trim() ?? '';
-      if (staffId.isNotEmpty) ids.add(staffId);
-    }
-    return ids;
   }
 
   Future<void> _loadCashierToolsPreference(String uid) async {
@@ -444,24 +409,30 @@ class _DailyStockPageState extends State<DailyStockPage>
       _staffInventoryStreamCache = FirebaseFirestore.instance
           .collection('staff_inventory')
           .where('staffId', isEqualTo: '')
-          .snapshots();
+          .snapshots(includeMetadataChanges: true);
       return _staffInventoryStreamCache!;
     }
     final query = FirebaseFirestore.instance.collection('staff_inventory');
     _staffInventoryStreamCache = ids.length == 1
-        ? query.where('staffId', isEqualTo: ids.first).snapshots()
-        : query.where('staffId', whereIn: ids).snapshots();
+        ? query.where('staffId', isEqualTo: ids.first).snapshots(includeMetadataChanges: true)
+        : query.where('staffId', whereIn: ids).snapshots(includeMetadataChanges: true);
     return _staffInventoryStreamCache!;
   }
 
   @override
   void dispose() {
+    _settingsSubscription?.cancel();
+    _settingsRevision.dispose();
+    _drawerDayTimer?.cancel();
+    _localDataSubscription?.cancel();
+    _allocationScopeSubscription?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     InventoryService().removeListener(_onInventoryChanged);
     _budgetSubscription?.cancel();
     _cashDrawerSubscription?.cancel();
     _pendingOrdersSubscription?.cancel();
     _dailyReportTimer?.cancel();
+    _branchHoursSubscription?.cancel();
     _budgetRequestController.dispose();
     _orderSearchController.dispose();
     for (final controller in _qtyControllers.values) {
@@ -538,18 +509,21 @@ class _DailyStockPageState extends State<DailyStockPage>
               Future<void>(() async {
                 final service = LocalDatabaseSyncService();
                 await service.mergeCashDrawerSnapshot(
-                      snapshot.docs.map(
-                        (doc) => {...doc.data(), '_localDocId': doc.id},
-                      ),
-                    );
+                  snapshot.docs.map(
+                    (doc) => {...doc.data(), '_localDocId': doc.id},
+                  ),
+                );
                 // Use the same stable opening-cash + today's-receipts value
                 // as the staff dashboard, never the raw stale server balance.
-                await service.rebuildTodayCashDrawerFromReceipts();
+                // Preserve branch-wide drawer totals, including sales outside business hours.
                 final drawerById = {
-                  for (final drawer
-                      in await service.getCachedCollection('staff_cash_drawer'))
+                  for (final drawer in await service.getCachedCollection(
+                    'staff_cash_drawer',
+                  ))
                     drawer['_localDocId']?.toString() ??
-                        drawer['id']?.toString() ?? '': drawer,
+                            drawer['id']?.toString() ??
+                            '':
+                        drawer,
                 };
                 final totalDrawer = ids.fold<double>(
                   0,
@@ -562,7 +536,7 @@ class _DailyStockPageState extends State<DailyStockPage>
             );
           },
           onError: (_) {
-            if (mounted) setState(() => _cashDrawer = 0.0);
+            // Preserve the last cached balance during network errors.
           },
         );
   }
@@ -701,19 +675,16 @@ class _DailyStockPageState extends State<DailyStockPage>
 
   double _discountedTotal(List<Map<String, dynamic>> orderItems) {
     final total = _cartTotal(orderItems);
-    return (_seniorDiscount || _pwdDiscount) ? total * 0.8 : total;
+    return (_seniorDiscount || _pwdDiscount) ? total * (1 - _discountRate) : total;
   }
 
   double _discountValue(List<Map<String, dynamic>> orderItems) {
     final total = _cartTotal(orderItems);
-    return (_seniorDiscount || _pwdDiscount) ? total * 0.2 : 0;
+    return (_seniorDiscount || _pwdDiscount) ? total * _discountRate : 0;
   }
 
   String get _discountLabel {
-    if (_seniorDiscount) return 'Senior discount (20%)';
-    if (_pwdDiscount) return 'PWD discount (20%)';
-    return '';
-  }
+    return _discountRate > 0 ? '$_discountName (${(_discountRate * 100).toStringAsFixed(0)}%)' : '';  }
 
   bool _isItemLocked(String name) {
     final current = InventoryService().getAnyEntryForItemToday(name);
@@ -888,16 +859,18 @@ class _DailyStockPageState extends State<DailyStockPage>
   }
 
   int _stockWithOptimisticTarget(Map<String, dynamic> item, int stock) {
-    final key = _cartKey(item);
+    final key = item['isBundle'] == true ? 'bundle-stock:${item['staffInventoryDocId']}' : _cartKey(item);
     final optimisticStock = _optimisticStockByKey[key];
-    if (optimisticStock == null) return stock;
-    if (stock <= optimisticStock) {
-      _optimisticStockByKey.remove(key);
-      return stock;
+    if (optimisticStock != null) {
+      if (stock <= optimisticStock) { _optimisticStockByKey.remove(key); }
+      else { stock = optimisticStock; }
     }
-    return optimisticStock;
+    if (item['isBundle'] == true) {
+      final others = _cart.entries.where((entry) => entry.key != _cartKey(item) && _cartItemLookup[entry.key]?['isBundle'] == true && _cartItemLookup[entry.key]?['staffInventoryDocId'] == item['staffInventoryDocId']).fold<int>(0, (sum, entry) => sum + entry.value);
+      stock = max(0, stock - others);
+    }
+    return stock;
   }
-
   void _applyConfirmedStockLocally(
     Iterable<MapEntry<String, int>> soldEntries,
   ) {
@@ -910,25 +883,31 @@ class _DailyStockPageState extends State<DailyStockPage>
       // A live Firestore update may have already reflected this sale, so
       // subtracting from the latest snapshot can show one item too few.
       final hasStockField = item.containsKey('stock') && item['stock'] != null;
-      final stockBeforeSale = _cartStockBeforeSelectionByKey[entry.key] ??
+      final stockBeforeSale =
+          _cartStockBeforeSelectionByKey[entry.key] ??
           (hasStockField
               ? _parseInt(item['stock'])
               : _parseInt(item['startingStock']));
-      confirmedStockByKey[entry.key] = max(
-        0,
-        stockBeforeSale - entry.value,
-      );
+      confirmedStockByKey[entry.key] = max(0, stockBeforeSale - entry.value);
+    }
+    final bundleSold = <String, int>{};
+    final bundleStock = <String, int>{};
+    for (final entry in soldEntries) {
+      final item = _cartItemLookup[entry.key];
+      if (item == null || item['isBundle'] != true) continue;
+      final key = 'bundle-stock:${item['staffInventoryDocId']}';
+      bundleSold[key] = (bundleSold[key] ?? 0) + entry.value;
+      bundleStock[key] = max(bundleStock[key] ?? 0, _parseInt(item['stock']));
+    }
+    for (final key in bundleSold.keys) {
+      _optimisticStockByKey[key] = max(0, (bundleStock[key] ?? 0) - bundleSold[key]!);
     }
     if (confirmedStockByKey.isEmpty) return;
 
-    _latestOrderItems = _latestOrderItems
-        .map((item) {
-          final confirmedStock = confirmedStockByKey[_cartKey(item)];
-          return confirmedStock == null
-              ? item
-              : {...item, 'stock': confirmedStock};
-        })
-        .toList();
+    _latestOrderItems = _latestOrderItems.map((item) {
+      final confirmedStock = confirmedStockByKey[_cartKey(item)];
+      return confirmedStock == null ? item : {...item, 'stock': confirmedStock};
+    }).toList();
     _optimisticStockByKey.addAll(confirmedStockByKey);
   }
 
@@ -969,8 +948,21 @@ class _DailyStockPageState extends State<DailyStockPage>
           'imageUrl': data['imageUrl']?.toString() ?? '',
           'categoryImageUrl': data['imageUrl']?.toString() ?? '',
           'isBundle': true,
+          'publicId': data['publicId'],
           'bundleId': data['bundleId']?.toString() ?? '',
-          'bundleContentNames': (data['items'] as List? ?? []).whereType<Map>().map((part) => ((part['variant']?.toString().isNotEmpty ?? false) ? part['variant'] : part['name'] ?? '').toString()).where((name) => name.isNotEmpty).toSet().join(', '),
+          'bundleItems': data['items'] ?? [],
+          'bundleContentNames': (data['items'] as List? ?? [])
+              .whereType<Map>()
+              .map(
+                (part) =>
+                    ((part['variant']?.toString().isNotEmpty ?? false)
+                            ? part['variant']
+                            : part['name'] ?? '')
+                        .toString(),
+              )
+              .where((name) => name.isNotEmpty)
+              .toSet()
+              .join(', '),
           'variantSlot': 0,
         };
         continue;
@@ -1014,6 +1006,7 @@ class _DailyStockPageState extends State<DailyStockPage>
             'staffInventoryDocId': data['staffDocId']?.toString() ?? '',
             'inventoryOwnerId': data['staffId']?.toString() ?? '',
             'itemId': variantId,
+            'publicId': itemData['publicId'] ?? (data['isCoffee'] == true ? data['publicId'] : null),
             'variant': variantName,
             'price': _parsePrice(itemData['price']),
             'category': data['category']?.toString() ?? '',
@@ -1147,6 +1140,30 @@ class _DailyStockPageState extends State<DailyStockPage>
     _cart[key] = (_cart[key] ?? 0) + 1;
     _syncQtyController(key, _cart[key]!);
   });
+
+  Future<void> _selectBundleOrItem(Map<String, dynamic> item, int stock) async {
+    if (item['isBundle'] != true || bundleDrinkServings(item).isEmpty) {
+      _addSingleItemToTicket(item, stock);
+      return;
+    }
+    try {
+      final snapshot = await FirebaseFirestore.instance.collection('coffee_addons').get();
+      final addons = snapshot.docs.where((doc) {
+        final data = doc.data();
+        return data['isDeleted'] != true && data['isAvailable'] != false && !_isExpiredItem('${data['expirationDate'] ?? ''}');
+      }).map((doc) => {'id': doc.id, 'name': doc.data()['name'], 'priceDelta': doc.data()['priceDelta'] ?? 0}).toList();
+      if (!mounted) return;
+      final selected = await showDialog<Map<String, dynamic>>(
+        context: context,
+        builder: (_) => BundleBeverageDialog(bundle: item, addons: addons),
+      );
+      if (selected == null || !mounted) return;
+      _addSingleItemToTicket(selected, _stockForItem(selected, 0));
+    } catch (error) {
+      debugPrint('Bundle beverage options: $error');
+      if (mounted) _showStyledSnackBar('Unable to load beverage options. Please try again.', isError: true);
+    }
+  }
 
   void _addSingleItemToTicket(Map<String, dynamic> item, int maxStock) {
     final key = _cartKey(item);
@@ -3744,7 +3761,7 @@ class _DailyStockPageState extends State<DailyStockPage>
     if (_autoReportCheckStarted) return;
     _autoReportCheckStarted = true;
     final now = DateTime.now();
-    final reportDay = latestClosedBranchDay(now);
+    final reportDay = latestClosedBranchDay(now, closingMinutes: _branchClosingMinutes);
     try {
       await _sendDailyReportForDate(
         reportDay,
@@ -3761,9 +3778,9 @@ class _DailyStockPageState extends State<DailyStockPage>
   void _scheduleNextDailyReportCheck() {
     _dailyReportTimer?.cancel();
     final now = DateTime.now();
-    final nextClosing = nextBranchClosingTime(now);
+    final nextClosing = nextBranchClosingTime(now, closingMinutes: _branchClosingMinutes);
     _dailyReportTimer = Timer(nextClosing.difference(now), () async {
-      final reportDay = latestClosedBranchDay(DateTime.now());
+      final reportDay = latestClosedBranchDay(DateTime.now(), closingMinutes: _branchClosingMinutes);
       try {
         await _sendDailyReportForDate(
           reportDay,
@@ -3891,12 +3908,14 @@ class _DailyStockPageState extends State<DailyStockPage>
         .collection('staff_budget')
         .doc(branchId)
         .get();
-    final openingCash =
-        (allocationDoc.data()?['allocatedBudget'] as num?)?.toDouble() ?? 0.0;
+
     final drawerDoc = await FirebaseFirestore.instance
         .collection('staff_cash_drawer')
         .doc(branchId)
         .get();
+    final openingCash = (drawerDoc.data()?['dailyOpeningCash'] as num?)?.toDouble()
+        ?? (drawerDoc.data()?['openingCash'] as num?)?.toDouble()
+        ?? (allocationDoc.data()?['allocatedBudget'] as num?)?.toDouble() ?? 0.0;
     final closingCash =
         (drawerDoc.data()?['balance'] as num?)?.toDouble() ?? _cashDrawer;
     final now = DateTime.now();
@@ -4106,9 +4125,11 @@ class _DailyStockPageState extends State<DailyStockPage>
   }) async {
     var processingDialogVisible = false;
     try {
+      if (!_settingsReady) throw StateError('Wait for payment settings to load.');
+      if ((orderTotal - _discountedTotal(orderItems)).abs() > .01) throw StateError('Discount settings changed. Review the updated total before paying.');
       final receiptEntries = _validCartEntries(orderItems);
       final receiptItems = receiptEntries.map<Map<String, dynamic>>((entry) {
-        final item = orderItems.firstWhere(
+        final item = _knownOrderItems(orderItems).firstWhere(
           (element) => _cartKey(element) == entry.key,
           orElse: () => {},
         );
@@ -4124,16 +4145,16 @@ class _DailyStockPageState extends State<DailyStockPage>
       }).toList();
       final subtotal = _cartTotal(orderItems);
       final discountAmount = (_seniorDiscount || _pwdDiscount)
-          ? subtotal * 0.2
+          ? subtotal * _discountRate
           : 0.0;
-      final discountType = _seniorDiscount
-          ? 'Senior'
-          : (_pwdDiscount ? 'PWD' : 'None');
+      final discountType = _discountName;
 
       final drawerId = _drawerIdForOrder(orderItems);
+      if (!_paymentOptions.any((method) => method['name'] == paymentMode)) throw StateError('Payment method is no longer available. Select another method.');
       final isCashPayment = paymentMode.toLowerCase() == 'cash';
       final completedSalePayload = {
         'userId': _currentUserId,
+        'stockSyncRequired': true,
         if (drawerId.isNotEmpty) 'branchId': drawerId,
         'salesId': salesId,
         'subtotal': subtotal,
@@ -4147,7 +4168,7 @@ class _DailyStockPageState extends State<DailyStockPage>
         'gcashTransactionId': gcashTransactionId.trim(),
         'cashDrawerDelta': isCashPayment ? paidAmount - change : 0.0,
         'items': receiptEntries.map((entry) {
-          final item = orderItems.firstWhere(
+          final item = _knownOrderItems(orderItems).firstWhere(
             (element) => _cartKey(element) == entry.key,
             orElse: () => {},
           );
@@ -4158,8 +4179,15 @@ class _DailyStockPageState extends State<DailyStockPage>
             'quantity': entry.value,
             'category': item['category'] ?? '',
             'isBundle': item['isBundle'] == true,
+        if (item['bundleBeverages'] != null) ...{
+          'bundleBeverages': item['bundleBeverages'],
+          'bundleItems': item['bundleItems'],
+          'bundleBasePrice': item['bundleBasePrice'],
+          'bundleAddonTotal': item['bundleAddonTotal'],
+        },
             'isCoffee': item['isCoffee'] == true,
             'coffeeSize': item['coffeeSize'] ?? '',
+            'publicId': item['publicId'],
             'coffeeId': item['coffeeId'] ?? '',
             'itemId': item['itemId'] ?? item['id'] ?? '',
             'basePrice': item['basePrice'] ?? 0,
@@ -4167,6 +4195,7 @@ class _DailyStockPageState extends State<DailyStockPage>
             'addonName': item['addonName'] ?? '',
             'addonPriceDelta': item['addonPriceDelta'] ?? 0,
             'sourceInventoryId': item['sourceInventoryId'] ?? '',
+            'staffInventoryDocId': item['staffInventoryDocId'] ?? '',
           };
         }).toList(),
         'timestamp': DateTime.now(),
@@ -4180,25 +4209,16 @@ class _DailyStockPageState extends State<DailyStockPage>
         completedSalePayload,
       );
       unawaited(LocalDatabaseSyncService().syncPendingSales());
-      await LocalDatabaseSyncService().recordCashDrawerChange(
-        drawerId: drawerId,
-        cashDelta: isCashPayment ? paidAmount - change : 0.0,
-        gcashDelta: isCashPayment ? 0.0 : orderTotal,
-        staffId: _currentUserId ?? '',
-        receiptId: salesId,
-        gcashTransactionId: gcashTransactionId.trim(),
-      );
+
 
       if (mounted) {
         setState(() {
           _applyConfirmedStockLocally(receiptEntries);
-          if (isCashPayment) {
-            _cashDrawer = max(0, _cashDrawer + paidAmount - change);
-          }
-      _cart.clear();
-      _cartItemLookup.clear();
-      _cartStockBeforeSelectionByKey.clear();
-      _showCartReview = false;
+          // The local drawer stream supplies the already-updated balance.
+          _cart.clear();
+          _cartItemLookup.clear();
+          _cartStockBeforeSelectionByKey.clear();
+          _showCartReview = false;
           _selectedGroupName = null;
           _seniorDiscount = false;
           _pwdDiscount = false;
@@ -4208,464 +4228,7 @@ class _DailyStockPageState extends State<DailyStockPage>
         });
       }
 
-      unawaited(
-        Future<void>(() async {
-          try {
-            // Drawer movements are committed through the durable local queue
-            // above, which prevents an online write from being counted twice.
-            final useLegacyDrawerWrite =
-                _currentUserId == '__legacy_drawer_write__';
-            if (_currentUserId != null && drawerId.isNotEmpty) {
-              final drawerRef = FirebaseFirestore.instance
-                  .collection('staff_cash_drawer')
-                  .doc(drawerId);
-
-              if (useLegacyDrawerWrite && isCashPayment) {
-                await FirebaseFirestore.instance.runTransaction((
-                  transaction,
-                ) async {
-                  final drawerSnapshot = await transaction.get(drawerRef);
-                  final currentBalance = drawerSnapshot.exists
-                      ? (drawerSnapshot.data()?['balance'] as num?)
-                                ?.toDouble() ??
-                            0.0
-                      : 0.0;
-                  if (change > 0 && currentBalance + 0.001 < change) {
-                    throw Exception(
-                      'Cash drawer is not enough for ₱${change.toStringAsFixed(2)} change.',
-                    );
-                  }
-                  final newCashBalance = currentBalance + paidAmount - change;
-                  transaction.set(drawerRef, {
-                    'balance': newCashBalance,
-                    'updatedAt': DateTime.now(),
-                    'staffId': drawerId,
-                    'branchId': drawerId,
-                    'handledByStaffId': _currentUserId,
-                  }, SetOptions(merge: true));
-                });
-              } else if (useLegacyDrawerWrite) {
-                await FirebaseFirestore.instance.runTransaction((
-                  transaction,
-                ) async {
-                  final drawerSnapshot = await transaction.get(drawerRef);
-                  final currentGcashBalance = drawerSnapshot.exists
-                      ? (drawerSnapshot.data()?['gcashBalance'] as num?)
-                                ?.toDouble() ??
-                            0.0
-                      : 0.0;
-                  transaction.set(drawerRef, {
-                    'gcashBalance': currentGcashBalance + orderTotal,
-                    'lastGcashTransactionId': gcashTransactionId.trim(),
-                    'updatedAt': DateTime.now(),
-                    'staffId': drawerId,
-                    'branchId': drawerId,
-                    'handledByStaffId': _currentUserId,
-                  }, SetOptions(merge: true));
-                });
-              }
-
-              // Update inventory stock for each sold item
-              final Map<String, Map<String, dynamic>> itemVariantQtys = {};
-
-              for (final entry in receiptEntries) {
-                final item = orderItems.firstWhere(
-                  (element) => _cartKey(element) == entry.key,
-                  orElse: () => {},
-                );
-                if (item.isEmpty) continue;
-
-                final itemName = item['name'] as String?;
-                final variantName = item['variant'] as String?;
-                final sourceInventoryId =
-                    item['sourceInventoryId']?.toString() ?? '';
-                final staffInventoryDocId =
-                    item['staffInventoryDocId']?.toString() ?? '';
-                final qtyRemoved = entry.value;
-
-                if (itemName != null && itemName.isNotEmpty) {
-                  final remainingKey = sourceInventoryId.isNotEmpty
-                      ? sourceInventoryId
-                      : itemName;
-                  final variantIndex = item['variantSlot'] is num
-                      ? (item['variantSlot'] as num).toInt()
-                      : orderItems.indexWhere((e) {
-                          return e['name'] == itemName &&
-                              e['variant'] == variantName &&
-                              (e['sourceInventoryId']?.toString() ?? '') ==
-                                  sourceInventoryId;
-                        });
-                  final tracker = itemVariantQtys.putIfAbsent(
-                    remainingKey,
-                    () => {
-                      'itemName': itemName,
-                      'sourceInventoryId': sourceInventoryId,
-                      'variants': <int, int>{},
-                      'starting': <int, int>{},
-                      'remaining': <int, int>{},
-                      'items': <int, Map<String, dynamic>>{},
-                    },
-                  );
-                  final variants = tracker['variants'] as Map<int, int>;
-                  if (variantIndex >= 0) {
-                    variants[variantIndex] =
-                        (variants[variantIndex] ?? 0) + qtyRemoved;
-                    final startingBySlot = tracker['starting'] as Map<int, int>;
-                    final remainingBySlot =
-                        tracker['remaining'] as Map<int, int>;
-                    final itemBySlot =
-                        tracker['items'] as Map<int, Map<String, dynamic>>;
-                    final currentStock = _parseInt(item['stock']);
-                    final startingStock = _parseInt(
-                      item['startingStock'],
-                      fallback: currentStock,
-                    );
-                    startingBySlot[variantIndex] = max(
-                      startingBySlot[variantIndex] ?? 0,
-                      startingStock,
-                    );
-                    remainingBySlot[variantIndex] = max(
-                      0,
-                      (remainingBySlot[variantIndex] ?? currentStock) -
-                          qtyRemoved,
-                    );
-                    itemBySlot[variantIndex] = {
-                      'id': item['itemId'] ?? item['id'] ?? '',
-                      'name': (variantName?.isNotEmpty ?? false)
-                          ? variantName
-                          : itemName,
-                      'variant': variantName ?? '',
-                      'price': item['price'] ?? 0,
-                      'quantity': startingStock,
-                      'reducedQuantity': _parseInt(item['reducedQuantity']),
-                      'isBundle': item['isBundle'] == true,
-                      'isCoffee': item['isCoffee'] == true,
-                      'coffeeId': item['coffeeId'] ?? '',
-                      'coffeeSize': item['coffeeSize'] ?? '',
-                      'addonName': item['addonName'] ?? '',
-                      'sugarLevel': item['sugarLevel'] ?? '',
-                    };
-                  }
-
-                  final stockDocs = <DocumentSnapshot<Map<String, dynamic>>>[];
-                  if (staffInventoryDocId.isNotEmpty) {
-                    final stockDoc = await FirebaseFirestore.instance
-                        .collection('staff_inventory')
-                        .doc(staffInventoryDocId)
-                        .get();
-                    if (stockDoc.exists) stockDocs.add(stockDoc);
-                  }
-                  if (stockDocs.isEmpty) {
-                    var staffQuery = FirebaseFirestore.instance
-                        .collection('staff_inventory')
-                        .where('staffId', isEqualTo: _currentUserId)
-                        .where('name', isEqualTo: itemName);
-                    if (sourceInventoryId.isNotEmpty) {
-                      staffQuery = staffQuery.where(
-                        'sourceInventoryId',
-                        isEqualTo: sourceInventoryId,
-                      );
-                    }
-                    final querySnapshot = await staffQuery.get();
-                    stockDocs.addAll(querySnapshot.docs);
-                  }
-                  if (stockDocs.isEmpty && sourceInventoryId.isNotEmpty) {
-                    final querySnapshot = await FirebaseFirestore.instance
-                        .collection('staff_inventory')
-                        .where(
-                          'sourceInventoryId',
-                          isEqualTo: sourceInventoryId,
-                        )
-                        .limit(10)
-                        .get();
-                    final allowedStaffIds = {
-                      ..._staffInventoryIds.map((id) => id.trim()),
-                      if ((_currentUserId ?? '').trim().isNotEmpty)
-                        _currentUserId!.trim(),
-                    }..removeWhere((id) => id.isEmpty);
-                    stockDocs.addAll(
-                      querySnapshot.docs.where((doc) {
-                        final staffId =
-                            doc.data()['staffId']?.toString().trim() ?? '';
-                        return allowedStaffIds.isEmpty ||
-                            allowedStaffIds.contains(staffId);
-                      }),
-                    );
-                  }
-
-                  for (final doc in stockDocs) {
-                    final data = doc.data() as Map<String, dynamic>?;
-                    if (data == null) continue;
-
-                    if (data['isBundle'] == true) {
-                      final int currentBundleCount = data['bundleCount'] is num
-                          ? (data['bundleCount'] as num).toInt()
-                          : int.tryParse(
-                                  data['bundleCount']?.toString() ?? '',
-                                ) ??
-                                0;
-                      final updatedBundleCount = max(
-                        0,
-                        currentBundleCount - qtyRemoved,
-                      );
-                      var remainingToMarkSold = qtyRemoved;
-                      final updatedBundleInstances =
-                          _bundleInstancesFromData(data).map((instance) {
-                            if (remainingToMarkSold <= 0) return instance;
-                            final status =
-                                instance['status']?.toString().toLowerCase() ??
-                                'available';
-                            if (status != 'available') return instance;
-                            remainingToMarkSold--;
-                            return {
-                              ...instance,
-                              'status': 'sold',
-                              'soldAt': Timestamp.now(),
-                              'salesId': salesId,
-                            };
-                          }).toList();
-                      await doc.reference.update({
-                        'bundleCount': updatedBundleCount,
-                        'bundleInstances': updatedBundleInstances,
-                        'updatedAt': FieldValue.serverTimestamp(),
-                      });
-                      if (updatedBundleCount == 0) {
-                        await _notifyAdminOutOfStock(
-                          itemName: itemName,
-                          variantName: '',
-                          sourceInventoryId: sourceInventoryId,
-                          staffInventoryDocId: doc.id,
-                        );
-                      }
-                      continue;
-                    }
-
-                    final itemsList = data['items'] as List<dynamic>? ?? [];
-                    var matchedStockItem = false;
-                    final updatedItems = itemsList.map((itemData) {
-                      if (itemData is Map) {
-                        final savedItem = Map<String, dynamic>.from(itemData);
-                        final savedVariant =
-                            savedItem['name']?.toString() ?? '';
-                        final savedVariantAlt =
-                            savedItem['variant']?.toString() ?? '';
-                        final savedId = savedItem['id']?.toString() ?? '';
-                        final wantedId =
-                            item['itemId']?.toString() ??
-                            item['id']?.toString() ??
-                            '';
-                        final matchesVariant =
-                            (wantedId.isNotEmpty && savedId == wantedId) ||
-                            (wantedId.isEmpty &&
-                                (savedVariant == (variantName ?? '') ||
-                                    savedVariantAlt == (variantName ?? '') ||
-                                    savedVariant == itemName ||
-                                    savedVariantAlt == itemName));
-
-                        if (matchesVariant) {
-                          matchedStockItem = true;
-                          // Update the stock for this variant.
-                          // If 'stock' field is missing, use 'startingStock' as the base.
-                          int currentStock;
-                          if (savedItem.containsKey('stock') &&
-                              savedItem['stock'] != null) {
-                            currentStock = savedItem['stock'] is num
-                                ? (savedItem['stock'] as num).toInt()
-                                : int.tryParse(
-                                        savedItem['stock']?.toString() ?? '',
-                                      ) ??
-                                      0;
-                          } else {
-                            currentStock = savedItem['startingStock'] is num
-                                ? (savedItem['startingStock'] as num).toInt()
-                                : int.tryParse(
-                                        savedItem['startingStock']
-                                                ?.toString() ??
-                                            '',
-                                      ) ??
-                                      0;
-                          }
-
-                          final updatedStock = max(
-                            0,
-                            currentStock - qtyRemoved,
-                          );
-                          if (updatedStock == 0) {
-                            unawaited(
-                              _notifyAdminOutOfStock(
-                                itemName: itemName,
-                                variantName: variantName ?? '',
-                                sourceInventoryId: sourceInventoryId,
-                                staffInventoryDocId: doc.id,
-                              ),
-                            );
-                          }
-                          return {...savedItem, 'stock': updatedStock};
-                        }
-                      }
-                      return itemData;
-                    }).toList();
-
-                    if (!matchedStockItem) {
-                      final currentStock = _stockForItem(item, variantIndex);
-                      final updatedStock = max(0, currentStock - qtyRemoved);
-                      updatedItems.add({
-                        'id': item['itemId']?.toString().isNotEmpty == true
-                            ? item['itemId']
-                            : (item['id'] ?? ''),
-                        'name': variantName ?? itemName,
-                        'price': item['price'] ?? 0,
-                        'startingStock': item['startingStock'] ?? currentStock,
-                        'stock': updatedStock,
-                        'expirationDate': item['expirationDate'] ?? '',
-                        'imageUrl': item['imageUrl'] ?? '',
-                      });
-                      if (updatedStock == 0) {
-                        unawaited(
-                          _notifyAdminOutOfStock(
-                            itemName: itemName,
-                            variantName: variantName ?? '',
-                            sourceInventoryId: sourceInventoryId,
-                            staffInventoryDocId: doc.id,
-                          ),
-                        );
-                      }
-                    }
-
-                    await doc.reference.update({
-                      'items': updatedItems,
-                      'updatedAt': FieldValue.serverTimestamp(),
-                    });
-                  }
-
-                  final trackedBundleItemName =
-                      (variantName != null && variantName.isNotEmpty)
-                      ? variantName
-                      : itemName;
-                  await _consumeBundleTrackedStock(
-                    itemName: trackedBundleItemName,
-                    quantity: qtyRemoved,
-                  );
-                }
-              }
-
-              // Update remaining stock in InventoryService for each item sold
-              for (final itemEntry in itemVariantQtys.values) {
-                final itemName = itemEntry['itemName']?.toString() ?? '';
-                final sourceInventoryId =
-                    itemEntry['sourceInventoryId']?.toString() ?? '';
-                final variantQtys = itemEntry['variants'] as Map<int, int>;
-                final startingBySlot = itemEntry['starting'] as Map<int, int>;
-                final remainingBySlot = itemEntry['remaining'] as Map<int, int>;
-                final itemBySlot =
-                    itemEntry['items'] as Map<int, Map<String, dynamic>>;
-
-                int qtyA = 0, qtyB = 0, qtyC = 0;
-
-                // Map variant indices to A, B, C positions
-                for (final variantEntry in variantQtys.entries) {
-                  final variantIndex = variantEntry.key;
-                  final qty = variantEntry.value;
-
-                  if (variantIndex == 0)
-                    qtyA = qty;
-                  else if (variantIndex == 1)
-                    qtyB = qty;
-                  else if (variantIndex == 2)
-                    qtyC = qty;
-                }
-
-                // Compute revenue for this item entry after any discount allocation.
-                final itemLineTotal = itemBySlot.entries.fold<double>(0.0, (
-                  sum,
-                  variantEntry,
-                ) {
-                  final idx = variantEntry.key;
-                  final price =
-                      double.tryParse(
-                        variantEntry.value['price']?.toString() ?? '0',
-                      ) ??
-                      0.0;
-                  final qty = variantQtys[idx] ?? 0;
-                  return sum + (price * qty);
-                });
-                final double revenueShare;
-                if (subtotal > 0 && discountAmount > 0) {
-                  final discountShare =
-                      itemLineTotal / subtotal * discountAmount;
-                  revenueShare = (itemLineTotal - discountShare).clamp(
-                    0.0,
-                    double.infinity,
-                  );
-                } else {
-                  revenueShare = itemLineTotal;
-                }
-
-                // Subtract from remaining stock
-                if (qtyA > 0 || qtyB > 0 || qtyC > 0) {
-                  final existing = InventoryService().getEntryForItemToday(
-                    itemName,
-                    sourceInventoryId: sourceInventoryId,
-                  );
-                  if (existing != null) {
-                    InventoryService().addRemainingStockForItem(
-                      itemName: itemName,
-                      quantityA: remainingBySlot[0] ?? existing.safeRemainingA,
-                      quantityB: remainingBySlot[1] ?? existing.safeRemainingB,
-                      quantityC: remainingBySlot[2] ?? existing.safeRemainingC,
-                      startingA: max(
-                        existing.safeStartingA,
-                        startingBySlot[0] ?? existing.safeStartingA,
-                      ),
-                      startingB: max(
-                        existing.safeStartingB,
-                        startingBySlot[1] ?? existing.safeStartingB,
-                      ),
-                      startingC: max(
-                        existing.safeStartingC,
-                        startingBySlot[2] ?? existing.safeStartingC,
-                      ),
-                      saleRevenue: revenueShare,
-                      sourceInventoryId: sourceInventoryId,
-                      items: existing.safeItems.isNotEmpty
-                          ? existing.safeItems
-                          : [0, 1, 2]
-                                .where((slot) => itemBySlot.containsKey(slot))
-                                .map((slot) => itemBySlot[slot]!)
-                                .toList(),
-                    );
-                  } else {
-                    InventoryService().addRemainingStockForItem(
-                      itemName: itemName,
-                      quantityA: remainingBySlot[0] ?? 0,
-                      quantityB: remainingBySlot[1] ?? 0,
-                      quantityC: remainingBySlot[2] ?? 0,
-                      startingA: startingBySlot[0] ?? 0,
-                      startingB: startingBySlot[1] ?? 0,
-                      startingC: startingBySlot[2] ?? 0,
-                      saleRevenue: revenueShare,
-                      sourceInventoryId: sourceInventoryId,
-                      items: [0, 1, 2]
-                          .where((slot) => itemBySlot.containsKey(slot))
-                          .map((slot) => itemBySlot[slot]!)
-                          .toList(),
-                    );
-                  }
-                }
-              }
-              await _loadLocalOrderCache();
-              await InventoryService().refreshFromCloud();
-              if (mounted) {
-                setState(() {
-                  entries = InventoryService().currentUserEntries;
-                });
-              }
-            }
-          } catch (e) {
-            debugPrint('Background order sync failed: $e');
-          }
-        }),
-      );
+      // Receipt and stock movements share a durable, idempotent sync operation.
       if (processingDialogVisible && mounted) {
         Navigator.of(context, rootNavigator: true).pop();
         processingDialogVisible = false;
@@ -4974,6 +4537,7 @@ class _DailyStockPageState extends State<DailyStockPage>
   }
 
   Future<void> _savePendingOrder(List<Map<String, dynamic>> orderItems) async {
+    if (!_staffCan('allowHoldOrders')) return;
     if (!_cartHasValidItems(orderItems)) {
       _showStyledSnackBar('Add items to the cart first', isError: true);
       return;
@@ -5010,6 +4574,12 @@ class _DailyStockPageState extends State<DailyStockPage>
             ? (item['variantSlot'] as num).toInt()
             : 0,
         'isBundle': item['isBundle'] == true,
+        if (item['bundleBeverages'] != null) ...{
+          'bundleBeverages': item['bundleBeverages'],
+          'bundleItems': item['bundleItems'],
+          'bundleBasePrice': item['bundleBasePrice'],
+          'bundleAddonTotal': item['bundleAddonTotal'],
+        },
         'isCoffee': item['isCoffee'] == true,
         'coffeeSize': item['coffeeSize']?.toString() ?? '',
         'coffeeId': item['coffeeId']?.toString() ?? '',
@@ -5032,9 +4602,7 @@ class _DailyStockPageState extends State<DailyStockPage>
       await pendingRef.set({
         'userId': userId,
         'items': pendingItems,
-        'discountType': _seniorDiscount
-            ? 'Senior'
-            : (_pwdDiscount ? 'PWD' : 'None'),
+        'discountType': _discountName, 'discountId': _selectedDiscountId,
         'discountApplied': _seniorDiscount || _pwdDiscount,
         'createdAt': FieldValue.serverTimestamp(),
       });
@@ -5044,10 +4612,10 @@ class _DailyStockPageState extends State<DailyStockPage>
         items: pendingItems,
       );
       setState(() {
-      _cart.clear();
-      _cartItemLookup.clear();
-      _cartStockBeforeSelectionByKey.clear();
-      for (final controller in _qtyControllers.values) {
+        _cart.clear();
+        _cartItemLookup.clear();
+        _cartStockBeforeSelectionByKey.clear();
+        for (final controller in _qtyControllers.values) {
           controller.dispose();
         }
         _qtyControllers.clear();
@@ -5188,6 +4756,7 @@ class _DailyStockPageState extends State<DailyStockPage>
   }
 
   Future<void> _showPendingOrders() async {
+    if (!_staffCan('allowHoldOrders')) return;
     final userId = FirebaseAuth.instance.currentUser?.uid;
     if (userId == null) {
       _showStyledSnackBar('User not authenticated', isError: true);
@@ -5382,6 +4951,7 @@ class _DailyStockPageState extends State<DailyStockPage>
   }
 
   Future<void> _restoreLatestPendingOrder() async {
+    if (!_staffCan('allowHoldOrders')) return;
     final userId = FirebaseAuth.instance.currentUser?.uid;
     if (userId == null) {
       _showStyledSnackBar('User not authenticated', isError: true);
@@ -5431,7 +5001,8 @@ class _DailyStockPageState extends State<DailyStockPage>
       _cartStockBeforeSelectionByKey.clear();
       final restoredOrderItems = <Map<String, dynamic>>[];
       final normalizedDiscount = discountType.trim().toLowerCase();
-      _seniorDiscount = normalizedDiscount == 'senior';
+      _selectedDiscountId = _discountOptions.where((row) => '${row['name']}'.toLowerCase() == normalizedDiscount).firstOrNull?['id']?.toString();
+      _seniorDiscount = _selectedDiscountId != null;
       _pwdDiscount = normalizedDiscount == 'pwd';
       for (final controller in _qtyControllers.values) {
         controller.clear();
@@ -5476,6 +5047,7 @@ class _DailyStockPageState extends State<DailyStockPage>
   }
 
   Future<void> _showOrderHistory() async {
+    if (!_staffCan('allowReceiptHistory')) return;
     try {
       final userId = FirebaseAuth.instance.currentUser?.uid;
       if (userId == null) {
@@ -5662,6 +5234,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                                 : '';
                             final isCoffee = item['isCoffee'] == true;
                             final coffeeId =
+                                item['publicId']?.toString().trim() ??
                                 item['coffeeId']?.toString().trim() ?? '';
                             final displayName = isCoffee
                                 ? [
@@ -5741,9 +5314,9 @@ class _DailyStockPageState extends State<DailyStockPage>
                           ),
                           Flexible(
                             child: Text(
-                              paymentMode == 'GCash' &&
+                              paymentMode != 'Cash' &&
                                       gcashTransactionId.isNotEmpty
-                                  ? 'GCash - $gcashTransactionId'
+                                  ? '$paymentMode - $gcashTransactionId'
                                   : paymentMode,
                               textAlign: TextAlign.right,
                               style: const TextStyle(
@@ -6009,6 +5582,7 @@ class _DailyStockPageState extends State<DailyStockPage>
   }
 
   Future<void> _showReceiptRefundDialog() async {
+    if (!_staffCan('allowRefunds')) return;
     final receiptController = TextEditingController();
     final reasonController = TextEditingController();
     Map<String, dynamic>? receipt;
@@ -6035,107 +5609,293 @@ class _DailyStockPageState extends State<DailyStockPage>
                       ),
                       borderRadius: BorderRadius.circular(18),
                     ),
-                    child: Row(children: [
-                      const Icon(Icons.assignment_return_rounded, color: Colors.white),
-                      const SizedBox(width: 10),
-                      const Expanded(child: Text('Refund by Receipt', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: Colors.white))),
-                      IconButton(onPressed: saving ? null : () => Navigator.pop(dialogContext), icon: const Icon(Icons.close_rounded, color: Colors.white)),
-                    ]),
+                    child: Row(
+                      children: [
+                        const Icon(
+                          Icons.assignment_return_rounded,
+                          color: Colors.white,
+                        ),
+                        const SizedBox(width: 10),
+                        const Expanded(
+                          child: Text(
+                            'Refund by Receipt',
+                            style: TextStyle(
+                              fontSize: 22,
+                              fontWeight: FontWeight.w900,
+                              color: Colors.white,
+                            ),
+                          ),
+                        ),
+                        IconButton(
+                          onPressed: saving
+                              ? null
+                              : () => Navigator.pop(dialogContext),
+                          icon: const Icon(
+                            Icons.close_rounded,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                   const SizedBox(height: 14),
-                  const Text('Enter the exact receipt number, then tap Find to review the order before refunding.', style: TextStyle(color: _AppColors.textSoft)),
+                  const Text(
+                    'Enter the exact receipt number, then tap Find to review the order before refunding.',
+                    style: TextStyle(color: _AppColors.textSoft),
+                  ),
                   const SizedBox(height: 12),
                   TextField(
                     controller: receiptController,
                     textCapitalization: TextCapitalization.characters,
-                    decoration: _refundInputDecoration('Receipt number', Icons.receipt_long_rounded).copyWith(
-                      hintText: 'Example: S-20260920-1247-972',
-                      suffixIcon: TextButton(
-                        onPressed: searching ? null : () async {
-                          final receiptId = receiptController.text.trim();
-                          if (receiptId.isEmpty) return;
-                          setDialogState(() { searching = true; receipt = null; });
-                          try {
-                            final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
-                            final snapshot = await FirebaseFirestore.instance.collection('completed_sales').where('salesId', isEqualTo: receiptId).limit(1).get();
-                            final doc = snapshot.docs.isEmpty ? null : snapshot.docs.first;
-                            if (doc == null || (uid.isNotEmpty && doc.data()['userId']?.toString() != uid)) {
-                              throw Exception('Receipt not found for this staff account');
-                            }
-                            final data = doc.data();
-                            if (data['type']?.toString().toLowerCase() == 'refund' || data['fullyRefunded'] == true) {
-                              throw Exception('This receipt has already been refunded');
-                            }
-                            setDialogState(() { receipt = data; receiptRef = doc.reference; });
-                          } catch (e) {
-                            if (mounted) _showStyledSnackBar(e.toString().replaceFirst('Exception: ', ''), isError: true);
-                          } finally { if (context.mounted) setDialogState(() => searching = false); }
-                        },
-                        child: searching ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)) : const Text('Find'),
-                      ),
-                    ),
+                    decoration:
+                        _refundInputDecoration(
+                          'Receipt number',
+                          Icons.receipt_long_rounded,
+                        ).copyWith(
+                          hintText: 'Example: S-20260920-1247-972',
+                          suffixIcon: TextButton(
+                            onPressed: searching
+                                ? null
+                                : () async {
+                                    final receiptId = receiptController.text
+                                        .trim();
+                                    if (receiptId.isEmpty) return;
+                                    setDialogState(() {
+                                      searching = true;
+                                      receipt = null;
+                                    });
+                                    try {
+                                      final uid =
+                                          FirebaseAuth
+                                              .instance
+                                              .currentUser
+                                              ?.uid ??
+                                          '';
+                                      final snapshot = await FirebaseFirestore
+                                          .instance
+                                          .collection('completed_sales')
+                                          .where(
+                                            'salesId',
+                                            isEqualTo: receiptId,
+                                          )
+                                          .limit(1)
+                                          .get();
+                                      final doc = snapshot.docs.isEmpty
+                                          ? null
+                                          : snapshot.docs.first;
+                                      if (doc == null ||
+                                          (uid.isNotEmpty &&
+                                              doc
+                                                      .data()['userId']
+                                                      ?.toString() !=
+                                                  uid)) {
+                                        throw Exception(
+                                          'Receipt not found for this staff account',
+                                        );
+                                      }
+                                      final data = doc.data();
+                                      if (data['type']
+                                                  ?.toString()
+                                                  .toLowerCase() ==
+                                              'refund' ||
+                                          data['fullyRefunded'] == true) {
+                                        throw Exception(
+                                          'This receipt has already been refunded',
+                                        );
+                                      }
+                                      setDialogState(() {
+                                        receipt = data;
+                                        receiptRef = doc.reference;
+                                      });
+                                    } catch (e) {
+                                      if (mounted)
+                                        _showStyledSnackBar(
+                                          e.toString().replaceFirst(
+                                            'Exception: ',
+                                            '',
+                                          ),
+                                          isError: true,
+                                        );
+                                    } finally {
+                                      if (context.mounted)
+                                        setDialogState(() => searching = false);
+                                    }
+                                  },
+                            child: searching
+                                ? const SizedBox(
+                                    width: 16,
+                                    height: 16,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  )
+                                : const Text('Find'),
+                          ),
+                        ),
                   ),
                   if (receipt != null) ...[
                     const SizedBox(height: 16),
-                    Text('Receipt ${receipt!['salesId']}', style: const TextStyle(fontWeight: FontWeight.w900, color: _AppColors.textMid)),
-                    Text('Date: ${receipt!['timestamp'] is Timestamp ? (receipt!['timestamp'] as Timestamp).toDate().toString() : receipt!['timestamp'] ?? 'Unknown'}'),
-                    Text('Discount: ${receipt!['discountType'] ?? 'None'} • ₱${_parsePrice(receipt!['discount']).toStringAsFixed(2)}'),
+                    Text(
+                      'Receipt ${receipt!['salesId']}',
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w900,
+                        color: _AppColors.textMid,
+                      ),
+                    ),
+                    Text(
+                      'Date: ${receipt!['timestamp'] is Timestamp ? (receipt!['timestamp'] as Timestamp).toDate().toString() : receipt!['timestamp'] ?? 'Unknown'}',
+                    ),
+                    Text(
+                      'Discount: ${receipt!['discountType'] ?? 'None'} • ₱${_parsePrice(receipt!['discount']).toStringAsFixed(2)}',
+                    ),
                     const SizedBox(height: 8),
-                    ...((receipt!['items'] as List<dynamic>? ?? []).whereType<Map>().map((raw) {
-                      final item = Map<String, dynamic>.from(raw);
-                      final kind = item['isBundle'] == true ? 'Bundle' : item['isCoffee'] == true ? 'Coffee' : 'Category';
-                      final qty = _parseInt(item['quantity'], fallback: 1);
-                      final originalLine = _parsePrice(item['price']) * qty;
-                      final subtotal = _parsePrice(receipt!['subtotal']);
-                      final paidTotal = _parsePrice(receipt!['total']);
-                      final refundLine = subtotal > 0
-                          ? originalLine * (paidTotal / subtotal)
-                          : originalLine;
-                      return ListTile(
-                        dense: true,
-                        title: Text('${item['name']} ${item['variant']?.toString().isNotEmpty == true ? '(${item['variant']})' : ''}'),
-                        subtitle: Text('$kind • $qty x ₱${(refundLine / qty).toStringAsFixed(2)} after discount'),
-                        trailing: Text('₱${refundLine.toStringAsFixed(2)}'),
-                      );
-                    })),
+                    ...((receipt!['items'] as List<dynamic>? ?? [])
+                        .whereType<Map>()
+                        .map((raw) {
+                          final item = Map<String, dynamic>.from(raw);
+                          final kind = item['isBundle'] == true
+                              ? 'Bundle'
+                              : item['isCoffee'] == true
+                              ? 'Beverages'
+                              : 'Category';
+                          final qty = _parseInt(item['quantity'], fallback: 1);
+                          final originalLine = _parsePrice(item['price']) * qty;
+                          final subtotal = _parsePrice(receipt!['subtotal']);
+                          final paidTotal = _parsePrice(receipt!['total']);
+                          final refundLine = subtotal > 0
+                              ? originalLine * (paidTotal / subtotal)
+                              : originalLine;
+                          return ListTile(
+                            dense: true,
+                            title: Text(
+                              '${item['name']} ${item['variant']?.toString().isNotEmpty == true ? '(${item['variant']})' : ''}',
+                            ),
+                            subtitle: Text(
+                              '$kind • $qty x ₱${(refundLine / qty).toStringAsFixed(2)} after discount',
+                            ),
+                            trailing: Text('₱${refundLine.toStringAsFixed(2)}'),
+                          );
+                        })),
                     const SizedBox(height: 10),
-                    TextField(controller: reasonController, minLines: 2, maxLines: 4, decoration: _refundInputDecoration('Reason', Icons.edit_note_rounded)),
+                    TextField(
+                      controller: reasonController,
+                      minLines: 2,
+                      maxLines: 4,
+                      decoration: _refundInputDecoration(
+                        'Reason',
+                        Icons.edit_note_rounded,
+                      ),
+                    ),
                     const SizedBox(height: 16),
                     ElevatedButton.icon(
-                      onPressed: saving ? null : () async {
-                        final reason = reasonController.text.trim();
-                        if (reason.isEmpty) { _showStyledSnackBar('Enter refund reason', isError: true); return; }
-                        final amount = _parsePrice(receipt!['total']).abs();
-                        final proceed = await showDialog<bool>(context: dialogContext, builder: (context) => AlertDialog(title: const Text('Confirm full receipt refund?'), content: Text('Refund ₱${amount.toStringAsFixed(2)} for ${receipt!['salesId']}?'), actions: [TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')), ElevatedButton(onPressed: () => Navigator.pop(context, true), child: const Text('Proceed'))]));
-                        if (proceed != true) return;
-                        setDialogState(() => saving = true);
-                        try {
-                          final items = (receipt!['items'] as List<dynamic>? ?? []).whereType<Map>().map((raw) => Map<String, dynamic>.from(raw)).toList();
-                          await _saveRefundTransaction(source: 'Receipt ${receipt!['salesId']}', reason: reason, amount: amount, items: items);
-                          // This source-receipt marker is non-critical and is
-                          // queued when offline. The refund receipt and drawer
-                          // movement above have already been saved locally.
-                          unawaited(Future<void>(() async {
-                            try {
-                              await receiptRef!.set({'fullyRefunded': true, 'refundReason': reason, 'refundedAt': FieldValue.serverTimestamp()}, SetOptions(merge: true));
-                            } catch (_) {}
-                          }));
-                          if (dialogContext.mounted) {
-                            Navigator.of(dialogContext, rootNavigator: true).pop();
-                          }
-                          _showStyledSnackBar('Refund recorded');
-                        } catch (e) { if (mounted) _showStyledSnackBar('Refund failed: $e', isError: true); if (context.mounted) setDialogState(() => saving = false); }
-                      },
-                      icon: saving ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)) : const Icon(Icons.assignment_return_rounded),
-                      label: Text(saving ? 'Recording refund...' : 'Confirm Refund'),
+                      onPressed: saving
+                          ? null
+                          : () async {
+                              final reason = reasonController.text.trim();
+                              if (reason.isEmpty) {
+                                _showStyledSnackBar(
+                                  'Enter refund reason',
+                                  isError: true,
+                                );
+                                return;
+                              }
+                              final amount = _parsePrice(
+                                receipt!['total'],
+                              ).abs();
+                              final proceed = await showDialog<bool>(
+                                context: dialogContext,
+                                builder: (context) => AlertDialog(
+                                  title: const Text(
+                                    'Confirm full receipt refund?',
+                                  ),
+                                  content: Text(
+                                    'Refund ₱${amount.toStringAsFixed(2)} for ${receipt!['salesId']}?',
+                                  ),
+                                  actions: [
+                                    TextButton(
+                                      onPressed: () =>
+                                          Navigator.pop(context, false),
+                                      child: const Text('Cancel'),
+                                    ),
+                                    ElevatedButton(
+                                      onPressed: () =>
+                                          Navigator.pop(context, true),
+                                      child: const Text('Proceed'),
+                                    ),
+                                  ],
+                                ),
+                              );
+                              if (proceed != true) return;
+                              setDialogState(() => saving = true);
+                              try {
+                                final items =
+                                    (receipt!['items'] as List<dynamic>? ?? [])
+                                        .whereType<Map>()
+                                        .map(
+                                          (raw) =>
+                                              Map<String, dynamic>.from(raw),
+                                        )
+                                        .toList();
+                                await _saveRefundTransaction(
+                                  source: 'Receipt ${receipt!['salesId']}',
+                                  reason: reason,
+                                  amount: amount,
+                                  items: items,
+                                );
+                                // This source-receipt marker is non-critical and is
+                                // queued when offline. The refund receipt and drawer
+                                // movement above have already been saved locally.
+                                unawaited(
+                                  Future<void>(() async {
+                                    try {
+                                      await receiptRef!.set({
+                                        'fullyRefunded': true,
+                                        'refundReason': reason,
+                                        'refundedAt':
+                                            FieldValue.serverTimestamp(),
+                                      }, SetOptions(merge: true));
+                                    } catch (_) {}
+                                  }),
+                                );
+                                if (dialogContext.mounted) {
+                                  Navigator.of(
+                                    dialogContext,
+                                    rootNavigator: true,
+                                  ).pop();
+                                }
+                                _showStyledSnackBar('Refund recorded');
+                              } catch (e) {
+                                if (mounted)
+                                  _showStyledSnackBar(
+                                    'Refund failed: $e',
+                                    isError: true,
+                                  );
+                                if (context.mounted)
+                                  setDialogState(() => saving = false);
+                              }
+                            },
+                      icon: saving
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(
+                                color: Colors.white,
+                                strokeWidth: 2,
+                              ),
+                            )
+                          : const Icon(Icons.assignment_return_rounded),
+                      label: Text(
+                        saving ? 'Recording refund...' : 'Confirm Refund',
+                      ),
                     ),
                   ] else ...[
                     const SizedBox(height: 16),
                     TextField(
                       enabled: false,
-                      decoration: _refundInputDecoration('Reason', Icons.edit_note_rounded).copyWith(
-                        hintText: 'Find a valid receipt first',
-                      ),
+                      decoration: _refundInputDecoration(
+                        'Reason',
+                        Icons.edit_note_rounded,
+                      ).copyWith(hintText: 'Find a valid receipt first'),
                     ),
                     const SizedBox(height: 16),
                     SizedBox(
@@ -6164,7 +5924,8 @@ class _DailyStockPageState extends State<DailyStockPage>
   }
 
   Future<void> _showRefundDialog(List<Map<String, dynamic>> orderItems) async {
-    await _showReceiptRefundDialog();
+    if (!_staffCan('allowRefunds')) return;
+    await showStaffRefundDialog(context, _currentUserId ?? FirebaseAuth.instance.currentUser?.uid ?? '');
     return;
     // Legacy inventory-picker flow retained below for reference.
     final userId = FirebaseAuth.instance.currentUser?.uid;
@@ -6235,7 +5996,8 @@ class _DailyStockPageState extends State<DailyStockPage>
               'docRef': doc.reference,
               'docId': doc.id,
               'bundleName': data['name']?.toString() ?? 'Bundle',
-              'bundleId': data['bundleId']?.toString() ?? '',
+              'publicId': data['publicId'],
+          'bundleId': data['bundleId']?.toString() ?? '',
               'instanceIndex': instanceIndex,
               'instanceNumber': instance['number'] ?? instanceIndex + 1,
               'instanceId':
@@ -6415,7 +6177,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                           if (coffeeItems.isNotEmpty)
                             const DropdownMenuItem(
                               value: 'coffee',
-                              child: Text('Coffee'),
+                              child: Text('Beverages'),
                             ),
                         ],
                         onChanged: (value) {
@@ -6447,7 +6209,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                               : selectedCategoryKey,
                           isExpanded: true,
                           decoration: _refundInputDecoration(
-                            isCoffee ? 'Coffee item' : 'Category item',
+                            isCoffee ? 'Beverages item' : 'Category item',
                             isCoffee
                                 ? Icons.local_cafe_rounded
                                 : Icons.category_rounded,
@@ -6559,8 +6321,8 @@ class _DailyStockPageState extends State<DailyStockPage>
                                 return;
                               }
 
-                              final refundItem = selectedShelfItem ??
-                                  selectedBundleOption;
+                              final refundItem =
+                                  selectedShelfItem ?? selectedBundleOption;
                               final itemLabel = isCategory || isCoffee
                                   ? _itemDisplayLabel(refundItem ?? const {})
                                   : '${refundItem?['bundleName'] ?? 'Bundle'} (${refundItem?['itemName'] ?? 'Item'})';
@@ -6576,11 +6338,13 @@ class _DailyStockPageState extends State<DailyStockPage>
                                   ),
                                   actions: [
                                     TextButton(
-                                      onPressed: () => Navigator.pop(context, false),
+                                      onPressed: () =>
+                                          Navigator.pop(context, false),
                                       child: const Text('Cancel'),
                                     ),
                                     ElevatedButton(
-                                      onPressed: () => Navigator.pop(context, true),
+                                      onPressed: () =>
+                                          Navigator.pop(context, true),
                                       child: const Text('Proceed'),
                                     ),
                                   ],
@@ -6610,7 +6374,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                                   item: selectedShelfItem,
                                   quantity: qty,
                                   reason: reason,
-                                  source: isCoffee ? 'Coffee' : 'Categories',
+                                  source: isCoffee ? 'Beverages' : 'Categories',
                                 );
                               } else {
                                 if (selectedBundleOption == null) {
@@ -6628,14 +6392,20 @@ class _DailyStockPageState extends State<DailyStockPage>
                               }
 
                               if (dialogContext.mounted) {
-                                Navigator.of(dialogContext, rootNavigator: true).pop();
+                                Navigator.of(
+                                  dialogContext,
+                                  rootNavigator: true,
+                                ).pop();
                               }
                               if (dialogContext.mounted) {
                                 Navigator.pop(dialogContext);
                               }
                             } catch (e) {
                               if (dialogContext.mounted) {
-                                Navigator.of(dialogContext, rootNavigator: true).pop();
+                                Navigator.of(
+                                  dialogContext,
+                                  rootNavigator: true,
+                                ).pop();
                               }
                               if (!mounted) return;
                               _showStyledSnackBar(
@@ -6704,6 +6474,7 @@ class _DailyStockPageState extends State<DailyStockPage>
     required String reason,
     String source = 'Categories',
   }) async {
+    if (!_staffCan('allowRefunds')) return;
     final itemName = item['name']?.toString() ?? '';
     final variantName = item['variant']?.toString() ?? '';
     final price = _parsePrice(item['price']);
@@ -6776,6 +6547,7 @@ class _DailyStockPageState extends State<DailyStockPage>
     required int quantity,
     required String reason,
   }) async {
+    if (!_staffCan('allowRefunds')) return;
     final docRef = option['docRef'] as DocumentReference<Map<String, dynamic>>;
     final instanceIndex = option['instanceIndex'] as int;
     final itemName = option['itemName']?.toString() ?? 'Item';
@@ -7144,7 +6916,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                         ),
                         const SizedBox(height: 18),
                         ...validCartEntries.map((entry) {
-                          final item = orderItems.firstWhere(
+                          final item = _knownOrderItems(orderItems).firstWhere(
                             (element) => _cartKey(element) == entry.key,
                             orElse: () => {},
                           );
@@ -7323,7 +7095,9 @@ class _DailyStockPageState extends State<DailyStockPage>
     }
     final validCartEntries = _validCartEntries(orderItems);
     final salesId = _generateSalesId();
-    final paymentController = TextEditingController(text: _discountedTotal(orderItems).toStringAsFixed(2));
+    final paymentController = TextEditingController(
+      text: _discountedTotal(orderItems).toStringAsFixed(2),
+    );
     var paidManuallyEdited = false;
     final gcashTransactionController = TextEditingController();
     final discountProofController = TextEditingController();
@@ -7332,30 +7106,31 @@ class _DailyStockPageState extends State<DailyStockPage>
     double paidAmount = 0;
     double change = 0;
 
-    final result = await showDialog<_OrderConfirmationResult>(
+    final route = DialogRoute<_OrderConfirmationResult>(
       context: context,
       barrierDismissible: false,
       builder: (dialogContext) {
-        return StatefulBuilder(
+        return ValueListenableBuilder<int>(valueListenable: _settingsRevision, builder: (_, __, ___) => StatefulBuilder(
           builder: (context, setState) {
+            if (!_paymentOptions.any((method) => method['name'] == paymentMode)) paymentMode = 'Cash';
             final hasDiscount = _seniorDiscount || _pwdDiscount;
             final totalDue = _discountedTotal(orderItems);
-            if (!paidManuallyEdited) paymentController.text = totalDue.toStringAsFixed(2);
-            paidAmount = double.tryParse(
-                        paymentController.text.trim().replaceAll(
-                          RegExp(r'[^0-9.]'),
-                          '',
-                        ),
-                      ) ??
-                      0;
+            if (!paidManuallyEdited)
+              paymentController.text = totalDue.toStringAsFixed(2);
+            paidAmount =
+                double.tryParse(
+                  paymentController.text.trim().replaceAll(
+                    RegExp(r'[^0-9.]'),
+                    '',
+                  ),
+                ) ??
+                0;
             change = paidAmount - totalDue;
             final hasEnoughCashForChange =
-                paymentMode == 'GCash' ||
+                paymentMode != 'Cash' ||
                 change <= 0 ||
                 _cashDrawer + 0.001 >= change;
-            final canConfirm =
-                paidAmount >= totalDue &&
-                hasEnoughCashForChange;
+            final canConfirm = paidAmount >= totalDue && hasEnoughCashForChange;
             return Dialog(
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(28),
@@ -7446,7 +7221,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                           children: [
                             // Items list
                             ...validCartEntries.map((entry) {
-                              final item = orderItems.firstWhere(
+                              final item = _knownOrderItems(orderItems).firstWhere(
                                 (element) => _cartKey(element) == entry.key,
                                 orElse: () => {},
                               );
@@ -7499,7 +7274,6 @@ class _DailyStockPageState extends State<DailyStockPage>
                                 isDiscount: true,
                               ),
                               const SizedBox(height: 14),
-                              
                             ],
                             const SizedBox(height: 8),
                             Container(
@@ -7561,16 +7335,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                                   ),
                                 ),
                               ),
-                              items: const [
-                                DropdownMenuItem(
-                                  value: 'Cash',
-                                  child: Text('Cash'),
-                                ),
-                                DropdownMenuItem(
-                                  value: 'GCash',
-                                  child: Text('GCash'),
-                                ),
-                              ],
+                              items: _paymentOptions.map((row) => DropdownMenuItem(value: '${row['name']}', child: Text('${row['name']}'))).toList(),
                               onChanged: (value) => setState(() {
                                 paymentMode = value ?? 'Cash';
                                 if (!paidManuallyEdited) {
@@ -7580,15 +7345,24 @@ class _DailyStockPageState extends State<DailyStockPage>
                               }),
                             ),
                             const SizedBox(height: 12),
-                            if (paymentMode == 'GCash') ...[
-                              Center(child: Container(width: 280, height: 280, decoration: BoxDecoration(color: _AppColors.bg, borderRadius: BorderRadius.circular(16), border: Border.all(color: _AppColors.border)), child: const Column(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(Icons.image_outlined, size: 64, color: _AppColors.primaryLight), SizedBox(height: 12), Text('No picture yet'), Text('GCash QR code', style: TextStyle(fontSize: 12))]))),
+                            if (paymentMode != 'Cash') ...[
+                              Center(
+                                child: Container(
+                                  width: 280,
+                                  height: 280,
+                                  decoration: BoxDecoration(
+                                    color: _AppColors.bg,
+                                    borderRadius: BorderRadius.circular(16),
+                                    border: Border.all(
+                                      color: _AppColors.border,
+                                    ),
+                                  ),
+                                  child: _paymentQr(paymentMode),
+                                ),
+                              ),
                               const SizedBox(height: 12),
                             ],
-                            Material(
-                              color: Colors.transparent,
-                              child: InkWell(
-                                onTap: () => setState(() {
-                                  isDiscountExpanded = !isDiscountExpanded;
+                            if (_discountsAllowed) Material(color: Colors.transparent, child: InkWell(onTap: () => setState(() { isDiscountExpanded = !isDiscountExpanded;
                                 }),
                                 borderRadius: BorderRadius.circular(14),
                                 child: Container(
@@ -7638,7 +7412,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                             AnimatedSize(
                               duration: const Duration(milliseconds: 200),
                               curve: Curves.easeInOut,
-                              child: isDiscountExpanded
+                              child: _discountsAllowed && isDiscountExpanded
                                   ? Padding(
                                       padding: const EdgeInsets.only(top: 10),
                                       child: Column(
@@ -7653,8 +7427,9 @@ class _DailyStockPageState extends State<DailyStockPage>
                                               if (value) _pwdDiscount = false;
                                               if (!paidManuallyEdited) {
                                                 paymentController.text =
-                                                    _discountedTotal(orderItems)
-                                                        .toStringAsFixed(2);
+                                                    _discountedTotal(
+                                                      orderItems,
+                                                    ).toStringAsFixed(2);
                                               }
                                             }),
                                             icon: Icons.elderly_rounded,
@@ -7667,18 +7442,19 @@ class _DailyStockPageState extends State<DailyStockPage>
                                             value: _pwdDiscount,
                                             onChanged: (value) => setState(() {
                                               _pwdDiscount = value;
-                                              if (value) _seniorDiscount = false;
+                                              if (value)
+                                                _seniorDiscount = false;
                                               if (!paidManuallyEdited) {
                                                 paymentController.text =
-                                                    _discountedTotal(orderItems)
-                                                        .toStringAsFixed(2);
+                                                    _discountedTotal(
+                                                      orderItems,
+                                                    ).toStringAsFixed(2);
                                               }
                                             }),
                                             icon: Icons.accessible_rounded,
                                           ),
                                           if (hasDiscount) ...[
                                             const SizedBox(height: 10),
-                                            
                                           ],
                                         ],
                                       ),
@@ -7695,7 +7471,9 @@ class _DailyStockPageState extends State<DailyStockPage>
                                     decimal: true,
                                   ),
                               prefixText: '₱',
-                              onChanged: (_) => setState(() { paidManuallyEdited = true; }),
+                              onChanged: (_) => setState(() {
+                                paidManuallyEdited = true;
+                              }),
                             ),
                             const SizedBox(height: 12),
                             Container(
@@ -7874,9 +7652,11 @@ class _DailyStockPageState extends State<DailyStockPage>
               ),
             );
           },
-        );
+        ));
       },
     );
+    final result = await Navigator.of(context).push(route);
+    await route.completed;
     paymentController.dispose();
     gcashTransactionController.dispose();
     discountProofController.dispose();
@@ -8104,7 +7884,7 @@ class _DailyStockPageState extends State<DailyStockPage>
             : _showBundleView
             ? 'Search bundles'
             : _showCoffeeView
-            ? 'Search coffee'
+            ? 'Search beverages'
             : 'Search categories',
         prefixIcon: const Icon(Icons.search_rounded, color: _AppColors.primary),
         suffixIcon: _orderSearchQuery.isEmpty
@@ -8263,16 +8043,18 @@ class _DailyStockPageState extends State<DailyStockPage>
     }
 
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      key: ValueKey(_staffInventoryIds.join('|')),
       stream: _staffInventoryStream(),
       builder: (context, snapshot) {
-        if (snapshot.hasData) {
+        if (snapshot.hasData && (!snapshot.data!.metadata.isFromCache || snapshot.data!.docs.isNotEmpty)) {
           unawaited(
-            LocalDatabaseSyncService().cacheCollectionDocs(
-              'staff_inventory',
+            LocalDatabaseSyncService().cacheStaffInventorySnapshot(
+              _staffInventoryIds,
               snapshot.data!.docs.map((doc) {
                 final data = doc.data();
                 return {...data, '_localDocId': doc.id};
               }),
+              authoritative: !snapshot.data!.metadata.isFromCache,
             ),
           );
         }
@@ -8291,14 +8073,14 @@ class _DailyStockPageState extends State<DailyStockPage>
             .map(_CachedDoc.fromFirestore)
             .toList();
         final docs =
-            (firestoreDocs == null ||
+            (_cachedStaffInventoryDocs.isNotEmpty || firestoreDocs == null ||
                 (firestoreDocs.isEmpty && _cachedStaffInventoryDocs.isNotEmpty))
             ? _cachedStaffInventoryDocs
             : firestoreDocs;
         return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
           stream: _rootSalesInventoryStream,
           builder: (context, rootSnapshot) {
-            if (rootSnapshot.hasData) {
+            if (rootSnapshot.hasData && (!rootSnapshot.data!.metadata.isFromCache || rootSnapshot.data!.docs.isNotEmpty)) {
               unawaited(
                 LocalDatabaseSyncService().cacheCollectionDocs(
                   'sales_inventory',
@@ -8450,9 +8232,9 @@ class _DailyStockPageState extends State<DailyStockPage>
 
                   coffeeItems.add({
                     'id': '$itemSourceId|size:$sizeName|addon:none',
-                    'name': data['name'] ?? 'Coffee',
+                    'name': data['name'] ?? 'Beverages',
                     'variant': sizeName,
-                    'flavor': data['name'] ?? 'Coffee',
+                    'flavor': data['name'] ?? 'Beverages',
                     'price': baseVariantPrice,
                     'basePrice': basePrice,
                     'sizePriceDelta': delta,
@@ -8463,6 +8245,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                     'imageUrl': data['imageUrl']?.toString() ?? '',
                     'categoryImageUrl': data['imageUrl']?.toString() ?? '',
                     'isCoffee': true,
+                    'publicId': data['publicId'],
                     'coffeeId': data['coffeeId'] ?? '',
                     'coffeeSize': sizeName,
                     'variantSlot': sizeIndex,
@@ -8475,9 +8258,9 @@ class _DailyStockPageState extends State<DailyStockPage>
                     coffeeItems.add({
                       'id':
                           '$itemSourceId|size:$sizeName|addon:${addonName.toLowerCase().replaceAll(' ', '_')}',
-                      'name': data['name'] ?? 'Coffee',
+                      'name': data['name'] ?? 'Beverages',
                       'variant': '$sizeName + $addonName',
-                      'flavor': data['name'] ?? 'Coffee',
+                      'flavor': data['name'] ?? 'Beverages',
                       'price': baseVariantPrice + addonDelta,
                       'basePrice': basePrice,
                       'sizePriceDelta': delta,
@@ -8488,7 +8271,8 @@ class _DailyStockPageState extends State<DailyStockPage>
                       'imageUrl': data['imageUrl']?.toString() ?? '',
                       'categoryImageUrl': data['imageUrl']?.toString() ?? '',
                       'isCoffee': true,
-                      'coffeeId': data['coffeeId'] ?? '',
+                      'publicId': data['publicId'],
+                    'coffeeId': data['coffeeId'] ?? '',
                       'coffeeSize': sizeName,
                       'variantSlot': sizeIndex,
                     });
@@ -8498,7 +8282,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                   ...data,
                   'staffDocId': doc.id,
                   'sourceInventoryId': effectiveSourceId,
-                  'name': data['name'] ?? 'Coffee',
+                  'name': data['name'] ?? 'Beverages',
                   'imageUrl': data['imageUrl'],
                   'items': coffeeItems,
                 });
@@ -8687,7 +8471,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                     _showBundleView
                         ? 'Back to Bundles'
                         : _showCoffeeView
-                        ? 'Back to Coffee'
+                        ? 'Back to Beverages'
                         : 'Back to Categories',
                   ),
                   style: OutlinedButton.styleFrom(
@@ -8808,9 +8592,10 @@ class _DailyStockPageState extends State<DailyStockPage>
                                       // even when the current grid is short. This
                                       // also lets users reach the last row when
                                       // the on-screen navigation reduces height.
-                                      physics: const AlwaysScrollableScrollPhysics(
-                                        parent: ClampingScrollPhysics(),
-                                      ),
+                                      physics:
+                                          const AlwaysScrollableScrollPhysics(
+                                            parent: ClampingScrollPhysics(),
+                                          ),
                                       padding: const EdgeInsets.fromLTRB(
                                         20,
                                         10,
@@ -8839,9 +8624,10 @@ class _DailyStockPageState extends State<DailyStockPage>
                                       maxWidth: 900,
                                     ),
                                     child: SingleChildScrollView(
-                                      physics: const AlwaysScrollableScrollPhysics(
-                                        parent: ClampingScrollPhysics(),
-                                      ),
+                                      physics:
+                                          const AlwaysScrollableScrollPhysics(
+                                            parent: ClampingScrollPhysics(),
+                                          ),
                                       padding: const EdgeInsets.fromLTRB(
                                         20,
                                         10,
@@ -8964,7 +8750,7 @@ class _DailyStockPageState extends State<DailyStockPage>
             widthFactor: 0.48,
             heightFactor: 1,
             child: Material(
-              color: const Color(0xFFFFF7FA),
+              color: AppColors.surface,
               child: SafeArea(
                 child: SingleChildScrollView(
                   padding: const EdgeInsets.fromLTRB(18, 18, 18, 28),
@@ -9014,6 +8800,7 @@ class _DailyStockPageState extends State<DailyStockPage>
   Widget _buildDiscountExpansionTile({
     required List<Map<String, dynamic>> orderItems,
   }) {
+    if (!_discountsAllowed) return const SizedBox.shrink();
     // This drawer is displayed in a dialog. Keep its expansion state inside
     // the tile so the first tap rebuilds the dialog immediately.
     var isExpanded = _isDiscountExpanded;
@@ -9257,7 +9044,7 @@ class _DailyStockPageState extends State<DailyStockPage>
     final orderItems = _knownOrderItems(_latestOrderItems);
     return Container(
       decoration: BoxDecoration(
-        color: const Color(0xFFFFF7FA),
+        color: AppColors.surface,
         border: Border(
           left: BorderSide(
             color: _AppColors.border.withOpacity(
@@ -9784,7 +9571,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                   _showBundleView
                       ? 'Bundles'
                       : _showCoffeeView
-                      ? 'Coffee'
+                      ? 'Beverages'
                       : 'Categories',
                   style: TextStyle(
                     fontSize: 12,
@@ -9824,7 +9611,7 @@ class _DailyStockPageState extends State<DailyStockPage>
           ] else
             Expanded(
               child: Text(
-                _showCoffeeView ? ' Select a coffee ' : ' Select a category ',
+                _showCoffeeView ? ' Select a beverage ' : ' Select a category ',
                 style: const TextStyle(
                   fontSize: 12,
                   color: _AppColors.textSoft,
@@ -9928,7 +9715,7 @@ class _DailyStockPageState extends State<DailyStockPage>
           _showBundleView
               ? 'BUNDLE'
               : _showCoffeeView
-              ? 'COFFEE'
+              ? 'BEVERAGES'
               : 'CATEGORY',
           style: TextStyle(
             fontSize: 10,
@@ -10221,7 +10008,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                       child: InkWell(
                         onTap: isOutOfStock
                             ? null
-                            : () => _addSingleItemToTicket(item, stock),
+                            : () => _selectBundleOrItem(item, stock),
                         borderRadius: BorderRadius.circular(20),
                         child: Container(
                           padding: const EdgeInsets.all(14),
@@ -10269,8 +10056,29 @@ class _DailyStockPageState extends State<DailyStockPage>
                                           : _AppColors.textMid,
                                     ),
                                   ),
-                                  if (item['isBundle'] == true && (item['bundleContentNames']?.toString().isNotEmpty ?? false))
-                                    Padding(padding: const EdgeInsets.only(top: 4), child: ConstrainedBox(constraints: const BoxConstraints(maxHeight: 64), child: SingleChildScrollView(child: Text(item['bundleContentNames'].toString(), style: const TextStyle(fontSize: 11, color: _AppColors.textSoft))))),
+                                  if (item['isBundle'] == true &&
+                                      (item['bundleContentNames']
+                                              ?.toString()
+                                              .isNotEmpty ??
+                                          false))
+                                    Padding(
+                                      padding: const EdgeInsets.only(top: 4),
+                                      child: ConstrainedBox(
+                                        constraints: const BoxConstraints(
+                                          maxHeight: 64,
+                                        ),
+                                        child: SingleChildScrollView(
+                                          child: Text(
+                                            item['bundleContentNames']
+                                                .toString(),
+                                            style: const TextStyle(
+                                              fontSize: 11,
+                                              color: _AppColors.textSoft,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
                                   const SizedBox(height: 6),
                                   Wrap(
                                     spacing: 6,
@@ -10600,7 +10408,7 @@ class _DailyStockPageState extends State<DailyStockPage>
     List<MapEntry<int, Map<String, dynamic>>> variants,
   ) {
     final coffeeId = variants.isNotEmpty
-        ? variants.first.value['coffeeId']?.toString() ?? ''
+        ? inventoryDisplayId(variants.first.value)
         : '';
     final sizeGroups = <String, List<Map<String, dynamic>>>{};
     for (final entry in variants) {
@@ -10617,7 +10425,7 @@ class _DailyStockPageState extends State<DailyStockPage>
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         if (sizeEntries.isEmpty)
-          _buildEmptyState('No coffee sizes available.')
+          _buildEmptyState('No beverage sizes available.')
         else ...[
           _buildCoffeeFlavorCard(displayGroupName, coffeeId, sizeEntries),
           if (_orderSearchQuery == '\u0000')
@@ -11277,7 +11085,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                   child: SingleChildScrollView(
                     child: Column(
                       children: validCartEntries.map((entry) {
-                        final item = orderItems.firstWhere(
+                        final item = _knownOrderItems(orderItems).firstWhere(
                           (element) => _cartKey(element) == entry.key,
                           orElse: () => {},
                         );
@@ -11499,7 +11307,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                     vertical: 12,
                   ),
                   decoration: BoxDecoration(
-                    color: const Color(0xFFFCE4EC),
+                    color: AppColors.blush,
                     borderRadius: BorderRadius.circular(14),
                   ),
                   child: Row(
@@ -11637,7 +11445,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                   )
                 : Column(
                     children: validCartEntries.map((entry) {
-                      final item = orderItems.firstWhere(
+                      final item = _knownOrderItems(orderItems).firstWhere(
                         (element) => _cartKey(element) == entry.key,
                         orElse: () => {},
                       );
@@ -11804,7 +11612,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                   ),
                   decoration: BoxDecoration(
                     gradient: const LinearGradient(
-                      colors: [Color(0xFFFCE4EC), Color(0xFFFFF0F5)],
+                      colors: [AppColors.blush, AppColors.surfaceTint],
                     ),
                     borderRadius: BorderRadius.circular(14),
                   ),
@@ -12016,69 +11824,14 @@ class _DailyStockPageState extends State<DailyStockPage>
     required ValueChanged<bool> onChanged,
     required IconData icon,
   }) {
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 300),
-      width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(16, 12, 12, 12),
-      decoration: BoxDecoration(
-        color: value ? _AppColors.primary.withOpacity(0.07) : _AppColors.cardBg,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(
-          color: value ? _AppColors.border : Colors.transparent,
-          width: 1,
-        ),
-      ),
-      child: Row(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: value
-                  ? _AppColors.primary.withOpacity(0.15)
-                  : Colors.white,
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: Icon(
-              icon,
-              size: 18,
-              color: value ? _AppColors.primary : _AppColors.textSoft,
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w700,
-                    color: value ? _AppColors.primary : _AppColors.textMid,
-                  ),
-                ),
-                Text(
-                  subtitle,
-                  style: const TextStyle(
-                    fontSize: 11,
-                    color: _AppColors.textSoft,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Switch(
-            value: value,
-            onChanged: onChanged,
-            activeColor: _AppColors.accent,
-            activeTrackColor: _AppColors.primary.withOpacity(0.25),
-            inactiveTrackColor: _AppColors.border,
-          ),
-        ],
-      ),
-    );
+    if (!_discountsAllowed || title.startsWith('PWD')) return const SizedBox.shrink();
+    return StatefulBuilder(builder:(context,refresh)=>Column(children:_discountOptions.map((row)=>SwitchListTile(
+      title:Text('${row['name']}'),subtitle:Text('${row['percent']}% discount'),
+      value:_selectedDiscountId==row['id'] && (_seniorDiscount || _pwdDiscount),
+      onChanged:(selected){_selectedDiscountId=selected?'${row['id']}':null;onChanged(selected);refresh((){});},
+      activeThumbColor:_AppColors.primary,
+    )).toList()));
   }
-
   Widget _buildEmptyState(String message) {
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 36),
@@ -12138,7 +11891,7 @@ class _DailyStockPageState extends State<DailyStockPage>
           ),
           const SizedBox(width: 10),
           _modeButton(
-            label: 'Coffee',
+            label: 'Beverages',
             icon: Icons.local_cafe_rounded,
             selected: _showCoffeeView,
             onTap: () => setState(() {

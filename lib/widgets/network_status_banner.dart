@@ -1,3 +1,4 @@
+import 'package:sales_tracking/theme/app_colors.dart';
 import 'dart:async';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
@@ -22,6 +23,7 @@ class _NetworkStatusBannerState extends State<NetworkStatusBanner> {
   bool _offline = false;
   bool _showNotice = false;
   bool _markDismissed = false;
+  DateTime? _lastSync;
 
   @override
   void initState() {
@@ -35,6 +37,12 @@ class _NetworkStatusBannerState extends State<NetworkStatusBanner> {
     try {
       final results = await Connectivity().checkConnectivity();
       _update(results);
+      if (!results.contains(ConnectivityResult.none) &&
+          (_lastSync == null || DateTime.now().difference(_lastSync!).inSeconds >= 20)) {
+        _lastSync = DateTime.now();
+        unawaited(LocalDatabaseSyncService().syncPendingSales());
+        unawaited(LocalDatabaseSyncService().syncPendingCashDrawerChanges());
+      }
     } catch (_) {}
   }
 
@@ -146,7 +154,7 @@ class _NetworkStatusBannerState extends State<NetworkStatusBanner> {
                         right: 4,
                       ),
                       decoration: BoxDecoration(
-                        color: const Color(0xFF8B0035),
+                        color: AppColors.primaryDeep,
                         borderRadius: BorderRadius.circular(18),
                       ),
                       child: Row(

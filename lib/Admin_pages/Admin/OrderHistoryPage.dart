@@ -1,3 +1,4 @@
+import 'package:sales_tracking/theme/app_colors.dart';
 import 'package:flutter/material.dart';
 
 class OrderHistoryPage extends StatelessWidget {
@@ -8,7 +9,7 @@ class OrderHistoryPage extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Order History'),
-        backgroundColor: const Color(0xFFF48FB1),
+        backgroundColor: AppColors.rose,
       ),
       body: const Center(
         child: Text(

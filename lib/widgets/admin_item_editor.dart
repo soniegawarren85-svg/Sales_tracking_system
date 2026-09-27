@@ -1,3 +1,7 @@
+import 'package:sales_tracking/theme/app_colors.dart';
+import '../services/short_id_service.dart';
+import '../services/bundle_stock_service.dart';
+import '../services/bundle_metadata_service.dart';
 import 'dart:math';
 import 'dart:convert';
 import 'dart:typed_data';
@@ -6,19 +10,55 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'admin_catalog.dart';
 
+String inventorySaveError(Object error) {
+  if (error is StateError) return error.message;
+  if (error is ArgumentError) return '${error.message}';
+  if (error is FirebaseException) {
+    switch (error.code) {
+      case 'permission-denied':
+        return 'Saving was blocked by database permissions. Your administrator needs to check access rules.';
+      case 'unauthenticated':
+        return 'Your session expired. Sign in again, then save.';
+      case 'resource-exhausted':
+        return 'The inventory record is too large or the database quota was reached. Try a smaller bundle batch.';
+      case 'invalid-argument':
+        return 'The record contains unsupported data or is too large. ${error.message ?? ''}';
+      case 'aborted':
+        return 'Stock changed while saving. Refresh the inventory and retry.';
+      case 'unavailable':
+        return 'The database is temporarily unavailable. Please retry.';
+      default:
+        return 'Unable to save (${error.code}): ${error.message ?? 'Please retry.'}';
+    }
+  }
+  return 'Unable to save: $error';
+}
+
 Future<void> showAdminItemEditor(
   BuildContext context, {
   AdminCatalogEntry? entry,
   Map<String, dynamic>? category,
+  FirebaseFirestore? firestore,
   required Future<String?> Function(Uint8List bytes) upload,
 }) => showDialog<void>(
   context: context,
   barrierDismissible: false,
-  builder: (_) => _ItemEditor(entry: entry, category: category, upload: upload),
+  builder: (_) => _ItemEditor(
+    entry: entry,
+    category: category,
+    upload: upload,
+    firestore: firestore,
+  ),
 );
 
 class _ItemEditor extends StatefulWidget {
-  const _ItemEditor({this.entry, this.category, required this.upload});
+  const _ItemEditor({
+    this.entry,
+    this.category,
+    required this.upload,
+    this.firestore,
+  });
+  final FirebaseFirestore? firestore;
   final AdminCatalogEntry? entry;
   final Map<String, dynamic>? category;
   final Future<String?> Function(Uint8List bytes) upload;
@@ -28,6 +68,7 @@ class _ItemEditor extends StatefulWidget {
 
 class _ItemEditorState extends State<_ItemEditor> {
   final _form = GlobalKey<FormState>();
+  final _additionalBundles = TextEditingController(text: '0');
   late final _data = widget.entry?.details ?? <String, dynamic>{};
   late final _name = TextEditingController(text: '${_data['name'] ?? ''}');
   late final _price = TextEditingController(
@@ -47,14 +88,92 @@ class _ItemEditorState extends State<_ItemEditor> {
       .map(
         (size) => (
           TextEditingController(text: '${size['name'] ?? ''}'),
-          TextEditingController(text: '${size['priceDelta'] ?? 0}'),
+          TextEditingController(
+            text:
+                '${(num.tryParse('${_data['basePrice']}') ?? 0) + (num.tryParse('${size['priceDelta']}') ?? 0)}',
+          ),
         ),
       )
       .toList();
   bool _saving = false;
   String? _error;
   Uint8List? _photo;
+  Future<String?>? _upload;
   String get _type => widget.entry?.type ?? 'Categories';
+  List<Map<String, dynamic>> _ingredientOptions = [];
+  late List<Map<String, dynamic>> _ingredients = bundleRows(
+    widget.entry?.source['items'],
+  );
+  bool _loadingIngredients = false;
+  @override
+  void initState() {
+    super.initState();
+    if (_type == 'Bundle') _loadIngredients();
+  }
+
+  String _ingredientKey(Map item) =>
+      '${item['sourceInventoryId']}::${item['variantId']}';
+  Future<void> _loadIngredients() async {
+    setState(() => _loadingIngredients = true);
+    try {
+      final docs = await (widget.firestore ?? FirebaseFirestore.instance)
+          .collection('sales_inventory')
+          .get();
+      final options = <Map<String, dynamic>>[];
+      for (final doc in docs.docs) {
+        final data = doc.data();
+        if (data['isDeleted'] == true || data['isBundle'] == true) continue;
+        for (final item in bundleRows(data['items'])) {
+          if (!catalogItemActive(item, DateTime.now())) continue;
+          options.add({
+            ...item,
+            'sourceInventoryId': doc.id,
+            'variantId': item['id'] ?? item['publicId'] ?? item['name'],
+            'parentName': data['name'],
+          });
+        }
+      }
+      final coffees = await (widget.firestore ?? FirebaseFirestore.instance)
+          .collection('coffee_products')
+          .get();
+      for (final doc in coffees.docs) {
+        options.addAll(bundleBeverageSizes(doc.id, doc.data()));
+      }
+      if (!mounted) return;
+      setState(() {
+        _ingredientOptions = options;
+        _ingredients = _ingredients.map((item) {
+          final exact = options
+              .where((option) => _ingredientKey(option) == _ingredientKey(item))
+              .toList();
+          final byName = options
+              .where(
+                (option) =>
+                    '${option['name']}'.trim().toLowerCase() ==
+                    '${item['name']}'.trim().toLowerCase(),
+              )
+              .toList();
+          final match = exact.length == 1
+              ? exact.single
+              : byName.length == 1
+              ? byName.single
+              : null;
+          return match == null
+              ? item
+              : {...match, 'quantity': item['quantity'] ?? 1};
+        }).toList();
+      });
+    } catch (error) {
+      if (mounted)
+        setState(
+          () => _error =
+              'Unable to load current ingredients. Reopen the editor to retry.',
+        );
+      debugPrint('Load bundle ingredients: $error');
+    } finally {
+      if (mounted) setState(() => _loadingIngredients = false);
+    }
+  }
 
   @override
   void dispose() {
@@ -64,6 +183,7 @@ class _ItemEditorState extends State<_ItemEditor> {
       _stock,
       _expiry,
       _description,
+      _additionalBundles,
       ..._sizes.expand((size) => [size.$1, size.$2]),
     ]) {
       controller.dispose();
@@ -78,21 +198,23 @@ class _ItemEditorState extends State<_ItemEditor> {
       _error = null;
     });
     try {
-      final url = _photo == null ? null : await widget.upload(_photo!);
+      final url = _photo == null
+          ? null
+          : await (_upload ?? widget.upload(_photo!));
       if (_photo != null && (url == null || url.isEmpty))
         throw StateError('Image upload failed');
       final changes = <String, dynamic>{
         'name': _name.text.trim(),
-        _type == 'Coffee' ? 'basePrice' : 'price': num.parse(
-          _price.text.trim(),
-        ),
+        _type == 'Beverages' ? 'basePrice' : 'price': _type == 'Beverages'
+            ? 0
+            : num.parse(_price.text.trim()),
         if (url != null) 'imageUrl': url,
         if (_type == 'Categories') ...{
           'stock': int.parse(_stock.text),
           'expirationDate': _expiry.text,
           if (widget.entry == null) 'startingStock': int.parse(_stock.text),
         },
-        if (_type == 'Coffee') ...{
+        if (_type == 'Beverages') ...{
           'description': _description.text.trim(),
           'sizes': _sizes
               .map(
@@ -104,11 +226,42 @@ class _ItemEditorState extends State<_ItemEditor> {
               .toList(),
         },
       };
-      final db = FirebaseFirestore.instance;
+      final db = widget.firestore ?? FirebaseFirestore.instance;
       final source = widget.entry?.source ?? widget.category!;
       final ref = db
-          .collection(_type == 'Coffee' ? 'coffee_products' : 'sales_inventory')
+          .collection(
+            _type == 'Beverages' ? 'coffee_products' : 'sales_inventory',
+          )
           .doc('${source['id']}');
+      final publicId = widget.entry == null
+          ? await ShortIdService.next(categoryPrefix('${source['name'] ?? ''}'))
+          : null;
+      if (_type == 'Bundle' && int.parse(_additionalBundles.text) > 0) {
+        if (_loadingIngredients)
+          throw StateError('Wait for ingredients to finish loading.');
+        if (_ingredients.any(
+          (item) => !_ingredientOptions.any(
+            (option) => _ingredientKey(option) == _ingredientKey(item),
+          ),
+        )) {
+          throw StateError(
+            'Choose an available inventory item for every bundle ingredient.',
+          );
+        }
+        await BundleStockService(db).restock(
+          ref.id,
+          int.parse(_additionalBundles.text),
+          changes,
+          ingredients: _ingredients,
+        );
+        if (mounted) Navigator.pop(context);
+        return;
+      }
+      if (_type == 'Bundle') {
+        await updateBundleMetadata(db, ref.id, changes);
+        if (mounted) Navigator.pop(context);
+        return;
+      }
       await db.runTransaction((tx) async {
         final snapshot = await tx.get(ref);
         final current = snapshot.data();
@@ -129,6 +282,7 @@ class _ItemEditorState extends State<_ItemEditor> {
             ...changes,
             'id':
                 'VAR-${DateTime.now().microsecondsSinceEpoch}-${Random.secure().nextInt(1000000).toString().padLeft(6, '0')}',
+            'publicId': publicId,
             'isDeleted': false,
           });
         } else {
@@ -140,11 +294,10 @@ class _ItemEditorState extends State<_ItemEditor> {
         tx.update(ref, {'items': items});
       });
       if (mounted) Navigator.pop(context);
-    } catch (_) {
-      if (mounted)
-        setState(
-          () => _error = 'Unable to save. Check your connection and try again.',
-        );
+    } catch (error) {
+      debugPrint('Inventory save failed: $error');
+      _upload = null;
+      if (mounted) setState(() => _error = inventorySaveError(error));
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -187,7 +340,7 @@ class _ItemEditorState extends State<_ItemEditor> {
   Widget _image() {
     final url = '${_data['imageUrl'] ?? ''}';
     Widget fallback() =>
-        const Icon(Icons.image_outlined, color: Color(0xFFE91E63));
+        const Icon(Icons.image_outlined, color: AppColors.primary);
     if (_photo != null) return Image.memory(_photo!, fit: BoxFit.cover);
     if (url.isEmpty) return fallback();
     try {
@@ -224,11 +377,8 @@ class _ItemEditorState extends State<_ItemEditor> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 _field(_name, 'Name'),
-                _field(
-                  _price,
-                  _type == 'Coffee' ? 'Base price' : 'Price',
-                  number: true,
-                ),
+                if (_type != 'Beverages')
+                  _field(_price, 'Price (₱)', number: true),
                 if (_type == 'Categories') ...[
                   _field(_stock, 'Current stock', number: true, integer: true),
                   TextFormField(
@@ -262,9 +412,7 @@ class _ItemEditorState extends State<_ItemEditor> {
                   ),
                   const SizedBox(height: 14),
                 ],
-                if (_type == 'Coffee') ...[
-                  _field(_description, 'Description', required: false),
-                  const Text('Size price = base price + additional price'),
+                if (_type == 'Beverages') ...[
                   const SizedBox(height: 12),
                   ..._sizes.map(
                     (size) => Row(
@@ -272,11 +420,7 @@ class _ItemEditorState extends State<_ItemEditor> {
                         Expanded(child: _field(size.$1, 'Size')),
                         const SizedBox(width: 8),
                         Expanded(
-                          child: _field(
-                            size.$2,
-                            'Additional price',
-                            number: true,
-                          ),
+                          child: _field(size.$2, 'Price (₱)', number: true),
                         ),
                       ],
                     ),
@@ -297,25 +441,80 @@ class _ItemEditorState extends State<_ItemEditor> {
                         : () async {
                             final file = await ImagePicker().pickImage(
                               source: ImageSource.gallery,
-                              maxWidth: 1200,
+                              maxWidth: 800,
+                              maxHeight: 800,
+                              imageQuality: 70,
                             );
                             if (file == null) return;
                             final bytes = await file.readAsBytes();
-                            if (mounted) setState(() => _photo = bytes);
+                            if (mounted)
+                              setState(() {
+                                _photo = bytes;
+                                _upload = widget
+                                    .upload(bytes)
+                                    .catchError((_) => null);
+                              });
                           },
                   ),
                 ),
                 if (_type == 'Bundle') ...[
-                  const Divider(),
-                  ...catalogBundleContents(widget.entry!.source).map(
-                    (item) => ListTile(
-                      title: Text('${item['name']}'),
-                      subtitle: Text(
-                        'Expires: ${item['expirationDate'] ?? 'Not recorded'}',
-                      ),
-                      trailing: Text('×${item['quantity'] ?? 1}'),
-                    ),
+                  _field(
+                    _additionalBundles,
+                    'Additional bundles (0–100)',
+                    number: true,
+                    integer: true,
                   ),
+                  const Divider(),
+                  if (_loadingIngredients) const LinearProgressIndicator(),
+                  ..._ingredients.asMap().entries.map((row) {
+                    final item = row.value;
+                    final exists = _ingredientOptions.any(
+                      (option) =>
+                          _ingredientKey(option) == _ingredientKey(item),
+                    );
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      child: DropdownButtonFormField<String>(
+                        key: ValueKey(
+                          '${row.key}-${_ingredientKey(item)}-${_ingredientOptions.length}',
+                        ),
+                        initialValue: exists ? _ingredientKey(item) : null,
+                        isExpanded: true,
+                        decoration: InputDecoration(
+                          labelText: 'Ingredient · x${item['quantity'] ?? 1}',
+                          helperText: exists
+                              ? 'Expires: ${item['expirationDate'] ?? 'Not recorded'}'
+                              : 'Select the replacement for ${item['name']}',
+                          border: const OutlineInputBorder(),
+                        ),
+                        items: _ingredientOptions
+                            .map(
+                              (option) => DropdownMenuItem(
+                                value: _ingredientKey(option),
+                                child: Text(
+                                  '${option['name']} (${option['publicId'] ?? option['variantId'] ?? ''})',
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: _saving
+                            ? null
+                            : (key) {
+                                if (key != null)
+                                  setState(
+                                    () => _ingredients[row.key] = {
+                                      ..._ingredientOptions.firstWhere(
+                                        (option) =>
+                                            _ingredientKey(option) == key,
+                                      ),
+                                      'quantity': item['quantity'] ?? 1,
+                                    },
+                                  );
+                              },
+                      ),
+                    );
+                  }),
                 ],
                 if (_error != null)
                   Text(_error!, style: const TextStyle(color: Colors.red)),

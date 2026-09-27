@@ -2,6 +2,34 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:sales_tracking/widgets/historical_cash_drawer.dart';
 
 void main() {
+  test('cash drawer includes early and late sales on the selected day', () {
+    expect(
+      calculatedDailyCash(
+        DateTime(2026, 9, 26),
+        [
+          {'createdAt': '2026-09-26T07:00:00', 'amount': 1000},
+        ],
+        [
+          {
+            'timestamp': '2026-09-26T09:00:00',
+            'paymentMode': 'Cash',
+            'total': 200,
+          },
+          {
+            'timestamp': '2026-09-26T21:00:00',
+            'paymentMode': 'Cash',
+            'total': 300,
+          },
+          {
+            'timestamp': '2026-09-27T09:00:00',
+            'paymentMode': 'Cash',
+            'total': 900,
+          },
+        ],
+      ),
+      1500,
+    );
+  });
   test(
     'historical drawer uses selected date allocation, cash sales and refunds',
     () {

@@ -1,4 +1,5 @@
-﻿import 'package:flutter/material.dart';
+import 'package:sales_tracking/theme/app_colors.dart';
+import 'package:flutter/material.dart';
 
 class Header extends StatelessWidget {
   final VoidCallback? onMessage;
@@ -15,12 +16,12 @@ class Header extends StatelessWidget {
       child: Container(
         height: 320,
         decoration: BoxDecoration(
-          color: const Color(0xFFE91E63),
+          color: AppColors.primary,
           image: DecorationImage(
             image: const AssetImage('Assets/Image/Bg.jpg'),
             fit: BoxFit.cover,
             colorFilter: ColorFilter.mode(
-              const Color(0xFFC2105C).withOpacity(0.85),
+              AppColors.primaryDark.withOpacity(0.85),
               BlendMode.darken,
             ),
           ),
@@ -115,7 +116,7 @@ class Header extends StatelessWidget {
                         ),
                         child: const Icon(
                           Icons.mail_outline,
-                          color: Color(0xFFF48FB1),
+                          color: AppColors.rose,
                           size: 20,
                         ),
                       ),
@@ -144,7 +145,7 @@ class Header extends StatelessWidget {
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
                           border: Border.all(
-                            color: Color(0xFFF48FB1),
+                            color: AppColors.rose,
                             width: 2,
                           ),
                           boxShadow: [
@@ -160,7 +161,7 @@ class Header extends StatelessWidget {
                           child: Icon(
                             Icons.person,
                             size: 34,
-                            color: Color(0xFFF48FB1),
+                            color: AppColors.rose,
                           ),
                         ),
                       ),

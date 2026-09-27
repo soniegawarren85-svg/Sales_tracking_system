@@ -1,3 +1,6 @@
+import 'inventory_records_table.dart';
+import 'package:sales_tracking/theme/app_colors.dart';
+import '../services/public_item_id.dart';
 import 'dart:convert';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
@@ -28,15 +31,20 @@ class BranchStaffActivityDialog extends StatefulWidget {
     super.key,
     required this.branchId,
     required this.branchName,
+    this.firestore,
   });
   final String branchId, branchName;
+  final FirebaseFirestore? firestore;
   @override
   State<BranchStaffActivityDialog> createState() =>
       _BranchStaffActivityDialogState();
 }
 
 class _BranchStaffActivityDialogState extends State<BranchStaffActivityDialog> {
-  late final sessions = FirebaseFirestore.instance
+  String _search = '';
+  DateTime? _date;
+  bool _history = false;
+  late final sessions = (widget.firestore ?? FirebaseFirestore.instance)
       .collection('staff_login_sessions')
       .where('branchId', isEqualTo: widget.branchId)
       .snapshots();
@@ -53,7 +61,7 @@ class _BranchStaffActivityDialogState extends State<BranchStaffActivityDialog> {
           Container(
             padding: const EdgeInsets.all(16),
             decoration: const BoxDecoration(
-              color: Color(0xFFFCE4EC),
+              color: AppColors.primaryDark,
               borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
             ),
             child: Row(
@@ -64,23 +72,68 @@ class _BranchStaffActivityDialogState extends State<BranchStaffActivityDialog> {
                     style: const TextStyle(
                       fontSize: 21,
                       fontWeight: FontWeight.bold,
-                      color: Color(0xFFC2105C),
+                      color: Colors.white,
                     ),
                   ),
                 ),
                 IconButton(
                   tooltip: 'Close activity logs',
                   onPressed: () => Navigator.pop(context),
-                  icon: const Icon(Icons.close),
+                  icon: const Icon(Icons.close, color: Colors.white),
                 ),
               ],
             ),
           ),
-          const Padding(
-            padding: EdgeInsets.all(12),
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: Text('Login and logout sessions - newest first'),
+          Padding(
+            padding: const EdgeInsets.all(12),
+            child: Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    decoration: const InputDecoration(
+                      hintText: 'Search staff name or ID',
+                      prefixIcon: Icon(Icons.search),
+                    ),
+                    onChanged: (value) =>
+                        setState(() => _search = value.trim().toLowerCase()),
+                  ),
+                ),
+                IconButton(
+                  tooltip: _date == null
+                      ? 'Filter by date'
+                      : MaterialLocalizations.of(
+                          context,
+                        ).formatShortDate(_date!),
+                  icon: const Icon(
+                    Icons.calendar_month,
+                    color: AppColors.primaryDark,
+                  ),
+                  onPressed: () async {
+                    final date = await showDatePicker(
+                      context: context,
+                      initialDate: _date ?? DateTime.now(),
+                      firstDate: DateTime(2020),
+                      lastDate: DateTime.now(),
+                    );
+                    if (date != null && mounted) setState(() => _date = date);
+                  },
+                ),
+                if (_date != null)
+                  IconButton(
+                    icon: const Icon(Icons.clear),
+                    onPressed: () => setState(() => _date = null),
+                  ),
+                IconButton(
+                  tooltip: _history ? 'Latest sessions' : 'Session history',
+                  isSelected: _history,
+                  selectedIcon: const Icon(
+                    Icons.history,
+                    color: AppColors.primaryDark,
+                  ),
+                  icon: const Icon(Icons.history),
+                  onPressed: () => setState(() => _history = !_history),
+                ),
+              ],
             ),
           ),
           Expanded(
@@ -102,7 +155,30 @@ class _BranchStaffActivityDialogState extends State<BranchStaffActivityDialog> {
                   (a, b) => (sessionTime(b['loginAt']) ?? DateTime(1970))
                       .compareTo(sessionTime(a['loginAt']) ?? DateTime(1970)),
                 );
-                return StaffSessionTable(sessions: records);
+                final seen = <String>{};
+                final latest = _history
+                    ? records
+                    : records
+                          .where(
+                            (row) => seen.add(
+                              (row['userId'] ?? row['staffId']).toString(),
+                            ),
+                          )
+                          .toList();
+                final filtered = latest.where((row) {
+                  final date = sessionTime(row['loginAt']);
+                  return (_date == null ||
+                          (date != null &&
+                              date.year == _date!.year &&
+                              date.month == _date!.month &&
+                              date.day == _date!.day)) &&
+                      (row.values.join(' ') +
+                              ' ' +
+                              publicItemId((row['staffId'] ?? '').toString()))
+                          .toLowerCase()
+                          .contains(_search);
+                }).toList();
+                return StaffSessionTable(sessions: filtered);
               },
             ),
           ),
@@ -119,7 +195,7 @@ class StaffSessionTable extends StatelessWidget {
     const fallback = Icon(
       Icons.account_circle,
       size: 36,
-      color: Color(0xFFE91E63),
+      color: AppColors.primary,
     );
     if (photo.isEmpty) return fallback;
     try {
@@ -157,67 +233,41 @@ class StaffSessionTable extends StatelessWidget {
     }
 
     return SingleChildScrollView(
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: DataTable(
-          headingRowColor: const WidgetStatePropertyAll(Color(0xFFFFF0F6)),
-          dataRowMinHeight: 64,
-          dataRowMaxHeight: 80,
-          columns: [
-            'Login time',
-            'Staff ID number',
-            'Staff name',
-            'Branch',
-            'Type',
-            'IP address',
-            'Logout time',
-            'Work hours',
-          ].map((label) => DataColumn(label: Text(label))).toList(),
-          rows: sessions
-              .map(
-                (session) => DataRow(
-                  cells: [
-                    DataCell(Text(date(session['loginAt']))),
-                    DataCell(
-                      SelectableText('${session['staffId'] ?? 'Not recorded'}'),
-                    ),
-                    DataCell(
-                      Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          ClipOval(
-                            child: avatar('${session['photoUrl'] ?? ''}'),
-                          ),
-                          const SizedBox(width: 10),
-                          Text('${session['staffName'] ?? 'Not recorded'}'),
-                        ],
-                      ),
-                    ),
-                    DataCell(
-                      Text('${session['branchName'] ?? 'Not assigned'}'),
-                    ),
-                    DataCell(Text('${session['type'] ?? 'User'}')),
-                    DataCell(
-                      Tooltip(
-                        message: '${session['ipType'] ?? 'IP address'}',
-                        child: SelectableText(
-                          '${session['ipAddress'] ?? 'Not recorded'}',
-                        ),
-                      ),
-                    ),
-                    DataCell(
-                      Text(
-                        session['logoutAt'] == null
-                            ? 'Not recorded / session open'
-                            : date(session['logoutAt']),
-                      ),
-                    ),
-                    DataCell(Text(sessionHours(session))),
-                  ],
+      padding: const EdgeInsets.all(12),
+      child: InventoryRecordsTable(
+        headings: const [
+          'Staff ID',
+          'Staff',
+          'Login',
+          'Logout',
+          'Status',
+          'Hours',
+          'IP address',
+        ],
+        flex: const {0: 1, 1: 2, 2: 1.8, 3: 1.8, 4: 1, 5: .8, 6: 1.5},
+        rows: sessions
+            .map(
+              (session) => <Widget>[
+                Text(publicItemId('${session['staffId'] ?? 'Not recorded'}')),
+                Text('${session['staffName'] ?? 'Not recorded'}'),
+                Text(date(session['loginAt'])),
+                Text(
+                  session['logoutAt'] == null ? '—' : date(session['logoutAt']),
                 ),
-              )
-              .toList(),
-        ),
+                Text(
+                  session['logoutAt'] == null ? 'Active' : 'Logged out',
+                  style: TextStyle(
+                    color: session['logoutAt'] == null
+                        ? Colors.green.shade700
+                        : AppColors.textMuted,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                Text(sessionHours(session)),
+                SelectableText('${session['ipAddress'] ?? 'Not recorded'}'),
+              ],
+            )
+            .toList(),
       ),
     );
   }

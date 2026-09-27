@@ -1,3 +1,4 @@
+import 'package:sales_tracking/theme/app_colors.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
@@ -248,7 +249,7 @@ class _NotificationPageState extends State<NotificationPage>
     return Container(
       decoration: const BoxDecoration(
         gradient: LinearGradient(
-          colors: [Color(0xFF8B0038), Color(0xFFC2105C), Color(0xFFE91E63)],
+          colors: [AppColors.primaryDeep, AppColors.primaryDark, AppColors.primary],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
@@ -445,7 +446,7 @@ class _NotificationPageState extends State<NotificationPage>
             width: 4,
             height: 16,
             decoration: BoxDecoration(
-              color: const Color(0xFFE91E63),
+              color: AppColors.primary,
               borderRadius: BorderRadius.circular(4),
             ),
           ),
@@ -455,14 +456,14 @@ class _NotificationPageState extends State<NotificationPage>
             style: const TextStyle(
               fontSize: 14,
               fontWeight: FontWeight.w700,
-              color: Color(0xFF8B0038),
+              color: AppColors.primaryDeep,
               letterSpacing: 0.2,
             ),
           ),
           const SizedBox(width: 8),
           Expanded(
             child: Divider(
-              color: const Color(0xFFF48FB1).withOpacity(0.4),
+              color: AppColors.rose.withOpacity(0.4),
               thickness: 1,
             ),
           ),
@@ -482,9 +483,9 @@ class _NotificationPageState extends State<NotificationPage>
         ? Icons.assignment_rounded
         : Icons.notifications_rounded;
     final Color iconColor =
-        type == 'report' ? const Color(0xFFE91E63) : const Color(0xFF8B0038);
+        type == 'report' ? AppColors.primary : AppColors.primaryDeep;
     final Color iconBg = type == 'report'
-        ? const Color(0xFFFCE4EC)
+        ? AppColors.blush
         : const Color(0xFFEDE7F6);
 
     return Dismissible(
@@ -535,14 +536,14 @@ class _NotificationPageState extends State<NotificationPage>
             border: Border.all(
               color: isRead
                   ? Colors.transparent
-                  : const Color(0xFFE91E63).withOpacity(0.20),
+                  : AppColors.primary.withOpacity(0.20),
               width: 1.5,
             ),
             boxShadow: [
               BoxShadow(
                 color: isRead
                     ? Colors.black.withOpacity(0.04)
-                    : const Color(0xFFE91E63).withOpacity(0.10),
+                    : AppColors.primary.withOpacity(0.10),
                 blurRadius: 14,
                 offset: const Offset(0, 4),
               ),
@@ -556,7 +557,7 @@ class _NotificationPageState extends State<NotificationPage>
                 decoration: BoxDecoration(
                   color: isRead
                       ? Colors.white
-                      : const Color(0xFFFCE4EC).withOpacity(0.45),
+                      : AppColors.blush.withOpacity(0.45),
                   borderRadius: const BorderRadius.vertical(
                     top: Radius.circular(20),
                   ),
@@ -602,7 +603,7 @@ class _NotificationPageState extends State<NotificationPage>
                                     fontWeight: isRead
                                         ? FontWeight.w600
                                         : FontWeight.w800,
-                                    color: const Color(0xFF8B0038),
+                                    color: AppColors.primaryDeep,
                                     letterSpacing: 0.1,
                                   ),
                                 ),
@@ -613,11 +614,11 @@ class _NotificationPageState extends State<NotificationPage>
                                   height: 9,
                                   margin: const EdgeInsets.only(left: 6),
                                   decoration: BoxDecoration(
-                                    color: const Color(0xFFE91E63),
+                                    color: AppColors.primary,
                                     shape: BoxShape.circle,
                                     boxShadow: [
                                       BoxShadow(
-                                        color: const Color(0xFFE91E63).withOpacity(0.40),
+                                        color: AppColors.primary.withOpacity(0.40),
                                         blurRadius: 6,
                                         spreadRadius: 1,
                                       ),
@@ -650,7 +651,7 @@ class _NotificationPageState extends State<NotificationPage>
                 decoration: BoxDecoration(
                   color: isRead
                       ? const Color(0xFFFAFAFA)
-                      : const Color(0xFFFCE4EC).withOpacity(0.30),
+                      : AppColors.blush.withOpacity(0.30),
                   borderRadius: const BorderRadius.vertical(
                     bottom: Radius.circular(20),
                   ),
@@ -658,7 +659,7 @@ class _NotificationPageState extends State<NotificationPage>
                     top: BorderSide(
                       color: isRead
                           ? Colors.grey.shade100
-                          : const Color(0xFFE91E63).withOpacity(0.10),
+                          : AppColors.primary.withOpacity(0.10),
                       width: 1,
                     ),
                   ),
@@ -706,7 +707,7 @@ class _NotificationPageState extends State<NotificationPage>
                           isRead ? Icons.done_all_rounded : Icons.check_rounded,
                           size: 13,
                           color: isRead
-                              ? const Color(0xFFE91E63)
+                              ? AppColors.primary
                               : Colors.grey.shade400,
                         ),
                         const SizedBox(width: 3),
@@ -715,7 +716,7 @@ class _NotificationPageState extends State<NotificationPage>
                           style: TextStyle(
                             fontSize: 10,
                             color: isRead
-                                ? const Color(0xFFE91E63)
+                                ? AppColors.primary
                                 : Colors.grey.shade400,
                             fontWeight: FontWeight.w600,
                           ),
@@ -745,8 +746,8 @@ class _NotificationPageState extends State<NotificationPage>
               decoration: BoxDecoration(
                 gradient: LinearGradient(
                   colors: [
-                    const Color(0xFFE91E63).withOpacity(0.12),
-                    const Color(0xFFF48FB1).withOpacity(0.08),
+                    AppColors.primary.withOpacity(0.12),
+                    AppColors.accent.withOpacity(0.08),
                   ],
                   begin: Alignment.topLeft,
                   end: Alignment.bottomRight,
@@ -756,7 +757,7 @@ class _NotificationPageState extends State<NotificationPage>
               child: Icon(
                 Icons.notifications_off_rounded,
                 size: 44,
-                color: const Color(0xFFE91E63).withOpacity(0.40),
+                color: AppColors.primary.withOpacity(0.40),
               ),
             ),
             const SizedBox(height: 22),
@@ -765,7 +766,7 @@ class _NotificationPageState extends State<NotificationPage>
               style: TextStyle(
                 fontSize: 20,
                 fontWeight: FontWeight.w800,
-                color: Color(0xFF8B0038),
+                color: AppColors.primaryDeep,
                 letterSpacing: 0.2,
               ),
             ),
@@ -784,14 +785,14 @@ class _NotificationPageState extends State<NotificationPage>
               padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 13),
               decoration: BoxDecoration(
                 gradient: const LinearGradient(
-                  colors: [Color(0xFF8B0038), Color(0xFFE91E63)],
+                  colors: [AppColors.primaryDeep, AppColors.primary],
                   begin: Alignment.topLeft,
                   end: Alignment.bottomRight,
                 ),
                 borderRadius: BorderRadius.circular(30),
                 boxShadow: [
                   BoxShadow(
-                    color: const Color(0xFFE91E63).withOpacity(0.35),
+                    color: AppColors.primary.withOpacity(0.35),
                     blurRadius: 14,
                     offset: const Offset(0, 5),
                   ),

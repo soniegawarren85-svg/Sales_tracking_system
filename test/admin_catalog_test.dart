@@ -80,7 +80,7 @@ void main() {
     expect(entry.stock, 1);
   });
 
-  test('Coffee uses existing IDs and does not invent stock quantities', () {
+  test('Beverages uses existing IDs and does not invent stock quantities', () {
     final entries = adminCatalogEntries([], [
       {'id': 'coffee-doc', 'coffeeId': 'COF-001', 'name': 'Latte'},
       {'id': 'removed-coffee', 'isDeleted': true},

@@ -59,7 +59,7 @@ void main() {
     expect((result.single['items'] as List).single['name'], 'Cake bundle');
     expect((july['items'] as List).length, 2);
     expect(
-      filterLossRecords(records, period: period, category: 'Coffee').length,
+      filterLossRecords(records, period: period, category: 'Beverages').length,
       1,
     );
     expect(

@@ -1,3 +1,7 @@
+import '../services/bundle_stock_service.dart';
+import '../widgets/allocation_checklist.dart';
+import 'package:sales_tracking/theme/app_colors.dart';
+import '../services/inventory_display_ids.dart';
 import '../services/public_item_id.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -234,7 +238,7 @@ class _AllCategPageState extends State<AllCategPage>
 
   Widget _imageFallback(IconData icon) => Container(
     color: const Color(0xFFFFF0E4),
-    child: Icon(icon, color: const Color(0xFFC2105C), size: 30),
+    child: Icon(icon, color: AppColors.primaryDark, size: 30),
   );
 
   int _parseInt(dynamic value, {int fallback = 0}) {
@@ -296,7 +300,7 @@ class _AllCategPageState extends State<AllCategPage>
     final flavor =
         coffee['categoryName']?.toString() ??
         coffee['name']?.toString() ??
-        'Coffee flavor';
+        'Beverages flavor';
     if (staffDocId.isEmpty) return;
 
     try {
@@ -309,7 +313,7 @@ class _AllCategPageState extends State<AllCategPage>
           }, SetOptions(merge: true));
       await FirebaseFirestore.instance.collection('admin_notifications').add({
         'type': 'coffee_low_stock',
-        'title': 'Coffee flavor is running low',
+        'title': 'Beverages flavor is running low',
         'message': '$flavor is marked as running low.',
         'itemName': flavor,
         'staffInventoryDocId': staffDocId,
@@ -323,7 +327,7 @@ class _AllCategPageState extends State<AllCategPage>
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        _buildSnackBar('Failed to mark coffee low: $e', isError: true),
+        _buildSnackBar('Failed to mark beverage low: $e', isError: true),
       );
     }
   }
@@ -367,17 +371,7 @@ class _AllCategPageState extends State<AllCategPage>
     });
   }
 
-  int _bundleStockForData(Map<String, dynamic> bundleData) {
-    final instances = _bundleInstancesFromData(bundleData);
-    final availableInstances = instances.where((instance) {
-      final status =
-          instance['status']?.toString().trim().toLowerCase() ?? 'available';
-      return status == 'available';
-    }).length;
-    return instances.isNotEmpty
-        ? availableInstances
-        : _parseInt(bundleData['bundleCount']);
-  }
+  int _bundleStockForData(Map<String, dynamic> data) => availableBundleStock(data);
 
   String _bundleExpirationDate(Map<String, dynamic> bundleData) {
     final dates = <String>[];
@@ -404,25 +398,7 @@ class _AllCategPageState extends State<AllCategPage>
     return dates.first;
   }
 
-  bool _hasExpiredBundleItem(Map<String, dynamic> bundleData) {
-    final rawItems = bundleData['items'] as List<dynamic>? ?? [];
-    for (final raw in rawItems) {
-      if (raw is! Map) continue;
-      final item = Map<String, dynamic>.from(raw);
-      final expirationDate = item['expirationDate']?.toString() ?? '';
-      if (_isExpiredItem(expirationDate)) return true;
-    }
-    for (final instance in _bundleInstancesFromData(bundleData)) {
-      final items = instance['items'] as List<dynamic>? ?? [];
-      for (final raw in items) {
-        if (raw is! Map) continue;
-        final item = Map<String, dynamic>.from(raw);
-        final expirationDate = item['expirationDate']?.toString() ?? '';
-        if (_isExpiredItem(expirationDate)) return true;
-      }
-    }
-    return false;
-  }
+  bool _hasExpiredBundleItem(Map<String, dynamic> data) => availableBundleStock(data) == 0;
 
   String _bundleStatusLabel(String status) {
     if (status == 'inCategory') return 'In category';
@@ -436,7 +412,7 @@ class _AllCategPageState extends State<AllCategPage>
       final expiryDate = DateTime.parse(expirationDate);
       final today = DateTime.now();
       return expiryDate.isBefore(
-        DateTime(today.year, today.month, today.day + 1),
+        DateTime(today.year, today.month, today.day),
       );
     } catch (e) {
       return false;
@@ -484,7 +460,7 @@ class _AllCategPageState extends State<AllCategPage>
                     borderRadius: BorderRadius.circular(28),
                     boxShadow: [
                       BoxShadow(
-                        color: const Color(0xFFC2105C).withOpacity(0.18),
+                        color: AppColors.primaryDark.withOpacity(0.18),
                         blurRadius: 32,
                         offset: const Offset(0, 8),
                       ),
@@ -499,7 +475,7 @@ class _AllCategPageState extends State<AllCategPage>
                         padding: const EdgeInsets.fromLTRB(16, 12, 8, 12),
                         decoration: const BoxDecoration(
                           gradient: LinearGradient(
-                            colors: [Color(0xFFC2105C), Color(0xFFE91E8C)],
+                            colors: [AppColors.primaryDark, AppColors.primary],
                             begin: Alignment.topLeft,
                             end: Alignment.bottomRight,
                           ),
@@ -557,14 +533,14 @@ class _AllCategPageState extends State<AllCategPage>
                                   _InfoChip(
                                     icon: Icons.label_outline_rounded,
                                     label: item['name']?.toString() ?? '',
-                                    color: const Color(0xFFC2105C),
+                                    color: AppColors.primaryDark,
                                   ),
                                   if ((item['variant']?.toString() ?? '')
                                       .isNotEmpty)
                                     _InfoChip(
                                       icon: Icons.tune_rounded,
                                       label: item['variant']?.toString() ?? '',
-                                      color: const Color(0xFFAD1457),
+                                      color: AppColors.primaryDark,
                                     ),
                                 ],
                               ),
@@ -576,7 +552,7 @@ class _AllCategPageState extends State<AllCategPage>
                                   horizontal: 14,
                                 ),
                                 decoration: BoxDecoration(
-                                  color: const Color(0xFFFCE4EC),
+                                  color: AppColors.blush,
                                   borderRadius: BorderRadius.circular(12),
                                 ),
                                 child: Row(
@@ -584,14 +560,14 @@ class _AllCategPageState extends State<AllCategPage>
                                     const Icon(
                                       Icons.inventory_2_outlined,
                                       size: 16,
-                                      color: Color(0xFFC2105C),
+                                      color: AppColors.primaryDark,
                                     ),
                                     const SizedBox(width: 8),
                                     Text(
                                       'Current Stock: $currentStock',
                                       style: const TextStyle(
                                         fontWeight: FontWeight.w700,
-                                        color: Color(0xFFC2105C),
+                                        color: AppColors.primaryDark,
                                         fontSize: 13,
                                       ),
                                     ),
@@ -612,28 +588,28 @@ class _AllCategPageState extends State<AllCategPage>
                                 decoration: InputDecoration(
                                   labelText: 'Reason',
                                   labelStyle: const TextStyle(
-                                    color: Color(0xFFC2105C),
+                                    color: AppColors.primaryDark,
                                   ),
                                   prefixIcon: const Icon(
                                     Icons.flag_outlined,
-                                    color: Color(0xFFC2105C),
+                                    color: AppColors.primaryDark,
                                   ),
                                   enabledBorder: OutlineInputBorder(
                                     borderRadius: BorderRadius.circular(14),
                                     borderSide: const BorderSide(
-                                      color: Color(0xFFF8BBD0),
+                                      color: AppColors.blush,
                                       width: 1.5,
                                     ),
                                   ),
                                   focusedBorder: OutlineInputBorder(
                                     borderRadius: BorderRadius.circular(14),
                                     borderSide: const BorderSide(
-                                      color: Color(0xFFC2105C),
+                                      color: AppColors.primaryDark,
                                       width: 2,
                                     ),
                                   ),
                                   filled: true,
-                                  fillColor: const Color(0xFFFFF0F5),
+                                  fillColor: AppColors.surfaceTint,
                                 ),
                                 dropdownColor: Colors.white,
                                 items: reasonOptions.map((reason) {
@@ -903,7 +879,7 @@ class _AllCategPageState extends State<AllCategPage>
                                       }
                                     },
                               style: ElevatedButton.styleFrom(
-                                backgroundColor: const Color(0xFFC2105C),
+                                backgroundColor: AppColors.primaryDark,
                                 foregroundColor: Colors.white,
                                 elevation: 0,
                                 shape: RoundedRectangleBorder(
@@ -948,7 +924,7 @@ class _AllCategPageState extends State<AllCategPage>
       behavior: SnackBarBehavior.floating,
       backgroundColor: isError
           ? const Color(0xFFB71C1C)
-          : const Color(0xFF880E4F),
+          : AppColors.primaryDeep,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
       margin: const EdgeInsets.all(16),
       content: Row(
@@ -1037,7 +1013,7 @@ class _AllCategPageState extends State<AllCategPage>
                   borderRadius: BorderRadius.circular(28),
                   boxShadow: [
                     BoxShadow(
-                      color: const Color(0xFFC2105C).withOpacity(0.18),
+                      color: AppColors.primaryDark.withOpacity(0.18),
                       blurRadius: 32,
                       offset: const Offset(0, 8),
                     ),
@@ -1051,7 +1027,7 @@ class _AllCategPageState extends State<AllCategPage>
                       padding: const EdgeInsets.fromLTRB(16, 14, 10, 14),
                       decoration: const BoxDecoration(
                         gradient: LinearGradient(
-                          colors: [Color(0xFFC2105C), Color(0xFFE91E8C)],
+                          colors: [AppColors.primaryDark, AppColors.primary],
                           begin: Alignment.topLeft,
                           end: Alignment.bottomRight,
                         ),
@@ -1114,7 +1090,7 @@ class _AllCategPageState extends State<AllCategPage>
                                 prefixIcon: const Icon(Icons.search_rounded),
                                 isDense: true,
                                 filled: true,
-                                fillColor: const Color(0xFFFFF0F5),
+                                fillColor: AppColors.surfaceTint,
                                 border: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(12),
                                 ),
@@ -1179,7 +1155,7 @@ class _AllCategPageState extends State<AllCategPage>
                               ConnectionState.waiting) {
                             return const Center(
                               child: CircularProgressIndicator(
-                                color: Color(0xFFC2105C),
+                                color: AppColors.primaryDark,
                               ),
                             );
                           }
@@ -1301,10 +1277,10 @@ class _AllCategPageState extends State<AllCategPage>
                                 margin: const EdgeInsets.only(bottom: 12),
                                 padding: const EdgeInsets.all(16),
                                 decoration: BoxDecoration(
-                                  color: const Color(0xFFFFF0F5),
+                                  color: AppColors.surfaceTint,
                                   borderRadius: BorderRadius.circular(18),
                                   border: Border.all(
-                                    color: const Color(0xFFF8BBD0),
+                                    color: AppColors.blush,
                                     width: 1,
                                   ),
                                 ),
@@ -1349,7 +1325,7 @@ class _AllCategPageState extends State<AllCategPage>
                                                 style: const TextStyle(
                                                   fontWeight: FontWeight.w800,
                                                   fontSize: 15,
-                                                  color: Color(0xFFC2105C),
+                                                  color: AppColors.primaryDark,
                                                 ),
                                               ),
                                               if (itemId.isNotEmpty)
@@ -1392,7 +1368,7 @@ class _AllCategPageState extends State<AllCategPage>
                                             vertical: 4,
                                           ),
                                           decoration: BoxDecoration(
-                                            color: const Color(0xFFC2105C),
+                                            color: AppColors.primaryDark,
                                             borderRadius: BorderRadius.circular(
                                               20,
                                             ),
@@ -1410,9 +1386,9 @@ class _AllCategPageState extends State<AllCategPage>
                                     ),
                                     const SizedBox(height: 6),
                                     Text(
-                                      'Price: PHP ${unitPrice.toStringAsFixed(2)}',
+                                      'Price: ₱${unitPrice.toStringAsFixed(2)}',
                                       style: const TextStyle(
-                                        color: Color(0xFFAD1457),
+                                        color: AppColors.primaryDark,
                                         fontSize: 12,
                                         fontWeight: FontWeight.w700,
                                       ),
@@ -1435,14 +1411,14 @@ class _AllCategPageState extends State<AllCategPage>
                                         const Icon(
                                           Icons.calendar_today_outlined,
                                           size: 12,
-                                          color: Color(0xFFAD1457),
+                                          color: AppColors.primaryDark,
                                         ),
                                         const SizedBox(width: 4),
                                         Text(
                                           '$formattedDate  $formattedTime',
                                           style: const TextStyle(
                                             fontSize: 11,
-                                            color: Color(0xFFAD1457),
+                                            color: AppColors.primaryDark,
                                           ),
                                         ),
                                       ],
@@ -1477,7 +1453,7 @@ class _AllCategPageState extends State<AllCategPage>
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Center(
-            child: CircularProgressIndicator(color: Color(0xFFC2105C)),
+            child: CircularProgressIndicator(color: AppColors.primaryDark),
           );
         }
         final target = selectedDate == null
@@ -1518,7 +1494,7 @@ class _AllCategPageState extends State<AllCategPage>
           return const Center(
             child: Text(
               'No reduction history found.',
-              style: TextStyle(color: Color(0xFFAD1457)),
+              style: TextStyle(color: AppColors.primaryDark),
             ),
           );
         }
@@ -1533,9 +1509,9 @@ class _AllCategPageState extends State<AllCategPage>
             return Container(
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
-                color: const Color(0xFFFFF0F5),
+                color: AppColors.surfaceTint,
                 borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: const Color(0xFFF8BBD0)),
+                border: Border.all(color: AppColors.blush),
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -1544,13 +1520,13 @@ class _AllCategPageState extends State<AllCategPage>
                     Expanded(child: Text(
                       '${entry['name']}${variant.isEmpty ? '' : ' ($variant)'}',
                       style: const TextStyle(
-                        color: Color(0xFFC2105C), fontWeight: FontWeight.w800),
+                        color: AppColors.primaryDark, fontWeight: FontWeight.w800),
                     )),
                     Text('-${entry['quantity']}', style: const TextStyle(
-                      color: Color(0xFFC2105C), fontWeight: FontWeight.w900)),
+                      color: AppColors.primaryDark, fontWeight: FontWeight.w900)),
                   ]),
                   const SizedBox(height: 6),
-                  Text('Price: PHP ${(entry['price'] as double).toStringAsFixed(2)}'),
+                  Text('Price: ₱${(entry['price'] as double).toStringAsFixed(2)}'),
                   const SizedBox(height: 4),
                   const Text('Reason: Stock reduction'),
                   const SizedBox(height: 4),
@@ -1565,7 +1541,7 @@ class _AllCategPageState extends State<AllCategPage>
   }
 
   Future<void> _showCoffeeVoidDialog(Map<String, dynamic> category) async {
-    final coffeeName = category['categoryName']?.toString() ?? 'Coffee';
+    final coffeeName = category['categoryName']?.toString() ?? 'Beverages';
     final sourceDocId = category['sourceDocId']?.toString() ?? '';
     final items =
         (category['items'] as List?)?.cast<Map<String, dynamic>>() ?? [];
@@ -1601,7 +1577,7 @@ class _AllCategPageState extends State<AllCategPage>
                     padding: const EdgeInsets.fromLTRB(16, 12, 8, 12),
                     decoration: const BoxDecoration(
                       gradient: LinearGradient(
-                        colors: [Color(0xFFC2105C), Color(0xFFE91E8C)],
+                        colors: [AppColors.primaryDark, AppColors.primary],
                       ),
                       borderRadius: BorderRadius.vertical(
                         top: Radius.circular(20),
@@ -1616,7 +1592,7 @@ class _AllCategPageState extends State<AllCategPage>
                         const SizedBox(width: 10),
                         const Expanded(
                           child: Text(
-                            'Void Coffee Item',
+                            'Void Beverages Item',
                             style: TextStyle(
                               color: Colors.white,
                               fontSize: 18,
@@ -1640,7 +1616,7 @@ class _AllCategPageState extends State<AllCategPage>
                         _InfoChip(
                           icon: Icons.local_cafe_rounded,
                           label: coffeeName,
-                          color: const Color(0xFFC2105C),
+                          color: AppColors.primaryDark,
                         ),
                         const SizedBox(height: 12),
                         DropdownButtonFormField<String>(
@@ -1649,7 +1625,7 @@ class _AllCategPageState extends State<AllCategPage>
                             labelText: 'Size',
                             prefixIcon: const Icon(
                               Icons.straighten_rounded,
-                              color: Color(0xFFC2105C),
+                              color: AppColors.primaryDark,
                             ),
                             border: OutlineInputBorder(
                               borderRadius: BorderRadius.circular(14),
@@ -1680,7 +1656,7 @@ class _AllCategPageState extends State<AllCategPage>
                             labelText: 'Reason',
                             prefixIcon: const Icon(
                               Icons.flag_outlined,
-                              color: Color(0xFFC2105C),
+                              color: AppColors.primaryDark,
                             ),
                             border: OutlineInputBorder(
                               borderRadius: BorderRadius.circular(14),
@@ -1727,7 +1703,7 @@ class _AllCategPageState extends State<AllCategPage>
                                           context,
                                         ).showSnackBar(
                                           _buildSnackBar(
-                                            'Please select a coffee size first',
+                                            'Please select a beverage size first',
                                             isError: true,
                                           ),
                                         );
@@ -1759,7 +1735,7 @@ class _AllCategPageState extends State<AllCategPage>
                                       try {
                                         if (sourceDocId.trim().isEmpty) {
                                           throw StateError(
-                                            'Coffee inventory record was not found.',
+                                            'Beverages inventory record was not found.',
                                           );
                                         }
                                         final docRef = FirebaseFirestore
@@ -1769,7 +1745,7 @@ class _AllCategPageState extends State<AllCategPage>
                                         final snapshot = await docRef.get();
                                         if (!snapshot.exists) {
                                           throw StateError(
-                                            'Coffee inventory record was not found.',
+                                            'Beverages inventory record was not found.',
                                           );
                                         }
                                         final snapshotData = snapshot.data()!;
@@ -1850,7 +1826,7 @@ class _AllCategPageState extends State<AllCategPage>
                                         }).toList();
                                         if (!matched) {
                                           throw StateError(
-                                            'Selected coffee size was not found in inventory.',
+                                            'Selected beverage size was not found in inventory.',
                                           );
                                         }
 
@@ -1904,7 +1880,7 @@ class _AllCategPageState extends State<AllCategPage>
                                         Navigator.pop(context);
                                         showTopNotification(
                                           context,
-                                          'Coffee item voided successfully!',
+                                          'Beverages item voided successfully!',
                                         );
                                       } catch (error) {
                                         if (mounted) {
@@ -1913,7 +1889,7 @@ class _AllCategPageState extends State<AllCategPage>
                                             context,
                                           ).showSnackBar(
                                             _buildSnackBar(
-                                              'Failed to void coffee item: $error',
+                                              'Failed to void beverage item: $error',
                                               isError: true,
                                             ),
                                           );
@@ -1921,7 +1897,7 @@ class _AllCategPageState extends State<AllCategPage>
                                       }
                                     },
                               style: ElevatedButton.styleFrom(
-                                backgroundColor: const Color(0xFFC2105C),
+                                backgroundColor: AppColors.primaryDark,
                                 foregroundColor: Colors.white,
                                 padding: const EdgeInsets.symmetric(
                                   vertical: 12,
@@ -1959,7 +1935,7 @@ class _AllCategPageState extends State<AllCategPage>
 
   Future<void> _showCoffeeVoidHistory(Map<String, dynamic> category) async {
     final sourceDocId = category['sourceDocId']?.toString() ?? '';
-    final coffeeName = category['categoryName']?.toString() ?? 'Coffee';
+    final coffeeName = category['categoryName']?.toString() ?? 'Beverages';
     var historySearch = '';
     DateTime? historyDate = DateTime.now();
 
@@ -1978,14 +1954,14 @@ class _AllCategPageState extends State<AllCategPage>
                 children: [
                   Container(
                     padding: const EdgeInsets.fromLTRB(16, 12, 8, 12),
-                    color: const Color(0xFFC2105C),
+                    color: AppColors.primaryDark,
                     child: Row(
                       children: [
                         const Icon(Icons.history_rounded, color: Colors.white),
                         const SizedBox(width: 10),
                         Expanded(
                           child: Text(
-                            'Coffee History',
+                            'Beverages History',
                             style: const TextStyle(
                               color: Colors.white,
                               fontSize: 18,
@@ -2011,11 +1987,11 @@ class _AllCategPageState extends State<AllCategPage>
                               () => historySearch = value.trim().toLowerCase(),
                             ),
                             decoration: InputDecoration(
-                              hintText: 'Search coffee, ID, price, reason, date',
+                              hintText: 'Search beverages, ID, price, reason, date',
                               prefixIcon: const Icon(Icons.search_rounded),
                               isDense: true,
                               filled: true,
-                              fillColor: const Color(0xFFFFF0F5),
+                              fillColor: AppColors.surfaceTint,
                               border: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(12),
                               ),
@@ -2142,8 +2118,8 @@ class _AllCategPageState extends State<AllCategPage>
                         if (docs.isEmpty)
                           return const Center(
                             child: Text(
-                              'No voided coffee items yet.',
-                              style: TextStyle(color: Color(0xFFAD1457)),
+                              'No voided beverage items yet.',
+                              style: TextStyle(color: AppColors.primaryDark),
                             ),
                           );
                         return ListView.builder(
@@ -2170,9 +2146,9 @@ class _AllCategPageState extends State<AllCategPage>
                               margin: const EdgeInsets.only(bottom: 12),
                               padding: const EdgeInsets.all(16),
                               decoration: BoxDecoration(
-                                color: const Color(0xFFFFF0F5),
+                                color: AppColors.surfaceTint,
                                 borderRadius: BorderRadius.circular(18),
-                                border: Border.all(color: const Color(0xFFF8BBD0)),
+                                border: Border.all(color: AppColors.blush),
                               ),
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -2190,7 +2166,7 @@ class _AllCategPageState extends State<AllCategPage>
                                       ),
                                     ),
                                     child: const Text(
-                                      'Coffee',
+                                      'Beverages',
                                       style: TextStyle(
                                         color: Color(0xFF9A6700),
                                         fontSize: 11,
@@ -2211,7 +2187,7 @@ class _AllCategPageState extends State<AllCategPage>
                                             Text(
                                               itemName,
                                               style: const TextStyle(
-                                                color: Color(0xFFC2105C),
+                                                color: AppColors.primaryDark,
                                                 fontSize: 15,
                                                 fontWeight: FontWeight.w800,
                                               ),
@@ -2250,16 +2226,16 @@ class _AllCategPageState extends State<AllCategPage>
                                             vertical: 5,
                                           ),
                                           decoration: BoxDecoration(
-                                            color: const Color(0xFFFCE4EC),
+                                            color: AppColors.blush,
                                             borderRadius: BorderRadius.circular(9),
                                             border: Border.all(
-                                              color: const Color(0xFFF48FB1),
+                                              color: AppColors.rose,
                                             ),
                                           ),
                                           child: Text(
                                             variant,
                                             style: const TextStyle(
-                                              color: Color(0xFFAD1457),
+                                              color: AppColors.primaryDark,
                                               fontSize: 11,
                                               fontWeight: FontWeight.w800,
                                             ),
@@ -2271,7 +2247,7 @@ class _AllCategPageState extends State<AllCategPage>
                                           vertical: 4,
                                         ),
                                         decoration: BoxDecoration(
-                                          color: const Color(0xFFC2105C),
+                                          color: AppColors.primaryDark,
                                           borderRadius: BorderRadius.circular(20),
                                         ),
                                         child: Text(
@@ -2286,9 +2262,9 @@ class _AllCategPageState extends State<AllCategPage>
                                   ),
                                   const SizedBox(height: 6),
                                   Text(
-                                    'Price: PHP ${_parsePrice(data['unitPrice']).toStringAsFixed(2)}',
+                                    'Price: ₱${_parsePrice(data['unitPrice']).toStringAsFixed(2)}',
                                     style: const TextStyle(
-                                      color: Color(0xFFAD1457),
+                                      color: AppColors.primaryDark,
                                       fontSize: 12,
                                       fontWeight: FontWeight.w700,
                                     ),
@@ -2332,11 +2308,7 @@ class _AllCategPageState extends State<AllCategPage>
     final bundlePrice = _parsePrice(bundle['price']);
     final bundleId = bundle['bundleId']?.toString() ?? '';
     final bundleInstances = _bundleInstancesFromData(bundle);
-    final availableBundleInstances = bundleInstances.where((instance) {
-      final status =
-          instance['status']?.toString().trim().toLowerCase() ?? 'available';
-      return status == 'available';
-    }).toList();
+    final availableBundleInstances = bundleInstances.where((instance) => bundleInstanceAvailable(instance, bundle)).toList();
     var bundleSearch = '';
     var selectedBundleFilter = '';
 
@@ -2395,7 +2367,7 @@ class _AllCategPageState extends State<AllCategPage>
                     borderRadius: BorderRadius.circular(28),
                     boxShadow: [
                       BoxShadow(
-                        color: const Color(0xFFC2105C).withOpacity(0.18),
+                        color: AppColors.primaryDark.withOpacity(0.18),
                         blurRadius: 32,
                         offset: const Offset(0, 8),
                       ),
@@ -2408,7 +2380,7 @@ class _AllCategPageState extends State<AllCategPage>
                         padding: const EdgeInsets.fromLTRB(22, 20, 14, 18),
                         decoration: const BoxDecoration(
                           gradient: LinearGradient(
-                            colors: [Color(0xFFC2105C), Color(0xFFE91E8C)],
+                            colors: [AppColors.primaryDark, AppColors.primary],
                             begin: Alignment.topLeft,
                             end: Alignment.bottomRight,
                           ),
@@ -2462,7 +2434,7 @@ class _AllCategPageState extends State<AllCategPage>
                             prefixIcon: const Icon(Icons.search_rounded),
                             isDense: true,
                             filled: true,
-                            fillColor: const Color(0xFFFFF0F5),
+                            fillColor: AppColors.surfaceTint,
                             border: OutlineInputBorder(
                               borderRadius: BorderRadius.circular(12),
                             ),
@@ -2502,7 +2474,7 @@ class _AllCategPageState extends State<AllCategPage>
                                   child: Text(
                                     'No bundle items available.',
                                     style: TextStyle(
-                                      color: Color(0xFFAD1457),
+                                      color: AppColors.primaryDark,
                                       fontWeight: FontWeight.w600,
                                     ),
                                   ),
@@ -2529,10 +2501,10 @@ class _AllCategPageState extends State<AllCategPage>
                                   return Container(
                                     padding: const EdgeInsets.all(14),
                                     decoration: BoxDecoration(
-                                      color: const Color(0xFFFFF0F5),
+                                      color: AppColors.surfaceTint,
                                       borderRadius: BorderRadius.circular(18),
                                       border: Border.all(
-                                        color: const Color(0xFFF8BBD0),
+                                        color: AppColors.blush,
                                       ),
                                     ),
                                     child: Column(
@@ -2587,7 +2559,7 @@ class _AllCategPageState extends State<AllCategPage>
                                                           size: 17,
                                                         ),
                                                         color: const Color(
-                                                          0xFFC2105C,
+                                                          0xFF963B58,
                                                         ),
                                                       ),
                                                     ],
@@ -2595,7 +2567,7 @@ class _AllCategPageState extends State<AllCategPage>
                                                   Text(
                                                     'Bundle price: ₱${bundlePrice.toStringAsFixed(2)}',
                                                     style: const TextStyle(
-                                                      color: Color(0xFFAD1457),
+                                                      color: AppColors.primaryDark,
                                                       fontSize: 12,
                                                       fontWeight:
                                                           FontWeight.w700,
@@ -2622,7 +2594,7 @@ class _AllCategPageState extends State<AllCategPage>
                                           const Text(
                                             'No items in this bundle.',
                                             style: TextStyle(
-                                              color: Color(0xFFAD1457),
+                                              color: AppColors.primaryDark,
                                               fontSize: 12,
                                             ),
                                           )
@@ -2719,7 +2691,7 @@ class _AllCategPageState extends State<AllCategPage>
                         margin: const EdgeInsets.only(bottom: 10),
                         padding: const EdgeInsets.fromLTRB(12, 10, 6, 10),
                         decoration: const BoxDecoration(
-                          color: Color(0xFFC2105C),
+                          color: AppColors.primaryDark,
                           borderRadius: BorderRadius.vertical(
                             top: Radius.circular(20),
                           ),
@@ -2755,7 +2727,7 @@ class _AllCategPageState extends State<AllCategPage>
                       _InfoChip(
                         icon: Icons.inventory_2_rounded,
                         label: '$bundleName - Bundle stock: $currentStock',
-                        color: const Color(0xFFC2105C),
+                        color: AppColors.primaryDark,
                       ),
                       const SizedBox(height: 10),
                       Row(
@@ -2797,7 +2769,8 @@ class _AllCategPageState extends State<AllCategPage>
                                         'available';
                               if (enteredId.isEmpty ||
                                   matchingIndex < 0 ||
-                                  status != 'available') {
+                                  status != 'available' ||
+                                  !bundleInstanceAvailable(instances[matchingIndex], bundle)) {
                                 setDialogState(() {
                                   validationMessage =
                                       'Invalid bundle ID number.';
@@ -2819,7 +2792,7 @@ class _AllCategPageState extends State<AllCategPage>
                             },
                             icon: const Icon(Icons.add_rounded),
                             style: IconButton.styleFrom(
-                              backgroundColor: const Color(0xFFC2105C),
+                              backgroundColor: AppColors.primaryDark,
                               foregroundColor: Colors.white,
                             ),
                           ),
@@ -2872,7 +2845,7 @@ class _AllCategPageState extends State<AllCategPage>
                           labelText: 'Reason',
                           prefixIcon: const Icon(
                             Icons.flag_outlined,
-                            color: Color(0xFFC2105C),
+                            color: AppColors.primaryDark,
                           ),
                           border: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(14),
@@ -3039,7 +3012,7 @@ class _AllCategPageState extends State<AllCategPage>
                                 )
                               : const Text('Reduce Bundle'),
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFFC2105C),
+                            backgroundColor: AppColors.primaryDark,
                             foregroundColor: Colors.white,
                             padding: const EdgeInsets.symmetric(vertical: 10),
                             minimumSize: const Size(190, 42),
@@ -3111,7 +3084,7 @@ class _AllCategPageState extends State<AllCategPage>
                           child: Text(
                             'Reduce Bundle $instanceId',
                             style: const TextStyle(
-                              color: Color(0xFF4A0020),
+                              color: AppColors.primaryDeep,
                               fontSize: 20,
                               fontWeight: FontWeight.w900,
                             ),
@@ -3120,7 +3093,7 @@ class _AllCategPageState extends State<AllCategPage>
                         IconButton(
                           onPressed: () => Navigator.pop(context),
                           icon: const Icon(Icons.close_rounded),
-                          color: const Color(0xFFC2105C),
+                          color: AppColors.primaryDark,
                         ),
                       ],
                     ),
@@ -3128,7 +3101,7 @@ class _AllCategPageState extends State<AllCategPage>
                     _InfoChip(
                       icon: Icons.inventory_2_rounded,
                       label: '$bundleName - $instanceId',
-                      color: const Color(0xFFC2105C),
+                      color: AppColors.primaryDark,
                     ),
                     const SizedBox(height: 14),
                     DropdownButtonFormField<String>(
@@ -3137,7 +3110,7 @@ class _AllCategPageState extends State<AllCategPage>
                         labelText: 'Reason',
                         prefixIcon: const Icon(
                           Icons.flag_outlined,
-                          color: Color(0xFFC2105C),
+                          color: AppColors.primaryDark,
                         ),
                         border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(14),
@@ -3243,7 +3216,7 @@ class _AllCategPageState extends State<AllCategPage>
                       icon: const Icon(Icons.remove_circle_outline_rounded),
                       label: const Text('Reduce Bundle'),
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFFC2105C),
+                        backgroundColor: AppColors.primaryDark,
                         foregroundColor: Colors.white,
                         padding: const EdgeInsets.symmetric(vertical: 14),
                         shape: RoundedRectangleBorder(
@@ -3302,7 +3275,7 @@ class _AllCategPageState extends State<AllCategPage>
                     padding: const EdgeInsets.fromLTRB(16, 12, 8, 12),
                     decoration: const BoxDecoration(
                       gradient: LinearGradient(
-                        colors: [Color(0xFFC2105C), Color(0xFFE91E8C)],
+                        colors: [AppColors.primaryDark, AppColors.primary],
                       ),
                       borderRadius: BorderRadius.vertical(
                         top: Radius.circular(24),
@@ -3350,7 +3323,7 @@ class _AllCategPageState extends State<AllCategPage>
                               prefixIcon: const Icon(Icons.search_rounded),
                               isDense: true,
                               filled: true,
-                              fillColor: const Color(0xFFFFF0F5),
+                              fillColor: AppColors.surfaceTint,
                               border: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(12),
                               ),
@@ -3410,7 +3383,7 @@ class _AllCategPageState extends State<AllCategPage>
                             ConnectionState.waiting) {
                           return const Center(
                             child: CircularProgressIndicator(
-                              color: Color(0xFFC2105C),
+                              color: AppColors.primaryDark,
                             ),
                           );
                         }
@@ -3500,10 +3473,10 @@ class _AllCategPageState extends State<AllCategPage>
                               margin: const EdgeInsets.symmetric(horizontal: 2),
                               padding: const EdgeInsets.all(12),
                               decoration: BoxDecoration(
-                                color: const Color(0xFFFFF0F5),
+                                color: AppColors.surfaceTint,
                                 borderRadius: BorderRadius.circular(14),
                                 border: Border.all(
-                                  color: const Color(0xFFF8BBD0),
+                                  color: AppColors.blush,
                                 ),
                               ),
                               child: Column(
@@ -3542,7 +3515,7 @@ class _AllCategPageState extends State<AllCategPage>
                                         const Text(
                                           'Bundle ID:',
                                           style: TextStyle(
-                                            color: Color(0xFF4A0020),
+                                            color: AppColors.primaryDeep,
                                             fontWeight: FontWeight.w800,
                                           ),
                                         ),
@@ -3595,7 +3568,7 @@ class _AllCategPageState extends State<AllCategPage>
                                             vertical: 4,
                                           ),
                                           decoration: BoxDecoration(
-                                            color: const Color(0xFFC2105C),
+                                            color: AppColors.primaryDark,
                                             borderRadius: BorderRadius.circular(
                                               18,
                                             ),
@@ -3613,9 +3586,9 @@ class _AllCategPageState extends State<AllCategPage>
                                     const SizedBox(height: 4),
                                   ],
                                   Text(
-                                    'Bundle price: PHP ${_parsePrice(data['bundlePrice'] ?? bundle['price']).toStringAsFixed(2)}',
+                                    'Bundle price: ₱${_parsePrice(data['bundlePrice'] ?? bundle['price']).toStringAsFixed(2)}',
                                     style: const TextStyle(
-                                      color: Color(0xFFAD1457),
+                                      color: AppColors.primaryDark,
                                       fontSize: 12,
                                       fontWeight: FontWeight.w700,
                                     ),
@@ -3624,7 +3597,7 @@ class _AllCategPageState extends State<AllCategPage>
                                   Text(
                                     'Reason: ${data['reason'] ?? ''}',
                                     style: const TextStyle(
-                                      color: Color(0xFFAD1457),
+                                      color: AppColors.primaryDark,
                                       fontSize: 12,
                                     ),
                                   ),
@@ -3632,7 +3605,7 @@ class _AllCategPageState extends State<AllCategPage>
                                   Text(
                                     'Reduced on: $reducedOnLabel',
                                     style: const TextStyle(
-                                      color: Color(0xFFAD1457),
+                                      color: AppColors.primaryDark,
                                       fontSize: 12,
                                     ),
                                   ),
@@ -3679,18 +3652,18 @@ class _AllCategPageState extends State<AllCategPage>
             duration: const Duration(milliseconds: 220),
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 14),
             decoration: BoxDecoration(
-              color: selected ? const Color(0xFFC2105C) : Colors.white,
+              color: selected ? AppColors.primaryDark : Colors.white,
               borderRadius: BorderRadius.circular(18),
               border: Border.all(
                 color: selected
-                    ? const Color(0xFFC2105C)
-                    : const Color(0xFFF8BBD0),
+                    ? AppColors.primaryDark
+                    : AppColors.blush,
                 width: 1.4,
               ),
               boxShadow: selected
                   ? [
                       BoxShadow(
-                        color: const Color(0xFFC2105C).withOpacity(0.18),
+                        color: AppColors.primaryDark.withOpacity(0.18),
                         blurRadius: 14,
                         offset: const Offset(0, 5),
                       ),
@@ -3703,7 +3676,7 @@ class _AllCategPageState extends State<AllCategPage>
                 Icon(
                   icon,
                   size: 18,
-                  color: selected ? Colors.white : const Color(0xFFC2105C),
+                  color: selected ? Colors.white : AppColors.primaryDark,
                 ),
                 const SizedBox(width: 8),
                 Flexible(
@@ -3712,7 +3685,7 @@ class _AllCategPageState extends State<AllCategPage>
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
-                      color: selected ? Colors.white : const Color(0xFF8B0035),
+                      color: selected ? Colors.white : AppColors.primaryDeep,
                       fontSize: 13,
                       fontWeight: FontWeight.w900,
                     ),
@@ -3757,7 +3730,7 @@ class _AllCategPageState extends State<AllCategPage>
           const SizedBox(width: 8),
           option(
             selected: _showCoffee,
-            label: 'Coffee',
+            label: 'Beverages',
             count: coffeeCount,
             icon: Icons.local_cafe_rounded,
             onTap: () => setState(() {
@@ -3780,12 +3753,12 @@ class _AllCategPageState extends State<AllCategPage>
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(icon, size: 64, color: const Color(0xFFC2105C).withOpacity(0.3)),
+          Icon(icon, size: 64, color: AppColors.primaryDark.withOpacity(0.3)),
           const SizedBox(height: 16),
           Text(
             message,
             style: const TextStyle(
-              color: Color(0xFFAD1457),
+              color: AppColors.primaryDark,
               fontSize: 16,
               fontWeight: FontWeight.w600,
             ),
@@ -3800,7 +3773,7 @@ class _AllCategPageState extends State<AllCategPage>
       width: width,
       height: 16,
       decoration: BoxDecoration(
-        color: const Color(0xFFF8BBD0),
+        color: AppColors.blush,
         borderRadius: BorderRadius.circular(8),
       ),
     );
@@ -3816,7 +3789,7 @@ class _AllCategPageState extends State<AllCategPage>
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: const Color(0xFFF8BBD0)),
+          border: Border.all(color: AppColors.blush),
         ),
         child: Row(
           children: [
@@ -3845,7 +3818,7 @@ class _AllCategPageState extends State<AllCategPage>
       label: Text(
         label,
         style: const TextStyle(
-          color: Color(0xFF8B0035),
+          color: AppColors.primaryDeep,
           fontWeight: FontWeight.w900,
           fontSize: 12,
         ),
@@ -3857,7 +3830,7 @@ class _AllCategPageState extends State<AllCategPage>
     String value, {
     double width = 120,
     FontWeight weight = FontWeight.w700,
-    Color color = const Color(0xFF1A0A10),
+    Color color = AppColors.text,
   }) {
     return DataCell(
       SizedBox(
@@ -3887,10 +3860,10 @@ class _AllCategPageState extends State<AllCategPage>
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFFF8BBD0)),
+        border: Border.all(color: AppColors.blush),
         boxShadow: [
           BoxShadow(
-            color: const Color(0xFFC2105C).withOpacity(0.06),
+            color: AppColors.primaryDark.withOpacity(0.06),
             blurRadius: 12,
             offset: const Offset(0, 4),
           ),
@@ -3912,7 +3885,7 @@ class _AllCategPageState extends State<AllCategPage>
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
-                          color: Color(0xFF8B0035),
+                          color: AppColors.primaryDeep,
                           fontSize: 16,
                           fontWeight: FontWeight.w900,
                         ),
@@ -3923,7 +3896,7 @@ class _AllCategPageState extends State<AllCategPage>
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
-                            color: const Color(0xFF8B0035).withOpacity(0.62),
+                            color: AppColors.primaryDeep.withOpacity(0.62),
                             fontSize: 11,
                             fontWeight: FontWeight.w700,
                           ),
@@ -3936,7 +3909,7 @@ class _AllCategPageState extends State<AllCategPage>
                     tooltip: 'View bundle items',
                     onPressed: onView,
                     icon: const Icon(Icons.visibility_rounded),
-                    color: const Color(0xFFC2105C),
+                    color: AppColors.primaryDark,
                   ),
                 if (onAddons != null)
                   TextButton.icon(
@@ -3947,7 +3920,7 @@ class _AllCategPageState extends State<AllCategPage>
                     ),
                     label: const Text('View add-ons'),
                     style: TextButton.styleFrom(
-                      foregroundColor: const Color(0xFFC2105C),
+                      foregroundColor: AppColors.primaryDark,
                       textStyle: const TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w800,
@@ -3959,7 +3932,7 @@ class _AllCategPageState extends State<AllCategPage>
                     tooltip: 'History',
                     onPressed: onHistory,
                     icon: const Icon(Icons.history_rounded),
-                    color: const Color(0xFFC2105C),
+                    color: AppColors.primaryDark,
                   ),
               ],
             ),
@@ -3971,7 +3944,7 @@ class _AllCategPageState extends State<AllCategPage>
                 constraints: BoxConstraints(minWidth: constraints.maxWidth),
                 child: DataTable(
                   headingRowColor: WidgetStatePropertyAll(
-                    const Color(0xFFC2105C).withOpacity(0.08),
+                    AppColors.primaryDark.withOpacity(0.08),
                   ),
                   dataRowMinHeight: 58,
                   dataRowMaxHeight: 70,
@@ -3989,7 +3962,7 @@ class _AllCategPageState extends State<AllCategPage>
   }
 
   String _displayItemId(Map<String, dynamic> item, {String? fallback}) {
-    for (final key in ['id', 'itemId', 'variantId', 'sourceItemId']) {
+    for (final key in ['publicId', 'id', 'itemId', 'variantId', 'sourceItemId']) {
       final value = item[key]?.toString().trim() ?? '';
       if (value.isNotEmpty) return publicItemId(value);
     }
@@ -4007,7 +3980,7 @@ class _AllCategPageState extends State<AllCategPage>
       icon: const Icon(Icons.remove_circle_outline_rounded, size: 16),
       label: Text(enabled ? label : 'Unavailable'),
       style: ElevatedButton.styleFrom(
-        backgroundColor: const Color(0xFFC2105C),
+        backgroundColor: AppColors.primaryDark,
         foregroundColor: Colors.white,
         disabledBackgroundColor: Colors.grey.shade300,
         elevation: 0,
@@ -4052,7 +4025,7 @@ class _AllCategPageState extends State<AllCategPage>
             final bundleName = bundle['name']?.toString() ?? 'Bundle';
             final bundleStock = _bundleStockForData(bundle);
             final bundlePrice = _parsePrice(bundle['price']);
-            final bundleId = bundle['bundleId']?.toString().trim() ?? '';
+            final bundleId = inventoryDisplayId(bundle);
             final bundleExpirationDate = _bundleExpirationDate(bundle);
 
             return DataRow(
@@ -4062,11 +4035,11 @@ class _AllCategPageState extends State<AllCategPage>
                       ? bundleId
                       : bundle['sourceDocId']?.toString() ?? '--',
                   width: 160,
-                  color: const Color(0xFFC2105C),
+                  color: AppColors.primaryDark,
                 ),
                 _tableCell(bundleName, width: 180, weight: FontWeight.w900),
                 _tableCell(
-                  'PHP ${bundlePrice.toStringAsFixed(2)}',
+                  '₱${bundlePrice.toStringAsFixed(2)}',
                   width: 100,
                   color: const Color(0xFF2E7D32),
                 ),
@@ -4091,14 +4064,15 @@ class _AllCategPageState extends State<AllCategPage>
   }
 
   Widget _buildCoffeeCategoryCard(Map<String, dynamic> category, int index) {
-    final coffeeName = category['categoryName']?.toString() ?? 'Coffee';
-    final coffeeId = category['coffeeId']?.toString() ?? '';
+    final coffeeName = category['categoryName']?.toString() ?? 'Beverages';
+    final coffeeId = inventoryDisplayId(category);
     final items =
         (category['items'] as List?)?.cast<Map<String, dynamic>>() ?? [];
     final addonByName = <String, Map<String, dynamic>>{};
     for (final rawAddon in (category['addonOptions'] as List?) ?? const []) {
       if (rawAddon is! Map) continue;
       final addon = Map<String, dynamic>.from(rawAddon);
+      if (addon['isDeleted'] == true || bundleExpired(addon, DateTime.now())) continue;
       final addonName = addon['name']?.toString().trim().toLowerCase() ?? '';
       if (addonName.isNotEmpty) {
         addonByName.putIfAbsent(addonName, () => addon);
@@ -4122,7 +4096,7 @@ class _AllCategPageState extends State<AllCategPage>
             final soldCoffeeId = sold['coffeeId']?.toString().trim() ?? '';
             final soldName = sold['name']?.toString().trim().toLowerCase() ?? '';
             final matchesCoffee = coffeeId.isNotEmpty
-                ? soldCoffeeId == coffeeId
+                ? (soldCoffeeId == coffeeId || soldCoffeeId == category['coffeeId']?.toString() || sold['publicId'] == category['publicId'] && category['publicId'] != null)
                 : soldName == coffeeName.trim().toLowerCase();
             if (matchesCoffee) {
               totalSoldFromReceipts += sign * _parseInt(sold['quantity'], fallback: 1);
@@ -4132,8 +4106,8 @@ class _AllCategPageState extends State<AllCategPage>
         return _AnimatedCategorySection(
       index: index,
       child: _tableBlock(
-        title: 'Coffee',
-        subtitle: 'Available Coffee Items: 1',
+        title: 'Beverages',
+        subtitle: 'Available Beverages Items: 1',
         onAddons: addonDocs.isEmpty
             ? null
             : () => _showCoffeeAddonsDialog(addonDocs, category),
@@ -4141,7 +4115,7 @@ class _AllCategPageState extends State<AllCategPage>
         compact: true,
         columns: [
           _tableColumn('ID'),
-          _tableColumn('Coffee Name'),
+          _tableColumn('Beverages Name'),
           _tableColumn('Small'),
           _tableColumn('Medium'),
           _tableColumn('Large'),
@@ -4165,7 +4139,7 @@ class _AllCategPageState extends State<AllCategPage>
                 final item = itemForSize(size);
                 return item == null
                     ? '--'
-                    : 'PHP ${_parsePrice(item['price']).toStringAsFixed(2)}';
+                    : '₱${_parsePrice(item['price']).toStringAsFixed(2)}';
               }
 
               final totalSold = totalSoldFromReceipts < 0
@@ -4177,7 +4151,7 @@ class _AllCategPageState extends State<AllCategPage>
                   _tableCell(
                     coffeeId.isNotEmpty ? coffeeId : '--',
                     width: 105,
-                    color: const Color(0xFFC2105C),
+                    color: AppColors.primaryDark,
                   ),
                   _tableCell(coffeeName, width: 145, weight: FontWeight.w900),
                   _tableCell(
@@ -4239,11 +4213,11 @@ class _AllCategPageState extends State<AllCategPage>
               color: Colors.white,
               borderRadius: BorderRadius.circular(22),
               border: Border.all(
-                color: const Color(0xFFF8BBD0).withOpacity(0.8),
+                color: AppColors.blush.withOpacity(0.8),
               ),
               boxShadow: [
                 BoxShadow(
-                  color: const Color(0xFFC2105C).withOpacity(0.08),
+                  color: AppColors.primaryDark.withOpacity(0.08),
                   blurRadius: 16,
                   offset: const Offset(0, 6),
                 ),
@@ -4256,7 +4230,7 @@ class _AllCategPageState extends State<AllCategPage>
                   padding: const EdgeInsets.fromLTRB(18, 16, 14, 16),
                   decoration: const BoxDecoration(
                     gradient: LinearGradient(
-                      colors: [Color(0xFFC2105C), Color(0xFFD81B6A)],
+                      colors: [AppColors.primaryDark, AppColors.primary],
                       begin: Alignment.topLeft,
                       end: Alignment.bottomRight,
                     ),
@@ -4351,8 +4325,8 @@ class _AllCategPageState extends State<AllCategPage>
                             _ItemTag(
                               icon: Icons.confirmation_number_outlined,
                               label: bundle['bundleId']?.toString() ?? '',
-                              bgColor: const Color(0xFFFCE4EC),
-                              textColor: const Color(0xFFAD1457),
+                              bgColor: AppColors.blush,
+                              textColor: AppColors.primaryDark,
                             ),
                         ],
                       ),
@@ -4365,9 +4339,9 @@ class _AllCategPageState extends State<AllCategPage>
                               icon: const Icon(Icons.visibility_rounded, size: 18),
                               label: const Text('View Bundle Items'),
                               style: OutlinedButton.styleFrom(
-                                foregroundColor: const Color(0xFFC2105C),
+                                foregroundColor: AppColors.primaryDark,
                                 side: const BorderSide(
-                                  color: Color(0xFFF8BBD0),
+                                  color: AppColors.blush,
                                   width: 1.4,
                                 ),
                                 shape: RoundedRectangleBorder(
@@ -4393,7 +4367,7 @@ class _AllCategPageState extends State<AllCategPage>
                               ),
                               label: const Text('Reduce'),
                               style: ElevatedButton.styleFrom(
-                                backgroundColor: const Color(0xFFC2105C),
+                                backgroundColor: AppColors.primaryDark,
                                 foregroundColor: Colors.white,
                                 disabledBackgroundColor: Colors.grey.shade300,
                                 elevation: 0,
@@ -4418,8 +4392,8 @@ class _AllCategPageState extends State<AllCategPage>
   }
 
   Widget _buildCoffeeCategoryCard(Map<String, dynamic> category, int index) {
-    final coffeeName = category['categoryName']?.toString() ?? 'Coffee';
-    final coffeeId = category['coffeeId']?.toString() ?? '';
+    final coffeeName = category['categoryName']?.toString() ?? 'Beverages';
+    final coffeeId = inventoryDisplayId(category);
     final coffeeImage = category['imageUrl']?.toString();
     final items =
         (category['items'] as List?)?.cast<Map<String, dynamic>>() ?? [];
@@ -4434,14 +4408,14 @@ class _AllCategPageState extends State<AllCategPage>
             padding: const EdgeInsets.fromLTRB(18, 14, 12, 14),
             decoration: BoxDecoration(
               gradient: const LinearGradient(
-                colors: [Color(0xFFC2105C), Color(0xFFD81B6A)],
+                colors: [AppColors.primaryDark, AppColors.primary],
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
               ),
               borderRadius: BorderRadius.circular(20),
               boxShadow: [
                 BoxShadow(
-                  color: const Color(0xFFC2105C).withOpacity(0.28),
+                  color: AppColors.primaryDark.withOpacity(0.28),
                   blurRadius: 16,
                   offset: const Offset(0, 6),
                 ),
@@ -4463,7 +4437,7 @@ class _AllCategPageState extends State<AllCategPage>
                           borderRadius: BorderRadius.circular(20),
                         ),
                         child: Text(
-                          coffeeId.isNotEmpty ? 'COFFEE - $coffeeId' : 'COFFEE',
+                          coffeeId.isNotEmpty ? 'BEVERAGES - $coffeeId' : 'BEVERAGES',
                           style: const TextStyle(
                             color: Colors.white,
                             fontSize: 10,
@@ -4539,11 +4513,11 @@ class _AllCategPageState extends State<AllCategPage>
                   color: Colors.white,
                   borderRadius: BorderRadius.circular(20),
                   border: Border.all(
-                    color: const Color(0xFFF8BBD0).withOpacity(0.8),
+                    color: AppColors.blush.withOpacity(0.8),
                   ),
                   boxShadow: [
                     BoxShadow(
-                      color: const Color(0xFFC2105C).withOpacity(0.07),
+                      color: AppColors.primaryDark.withOpacity(0.07),
                       blurRadius: 12,
                       offset: const Offset(0, 4),
                     ),
@@ -4578,7 +4552,7 @@ class _AllCategPageState extends State<AllCategPage>
                                               style: const TextStyle(
                                                 fontWeight: FontWeight.w800,
                                                 fontSize: 15,
-                                                color: Color(0xFFC2105C),
+                                                color: AppColors.primaryDark,
                                               ),
                                             ),
                                             if ((categoryId ?? '').isNotEmpty)
@@ -4633,8 +4607,8 @@ class _AllCategPageState extends State<AllCategPage>
                           return _ItemTag(
                             icon: Icons.add_circle_outline_rounded,
                             label: '$addonName$priceLabel',
-                            bgColor: const Color(0xFFFCE4EC),
-                            textColor: const Color(0xFFAD1457),
+                            bgColor: AppColors.blush,
+                            textColor: AppColors.primaryDark,
                           );
                         }).toList(),
                       ),
@@ -4679,7 +4653,7 @@ class _AllCategPageState extends State<AllCategPage>
                     padding: const EdgeInsets.fromLTRB(18, 14, 10, 14),
                     decoration: const BoxDecoration(
                       gradient: LinearGradient(
-                        colors: [Color(0xFFC2105C), Color(0xFFE91E8C)],
+                        colors: [AppColors.primaryDark, AppColors.primary],
                       ),
                     ),
                     child: Row(
@@ -4691,7 +4665,7 @@ class _AllCategPageState extends State<AllCategPage>
                         const SizedBox(width: 10),
                         const Expanded(
                           child: Text(
-                            'Coffee Add-ons',
+                            'Beverages Add-ons',
                             style: TextStyle(
                               color: Colors.white,
                               fontSize: 18,
@@ -4717,14 +4691,14 @@ class _AllCategPageState extends State<AllCategPage>
                         hintText: 'Search add-ons',
                         prefixIcon: const Icon(
                           Icons.search_rounded,
-                          color: Color(0xFFC2105C),
+                          color: AppColors.primaryDark,
                         ),
                         filled: true,
-                        fillColor: const Color(0xFFFFF0F5),
+                        fillColor: AppColors.surfaceTint,
                         border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(14),
                           borderSide: const BorderSide(
-                            color: Color(0xFFF8BBD0),
+                            color: AppColors.blush,
                           ),
                         ),
                       ),
@@ -4745,7 +4719,7 @@ class _AllCategPageState extends State<AllCategPage>
                           return const Center(
                             child: Text(
                               'No add-ons found.',
-                              style: TextStyle(color: Color(0xFFAD1457)),
+                              style: TextStyle(color: AppColors.primaryDark),
                             ),
                           );
                         }
@@ -4760,14 +4734,14 @@ class _AllCategPageState extends State<AllCategPage>
                             },
                             border: TableBorder(
                               horizontalInside: BorderSide(
-                                color: Color(0xFFF8BBD0),
+                                color: AppColors.blush,
                               ),
                             ),
                             children: [
                               TableRow(
                                 decoration: BoxDecoration(
                                   color: const Color(
-                                    0xFFC2105C,
+                                    0xFF963B58,
                                   ).withOpacity(0.08),
                                 ),
                                 children: const [
@@ -4806,7 +4780,7 @@ class _AllCategPageState extends State<AllCategPage>
                                           : const Color(0xFFC62828),
                                     ),
                                     _AddonCell(
-                                      'PHP ${price.toStringAsFixed(2)}',
+                                      '₱${price.toStringAsFixed(2)}',
                                       color: const Color(0xFF2E7D32),
                                     ),
                                   ],
@@ -4845,7 +4819,7 @@ class _AllCategPageState extends State<AllCategPage>
           ElevatedButton(
             onPressed: () => Navigator.pop(context, true),
             style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFFC2105C),
+              backgroundColor: AppColors.primaryDark,
               foregroundColor: Colors.white,
             ),
             child: const Text('Void'),
@@ -4859,7 +4833,7 @@ class _AllCategPageState extends State<AllCategPage>
       await FirebaseFirestore.instance.collection('stock_adjustments').add({
         'type': 'addon_void',
         'categoryId': category['sourceDocId']?.toString() ?? '',
-        'categoryName': category['categoryName']?.toString() ?? 'Coffee',
+        'categoryName': category['categoryName']?.toString() ?? 'Beverages',
         'itemId': _displayItemId(addon),
         'itemName': addonName,
         'quantity': 1,
@@ -4902,14 +4876,14 @@ class _AllCategPageState extends State<AllCategPage>
               color: Colors.white,
               borderRadius: BorderRadius.circular(20),
               border: Border.all(
-                color: const Color(0xFFF8BBD0).withOpacity(0.8),
+                color: AppColors.blush.withOpacity(0.8),
               ),
             ),
             child: Row(
               children: [
                 const Icon(
                   Icons.add_circle_outline_rounded,
-                  color: Color(0xFFC2105C),
+                  color: AppColors.primaryDark,
                 ),
                 const SizedBox(width: 12),
                 Expanded(
@@ -4918,15 +4892,15 @@ class _AllCategPageState extends State<AllCategPage>
                     style: const TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.w800,
-                      color: Color(0xFF1A0A10),
+                      color: AppColors.text,
                     ),
                   ),
                 ),
                 _ItemTag(
                   icon: Icons.payments_outlined,
                   label: '+₱${price.toStringAsFixed(0)}',
-                  bgColor: const Color(0xFFFCE4EC),
-                  textColor: const Color(0xFFAD1457),
+                  bgColor: AppColors.blush,
+                  textColor: AppColors.primaryDark,
                 ),
               ],
             ),
@@ -4979,7 +4953,7 @@ class _AllCategPageState extends State<AllCategPage>
                       category['categoryId']?.toString(),
                 ),
                 width: 140,
-                color: const Color(0xFFC2105C),
+                color: AppColors.primaryDark,
               ),
               _tableCell(
                 item['name']?.toString() ?? 'Item',
@@ -4987,7 +4961,7 @@ class _AllCategPageState extends State<AllCategPage>
                 weight: FontWeight.w900,
               ),
               _tableCell(
-                'PHP ${_parsePrice(item['price']).toStringAsFixed(2)}',
+                '₱${_parsePrice(item['price']).toStringAsFixed(2)}',
                 width: 100,
                 color: const Color(0xFF2E7D32),
               ),
@@ -5083,13 +5057,13 @@ class _AllCategPageState extends State<AllCategPage>
                         ),
                         decoration: BoxDecoration(
                           color: selected
-                              ? const Color(0xFFC2105C)
+                              ? AppColors.primaryDark
                               : Colors.white,
                           borderRadius: BorderRadius.circular(16),
                           border: Border.all(
                             color: selected
-                                ? const Color(0xFFC2105C)
-                                : const Color(0xFFF8BBD0),
+                                ? AppColors.primaryDark
+                                : AppColors.blush,
                             width: 1.3,
                           ),
                         ),
@@ -5101,7 +5075,7 @@ class _AllCategPageState extends State<AllCategPage>
                               size: 16,
                               color: selected
                                   ? Colors.white
-                                  : const Color(0xFFC2105C),
+                                  : AppColors.primaryDark,
                             ),
                             const SizedBox(width: 8),
                             Text(
@@ -5109,7 +5083,7 @@ class _AllCategPageState extends State<AllCategPage>
                               style: TextStyle(
                                 color: selected
                                     ? Colors.white
-                                    : const Color(0xFF8B0035),
+                                    : AppColors.primaryDeep,
                                 fontSize: 13,
                                 fontWeight: FontWeight.w900,
                               ),
@@ -5148,19 +5122,19 @@ class _AllCategPageState extends State<AllCategPage>
                       ),
                       decoration: BoxDecoration(
                         color: selected
-                            ? const Color(0xFFC2105C)
+                            ? AppColors.primaryDark
                             : Colors.white,
                         borderRadius: BorderRadius.circular(16),
                         border: Border.all(
                           color: selected
-                              ? const Color(0xFFC2105C)
-                              : const Color(0xFFF8BBD0),
+                              ? AppColors.primaryDark
+                              : AppColors.blush,
                           width: 1.3,
                         ),
                         boxShadow: [
                           BoxShadow(
                             color: const Color(
-                              0xFFC2105C,
+                              0xFF963B58,
                             ).withOpacity(selected ? 0.16 : 0.06),
                             blurRadius: selected ? 14 : 8,
                             offset: const Offset(0, 4),
@@ -5175,7 +5149,7 @@ class _AllCategPageState extends State<AllCategPage>
                             size: 16,
                             color: selected
                                 ? Colors.white
-                                : const Color(0xFFC2105C),
+                                : AppColors.primaryDark,
                           ),
                           const SizedBox(width: 8),
                           Flexible(
@@ -5186,7 +5160,7 @@ class _AllCategPageState extends State<AllCategPage>
                               style: TextStyle(
                                 color: selected
                                     ? Colors.white
-                                    : const Color(0xFF8B0035),
+                                    : AppColors.primaryDeep,
                                 fontSize: 13,
                                 fontWeight: FontWeight.w900,
                               ),
@@ -5245,14 +5219,14 @@ class _AllCategPageState extends State<AllCategPage>
                 padding: const EdgeInsets.fromLTRB(18, 14, 12, 14),
                 decoration: BoxDecoration(
                   gradient: const LinearGradient(
-                    colors: [Color(0xFFC2105C), Color(0xFFD81B6A)],
+                    colors: [AppColors.primaryDark, AppColors.primary],
                     begin: Alignment.topLeft,
                     end: Alignment.bottomRight,
                   ),
                   borderRadius: BorderRadius.circular(20),
                   boxShadow: [
                     BoxShadow(
-                      color: const Color(0xFFC2105C).withOpacity(0.28),
+                      color: AppColors.primaryDark.withOpacity(0.28),
                       blurRadius: 16,
                       offset: const Offset(0, 6),
                     ),
@@ -5363,12 +5337,12 @@ class _AllCategPageState extends State<AllCategPage>
                       color: Colors.white,
                       borderRadius: BorderRadius.circular(20),
                       border: Border.all(
-                        color: const Color(0xFFF8BBD0).withOpacity(0.8),
+                        color: AppColors.blush.withOpacity(0.8),
                         width: 1,
                       ),
                       boxShadow: [
                         BoxShadow(
-                          color: const Color(0xFFC2105C).withOpacity(0.07),
+                          color: AppColors.primaryDark.withOpacity(0.07),
                           blurRadius: 12,
                           offset: const Offset(0, 4),
                         ),
@@ -5395,8 +5369,8 @@ class _AllCategPageState extends State<AllCategPage>
                             decoration: BoxDecoration(
                               gradient: LinearGradient(
                                 colors: [
-                                  const Color(0xFFC2105C),
-                                  const Color(0xFFC2105C).withOpacity(0.2),
+                                  AppColors.primaryDark,
+                                  AppColors.primaryDark.withOpacity(0.2),
                                 ],
                                 begin: Alignment.topCenter,
                                 end: Alignment.bottomCenter,
@@ -5413,7 +5387,7 @@ class _AllCategPageState extends State<AllCategPage>
                                   style: const TextStyle(
                                     fontSize: 16,
                                     fontWeight: FontWeight.w800,
-                                    color: Color(0xFF1A0A10),
+                                    color: AppColors.text,
                                     letterSpacing: 0.2,
                                   ),
                                 ),
@@ -5428,17 +5402,17 @@ class _AllCategPageState extends State<AllCategPage>
                                         icon: Icons.tune_rounded,
                                         label:
                                             item['variant']?.toString() ?? '',
-                                        bgColor: const Color(0xFFFCE4EC),
-                                        textColor: const Color(0xFFAD1457),
+                                        bgColor: AppColors.blush,
+                                        textColor: AppColors.primaryDark,
                                       ),
                                     if ((item['id']?.toString() ?? '')
                                         .isNotEmpty)
                                       _ItemTag(
                                         icon:
                                             Icons.confirmation_number_outlined,
-                                        label: 'ID: ${item['id']}',
-                                        bgColor: const Color(0xFFFCE4EC),
-                                        textColor: const Color(0xFFAD1457),
+                                        label: 'ID: ${_displayItemId(item)}',
+                                        bgColor: AppColors.blush,
+                                        textColor: AppColors.primaryDark,
                                       ),
                                     _ItemTag(
                                       icon: Icons.payments_outlined,
@@ -5487,7 +5461,7 @@ class _AllCategPageState extends State<AllCategPage>
                               itemStock > 0 ? 'Reduce' : 'Unavailable',
                             ),
                             style: ElevatedButton.styleFrom(
-                              backgroundColor: const Color(0xFFC2105C),
+                              backgroundColor: AppColors.primaryDark,
                               foregroundColor: Colors.white,
                               elevation: 0,
                               shape: RoundedRectangleBorder(
@@ -5521,7 +5495,7 @@ class _AllCategPageState extends State<AllCategPage>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFFFF0F5),
+      backgroundColor: AppColors.surfaceTint,
       body: NestedScrollView(
         headerSliverBuilder: (context, innerBoxIsScrolled) => [
           SliverAppBar(
@@ -5530,15 +5504,15 @@ class _AllCategPageState extends State<AllCategPage>
             floating: false,
             pinned: true,
             elevation: 0,
-            backgroundColor: const Color(0xFFC2105C),
+            backgroundColor: AppColors.primaryDark,
             flexibleSpace: FlexibleSpaceBar(
               background: Container(
                 decoration: const BoxDecoration(
                   gradient: LinearGradient(
                     colors: [
-                      Color(0xFF8B0035),
-                      Color(0xFFC2105C),
-                      Color(0xFFE91E8C),
+                      AppColors.primaryDeep,
+                      AppColors.primaryDark,
+                      AppColors.primary,
                     ],
                     begin: Alignment.topLeft,
                     end: Alignment.bottomRight,
@@ -5583,6 +5557,7 @@ class _AllCategPageState extends State<AllCategPage>
                         ),
                       ),
                     ),
+                    Positioned(right: 20, top: 16, child: AllocationChecklistButton(scopeIds: _staffInventoryIds)),
                     // Header content
                     Positioned(
                       bottom: 22,
@@ -5602,7 +5577,7 @@ class _AllCategPageState extends State<AllCategPage>
                                           ? (widget.selectedCategoryName ??
                                                 'Selected Bundle')
                                           : _isCoffeeView
-                                          ? '${widget.selectedCategoryName ?? 'Selected'} Coffee'
+                                          ? '${widget.selectedCategoryName ?? 'Selected'} Beverages'
                                           : '${widget.selectedCategoryName ?? 'Selected'} Categories'
                                     : 'Inventory',
                                 style: const TextStyle(
@@ -5618,7 +5593,7 @@ class _AllCategPageState extends State<AllCategPage>
                                     ? widget.selectedIsBundle
                                           ? 'Manage this bundle inventory'
                                           : _isCoffeeView
-                                          ? 'Manage this coffee flavor'
+                                          ? 'Manage this beverage flavor'
                                           : 'Manage this category inventory'
                                     : 'Manage your product inventory',
                                 style: TextStyle(
@@ -5673,12 +5648,12 @@ class _AllCategPageState extends State<AllCategPage>
                     Icon(
                       Icons.error_outline_rounded,
                       size: 56,
-                      color: const Color(0xFFC2105C).withOpacity(0.4),
+                      color: AppColors.primaryDark.withOpacity(0.4),
                     ),
                     const SizedBox(height: 12),
                     const Text(
                       'Error loading items',
-                      style: TextStyle(color: Color(0xFFAD1457)),
+                      style: TextStyle(color: AppColors.primaryDark),
                     ),
                   ],
                 ),
@@ -5720,6 +5695,7 @@ class _AllCategPageState extends State<AllCategPage>
                   final data = doc.data() as Map<String, dynamic>?;
                   if (data == null || data['isDeleted'] == true) continue;
                   if (data['isAddon'] == true) {
+                    if (bundleExpired(data, DateTime.now())) continue;
                     visibleDocs.add({...data, 'sourceDocId': doc.id});
                     continue;
                   }
@@ -5756,7 +5732,7 @@ class _AllCategPageState extends State<AllCategPage>
                     if (coffeeItems.isEmpty) continue;
                     visibleDocs.add({
                       ...data,
-                      'name': data['name'] ?? 'Coffee',
+                      'name': data['name'] ?? 'Beverages',
                       'imageUrl': rootData['imageUrl'] ?? data['imageUrl'],
                       'items': coffeeItems,
                       'addonOptions': coffeeItems
@@ -5774,12 +5750,13 @@ class _AllCategPageState extends State<AllCategPage>
 
                   if (data['isBundle'] == true) {
                     if (rootData['isBundle'] != true) continue;
-                    if (_hasExpiredBundleItem(rootData)) continue;
+
                     if (_hasExpiredBundleItem(data)) continue;
                     if (_bundleStockForData(data) <= 0) continue;
                     visibleDocs.add({
                       ...data,
                       'name': rootData['name'] ?? data['name'],
+                      'publicId': rootData['publicId'] ?? data['publicId'],
                       'imageUrl': rootData['imageUrl'] ?? data['imageUrl'],
                       'sourceDocId': doc.id,
                     });
@@ -5792,7 +5769,8 @@ class _AllCategPageState extends State<AllCategPage>
                           .map((item) => Map<String, dynamic>.from(item))
                           .toList();
                   final rootKeys = rootItems.map(itemKey).toSet();
-                  final activeItems = ((data['items'] as List<dynamic>?) ?? [])
+                  final alignedData = alignInventoryDisplayIds(data, rootData);
+                  final activeItems = ((alignedData['items'] as List<dynamic>?) ?? [])
                       .whereType<Map>()
                       .map((item) => Map<String, dynamic>.from(item))
                       .where((item) {
@@ -5807,6 +5785,7 @@ class _AllCategPageState extends State<AllCategPage>
                   visibleDocs.add({
                     ...data,
                     'name': rootData['name'] ?? data['name'],
+                    'publicId': rootData['publicId'] ?? data['publicId'],
                     'imageUrl': rootData['imageUrl'] ?? data['imageUrl'],
                     'items': activeItems,
                     'sourceDocId': doc.id,
@@ -5850,6 +5829,7 @@ class _AllCategPageState extends State<AllCategPage>
                     'addonOptions': data['addonOptions'] ?? const [],
                     'isCoffee': data['isCoffee'] == true,
                     'sourceDocId': data['sourceDocId'],
+                    'publicId': data['publicId'],
                     'coffeeId': data['coffeeId'],
                     'isLowStock': data['isLowStock'] == true,
                   };
@@ -5916,7 +5896,8 @@ class _AllCategPageState extends State<AllCategPage>
                         final categoryMatches = matchesVisibleFields({
                           'id': data['categoryId'],
                           'name': data['categoryName'],
-                          'coffeeId': data['coffeeId'],
+                          'publicId': data['publicId'],
+                    'coffeeId': data['coffeeId'],
                         });
                         final items =
                             (data['items'] as List?)
@@ -5997,14 +5978,14 @@ class _AllCategPageState extends State<AllCategPage>
                           hintText: 'Search',
                           prefixIcon: const Icon(
                             Icons.search_rounded,
-                            color: Color(0xFFC2105C),
+                            color: AppColors.primaryDark,
                           ),
                           filled: true,
                           fillColor: Colors.white,
                           border: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(16),
                             borderSide: const BorderSide(
-                              color: Color(0xFFF48FB1),
+                              color: AppColors.rose,
                             ),
                           ),
                         ),
@@ -6014,7 +5995,7 @@ class _AllCategPageState extends State<AllCategPage>
                       child: widget.selectedIsCoffee
                           ? _buildCategoryList(
                               searchedCoffeeDocs,
-                              emptyMessage: 'No coffee items found.',
+                              emptyMessage: 'No beverage items found.',
                             )
                           : widget.selectedIsBundle
                           ? _buildBundleList(searchedBundleDocs)
@@ -6024,13 +6005,13 @@ class _AllCategPageState extends State<AllCategPage>
                                   ? searchedCoffeeDocs
                                   : searchedCategoryDocs,
                               emptyMessage: widget.selectedIsCoffee
-                                  ? 'No coffee items found.'
+                                  ? 'No beverage items found.'
                                   : 'No items found.',
                             )
                           : _showCoffee
                           ? _buildCategoryList(
                               searchedCoffeeDocs,
-                              emptyMessage: 'No coffee items found.',
+                              emptyMessage: 'No beverage items found.',
                             )
                           : _showCategories
                           ? _buildCategoryList(
@@ -6064,7 +6045,7 @@ class _AddonHeaderCell extends StatelessWidget {
       child: Text(
         label,
         style: const TextStyle(
-          color: Color(0xFF8B0035),
+          color: AppColors.primaryDeep,
           fontSize: 12,
           fontWeight: FontWeight.w900,
         ),
@@ -6080,7 +6061,7 @@ class _AddonCell extends StatelessWidget {
 
   const _AddonCell(
     this.value, {
-    this.color = const Color(0xFF1A0A10),
+    this.color = AppColors.text,
     this.weight = FontWeight.w600,
   });
 
@@ -6279,12 +6260,12 @@ class _HistoryDetailRow extends StatelessWidget {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Icon(icon, size: 13, color: const Color(0xFFAD1457)),
+        Icon(icon, size: 13, color: AppColors.primaryDark),
         const SizedBox(width: 6),
         Expanded(
           child: Text(
             label,
-            style: const TextStyle(fontSize: 13, color: Color(0xFF4A0020)),
+            style: const TextStyle(fontSize: 13, color: AppColors.primaryDeep),
           ),
         ),
       ],
@@ -6318,22 +6299,22 @@ class _PinkTextField extends StatelessWidget {
       decoration: InputDecoration(
         labelText: label,
         hintText: hint,
-        prefixIcon: Icon(icon, color: const Color(0xFFC2105C), size: 18),
-        labelStyle: const TextStyle(color: Color(0xFFC2105C)),
+        prefixIcon: Icon(icon, color: AppColors.primaryDark, size: 18),
+        labelStyle: const TextStyle(color: AppColors.primaryDark),
         hintStyle: TextStyle(
-          color: const Color(0xFFAD1457).withOpacity(0.4),
+          color: AppColors.primaryDark.withOpacity(0.4),
           fontSize: 13,
         ),
         enabledBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(14),
-          borderSide: const BorderSide(color: Color(0xFFF8BBD0), width: 1.5),
+          borderSide: const BorderSide(color: AppColors.blush, width: 1.5),
         ),
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(14),
-          borderSide: const BorderSide(color: Color(0xFFC2105C), width: 2),
+          borderSide: const BorderSide(color: AppColors.primaryDark, width: 2),
         ),
         filled: true,
-        fillColor: const Color(0xFFFFF0F5),
+        fillColor: AppColors.surfaceTint,
       ),
     );
   }

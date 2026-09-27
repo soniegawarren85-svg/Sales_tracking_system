@@ -113,6 +113,13 @@ class _AdminCategorySheetState extends State<AdminCategorySheet> {
             ),
             const SizedBox(height: 24),
             FilledButton.icon(
+              style: FilledButton.styleFrom(
+                minimumSize: const Size.fromHeight(54),
+                textStyle: const TextStyle(
+                  fontSize: 17,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
               onPressed: _saving ? null : _save,
               icon: const Icon(Icons.category_outlined),
               label: Text(_saving ? 'Saving...' : 'Save category'),

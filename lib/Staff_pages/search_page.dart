@@ -1,3 +1,4 @@
+import 'package:sales_tracking/theme/app_colors.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -9,19 +10,19 @@ import '../services/inventory_service.dart';
 
 // ─── Design Tokens (shared with StaffPage) ────────────────────────────────────
 class _AC {
-  static const cream = Color(0xFFFDF6EE);
-  static const parchment = Color(0xFFF5EBD8);
-  static const choco = Color(0xFFC2105C);
-  static const chocoMid = Color(0xFFE91E63);
-  static const chocoLight = Color(0xFFF48FB1);
+  static const cream = AppColors.background;
+  static const parchment = AppColors.surfaceTint;
+  static const choco = AppColors.primaryDark;
+  static const chocoMid = AppColors.primary;
+  static const chocoLight = AppColors.rose;
   static const gold = Color(0xFFD4A853);
   static const goldLight = Color(0xFFE8C97A);
-  static const dustyRose = Color(0xFFF8BBD0);
-  static const blush = Color(0xFFF9EDE5);
-  static const textDark = Color(0xFFC2105C);
-  static const textMid = Color(0xFFE91E63);
-  static const textLight = Color(0xFFF48FB1);
-  static const divider = Color(0xFFE8C4B0);
+  static const dustyRose = AppColors.blush;
+  static const blush = AppColors.surfaceTint;
+  static const textDark = AppColors.primaryDark;
+  static const textMid = AppColors.primary;
+  static const textLight = AppColors.rose;
+  static const divider = AppColors.border;
   static const white = Color(0xFFFFFFFF);
 }
 

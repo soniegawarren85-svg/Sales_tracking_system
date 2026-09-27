@@ -1,3 +1,5 @@
+import 'package:sales_tracking/theme/app_colors.dart';
+import '../../services/account_username.dart';
 import '../../../services/staff_login_session.dart';
 import 'dart:convert';
 
@@ -110,7 +112,7 @@ class _LoginScreenState extends State<LoginScreen>
           ],
         ),
         backgroundColor: isError
-            ? const Color(0xFFC2105C)
+            ? AppColors.primaryDark
             : const Color(0xFF4A7C59),
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -120,19 +122,7 @@ class _LoginScreenState extends State<LoginScreen>
     );
   }
 
-  String _normalizeUsername(String username) {
-    final cleaned = username
-        .trim()
-        .toUpperCase()
-        .replaceAll(RegExp('[\\u2013\\u2014\\u2212]'), '-')
-        .replaceAll(' ', '');
-    final match = RegExp(r'^(ADM|STF)-(.+)$').firstMatch(cleaned);
-    if (match == null) return cleaned;
-
-    final prefix = match.group(1)!;
-    final numberPart = match.group(2)!.replaceAll('O', '0');
-    return '$prefix-$numberPart';
-  }
+  String _normalizeUsername(String username) => normalizeAccountUsername(username);
 
   List<String> _authPasswordCandidates(String username, String password) {
     final candidates = <String>[password];
@@ -331,7 +321,6 @@ class _LoginScreenState extends State<LoginScreen>
     String idField,
   ) {
     final normalized = _normalizeUsername(username);
-    final normalizedNumber = normalized.split('-').last;
     final uniqueDocs = <String, QueryDocumentSnapshot<Map<String, dynamic>>>{};
     for (final doc in docs) {
       uniqueDocs[doc.id] = doc;
@@ -352,11 +341,7 @@ class _LoginScreenState extends State<LoginScreen>
       return storedId == normalized ||
           storedAdminId == normalized ||
           storedStaffId == normalized ||
-          storedUsername == normalized ||
-          storedId.endsWith('-$normalizedNumber') ||
-          storedAdminId.endsWith('-$normalizedNumber') ||
-          storedStaffId.endsWith('-$normalizedNumber') ||
-          storedUsername.endsWith('-$normalizedNumber');
+          storedUsername == normalized;
     }).toList();
 
     matches.sort((a, b) {
@@ -391,18 +376,18 @@ class _LoginScreenState extends State<LoginScreen>
     for (final field in idFields) {
       final byId = await FirebaseFirestore.instance
           .collection('staff_requests')
-          .where(field, isEqualTo: normalized)
+          .where(field, whereIn: accountUsernameAliases(normalized))
           .get();
       matches.addAll(byId.docs);
     }
 
     final byUsername = await FirebaseFirestore.instance
         .collection('staff_requests')
-        .where('username', isEqualTo: normalized)
+        .where('username', whereIn: accountUsernameAliases(normalized))
         .get();
     matches.addAll(byUsername.docs);
 
-    if (RegExp(r'^\d{4}$').hasMatch(idNumber)) {
+    if (RegExp(r'^\d+$').hasMatch(idNumber)) {
       final role = normalized.startsWith('ADM-') ? 'admin' : 'staff';
       final byRole = await FirebaseFirestore.instance
           .collection('staff_requests')
@@ -420,7 +405,7 @@ class _LoginScreenState extends State<LoginScreen>
 
         if (storedIds.any(
           (storedId) =>
-              storedId == normalized || storedId.endsWith('-$idNumber'),
+              storedId == normalized,
         )) {
           matches.add(doc);
         }
@@ -477,31 +462,20 @@ class _LoginScreenState extends State<LoginScreen>
       return;
     }
 
-    if (username.startsWith('ADM-') &&
-        !_isAcceptedAdminPassword(password) &&
-        !_isEmergencyAdminLogin(username, password)) {
-      _showMessage(
-        'Incorrect admin password. Please try again.',
-        isError: true,
-      );
-      return;
-    }
-
     setState(() => _isLoading = true);
     try {
-      if (_isEmergencyAdminLogin(username, password)) {
+      final accountDocs = await _findAccountsByUsername(username);
+      if (_isEmergencyAdminLogin(username, password) && !accountDocs.any((doc)=>doc.data()['credentialsChangedAt'] != null)) {
         await _signInEmergencyAdmin();
         return;
       }
-
-      final accountDocs = await _findAccountsByUsername(username);
       if (accountDocs.isEmpty) {
         _showMessage('No account found with this username.', isError: true);
         return;
       }
 
       // Special handling for admin accounts with valid admin password
-      if (username.startsWith('ADM-') && _isAcceptedAdminPassword(password)) {
+      if (username.startsWith('ADM-') && _isAcceptedAdminPassword(password) && !accountDocs.any((doc)=>doc.data()['credentialsChangedAt'] != null)) {
         // For admin accounts, use the valid admin password for direct authentication
         for (final accountDoc in accountDocs) {
           final accountData = accountDoc.data();
@@ -577,13 +551,10 @@ class _LoginScreenState extends State<LoginScreen>
 
       for (final accountDoc in accountDocs) {
         final accountData = accountDoc.data();
-        final email = accountData['email']?.toString().trim() ?? '';
+        final email = (accountData['authEmail'] ?? accountData['email'])?.toString().trim() ?? '';
         if (email.isEmpty) continue;
 
-        for (final authPassword in _authPasswordCandidates(
-          username,
-          password,
-        )) {
+        for (final authPassword in accountData['credentialsChangedAt'] != null ? [password] : _authPasswordCandidates(username, password)) {
           try {
             credential = await FirebaseAuth.instance.signInWithEmailAndPassword(
               email: email,
@@ -612,7 +583,7 @@ class _LoginScreenState extends State<LoginScreen>
               .trim()
               .toLowerCase();
           final status = rawStatus.isEmpty ? 'accepted' : rawStatus;
-          if (status == 'accepted' && _storedPasswordMatches(data, password)) {
+          if (status == 'accepted' && data['credentialsChangedAt'] == null && _storedPasswordMatches(data, password)) {
             fallbackDoc = doc;
             break;
           }
@@ -666,6 +637,7 @@ class _LoginScreenState extends State<LoginScreen>
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString('lastRole', isAdmin ? 'admin' : 'staff');
         await prefs.setString('lastUserId', uid);
+        if (isAdmin) await prefs.setString('adminId', (data['adminId'] ?? data['staffId'] ?? username).toString());
         final publicId = (data[isAdmin ? 'adminId' : 'staffId'] ?? username)
             .toString();
         await _rememberOfflineAccount(
@@ -718,7 +690,7 @@ class _LoginScreenState extends State<LoginScreen>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFFDF6F0),
+      backgroundColor: AppColors.background,
       body: Stack(
         children: [
           // ── Decorative background blobs ──────────────────────────────
@@ -730,7 +702,7 @@ class _LoginScreenState extends State<LoginScreen>
               height: 180,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: const Color(0xFFF8BBD0).withOpacity(0.4),
+                color: AppColors.blush.withOpacity(0.4),
               ),
             ),
           ),
@@ -742,7 +714,7 @@ class _LoginScreenState extends State<LoginScreen>
               height: 100,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: const Color(0xFFF5A0C8).withOpacity(0.25),
+                color: AppColors.rose.withOpacity(0.25),
               ),
             ),
           ),
@@ -813,7 +785,7 @@ class _LoginScreenState extends State<LoginScreen>
           ),
           decoration: const BoxDecoration(
             gradient: LinearGradient(
-              colors: [Color(0xFFC2105C), Color(0xFFE91E63), Color(0xFFF48FB1)],
+              colors: [AppColors.primaryDark, AppColors.primary, AppColors.accent],
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
             ),
@@ -955,7 +927,7 @@ class _LoginScreenState extends State<LoginScreen>
           style: GoogleFonts.outfit(
             fontSize: 35,
             fontWeight: FontWeight.w800,
-            color: const Color.fromARGB(255, 194, 16, 92),
+            color: AppColors.primary,
             height: 1.05,
             letterSpacing: -1.0,
           ),
@@ -968,7 +940,7 @@ class _LoginScreenState extends State<LoginScreen>
               height: 3,
               decoration: BoxDecoration(
                 gradient: const LinearGradient(
-                  colors: [Color(0xFFE91E63), Color(0xFFF48FB1)],
+                  colors: [AppColors.primary, AppColors.accent],
                 ),
                 borderRadius: BorderRadius.circular(2),
               ),
@@ -978,7 +950,7 @@ class _LoginScreenState extends State<LoginScreen>
               'Sign in to continue',
               style: GoogleFonts.dmSans(
                 fontSize: 12,
-                color: const Color(0xFFE91E63),
+                color: AppColors.primary,
                 fontWeight: FontWeight.w400,
               ),
             ),
@@ -1010,7 +982,7 @@ class _LoginScreenState extends State<LoginScreen>
               _obscurePassword
                   ? Icons.visibility_off_outlined
                   : Icons.visibility_outlined,
-              color: const Color(0xFFF48FB1),
+              color: AppColors.rose,
               size: 20,
             ),
             onPressed: () =>
@@ -1034,7 +1006,7 @@ class _LoginScreenState extends State<LoginScreen>
               'Forgot password?',
               style: GoogleFonts.dmSans(
                 fontSize: 13,
-                color: const Color(0xFFE91E63),
+                color: AppColors.primary,
                 fontWeight: FontWeight.w600,
               ),
             ),
@@ -1048,14 +1020,14 @@ class _LoginScreenState extends State<LoginScreen>
             Expanded(
               child: Divider(
                 thickness: 1,
-                color: Colors.pink.withOpacity(0.25),
+                color: AppColors.brand.withOpacity(0.25),
               ),
             ),
 
             Expanded(
               child: Divider(
                 thickness: 1,
-                color: Colors.pink.withOpacity(0.25),
+                color: AppColors.brand.withOpacity(0.25),
               ),
             ),
           ],
@@ -1080,7 +1052,7 @@ class _LoginScreenState extends State<LoginScreen>
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(
-            color: const Color(0xFFE91E63).withOpacity(0.07),
+            color: AppColors.primary.withOpacity(0.07),
             blurRadius: 20,
             offset: const Offset(0, 4),
           ),
@@ -1092,24 +1064,24 @@ class _LoginScreenState extends State<LoginScreen>
         obscureText: obscureText,
         style: GoogleFonts.dmSans(
           fontSize: 15,
-          color: const Color(0xFF2A1010),
+          color: AppColors.text,
           fontWeight: FontWeight.w500,
         ),
         decoration: InputDecoration(
           labelText: label,
           labelStyle: GoogleFonts.dmSans(
             fontSize: 13,
-            color: const Color(0xFFF48FB1),
+            color: AppColors.rose,
             fontWeight: FontWeight.w500,
           ),
           floatingLabelStyle: GoogleFonts.dmSans(
             fontSize: 12,
-            color: const Color(0xFFE91E63),
+            color: AppColors.primary,
             fontWeight: FontWeight.w600,
           ),
           prefixIcon: Padding(
             padding: const EdgeInsets.only(left: 16, right: 8),
-            child: Icon(icon, color: const Color(0xFFF48FB1), size: 20),
+            child: Icon(icon, color: AppColors.rose, size: 20),
           ),
           prefixIconConstraints: const BoxConstraints(
             minWidth: 0,
@@ -1126,7 +1098,7 @@ class _LoginScreenState extends State<LoginScreen>
           ),
           focusedBorder: OutlineInputBorder(
             borderRadius: BorderRadius.circular(16),
-            borderSide: const BorderSide(color: Color(0xFFE91E63), width: 1.5),
+            borderSide: const BorderSide(color: AppColors.primary, width: 1.5),
           ),
           filled: true,
           fillColor: Colors.white,
@@ -1146,14 +1118,14 @@ class _LoginScreenState extends State<LoginScreen>
       height: 56,
       decoration: BoxDecoration(
         gradient: const LinearGradient(
-          colors: [Color(0xFFE91E63), Color(0xFFC2105C)],
+          colors: [AppColors.primary, AppColors.primaryDark],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(
-            color: const Color(0xFFE91E63).withOpacity(0.4),
+            color: AppColors.primary.withOpacity(0.4),
             blurRadius: 20,
             offset: const Offset(0, 8),
           ),
@@ -1209,7 +1181,7 @@ class _LoginScreenState extends State<LoginScreen>
 class _WavePainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
-    final paint = Paint()..color = const Color(0xFFFDF6F0);
+    final paint = Paint()..color = AppColors.background;
     final path = Path();
 
     path.moveTo(0, size.height);

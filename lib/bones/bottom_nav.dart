@@ -1,3 +1,4 @@
+import 'package:sales_tracking/theme/app_colors.dart';
 import 'package:flutter/material.dart';
 import 'package:curved_navigation_bar/curved_navigation_bar.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -206,8 +207,8 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
                           : Colors.white70,
                     ),
                   ],
-                  color: const Color(0xFFF48FB1),
-                  buttonBackgroundColor: const Color(0xFFE91E63),
+                  color: AppColors.primaryDark,
+                  buttonBackgroundColor: AppColors.primary,
                   backgroundColor: Colors.transparent,
                   animationCurve: Curves.easeInOut,
                   animationDuration: const Duration(milliseconds: 300),
@@ -257,10 +258,10 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
                 decoration: BoxDecoration(
                   color: Colors.white,
                   borderRadius: BorderRadius.circular(18),
-                  border: Border.all(color: const Color(0xFFF8BBD0)),
+                  border: Border.all(color: AppColors.blush),
                   boxShadow: [
                     BoxShadow(
-                      color: const Color(0xFFE91E63).withOpacity(0.18),
+                      color: AppColors.primary.withOpacity(0.18),
                       blurRadius: 18,
                       offset: const Offset(0, 7),
                     ),
@@ -271,14 +272,14 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
                   children: [
                     const Icon(
                       Icons.bookmark_rounded,
-                      color: Color(0xFFE91E63),
+                      color: AppColors.primary,
                       size: 18,
                     ),
                     const SizedBox(width: 7),
                     Text(
                       '$count pending',
                       style: const TextStyle(
-                        color: Color(0xFFC2105C),
+                        color: AppColors.primaryDark,
                         fontSize: 13,
                         fontWeight: FontWeight.w900,
                       ),
@@ -304,11 +305,11 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
           margin: const EdgeInsets.only(bottom: 10),
           padding: const EdgeInsets.symmetric(horizontal: 10),
           decoration: BoxDecoration(
-            color: const Color(0xFFF48FB1),
+            color: AppColors.primaryDark,
             borderRadius: BorderRadius.circular(24),
             boxShadow: [
               BoxShadow(
-                color: const Color(0xFFE91E63).withOpacity(0.18),
+                color: AppColors.primary.withOpacity(0.18),
                 blurRadius: 18,
                 offset: const Offset(0, 8),
               ),
@@ -334,7 +335,7 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
       onPressed: () => setState(() => _selectedIndex = index),
       style: IconButton.styleFrom(
         backgroundColor: selected
-            ? const Color(0xFFE91E63)
+            ? AppColors.primary
             : Colors.white.withOpacity(0.12),
         fixedSize: const Size(46, 46),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),

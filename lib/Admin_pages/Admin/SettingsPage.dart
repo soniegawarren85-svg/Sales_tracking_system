@@ -1,4 +1,10 @@
+import 'package:crypto/crypto.dart';
+import '../../widgets/transaction_settings_dialog.dart';
+import '../../services/catalog_image_service.dart';
+import 'package:sales_tracking/theme/app_colors.dart';
+import '../../services/public_item_id.dart';
 import 'dart:convert';
+import '../../widgets/backup_restore_dialog.dart';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -20,7 +26,10 @@ class SettingsPage extends StatefulWidget {
 class _SettingsPageState extends State<SettingsPage> {
   bool _isUploadingProfilePhoto = false;
   String? _lastProfilePhotoUrl;
-  String _adminId = 'ADM-0001';
+  Uint8List? _profilePreview;
+  String _adminId = 'ADM-001';
+  String _profileId = 'ADM-001';
+  bool _profileReady = false;
 
   @override
   void initState() {
@@ -30,17 +39,25 @@ class _SettingsPageState extends State<SettingsPage> {
 
   Future<void> _loadAdminId() async {
     final prefs = await SharedPreferences.getInstance();
-    final savedAdminId = prefs.getString('adminId')?.trim();
-    if (!mounted || savedAdminId == null || savedAdminId.isEmpty) return;
-    setState(() => _adminId = savedAdminId);
+    final savedAdminId = prefs.getString('adminId')?.trim() ?? 'ADM-001';
+    if (!mounted) return;
+    setState(() {
+      _profileReady = true;
+      _adminId = savedAdminId;
+      _profileId = prefs.getString('lastUserId') == 'emergency-admin'
+          ? savedAdminId
+          : FirebaseAuth.instance.currentUser?.uid ?? savedAdminId;
+    });
   }
 
   @override
   Widget build(BuildContext context) {
+    if (!_profileReady)
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: SystemUiOverlayStyle.light,
       child: Scaffold(
-        backgroundColor: const Color(0xFFF5F0F8),
+        backgroundColor: AppColors.background,
         body: CustomScrollView(
           physics: const BouncingScrollPhysics(),
           slivers: [
@@ -51,7 +68,7 @@ class _SettingsPageState extends State<SettingsPage> {
               floating: false,
               pinned: true,
               elevation: 0,
-              backgroundColor: const Color(0xFFD63384),
+              backgroundColor: AppColors.primary,
               flexibleSpace: FlexibleSpaceBar(
                 collapseMode: CollapseMode.pin,
                 background: Stack(
@@ -62,9 +79,9 @@ class _SettingsPageState extends State<SettingsPage> {
                       decoration: const BoxDecoration(
                         gradient: LinearGradient(
                           colors: [
-                            Color(0xFFAD1457),
-                            Color(0xFFE91E8C),
-                            Color(0xFFF48FB1),
+                            AppColors.primaryDark,
+                            AppColors.primary,
+                            AppColors.accent,
                           ],
                           begin: Alignment.topLeft,
                           end: Alignment.bottomRight,
@@ -109,7 +126,7 @@ class _SettingsPageState extends State<SettingsPage> {
                         clipper: _WaveClipper(),
                         child: Container(
                           height: 36,
-                          color: const Color(0xFFF5F0F8),
+                          color: AppColors.background,
                         ),
                       ),
                     ),
@@ -121,17 +138,13 @@ class _SettingsPageState extends State<SettingsPage> {
                       right: 24,
                       child:
                           StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-                            stream:
-                                FirebaseAuth.instance.currentUser?.uid != null
-                                ? FirebaseFirestore.instance
-                                      .collection('staff_requests')
-                                      .doc(
-                                        FirebaseAuth.instance.currentUser!.uid,
-                                      )
-                                      .snapshots()
-                                : Stream<
-                                    DocumentSnapshot<Map<String, dynamic>>
-                                  >.empty(),
+                            stream: FirebaseFirestore.instance
+                                .collection('staff_requests')
+                                .doc(
+                                  FirebaseAuth.instance.currentUser?.uid ??
+                                      _adminId,
+                                )
+                                .snapshots(),
                             builder: (context, snapshot) {
                               final data = snapshot.data?.data();
                               final fullName = _getFullName(data);
@@ -163,7 +176,7 @@ class _SettingsPageState extends State<SettingsPage> {
                                       _buildAdminAvatar(photoUrl),
                                       const SizedBox(height: 3),
                                       Text(
-                                        adminId,
+                                        publicItemId(adminId),
                                         style: const TextStyle(
                                           color: Colors.white,
                                           fontSize: 10,
@@ -283,7 +296,8 @@ class _SettingsPageState extends State<SettingsPage> {
                     subtitleWidget: _buildAccountInformationSummary(),
                     iconColor: const Color(0xFF7B1FA2),
                     iconBg: const Color(0xFFF3E5F5),
-                    onTap: () => _showAccountInformation(context, null),
+                    onTap: () =>
+                        _showAccountInformation(context, null, readOnly: true),
                   ),
 
                   const SizedBox(height: 6),
@@ -295,7 +309,11 @@ class _SettingsPageState extends State<SettingsPage> {
                     subtitle: "Manage discount permissions",
                     iconColor: const Color(0xFFFF6F00),
                     iconBg: const Color(0xFFFFF8E1),
-                    onTap: _showDiscountSettings,
+                    onTap: () => showDialog(
+                      context: context,
+                      builder: (_) =>
+                          const TransactionSettingsDialog(kind: 'discounts'),
+                    ),
                   ),
                   _settingItem(
                     icon: Icons.payments_rounded,
@@ -303,7 +321,11 @@ class _SettingsPageState extends State<SettingsPage> {
                     subtitle: "Configure payment and cash drawer options",
                     iconColor: const Color(0xFF3949AB),
                     iconBg: const Color(0xFFE8EAF6),
-                    onTap: _showPaymentSettings,
+                    onTap: () => showDialog(
+                      context: context,
+                      builder: (_) =>
+                          const TransactionSettingsDialog(kind: 'payments'),
+                    ),
                   ),
 
                   const SizedBox(height: 6),
@@ -315,22 +337,37 @@ class _SettingsPageState extends State<SettingsPage> {
                     subtitle: "Manage access and approvals",
                     iconColor: const Color(0xFF00897B),
                     iconBg: const Color(0xFFE0F2F1),
-                    onTap: _showApprovalSettings,
+                    onTap: () => showDialog(
+                      context: context,
+                      builder: (_) =>
+                          const TransactionSettingsDialog(kind: 'permissions'),
+                    ),
                   ),
 
                   const SizedBox(height: 6),
 
                   _sectionLabel("System settings"),
                   _settingItem(
+                    icon: Icons.backup_rounded,
+                    title: 'Backup and Restore',
+                    subtitle: 'Download a backup or restore from a file',
+                    iconColor: AppColors.primaryDark,
+                    iconBg: AppColors.blush,
+                    onTap: () => showDialog<void>(
+                      context: context,
+                      builder: (_) => const BackupRestoreDialog(),
+                    ),
+                  ),
+                  _settingItem(
                     icon: Icons.info_rounded,
                     title: "About App",
-                    subtitle: "Version & licenses",
+                    subtitle: "About the sales tracking system",
                     iconColor: const Color(0xFF1E88E5),
                     iconBg: const Color(0xFFE3F2FD),
                     onTap: () => _showInfoDialog(
                       context,
                       'About App',
-                      'Sales Tracker v1.0.0\nInventory, sales, staff allocation, notifications, coffee menu, and reports.',
+                      'Track sales and inventory across branches, allocate cash and products, manage staff and beverage bundles, monitor expiry, and review branch reports.',
                     ),
                   ),
                   _settingItem(
@@ -352,7 +389,7 @@ class _SettingsPageState extends State<SettingsPage> {
                   /// App Version
                   Center(
                     child: Text(
-                      "Sales Tracker  v1.0.0",
+                      "Sales Tracking",
                       style: TextStyle(
                         fontSize: 12,
                         color: Colors.grey[400],
@@ -374,7 +411,9 @@ class _SettingsPageState extends State<SettingsPage> {
   Widget _buildAdminAvatar(String? photoUrl) {
     final url = photoUrl?.trim() ?? '';
     Widget avatar;
-    if (url.startsWith('data:image/')) {
+    if (_profilePreview != null) {
+      avatar = Image.memory(_profilePreview!, fit: BoxFit.cover);
+    } else if (url.startsWith('data:image/')) {
       final commaIndex = url.indexOf(',');
       final bytes = commaIndex == -1
           ? null
@@ -418,7 +457,7 @@ class _SettingsPageState extends State<SettingsPage> {
               child: Container(
                 width: 68,
                 height: 68,
-                color: const Color(0xFFAD1457),
+                color: AppColors.primaryDark,
                 child: avatar,
               ),
             ),
@@ -455,7 +494,7 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   Future<void> _pickAndUploadProfilePhoto() async {
-    final uid = FirebaseAuth.instance.currentUser?.uid;
+    final uid = _profileId;
     if (uid == null || uid.isEmpty || _isUploadingProfilePhoto) return;
     try {
       final picked = await ImagePicker().pickImage(
@@ -467,6 +506,7 @@ class _SettingsPageState extends State<SettingsPage> {
       if (picked == null) return;
       setState(() => _isUploadingProfilePhoto = true);
       final bytes = await picked.readAsBytes();
+      if (mounted) setState(() => _profilePreview = bytes);
       final photoUrl = await _uploadProfilePhoto(bytes, uid);
       await FirebaseFirestore.instance
           .collection('staff_requests')
@@ -477,9 +517,10 @@ class _SettingsPageState extends State<SettingsPage> {
             'updatedAt': FieldValue.serverTimestamp(),
           }, SetOptions(merge: true));
       _lastProfilePhotoUrl = photoUrl;
-      await FirebaseAuth.instance.currentUser?.updatePhotoURL(
-        photoUrl.startsWith('data:image/') ? null : photoUrl,
-      );
+      if (FirebaseAuth.instance.currentUser?.uid == _profileId)
+        await FirebaseAuth.instance.currentUser?.updatePhotoURL(
+          photoUrl.startsWith('data:image/') ? null : photoUrl,
+        );
       if (mounted) _showStyledSnackBar('Profile photo updated successfully.');
     } catch (_) {
       if (mounted) {
@@ -489,31 +530,26 @@ class _SettingsPageState extends State<SettingsPage> {
         );
       }
     } finally {
-      if (mounted) setState(() => _isUploadingProfilePhoto = false);
+      if (mounted)
+        setState(() {
+          _isUploadingProfilePhoto = false;
+          _profilePreview = null;
+        });
     }
   }
 
   Future<String> _uploadProfilePhoto(Uint8List bytes, String uid) async {
-    try {
-      final imageRef = FirebaseStorage.instance.ref().child(
-        'admin_profiles/$uid-${DateTime.now().millisecondsSinceEpoch}.jpg',
-      );
-      final upload = await imageRef
-          .putData(bytes, SettableMetadata(contentType: 'image/jpeg'))
-          .timeout(const Duration(seconds: 12));
-      return upload.ref.getDownloadURL().timeout(const Duration(seconds: 12));
-    } catch (_) {
-      final dataUrl = 'data:image/jpeg;base64,${base64Encode(bytes)}';
-      if (dataUrl.length > 700000) rethrow;
-      return dataUrl;
-    }
+    final url = await uploadCatalogImage(bytes, folder: 'admin_profiles');
+    if (url == null) throw StateError('Unable to upload photo');
+    return url;
   }
 
   Future<void> _showAccountInformation(
     BuildContext context,
-    Map<String, dynamic>? incomingData,
-  ) async {
-    final uid = FirebaseAuth.instance.currentUser?.uid;
+    Map<String, dynamic>? incomingData, {
+    bool readOnly = false,
+  }) async {
+    final uid = _profileId;
     var data = <String, dynamic>{...?incomingData};
     if (uid != null) {
       final snapshot = await FirebaseFirestore.instance
@@ -524,7 +560,8 @@ class _SettingsPageState extends State<SettingsPage> {
     }
     if (!mounted) return;
 
-    final currentUser = FirebaseAuth.instance.currentUser;
+    final authUser = FirebaseAuth.instance.currentUser;
+    final currentUser = authUser?.uid == _profileId ? authUser : null;
     final firstName = TextEditingController(
       text: data['firstName']?.toString() ?? '',
     );
@@ -542,7 +579,7 @@ class _SettingsPageState extends State<SettingsPage> {
       text: data['address']?.toString() ?? '',
     );
 
-    await showDialog<void>(
+    final route = DialogRoute<void>(
       context: context,
       builder: (dialogContext) => Dialog(
         insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
@@ -564,33 +601,39 @@ class _SettingsPageState extends State<SettingsPage> {
                 ),
                 const SizedBox(height: 18),
                 TextField(
+                  readOnly: readOnly,
                   controller: firstName,
                   decoration: const InputDecoration(labelText: 'First name'),
                 ),
                 const SizedBox(height: 10),
                 TextField(
+                  readOnly: readOnly,
                   controller: middleName,
                   decoration: const InputDecoration(labelText: 'Middle name'),
                 ),
                 const SizedBox(height: 10),
                 TextField(
+                  readOnly: readOnly,
                   controller: lastName,
                   decoration: const InputDecoration(labelText: 'Last name'),
                 ),
                 const SizedBox(height: 10),
                 TextField(
+                  readOnly: readOnly,
                   controller: email,
                   keyboardType: TextInputType.emailAddress,
                   decoration: const InputDecoration(labelText: 'Gmail / email'),
                 ),
                 const SizedBox(height: 10),
                 TextField(
+                  readOnly: readOnly,
                   controller: age,
                   keyboardType: TextInputType.number,
                   decoration: const InputDecoration(labelText: 'Age'),
                 ),
                 const SizedBox(height: 10),
                 TextField(
+                  readOnly: readOnly,
                   controller: address,
                   maxLines: 3,
                   decoration: const InputDecoration(labelText: 'Address'),
@@ -601,39 +644,59 @@ class _SettingsPageState extends State<SettingsPage> {
                   children: [
                     TextButton(
                       onPressed: () => Navigator.pop(dialogContext),
-                      child: const Text('Cancel'),
+                      child: Text(readOnly ? 'Close' : 'Cancel'),
                     ),
                     const SizedBox(width: 10),
-                    FilledButton(
-                      onPressed: () async {
-                        if (uid == null) return;
-                        await FirebaseFirestore.instance
-                            .collection('staff_requests')
-                            .doc(uid)
-                            .set({
-                              'firstName': firstName.text.trim(),
-                              'middleName': middleName.text.trim(),
-                              'lastName': lastName.text.trim(),
-                              'email': email.text.trim(),
-                              'age': age.text.trim(),
-                              'address': address.text.trim(),
-                              'updatedAt': FieldValue.serverTimestamp(),
-                            }, SetOptions(merge: true));
-                        final updatedName = [
-                          firstName.text.trim(),
-                          middleName.text.trim(),
-                          lastName.text.trim(),
-                        ].where((part) => part.isNotEmpty).join(' ');
-                        if (updatedName.isNotEmpty) {
-                          await currentUser?.updateDisplayName(updatedName);
-                        }
-                        if (dialogContext.mounted) Navigator.pop(dialogContext);
-                        if (mounted) {
-                          _showStyledSnackBar('Account information updated.');
-                        }
-                      },
-                      child: const Text('Save'),
-                    ),
+                    if (!readOnly)
+                      FilledButton(
+                        onPressed: () async {
+                          if (firstName.text.trim().isEmpty) {
+                            _showStyledSnackBar(
+                              'Enter your first name.',
+                              isError: true,
+                            );
+                            return;
+                          }
+                          try {
+                            await FirebaseFirestore.instance
+                                .collection('staff_requests')
+                                .doc(uid)
+                                .set({
+                                  'firstName': firstName.text.trim(),
+                                  'middleName': middleName.text.trim(),
+                                  'lastName': lastName.text.trim(),
+                                  'email': email.text.trim(),
+                                  if (currentUser?.email != null)
+                                    'authEmail': currentUser!.email,
+                                  'age': age.text.trim(),
+                                  'address': address.text.trim(),
+                                  'updatedAt': FieldValue.serverTimestamp(),
+                                }, SetOptions(merge: true));
+                            final updatedName = [
+                              firstName.text.trim(),
+                              middleName.text.trim(),
+                              lastName.text.trim(),
+                            ].where((part) => part.isNotEmpty).join(' ');
+                            if (updatedName.isNotEmpty) {
+                              await currentUser?.updateDisplayName(updatedName);
+                            }
+                            if (dialogContext.mounted)
+                              Navigator.pop(dialogContext);
+                            if (mounted) {
+                              _showStyledSnackBar(
+                                'Account information updated.',
+                              );
+                            }
+                          } catch (error) {
+                            if (mounted)
+                              _showStyledSnackBar(
+                                'Unable to save account information: $error',
+                                isError: true,
+                              );
+                          }
+                        },
+                        child: const Text('Save'),
+                      ),
                   ],
                 ),
               ],
@@ -642,6 +705,8 @@ class _SettingsPageState extends State<SettingsPage> {
         ),
       ),
     );
+    await Navigator.of(context).push(route);
+    await route.completed;
     firstName.dispose();
     middleName.dispose();
     lastName.dispose();
@@ -659,40 +724,7 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
-  Widget _buildAccountInformationSummary() {
-    final uid = FirebaseAuth.instance.currentUser?.uid;
-    if (uid == null || uid.isEmpty) {
-      return const Text('No account information saved yet.');
-    }
-
-    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-      stream: FirebaseFirestore.instance
-          .collection('staff_requests')
-          .doc(uid)
-          .snapshots(),
-      builder: (context, snapshot) {
-        final data = snapshot.data?.data() ?? const <String, dynamic>{};
-        final name = _getFullName(data);
-        final email = data['email']?.toString().trim() ?? '';
-        final age = data['age']?.toString().trim() ?? '';
-        final address = data['address']?.toString().trim() ?? '';
-        final values = <String>[
-          if (name != 'Admin User') name,
-          if (email.isNotEmpty) email,
-          if (age.isNotEmpty) 'Age: $age',
-          if (address.isNotEmpty) address,
-        ];
-
-        return Text(
-          values.isEmpty
-              ? 'No account information saved yet.'
-              : values.join(' • '),
-          maxLines: 2,
-          overflow: TextOverflow.ellipsis,
-        );
-      },
-    );
-  }
+  Widget _buildAccountInformationSummary() => const Text('Manage information');
 
   String _getFullName(Map<String, dynamic>? data) {
     if (data == null) return 'Admin User';
@@ -707,7 +739,7 @@ class _SettingsPageState extends State<SettingsPage> {
     return fullName.isEmpty ? 'Admin User' : fullName;
   }
 
-  static Future<void> _showChangePassword(BuildContext context) async {
+  Future<void> _showChangePassword(BuildContext context) async {
     final current = TextEditingController();
     final next = TextEditingController();
     final confirm = TextEditingController();
@@ -749,7 +781,7 @@ class _SettingsPageState extends State<SettingsPage> {
                 );
                 return;
               }
-              if (user?.email == null) {
+              if (user?.email == null || user?.uid != _profileId) {
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(
                     content: Text('This admin account has no Firebase email.'),
@@ -764,6 +796,25 @@ class _SettingsPageState extends State<SettingsPage> {
                 );
                 await user.reauthenticateWithCredential(credential);
                 await user.updatePassword(next.text);
+                final prefs = await SharedPreferences.getInstance();
+                final adminId = prefs.getString('adminId') ?? 'ADM-001';
+                await FirebaseFirestore.instance
+                    .collection('staff_requests')
+                    .doc(user.uid)
+                    .set({
+                      'credentialsChangedAt': FieldValue.serverTimestamp(),
+                      'adminId': adminId,
+                      'role': 'admin',
+                      'authEmail': user.email,
+                    }, SetOptions(merge: true));
+                final username = prefs.getString('offlineLogin.username');
+                if (username != null)
+                  await prefs.setString(
+                    'offlineLogin.passwordHash',
+                    sha256
+                        .convert(utf8.encode('$username:${next.text}'))
+                        .toString(),
+                  );
                 if (context.mounted) Navigator.pop(context);
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(content: Text('Password updated.')),
@@ -803,7 +854,7 @@ class _SettingsPageState extends State<SettingsPage> {
               return SwitchListTile(
                 value: alerts[key]!,
                 title: Text(key),
-                activeThumbColor: const Color(0xFFE91E63),
+                activeThumbColor: AppColors.primary,
                 onChanged: (value) async {
                   setState(() => alerts[key] = value);
                   final prefs = await SharedPreferences.getInstance();
@@ -833,326 +884,6 @@ class _SettingsPageState extends State<SettingsPage> {
             },
           ),
         ],
-      ),
-    );
-  }
-
-  DocumentReference<Map<String, dynamic>>? get _settingsReference {
-    final uid = FirebaseAuth.instance.currentUser?.uid;
-    if (uid == null || uid.isEmpty) return null;
-    return FirebaseFirestore.instance.collection('admin_settings').doc(uid);
-  }
-
-  Future<Map<String, dynamic>> _readAdminSettings() async {
-    final reference = _settingsReference;
-    if (reference == null) return {};
-    final snapshot = await reference.get();
-    return snapshot.data() ?? {};
-  }
-
-  Future<void> _showDiscountSettings() async {
-    final data = await _readAdminSettings();
-    if (!mounted) return;
-    final discounts = ((data['discounts'] as List<dynamic>?) ?? [])
-        .whereType<Map>()
-        .map(
-          (item) => <String, dynamic>{
-            'name': item['name']?.toString() ?? 'Discount',
-            'percent': (item['percent'] as num?)?.toDouble() ?? 0,
-          },
-        )
-        .toList();
-    if (discounts.isEmpty) {
-      discounts.addAll([
-        {'name': 'Senior', 'percent': 20.0},
-        {'name': 'PWD', 'percent': 20.0},
-      ]);
-    }
-    var enabled = data['discountsEnabled'] as bool? ?? true;
-    await showDialog<void>(
-      context: context,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          title: const Text('Discount Control'),
-          content: SizedBox(
-            width: 520,
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  SwitchListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: const Text('Enable discount'),
-                    subtitle: const Text('Allow discounts during staff sales'),
-                    value: enabled,
-                    onChanged: (value) => setDialogState(() => enabled = value),
-                  ),
-                  const Divider(),
-                  ...discounts.asMap().entries.map((entry) {
-                    final discount = entry.value;
-                    return ListTile(
-                      contentPadding: EdgeInsets.zero,
-                      title: Text(discount['name'].toString()),
-                      subtitle: Text('${discount['percent']}% discount'),
-                      trailing: IconButton(
-                        tooltip: 'Remove discount',
-                        icon: const Icon(
-                          Icons.delete_outline,
-                          color: Colors.red,
-                        ),
-                        onPressed: () =>
-                            setDialogState(() => discounts.removeAt(entry.key)),
-                      ),
-                    );
-                  }),
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: OutlinedButton.icon(
-                      onPressed: () async {
-                        final result = await _showAddDiscountDialog(context);
-                        if (result != null) {
-                          setDialogState(() => discounts.add(result));
-                        }
-                      },
-                      icon: const Icon(Icons.add),
-                      label: const Text('Add discount type'),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () async {
-                await _settingsReference?.set({
-                  'discountsEnabled': enabled,
-                  'discounts': discounts,
-                  'updatedAt': FieldValue.serverTimestamp(),
-                }, SetOptions(merge: true));
-                if (dialogContext.mounted) Navigator.pop(dialogContext);
-                if (mounted) _showStyledSnackBar('Discount settings saved.');
-              },
-              child: const Text('Save'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Future<Map<String, dynamic>?> _showAddDiscountDialog(
-    BuildContext parentContext,
-  ) async {
-    final nameController = TextEditingController();
-    final percentController = TextEditingController();
-    final result = await showDialog<Map<String, dynamic>>(
-      context: parentContext,
-      builder: (context) => AlertDialog(
-        title: const Text('Add discount type'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: nameController,
-              decoration: const InputDecoration(labelText: 'Discount name'),
-            ),
-            TextField(
-              controller: percentController,
-              keyboardType: const TextInputType.numberWithOptions(
-                decimal: true,
-              ),
-              decoration: const InputDecoration(labelText: 'Percent'),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () {
-              final name = nameController.text.trim();
-              final percent = double.tryParse(percentController.text.trim());
-              if (name.isEmpty ||
-                  percent == null ||
-                  percent <= 0 ||
-                  percent > 100) {
-                return;
-              }
-              Navigator.pop(context, {'name': name, 'percent': percent});
-            },
-            child: const Text('Add'),
-          ),
-        ],
-      ),
-    );
-    nameController.dispose();
-    percentController.dispose();
-    return result;
-  }
-
-  Future<void> _showPaymentSettings() async {
-    final data = await _readAdminSettings();
-    if (!mounted) return;
-    final methods = ((data['paymentMethods'] as List<dynamic>?) ?? [])
-        .map((method) => method.toString())
-        .where((method) => method.trim().isNotEmpty)
-        .toList();
-    if (methods.isEmpty) methods.addAll(['Cash', 'GCash', 'Maya']);
-    await showDialog<void>(
-      context: context,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          title: const Text('Payment Settings'),
-          content: SizedBox(
-            width: 520,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text('Payment methods available in staff sales.'),
-                ),
-                const SizedBox(height: 10),
-                ...methods.asMap().entries.map(
-                  (entry) => ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    leading: const Icon(Icons.payments_outlined),
-                    title: Text(entry.value),
-                    trailing: IconButton(
-                      tooltip: 'Remove payment method',
-                      icon: const Icon(Icons.delete_outline, color: Colors.red),
-                      onPressed: () =>
-                          setDialogState(() => methods.removeAt(entry.key)),
-                    ),
-                  ),
-                ),
-                OutlinedButton.icon(
-                  onPressed: () async {
-                    final controller = TextEditingController();
-                    final method = await showDialog<String>(
-                      context: context,
-                      builder: (context) => AlertDialog(
-                        title: const Text('Add payment method'),
-                        content: TextField(
-                          controller: controller,
-                          autofocus: true,
-                          decoration: const InputDecoration(
-                            labelText: 'Method name',
-                            hintText: 'Cards',
-                          ),
-                        ),
-                        actions: [
-                          TextButton(
-                            onPressed: () => Navigator.pop(context),
-                            child: const Text('Cancel'),
-                          ),
-                          FilledButton(
-                            onPressed: () =>
-                                Navigator.pop(context, controller.text.trim()),
-                            child: const Text('Add'),
-                          ),
-                        ],
-                      ),
-                    );
-                    controller.dispose();
-                    if (method != null && method.isNotEmpty) {
-                      setDialogState(() => methods.add(method));
-                    }
-                  },
-                  icon: const Icon(Icons.add),
-                  label: const Text('Add payment method'),
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () async {
-                await _settingsReference?.set({
-                  'paymentMethods': methods,
-                  'updatedAt': FieldValue.serverTimestamp(),
-                }, SetOptions(merge: true));
-                if (dialogContext.mounted) Navigator.pop(dialogContext);
-                if (mounted) _showStyledSnackBar('Payment settings saved.');
-              },
-              child: const Text('Save'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Future<void> _showApprovalSettings() async {
-    final data = await _readAdminSettings();
-    if (!mounted) return;
-    var voidApproval = data['voidApproval'] as bool? ?? true;
-    var refundApproval = data['refundApproval'] as bool? ?? true;
-    var discountApproval = data['discountApproval'] as bool? ?? false;
-    await showDialog<void>(
-      context: context,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          title: const Text('Security and Approval'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              SwitchListTile(
-                title: const Text('Void approval'),
-                subtitle: const Text('Require approval before voiding a sale'),
-                value: voidApproval,
-                onChanged: (value) =>
-                    setDialogState(() => voidApproval = value),
-              ),
-              SwitchListTile(
-                title: const Text('Refund approval'),
-                subtitle: const Text(
-                  'Require approval before processing refunds',
-                ),
-                value: refundApproval,
-                onChanged: (value) =>
-                    setDialogState(() => refundApproval = value),
-              ),
-              SwitchListTile(
-                title: const Text('Discount approval'),
-                subtitle: const Text('Require approval for staff discounts'),
-                value: discountApproval,
-                onChanged: (value) =>
-                    setDialogState(() => discountApproval = value),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () async {
-                await _settingsReference?.set({
-                  'voidApproval': voidApproval,
-                  'refundApproval': refundApproval,
-                  'discountApproval': discountApproval,
-                  'updatedAt': FieldValue.serverTimestamp(),
-                }, SetOptions(merge: true));
-                if (dialogContext.mounted) Navigator.pop(dialogContext);
-                if (mounted) _showStyledSnackBar('Approval settings saved.');
-              },
-              child: const Text('Save'),
-            ),
-          ],
-        ),
       ),
     );
   }
@@ -1271,7 +1002,7 @@ class _SettingsPageState extends State<SettingsPage> {
                   width: 30,
                   height: 30,
                   decoration: BoxDecoration(
-                    color: const Color(0xFFF5F0F8),
+                    color: AppColors.background,
                     borderRadius: BorderRadius.circular(10),
                   ),
                   child: Icon(
@@ -1338,14 +1069,18 @@ class _LogoutButtonState extends State<_LogoutButton>
           height: 60,
           decoration: BoxDecoration(
             gradient: const LinearGradient(
-              colors: [Color(0xFFAD1457), Color(0xFFE91E8C), Color(0xFFF06292)],
+              colors: [
+                AppColors.primaryDark,
+                AppColors.primary,
+                AppColors.accent,
+              ],
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
             ),
             borderRadius: BorderRadius.circular(20),
             boxShadow: [
               BoxShadow(
-                color: const Color(0xFFE91E8C).withOpacity(0.38),
+                color: AppColors.primary.withOpacity(0.38),
                 blurRadius: 18,
                 offset: const Offset(0, 8),
               ),
@@ -1415,14 +1150,14 @@ class _LogoutButtonState extends State<_LogoutButton>
                 height: 72,
                 decoration: BoxDecoration(
                   gradient: const LinearGradient(
-                    colors: [Color(0xFFE91E8C), Color(0xFFF06292)],
+                    colors: [AppColors.primary, AppColors.accent],
                     begin: Alignment.topLeft,
                     end: Alignment.bottomRight,
                   ),
                   shape: BoxShape.circle,
                   boxShadow: [
                     BoxShadow(
-                      color: const Color(0xFFE91E8C).withOpacity(0.35),
+                      color: AppColors.primary.withOpacity(0.35),
                       blurRadius: 16,
                       offset: const Offset(0, 6),
                     ),
@@ -1474,7 +1209,7 @@ class _LogoutButtonState extends State<_LogoutButton>
                       child: Container(
                         height: 50,
                         decoration: BoxDecoration(
-                          color: const Color(0xFFF5F0F8),
+                          color: AppColors.background,
                           borderRadius: BorderRadius.circular(16),
                         ),
                         child: Center(
@@ -1513,14 +1248,14 @@ class _LogoutButtonState extends State<_LogoutButton>
                         height: 50,
                         decoration: BoxDecoration(
                           gradient: const LinearGradient(
-                            colors: [Color(0xFFAD1457), Color(0xFFE91E8C)],
+                            colors: [AppColors.primaryDark, AppColors.primary],
                             begin: Alignment.topLeft,
                             end: Alignment.bottomRight,
                           ),
                           borderRadius: BorderRadius.circular(16),
                           boxShadow: [
                             BoxShadow(
-                              color: const Color(0xFFE91E8C).withOpacity(0.35),
+                              color: AppColors.primary.withOpacity(0.35),
                               blurRadius: 12,
                               offset: const Offset(0, 5),
                             ),

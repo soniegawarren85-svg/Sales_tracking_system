@@ -1,3 +1,5 @@
+import 'profile_avatar.dart';
+import 'package:sales_tracking/theme/app_colors.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'branch_staff_activity_dialog.dart';
@@ -59,7 +61,7 @@ class AdminStaffBranches extends StatelessWidget {
                       width:
                           (constraints.maxWidth - (columns - 1) * 14) / columns,
                       child: Card(
-                        color: const Color(0xFFFCE4EC),
+                        color: AppColors.blush,
                         clipBehavior: Clip.antiAlias,
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(24),
@@ -83,7 +85,7 @@ class AdminStaffBranches extends StatelessWidget {
                                 Text(
                                   'Staff in ${data['name'] ?? 'Branch'}',
                                   style: const TextStyle(
-                                    color: Color(0xFFAD1457),
+                                    color: AppColors.primaryDark,
                                     fontSize: 20,
                                     fontWeight: FontWeight.w800,
                                   ),
@@ -100,16 +102,8 @@ class AdminStaffBranches extends StatelessWidget {
                                         .map(
                                           (member) => Tooltip(
                                             message: _staffName(member.data()),
-                                            child: CircleAvatar(
-                                              backgroundColor: Colors.white,
-                                              foregroundColor: const Color(
-                                                0xFFE91E63,
-                                              ),
-                                              child: Text(
-                                                _staffName(
-                                                  member.data(),
-                                                ).substring(0, 1).toUpperCase(),
-                                              ),
+                                            child: ProfileAvatar(
+                                              data: member.data(),
                                             ),
                                           ),
                                         ),
@@ -122,22 +116,27 @@ class AdminStaffBranches extends StatelessWidget {
                                         backgroundColor: Colors.white,
                                         child: Icon(
                                           Icons.person_outline,
-                                          color: Color(0xFFE91E63),
+                                          color: AppColors.primary,
                                         ),
                                       ),
                                   ],
                                 ),
                                 const Divider(height: 28),
-                                TextButton.icon(
+                                FilledButton.icon(
+                                  label: const Text('Activity logs'),
                                   onPressed: () => showBranchStaffActivity(
                                     context,
                                     doc.id,
                                     '${data['name'] ?? 'Branch'}',
                                   ),
                                   icon: const Icon(Icons.history_rounded),
-                                  label: const Text('View Activity Logs'),
-                                  style: TextButton.styleFrom(
-                                    foregroundColor: const Color(0xFFAD1457),
+
+                                  style: FilledButton.styleFrom(
+                                    foregroundColor: Colors.white,
+                                    backgroundColor: AppColors.primaryDark,
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
                                   ),
                                 ),
                                 const SizedBox(height: 8),
@@ -148,7 +147,7 @@ class AdminStaffBranches extends StatelessWidget {
                                     ),
                                     Icon(
                                       Icons.arrow_forward,
-                                      color: Color(0xFFE91E63),
+                                      color: AppColors.primary,
                                     ),
                                   ],
                                 ),
@@ -244,106 +243,102 @@ class _BranchStaffSheetState extends State<_BranchStaffSheet> {
   }
 
   @override
-  Widget build(
-    BuildContext context,
-  ) => StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-    stream: widget.branch.snapshots(),
-    builder: (context, branch) =>
-        StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-          stream: FirebaseFirestore.instance
-              .collection('staff_requests')
-              .snapshots(),
-          builder: (context, snapshot) {
-            if (snapshot.hasError || branch.hasError)
-              return const Center(
-                child: Text('Unable to load staff assignments.'),
-              );
-            if (!snapshot.hasData || !branch.hasData)
-              return const Center(child: CircularProgressIndicator());
-            final ids = (branch.data!.data()?['staffIds'] as List? ?? [])
-                .map((id) => '$id')
-                .toSet();
-            final staff = snapshot.data!.docs
-                .where(
-                  (doc) =>
-                      '${doc.data()['role']}'.toLowerCase() == 'staff' &&
-                      (doc.data()['status'] == 'accepted' ||
-                          ids.contains(_staffKey(doc))),
-                )
-                .toList();
-            staff.sort(
-              (a, b) => (ids.contains(_staffKey(b)) ? 1 : 0).compareTo(
-                ids.contains(_staffKey(a)) ? 1 : 0,
-              ),
-            );
-            return Column(
-              children: [
-                ListTile(
-                  title: Text(
-                    'Staff in ${branch.data!.data()?['name'] ?? 'Branch'}',
-                    style: const TextStyle(
-                      fontWeight: FontWeight.bold,
-                      fontSize: 20,
-                    ),
+  Widget build(BuildContext context) =>
+      StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+        stream: widget.branch.snapshots(),
+        builder: (context, branch) =>
+            StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+              stream: FirebaseFirestore.instance
+                  .collection('staff_requests')
+                  .snapshots(),
+              builder: (context, snapshot) {
+                if (snapshot.hasError || branch.hasError)
+                  return const Center(
+                    child: Text('Unable to load staff assignments.'),
+                  );
+                if (!snapshot.hasData || !branch.hasData)
+                  return const Center(child: CircularProgressIndicator());
+                final ids = (branch.data!.data()?['staffIds'] as List? ?? [])
+                    .map((id) => '$id')
+                    .toSet();
+                final staff = snapshot.data!.docs
+                    .where(
+                      (doc) =>
+                          '${doc.data()['role']}'.toLowerCase() == 'staff' &&
+                          (doc.data()['status'] == 'accepted' ||
+                              ids.contains(_staffKey(doc))),
+                    )
+                    .toList();
+                staff.sort(
+                  (a, b) => (ids.contains(_staffKey(b)) ? 1 : 0).compareTo(
+                    ids.contains(_staffKey(a)) ? 1 : 0,
                   ),
-                  subtitle: const Text('Assigned staff and available accounts'),
-                  trailing: IconButton(
-                    tooltip: 'Close',
-                    onPressed: () => Navigator.pop(context),
-                    icon: const Icon(Icons.close),
-                  ),
-                ),
-                if (_saving) const LinearProgressIndicator(),
-                if (_error != null)
-                  Padding(
-                    padding: const EdgeInsets.all(12),
-                    child: Text(
-                      _error!,
-                      style: const TextStyle(color: Colors.red),
-                    ),
-                  ),
-                Expanded(
-                  child: ListView(
-                    children: [
-                      if (staff.isEmpty)
-                        const ListTile(
-                          title: Text('No available staff accounts.'),
+                );
+                return Column(
+                  children: [
+                    ListTile(
+                      title: Text(
+                        'Staff in ${branch.data!.data()?['name'] ?? 'Branch'}',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 20,
                         ),
-                      ...staff.map((doc) {
-                        final data = doc.data();
-                        final assigned = ids.contains(_staffKey(doc));
-                        final elsewhere = (data['branchIds'] as List? ?? [])
-                            .any((id) => id != widget.branch.id);
-                        return CheckboxListTile(
-                          value: assigned,
-                          secondary: CircleAvatar(
-                            backgroundColor: const Color(0xFFFCE4EC),
-                            child: Text(
-                              _staffName(data).substring(0, 1).toUpperCase(),
+                      ),
+                      subtitle: const Text(
+                        'Assigned staff and available accounts',
+                      ),
+                      trailing: IconButton(
+                        tooltip: 'Close',
+                        onPressed: () => Navigator.pop(context),
+                        icon: const Icon(Icons.close),
+                      ),
+                    ),
+                    if (_saving) const LinearProgressIndicator(),
+                    if (_error != null)
+                      Padding(
+                        padding: const EdgeInsets.all(12),
+                        child: Text(
+                          _error!,
+                          style: const TextStyle(color: Colors.red),
+                        ),
+                      ),
+                    Expanded(
+                      child: ListView(
+                        children: [
+                          if (staff.isEmpty)
+                            const ListTile(
+                              title: Text('No available staff accounts.'),
                             ),
-                          ),
-                          title: Text(_staffName(data)),
-                          subtitle: Text(
-                            assigned
-                                ? (data['status'] == 'accepted'
-                                      ? 'Assigned to this branch'
-                                      : 'Deactivated')
-                                : elsewhere
-                                ? 'Assigned to another branch'
-                                : 'Available to assign',
-                          ),
-                          activeColor: const Color(0xFFE91E63),
-                          onChanged: _saving || (!assigned && elsewhere)
-                              ? null
-                              : (value) => _assign(doc, value == true),
-                        );
-                      }),
-                    ],
-                  ),
-                ),
-              ],
-            );
-          },
-        ),
-  );
+                          ...staff.map((doc) {
+                            final data = doc.data();
+                            final assigned = ids.contains(_staffKey(doc));
+                            final elsewhere = (data['branchIds'] as List? ?? [])
+                                .any((id) => id != widget.branch.id);
+                            return CheckboxListTile(
+                              value: assigned,
+                              secondary: ProfileAvatar(data: data),
+                              title: Text(_staffName(data)),
+                              subtitle: Text(
+                                assigned
+                                    ? (data['status'] == 'accepted'
+                                          ? 'Assigned to this branch'
+                                          : 'Deactivated')
+                                    : elsewhere
+                                    ? 'Assigned to another branch'
+                                    : 'Available to assign',
+                              ),
+                              activeColor: AppColors.primary,
+                              onChanged: _saving || (!assigned && elsewhere)
+                                  ? null
+                                  : (value) => _assign(doc, value == true),
+                            );
+                          }),
+                        ],
+                      ),
+                    ),
+                  ],
+                );
+              },
+            ),
+      );
 }

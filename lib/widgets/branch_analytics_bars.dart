@@ -1,3 +1,4 @@
+import 'package:sales_tracking/theme/app_colors.dart';
 import 'package:flutter/material.dart';
 
 class BranchAnalyticsBars extends StatelessWidget {
@@ -11,7 +12,7 @@ class BranchAnalyticsBars extends StatelessWidget {
   const BranchAnalyticsBars({
     required this.values,
     required this.labels,
-    this.colors = const [Color(0xFFC2105C), Color(0xFFE91E63)],
+    this.colors = const [AppColors.primaryDark, AppColors.primary],
     this.refunds,
     this.reduced,
     this.selectedStatus = 'All',

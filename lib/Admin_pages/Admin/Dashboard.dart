@@ -1,7 +1,13 @@
-﻿import '../../Login/Login/Login.dart';
+import '../../widgets/admin_profile_label.dart';
+import 'dart:async';
+import '../../widgets/admin_message_preview.dart';
+import 'package:sales_tracking/theme/app_colors.dart';
+import '../../services/short_id_service.dart';
+import '../../Login/Login/Login.dart';
 import '../../widgets/admin_sales_overview.dart';
 import '../../widgets/admin_recent_sales.dart';
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -17,14 +23,13 @@ import 'SettingsPage.dart';
 import 'StaffPage.dart';
 import 'Reports.dart';
 
-// ─── Color Palette (Professional / Refined) ───────────────────────────────
-// A deeper, more premium magenta-plum palette instead of flat pink.
-const kPrimaryBrown = Color(0xFFE91E63); // Deep magenta (primary)
-const kLightBrown = Color(0xFFF48FB1); // Muted rose (secondary)
-const kAccentBrown = Color(0xFFF8BBD0); // Soft blush accent
-const kCreamWhite = Color(0xFFFFF8F5); // Cool off-white background
-const kDeepBrown = Color(0xFFC2105C); // Deep plum for text/icons
-const kSurfaceDark = Color(0xFFC2105C); // Near-black plum for dark surfaces
+// Raspberry accents with quiet, cool neutral surfaces.
+const kPrimaryBrown = AppColors.primary;
+const kLightBrown = AppColors.rose;
+const kAccentBrown = AppColors.blush;
+const kCreamWhite = AppColors.background;
+const kDeepBrown = AppColors.primaryDark;
+const kSurfaceDark = AppColors.primaryDeep;
 
 class AdminDashboard extends StatefulWidget {
   const AdminDashboard({super.key});
@@ -36,6 +41,7 @@ class AdminDashboard extends StatefulWidget {
 class _AdminDashboardState extends State<AdminDashboard>
     with TickerProviderStateMixin {
   int _selectedIndex = 0;
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _allocationNotices;
 
   static const String kShopLogoAsset = 'Assets/Image/ob.jpg';
   final _navItems = const [
@@ -55,6 +61,12 @@ class _AdminDashboardState extends State<AdminDashboard>
   @override
   void initState() {
     super.initState();
+    _allocationNotices = FirebaseFirestore.instance.collection('admin_notifications').where('type', isEqualTo: 'allocation_declined').snapshots().listen((snapshot) {
+      for (final doc in snapshot.docs) {
+        if (doc.data()['toastShown'] != true) unawaited(_showAllocationNotice(doc.reference));
+      }
+    }, onError: (Object error) { debugPrint('Allocation notifications: $error'); });
+    ShortIdService.refresh().catchError((Object error) { debugPrint('Short ID update deferred: $error'); });
     print('✅ AdminDashboard initialized');
     print('📦 Current entries: ${InventoryService().entries.length}');
     ExpiryNotificationService().checkAndNotifyExpiringItems();
@@ -79,6 +91,23 @@ class _AdminDashboardState extends State<AdminDashboard>
     _entranceController.forward();
   }
 
+  Future<void> _showAllocationNotice(DocumentReference<Map<String, dynamic>> ref) async {
+    if (!mounted) return;
+    try {
+      final message = await FirebaseFirestore.instance.runTransaction<String?>((tx) async {
+        final data = (await tx.get(ref)).data();
+        if (data == null || data['toastShown'] == true) return null;
+        tx.update(ref, {'toastShown': true, 'toastShownAt': FieldValue.serverTimestamp()});
+        return data['message']?.toString();
+      });
+      if (message != null && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(message), duration: const Duration(seconds: 8),
+          backgroundColor: AppColors.primary,
+        ));
+      }
+    } catch (error) { debugPrint('Allocation notice deferred: $error'); }
+  }
   void _onBranchChanged() {
     if (mounted) {
       setState(() => _selectedIndex = 0);
@@ -90,6 +119,7 @@ class _AdminDashboardState extends State<AdminDashboard>
 
   @override
   void dispose() {
+    _allocationNotices?.cancel();
     BranchSession.instance.removeListener(_onBranchChanged);
     _entranceController.dispose();
     super.dispose();
@@ -262,7 +292,7 @@ class _AdminDashboardState extends State<AdminDashboard>
       clipBehavior: Clip.antiAlias,
       stretch: true,
       elevation: 0,
-      backgroundColor: kPrimaryBrown,
+      backgroundColor: AppColors.primaryDeep,
       title: Row(
         children: [
           _buildShopLogoMini(),
@@ -312,12 +342,7 @@ class _AdminDashboardState extends State<AdminDashboard>
                 }
                 return _buildIconButton(
                   Icons.mail_outline_rounded,
-                  () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(builder: (_) => const MessagePage()),
-                    );
-                  },
+                  () => _showMessagesPreview(adminMessageId),
                   badgeCount: unreadCount,
                   iconSize: 22,
                   padding: const EdgeInsets.all(10),
@@ -381,7 +406,7 @@ class _AdminDashboardState extends State<AdminDashboard>
             gradient: LinearGradient(
               begin: Alignment.bottomLeft,
               end: Alignment.topRight,
-              colors: [Color(0xC2C2105C), Color(0x99E91E63), Color(0x40F48FB1)],
+              colors: [Color(0xF270132E), Color(0xE694163A), Color(0xCC70132E)],
             ),
           ),
         ),
@@ -402,14 +427,7 @@ class _AdminDashboardState extends State<AdminDashboard>
                     child: child,
                   ),
                 ),
-                child: const Text(
-                  'Good day, Admin!',
-                  style: TextStyle(
-                    fontSize: 26,
-                    fontWeight: FontWeight.w800,
-                    color: Colors.white,
-                  ),
-                ),
+                child: const AdminProfileLabel(greeting: true),
               ),
               const SizedBox(height: 8),
               const Text(
@@ -496,14 +514,34 @@ class _AdminDashboardState extends State<AdminDashboard>
   }
 
   // ══════════════════════════════════════════════════════════════════════════
-  //  SIDEBAR  –  refined dark-plum surface with hover + selection animation
+  //  SIDEBAR  –  raspberry surface with hover + selection animation
   // ══════════════════════════════════════════════════════════════════════════
+  void _showMessagesPreview(String adminId) {
+    showModalBottomSheet<void>(context: context, isScrollControlled: true,
+      showDragHandle: true, backgroundColor: AppColors.surface,
+      builder: (sheetContext) => SizedBox(
+        height: MediaQuery.sizeOf(context).height * .5,
+        child: Padding(padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            const Text('Messages', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: AppColors.primaryDark)),
+            const SizedBox(height: 12),
+            Expanded(child: AdminMessagePreview(adminId: adminId, onOpen: (id) {
+              Navigator.pop(sheetContext);
+              Navigator.push(context, MaterialPageRoute(builder: (_) => MessagePage(initialContactId: id)));
+            })),            const SizedBox(height: 12),
+            FilledButton.icon(onPressed: () {
+              Navigator.pop(sheetContext);
+              Navigator.push(context, MaterialPageRoute(builder: (_) => const MessagePage()));
+            }, icon: const Icon(Icons.forum_outlined), label: const Text('View all messages')),
+          ])),
+      ));
+  }
   Widget _buildSidebar() => Container(
     width: 192,
     decoration: const BoxDecoration(
       color: kSurfaceDark,
       boxShadow: [
-        BoxShadow(color: Colors.black26, blurRadius: 12, offset: Offset(3, 0)),
+        BoxShadow(color: Color(0x14000000), blurRadius: 12, offset: Offset(3, 0)),
       ],
     ),
     child: Column(
@@ -511,17 +549,30 @@ class _AdminDashboardState extends State<AdminDashboard>
         const SizedBox(height: 24),
         _buildShopLogoMini(),
         const SizedBox(height: 10),
-        const Padding(
-          padding: EdgeInsets.symmetric(horizontal: 12),
-          child: Text(
-            'Angelz Bites Cupcakes',
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              color: Color(0xFFF8BBD0),
-              fontSize: 20,
-              fontWeight: FontWeight.w600,
-              fontStyle: FontStyle.italic,
-            ),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          child: Column(
+            children: [
+              Text(
+                "Angel'Z Bites",
+                textAlign: TextAlign.center,
+                style: GoogleFonts.satisfy(
+                  color: Colors.white,
+                  fontSize: 24,
+                  fontWeight: FontWeight.w400,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'CUPCAKES',
+                style: GoogleFonts.dmSans(
+                  color: AppColors.blush,
+                  fontSize: 9,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: 3.5,
+                ),
+              ),
+            ],
           ),
         ),
         const SizedBox(height: 28),
@@ -546,28 +597,26 @@ class _AdminDashboardState extends State<AdminDashboard>
         Padding(
           padding: const EdgeInsets.all(16),
           child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const ListTile(
-                contentPadding: EdgeInsets.zero,
-                leading: CircleAvatar(
-                  backgroundColor: Colors.white24,
-                  child: Icon(Icons.person, color: Colors.white),
-                ),
-                title: Text(
-                  'Admin',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
+              const SizedBox(height: 48, child: AdminProfileLabel()),
+              const SizedBox(height: 10),
+              FilledButton.icon(
+                onPressed: _logout,
+                style: FilledButton.styleFrom(
+                  backgroundColor: const Color(0xFFB42335),
+                  foregroundColor: Colors.white,
+                  minimumSize: const Size.fromHeight(42),
+                  side: const BorderSide(color: Color(0xFFE28B98)),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  textStyle: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
-              ),
-              TextButton.icon(
-                onPressed: _logout,
-                style: TextButton.styleFrom(
-                  foregroundColor: Colors.white,
-                  overlayColor: kPrimaryBrown.withOpacity(0.3),
-                ),
-                icon: const Icon(Icons.logout, size: 18),
+                icon: const Icon(Icons.logout_rounded, size: 16),
                 label: const Text('Logout'),
               ),
             ],
@@ -648,7 +697,7 @@ class _AdminDashboardState extends State<AdminDashboard>
                   ),
                   decoration: BoxDecoration(
                     gradient: const LinearGradient(
-                      colors: [kPrimaryBrown, kLightBrown],
+                      colors: [AppColors.primaryDeep, AppColors.primaryDark],
                       begin: Alignment.topLeft,
                       end: Alignment.bottomRight,
                     ),
@@ -695,7 +744,7 @@ class _AdminDashboardState extends State<AdminDashboard>
                                           )
                                           .length
                                     : null,
-                                'Coffee',
+                                'Beverages',
                               ),
                             ),
                       ),
@@ -921,8 +970,8 @@ class _SidebarTileState extends State<_SidebarTile> {
   @override
   Widget build(BuildContext context) {
     final bg = widget.selected
-        ? kPrimaryBrown
-        : (_hovering ? Colors.white.withOpacity(0.08) : Colors.transparent);
+        ? Colors.white.withValues(alpha: 0.16)
+        : (_hovering ? Colors.white.withValues(alpha: 0.08) : Colors.transparent);
 
     return MouseRegion(
       onEnter: (_) => setState(() => _hovering = true),
@@ -945,10 +994,10 @@ class _SidebarTileState extends State<_SidebarTile> {
                 duration: const Duration(milliseconds: 180),
                 child: Icon(
                   widget.item.icon,
-                  size: 21,
+                  size: 18,
                   color: widget.selected
                       ? Colors.white
-                      : const Color(0xFFF8BBD0),
+                      : AppColors.blush,
                 ),
               ),
               const SizedBox(width: 10),
@@ -956,8 +1005,10 @@ class _SidebarTileState extends State<_SidebarTile> {
                 child: Text(
                   widget.item.label,
                   style: TextStyle(
-                    fontSize: 13,
-                    color: widget.selected ? Colors.white : Colors.white70,
+                    fontSize: 12,
+                    color: widget.selected
+                        ? Colors.white
+                        : AppColors.blush,
                     fontWeight: widget.selected
                         ? FontWeight.w700
                         : FontWeight.w400,

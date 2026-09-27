@@ -1,3 +1,8 @@
+import 'package:sales_tracking/theme/app_colors.dart';
+import '../services/inventory_display_ids.dart';
+import '../services/staff_allocation_scope.dart';
+import '../services/public_item_id.dart';
+import '../widgets/staff_refund_dialog.dart';
 import '../services/staff_login_session.dart';
 // dashboard_page.dart
 
@@ -110,31 +115,15 @@ List<String> _inventoryImageUrls(Map<String, dynamic> data) {
   return urls;
 }
 
-String _buildCategoryDisplayId(Map<String, dynamic> data) {
-  final timestampValue = data['categoryTimestamp'] ?? data['timestamp'];
-  final dateTime = timestampValue is Timestamp
-      ? timestampValue.toDate().toLocal()
-      : DateTime.now();
-  final datePart =
-      '${dateTime.year}${dateTime.month.toString().padLeft(2, '0')}${dateTime.day.toString().padLeft(2, '0')}';
-  final timePart =
-      '${dateTime.hour.toString().padLeft(2, '0')}${dateTime.minute.toString().padLeft(2, '0')}';
-  final name = data['name']?.toString().trim() ?? '';
-  var codeSource = name.isNotEmpty ? name : (data['id']?.toString() ?? 'CAT');
-  codeSource = codeSource.replaceAll(RegExp(r'[^A-Za-z0-9]'), '');
-  final code = codeSource.length >= 4
-      ? codeSource.substring(0, 4).toUpperCase()
-      : codeSource.toUpperCase().padRight(4, 'X');
-  return 'CAT-$datePart-$timePart-$code';
-}
+String _buildCategoryDisplayId(Map<String, dynamic> data) => inventoryDisplayId(data);
 
 class _C {
-  static const primary = Color(0xFFE91E63);
-  static const primaryLight = Color(0xFFF48FB1);
-  static const primaryDark = Color(0xFFC2105C);
+  static const primary = AppColors.primary;
+  static const primaryLight = AppColors.rose;
+  static const primaryDark = AppColors.primaryDark;
   static const accent = Color(0xFFFF8C42);
   static const gold = Color(0xFFFFD166);
-  static const surface = Color(0xFFFFF8F5);
+  static const surface = AppColors.background;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -175,7 +164,8 @@ class _DashboardPageState extends State<DashboardPage>
   List<_CachedDoc> _cachedSalesInventoryDocs = const [];
   List<_CachedDoc> _cachedCashDrawerDocs = const [];
   StreamSubscription<String>? _localCacheSubscription;
-  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _receiptCacheSubscription;
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>?
+  _receiptCacheSubscription;
   String? _staffDocId;
   String _inventorySearchQuery = '';
   bool _isResolvingStaffIdentity = true;
@@ -188,12 +178,16 @@ class _DashboardPageState extends State<DashboardPage>
     'coffee': 0,
   };
   int _performancePage = 0;
+  Timer? _drawerDayTimer;
+  StreamSubscription<StaffAllocationScope>? _allocationScopeSubscription;
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _drawerCacheSubscription;
 
   static const int _itemsPerPage = 5;
 
   @override
   void initState() {
     super.initState();
+    _drawerDayTimer = Timer.periodic(const Duration(seconds: 15), (_) => LocalDatabaseSyncService().rolloverCashDrawers());
     StaffLoginSession.flush();
     _rootInventoryStream = FirebaseFirestore.instance
         .collection('sales_inventory')
@@ -203,7 +197,8 @@ class _DashboardPageState extends State<DashboardPage>
     _localCacheSubscription = LocalDatabaseSyncService().collectionUpdates
         .where(
           (collection) =>
-              collection == 'staff_cash_drawer' || collection == 'completed_sales',
+              collection == 'staff_inventory' || collection == 'sales_inventory' || collection == 'staff_cash_drawer' ||
+              collection == 'completed_sales',
         )
         .listen((_) => _loadLocalDashboardCache());
     // Refreshes the on-device snapshots in the background when online.  It is
@@ -221,13 +216,15 @@ class _DashboardPageState extends State<DashboardPage>
 
   Future<void> _loadLocalDashboardCache() async {
     final service = LocalDatabaseSyncService();
-    await service.rebuildTodayCashDrawerFromReceipts();
+    await service.rolloverCashDrawers();
+    // Preserve branch-wide drawer totals, including sales outside business hours.
     final staffInventory = await service.getCachedCollection('staff_inventory');
     final salesInventory = await service.getCachedCollection('sales_inventory');
     final cashDrawer = await service.getCachedCollection('staff_cash_drawer');
     if (!mounted) return;
     setState(() {
       _cachedStaffInventoryDocs = staffInventory
+          .where((row) => allocationBelongsTo(row, _staffInventoryIds))
           .map(_CachedDoc.fromMap)
           .toList();
       _cachedSalesInventoryDocs = salesInventory
@@ -270,9 +267,12 @@ class _DashboardPageState extends State<DashboardPage>
 
   @override
   void dispose() {
+    _drawerDayTimer?.cancel();
     InventoryService().removeListener(_onInventoryChanged);
     _localCacheSubscription?.cancel();
     _receiptCacheSubscription?.cancel();
+    _drawerCacheSubscription?.cancel();
+    _allocationScopeSubscription?.cancel();
     super.dispose();
   }
 
@@ -283,50 +283,28 @@ class _DashboardPageState extends State<DashboardPage>
   }
 
   Future<void> _loadStaffInventoryIds(String uid) async {
-    final ids = <String>{};
-    final prefs = await SharedPreferences.getInstance();
-    try {
-      final doc = await FirebaseFirestore.instance
-          .collection('staff_requests')
-          .doc(uid)
-          .get();
-      final data = doc.data();
-      final publicStaffId = data?['staffId']?.toString().trim() ?? '';
-      final branchIds = (data?['branchIds'] as List<dynamic>? ?? [])
-          .map((id) => id.toString().trim())
-          .where((id) => id.isNotEmpty);
-      ids.addAll(branchIds);
-      final byUid = await FirebaseFirestore.instance
-          .collection('branches')
-          .where('staffIds', arrayContains: uid)
-          .get();
-      ids.addAll(byUid.docs.map((doc) => doc.id));
-      if (publicStaffId.isNotEmpty) {
-        final byPublicId = await FirebaseFirestore.instance
-            .collection('branches')
-            .where('staffIds', arrayContains: publicStaffId)
-            .get();
-        ids.addAll(byPublicId.docs.map((doc) => doc.id));
-      }
-    } catch (_) {
-      // The last resolved branch IDs are enough to open cached allocations.
-    }
-
-    if (ids.isEmpty) {
-      ids.addAll(prefs.getStringList('lastStaffBranchIds') ?? const []);
-    }
-
-    if (ids.isNotEmpty) {
-      await prefs.setStringList('lastStaffBranchIds', ids.toList());
-    }
-
-    if (mounted) {
+    await _allocationScopeSubscription?.cancel();
+    _allocationScopeSubscription = watchStaffAllocationScope(uid).listen((scope) {
+      if (!mounted) return;
+      final changed = _staffInventoryIds.join('|') != scope.targets.join('|');
       setState(() {
-        _staffInventoryIds = ids.toList();
+        _staffInventoryIds = scope.targets;
         _isResolvingStaffIdentity = false;
-        _staffInventoryStreamCache = null;
+        if (changed) _staffInventoryStreamCache = null;
       });
-    }
+      if (changed) {
+        _drawerCacheSubscription?.cancel();
+        _drawerCacheSubscription = FirebaseFirestore.instance.collection('staff_cash_drawer')
+            .where(FieldPath.documentId, whereIn: scope.targets.take(10).toList())
+            .snapshots().listen((snapshot) {
+          unawaited(LocalDatabaseSyncService().mergeCashDrawerSnapshot(snapshot.docs.map((doc) => {...doc.data(), '_localDocId': doc.id})));
+        }, onError: (Object error) { debugPrint('Cash drawer listener: $error'); });
+        unawaited(_loadLocalDashboardCache());
+      }
+    }, onError: (Object error) {
+      debugPrint('Staff allocation lookup: $error');
+      if (mounted) setState(() => _isResolvingStaffIdentity = false);
+    });
   }
 
   Stream<QuerySnapshot<Map<String, dynamic>>> _staffInventoryStream() {
@@ -340,11 +318,11 @@ class _DashboardPageState extends State<DashboardPage>
     if (ids.isEmpty) {
       return _staffInventoryStreamCache = query
           .where('staffId', isEqualTo: '')
-          .snapshots();
+          .snapshots(includeMetadataChanges: true);
     }
     return _staffInventoryStreamCache = ids.length == 1
-        ? query.where('staffId', isEqualTo: ids.first).snapshots()
-        : query.where('staffId', whereIn: ids).snapshots();
+        ? query.where('staffId', isEqualTo: ids.first).snapshots(includeMetadataChanges: true)
+        : query.where('staffId', whereIn: ids).snapshots(includeMetadataChanges: true);
   }
 
   Stream<QuerySnapshot<Map<String, dynamic>>> _receiptStream() {
@@ -376,7 +354,7 @@ class _DashboardPageState extends State<DashboardPage>
   }
 
   void _openRefundFlow() {
-    _showRefundDialog();
+    showStaffRefundDialog(context, _staffDocId ?? FirebaseAuth.instance.currentUser?.uid ?? '');
   }
 
   double _parseMoney(dynamic value) {
@@ -462,12 +440,12 @@ class _DashboardPageState extends State<DashboardPage>
   }
 
   List<Map<String, dynamic>> _coffeeRefundOptionsFromData({
-    required QueryDocumentSnapshot<Map<String, dynamic>> doc,
+    required dynamic doc,
     required Map<String, dynamic> data,
     required Map<String, dynamic> rootData,
   }) {
     final sourceId = data['sourceInventoryId']?.toString() ?? doc.id;
-    final categoryName = data['name']?.toString() ?? 'Coffee';
+    final categoryName = data['name']?.toString() ?? 'Beverages';
     final basePrice = _parseMoney(data['basePrice'] ?? rootData['basePrice']);
     final sizes =
         ((data['sizes'] as List<dynamic>?) ??
@@ -500,7 +478,7 @@ class _DashboardPageState extends State<DashboardPage>
       final sizeName = size['name']?.toString() ?? 'Regular';
       final price = basePrice + _parseMoney(size['priceDelta']);
       options.add({
-        'source': 'Coffee',
+        'source': 'Beverages',
         'docId': doc.id,
         'sourceInventoryId': sourceId,
         'name': categoryName,
@@ -516,7 +494,7 @@ class _DashboardPageState extends State<DashboardPage>
         if (addonName.isEmpty) continue;
         final addonPrice = _parseMoney(addon['priceDelta']);
         options.add({
-          'source': 'Coffee',
+          'source': 'Beverages',
           'docId': doc.id,
           'sourceInventoryId': sourceId,
           'name': categoryName,
@@ -551,13 +529,17 @@ class _DashboardPageState extends State<DashboardPage>
           : query.where('staffId', whereIn: ids);
     }
 
-    final snapshot = await query.get();
-    final rootSnapshot = await FirebaseFirestore.instance
-        .collection('sales_inventory')
-        .get();
+    final cached = LocalDatabaseSyncService();
+    final docs = (await cached.getCachedCollection('staff_inventory'))
+        .map(_CachedDoc.fromMap)
+        .where((doc) => ids.contains(doc.data()['staffId']?.toString()))
+        .toList();
+    final roots = (await cached.getCachedCollection(
+      'sales_inventory',
+    )).map(_CachedDoc.fromMap).toList();
     final activeRootById = <String, Map<String, dynamic>>{};
     final activeRootByName = <String, Map<String, dynamic>>{};
-    for (final rootDoc in rootSnapshot.docs) {
+    for (final rootDoc in roots) {
       final rootData = rootDoc.data();
       if (rootData['isDeleted'] == true) continue;
       activeRootById[rootDoc.id] = rootData;
@@ -566,7 +548,7 @@ class _DashboardPageState extends State<DashboardPage>
     }
 
     final options = <Map<String, dynamic>>[];
-    for (final doc in snapshot.docs) {
+    for (final doc in docs) {
       final data = doc.data();
       if (data['isDeleted'] == true || data['isAddon'] == true) continue;
       final sourceId = data['sourceInventoryId']?.toString() ?? doc.id;
@@ -652,15 +634,13 @@ class _DashboardPageState extends State<DashboardPage>
   Future<int> _soldQuantityForRefundOption(Map<String, dynamic> option) async {
     final uid = _staffDocId ?? FirebaseAuth.instance.currentUser?.uid ?? '';
     if (uid.isEmpty) return 0;
-    final query = FirebaseFirestore.instance
-        .collection('completed_sales')
-        .where('userId', isEqualTo: uid);
-    final snapshot = await query.get();
+    final records = await LocalDatabaseSyncService().getCachedCollection(
+      'completed_sales',
+    );
     var soldTotal = 0;
     var refundedTotal = 0;
 
-    for (final doc in snapshot.docs) {
-      final data = doc.data();
+    for (final data in records.where((row) => row['userId'] == uid)) {
       final items = (data['items'] as List<dynamic>? ?? [])
           .whereType<Map>()
           .map((item) => Map<String, dynamic>.from(item));
@@ -733,8 +713,7 @@ class _DashboardPageState extends State<DashboardPage>
         : uid;
     final amount = (_parseMoney(option['price']) * quantity).abs();
     final firestore = FirebaseFirestore.instance;
-    final salesRef = firestore.collection('completed_sales').doc();
-    final drawerRef = firestore.collection('staff_cash_drawer').doc(drawerId);
+
     final now = DateTime.now();
     final refundId =
         'R-${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}-${now.hour.toString().padLeft(2, '0')}${now.minute.toString().padLeft(2, '0')}-${now.millisecond.toString().padLeft(3, '0')}';
@@ -746,69 +725,67 @@ class _DashboardPageState extends State<DashboardPage>
     final itemLabel =
         '${option['name'] ?? 'Item'} (${option['variant'] ?? 'Refund'})';
 
-    await firestore.runTransaction((transaction) async {
-      final drawerSnapshot = await transaction.get(drawerRef);
-      final currentCash =
-          (drawerSnapshot.data()?['balance'] as num?)?.toDouble() ?? 0.0;
-      final nextCash = currentCash - amount;
-      transaction.set(salesRef, {
-        'userId': uid,
-        'branchId': drawerId,
-        'salesId': refundId,
-        'type': 'refund',
-        'source': option['source'] ?? 'Refund',
-        'reason': reason,
-        'subtotal': -amount,
-        'discount': 0.0,
-        'discountType': 'None',
-        'total': -amount,
-        'paidAmount': 0.0,
-        'change': 0.0,
-        'paymentMode': 'Cash',
-        'cashDrawerDelta': -amount,
-        'cashDrawerBalanceAfter': nextCash,
-        'items': [
-          {
-            'name': option['name'],
-            'variant': option['variant'],
-            'price': option['price'],
-            'quantity': quantity,
-            'sourceInventoryId': option['sourceInventoryId'] ?? '',
-            'itemId': option['itemId'] ?? '',
-            'isBundle': option['isBundle'] == true,
-            'isCoffee': option['isCoffee'] == true,
-          },
-        ],
-        'timestamp': FieldValue.serverTimestamp(),
-        'status': 'Refund',
-      });
-      transaction.set(drawerRef, {
-        'balance': nextCash,
-        'updatedAt': FieldValue.serverTimestamp(),
-        'staffId': drawerId,
-        'branchId': drawerId,
-        'handledByStaffId': uid,
-      }, SetOptions(merge: true));
-    });
-
-    await firestore.collection('admin_notifications').add({
-      'title': 'Refund recorded',
-      'message':
-          '$staffName refunded $quantity x $itemLabel for ₱${amount.toStringAsFixed(2)}. Cash drawer was deducted.',
-      'category': 'Refunds',
-      'type': 'refund',
-      'salesId': refundId,
-      'staffId': uid,
-      'staffName': staffName,
+    await LocalDatabaseSyncService().recordCompletedSale({
+      'userId': uid,
       'branchId': drawerId,
-      'amount': amount,
-      'quantity': quantity,
+      'salesId': refundId,
+      'type': 'refund',
+      'source': option['source'] ?? 'Refund',
       'reason': reason,
-      'itemName': option['name'] ?? '',
-      'variant': option['variant'] ?? '',
-      'isRead': false,
-      'createdAt': FieldValue.serverTimestamp(),
+      'subtotal': -amount,
+      'discount': 0.0,
+      'discountType': 'None',
+      'total': -amount,
+      'paidAmount': 0.0,
+      'change': 0.0,
+      'paymentMode': 'Cash',
+      'cashDrawerDelta': -amount,
+      'items': [
+        {
+          'name': option['name'],
+          'variant': option['variant'],
+          'price': option['price'],
+          'quantity': quantity,
+          'sourceInventoryId': option['sourceInventoryId'] ?? '',
+          'itemId': option['itemId'] ?? '',
+          'isBundle': option['isBundle'] == true,
+          'isCoffee': option['isCoffee'] == true,
+        },
+      ],
+      'timestamp': now,
+      'status': 'Refund',
     });
+    await LocalDatabaseSyncService().recordCashDrawerChange(
+      drawerId: drawerId,
+      cashDelta: -amount,
+      gcashDelta: 0,
+      staffId: uid,
+      receiptId: refundId,
+    );
+
+    unawaited(
+      firestore
+          .collection('admin_notifications')
+          .add({
+            'title': 'Refund recorded',
+            'message':
+                '$staffName refunded $quantity x $itemLabel for ₱${amount.toStringAsFixed(2)}. Cash drawer was deducted.',
+            'category': 'Refunds',
+            'type': 'refund',
+            'salesId': refundId,
+            'staffId': uid,
+            'staffName': staffName,
+            'branchId': drawerId,
+            'amount': amount,
+            'quantity': quantity,
+            'reason': reason,
+            'itemName': option['name'] ?? '',
+            'variant': option['variant'] ?? '',
+            'isRead': false,
+            'createdAt': FieldValue.serverTimestamp(),
+          })
+          .then<void>((_) {}, onError: (Object _) {}),
+    );
   }
 
   Future<void> _showRefundDialog() async {
@@ -1075,14 +1052,14 @@ class _DashboardPageState extends State<DashboardPage>
       labelText: label,
       prefixIcon: Icon(icon, color: _C.primary),
       filled: true,
-      fillColor: const Color(0xFFFFF3F8),
+      fillColor: AppColors.surfaceTint,
       border: OutlineInputBorder(
         borderRadius: BorderRadius.circular(16),
-        borderSide: const BorderSide(color: Color(0xFFF8BBD0)),
+        borderSide: const BorderSide(color: AppColors.blush),
       ),
       enabledBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(16),
-        borderSide: const BorderSide(color: Color(0xFFF8BBD0)),
+        borderSide: const BorderSide(color: AppColors.blush),
       ),
       focusedBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(16),
@@ -1100,154 +1077,121 @@ class _DashboardPageState extends State<DashboardPage>
     final horizontalPadding = isTablet ? 24.0 : 16.0;
     final headerHeight = isTablet ? 260.0 : 300.0;
 
-    return RefreshIndicator(onRefresh: () async {
-      try {
-        await Future.wait([
-          FirebaseFirestore.instance.collection('sales_inventory').get(const GetOptions(source: Source.server)),
-          if (_staffDocId != null) FirebaseFirestore.instance.collection('completed_sales').where('userId', isEqualTo: _staffDocId).get(const GetOptions(source: Source.server)),
-        ]).timeout(const Duration(seconds: 15));
-        await _initStaffIdentity(); await _loadLocalDashboardCache();
-        if (mounted) setState(() { _staffInventoryStreamCache = null; });
-      } catch (_) { if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Unable to refresh. Please check your connection.'))); }
-    }, child: CustomScrollView(
-      controller: widget.scrollController,
-      physics: const AlwaysScrollableScrollPhysics(parent: ClampingScrollPhysics()),
-      slivers: [
-        // ── Header ────────────────────────────────────────────────────────
-        SliverAppBar(
-          expandedHeight: headerHeight,
-          collapsedHeight: 60,
-          pinned: true,
-          elevation: 0,
-          backgroundColor: _C.primary,
-          foregroundColor: Colors.white,
-          centerTitle: false,
-          flexibleSpace: FlexibleSpaceBar(
-            collapseMode: CollapseMode.parallax,
-            background: _Header(
-              onMessage: widget.onMessage,
-              onNotification: widget.onNotification,
-              // A cash-drawer document is keyed by the assigned branch ID.
-              // Do not add every cached drawer here: that made a staff member's
-              // dashboard total include other staff/branch cash drawers.
-              drawerIds: _staffInventoryIds,
-              cachedDrawerDocs: _cachedCashDrawerDocs,
-              staffDocId: _staffDocId,
+    return RefreshIndicator(
+      onRefresh: () async {
+        try {
+          await Future.wait([
+            FirebaseFirestore.instance
+                .collection('sales_inventory')
+                .get(const GetOptions(source: Source.server)),
+            if (_staffDocId != null)
+              FirebaseFirestore.instance
+                  .collection('completed_sales')
+                  .where('userId', isEqualTo: _staffDocId)
+                  .get(const GetOptions(source: Source.server)),
+          ]).timeout(const Duration(seconds: 15));
+          await _initStaffIdentity();
+          await _loadLocalDashboardCache();
+          if (mounted)
+            setState(() {
+              _staffInventoryStreamCache = null;
+            });
+        } catch (_) {
+          if (mounted)
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text(
+                  'Unable to refresh. Please check your connection.',
+                ),
+              ),
+            );
+        }
+      },
+      child: CustomScrollView(
+        controller: widget.scrollController,
+        physics: const AlwaysScrollableScrollPhysics(
+          parent: ClampingScrollPhysics(),
+        ),
+        slivers: [
+          // ── Header ────────────────────────────────────────────────────────
+          SliverAppBar(
+            expandedHeight: headerHeight,
+            collapsedHeight: 60,
+            pinned: true,
+            elevation: 0,
+            backgroundColor: _C.primary,
+            foregroundColor: Colors.white,
+            centerTitle: false,
+            flexibleSpace: FlexibleSpaceBar(
+              collapseMode: CollapseMode.parallax,
+              background: _Header(
+                onMessage: widget.onMessage,
+                onNotification: widget.onNotification,
+                // A cash-drawer document is keyed by the assigned branch ID.
+                // Do not add every cached drawer here: that made a staff member's
+                // dashboard total include other staff/branch cash drawers.
+                drawerIds: _staffInventoryIds,
+                cachedDrawerDocs: _cachedCashDrawerDocs,
+                staffDocId: _staffDocId,
+              ),
             ),
           ),
-        ),
 
-        // ── "Dashboard" label ─────────────────────────────────────────────
-        SliverToBoxAdapter(
-          child: Container(
-            color: _C.surface,
-            padding: EdgeInsets.fromLTRB(
-              isTablet ? 24 : 20,
-              isTablet ? 10 : 14,
-              isTablet ? 24 : 20,
-              8,
-            ),
-            child: Align(
-              alignment: isTablet ? Alignment.centerLeft : Alignment.center,
-              child: ConstrainedBox(
-                constraints: BoxConstraints(maxWidth: contentMaxWidth),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    if (isTablet)
-                      Row(children: [const _SectionLabel(title: 'Dashboard')])
-                    else ...[
-                      const Align(
-                        alignment: Alignment.center,
-                        child: _SectionLabel(title: 'Dashboard'),
+          // ── "Dashboard" label ─────────────────────────────────────────────
+          SliverToBoxAdapter(
+            child: Container(
+              color: _C.surface,
+              padding: EdgeInsets.fromLTRB(
+                isTablet ? 24 : 20,
+                isTablet ? 10 : 14,
+                isTablet ? 24 : 20,
+                8,
+              ),
+              child: Align(
+                alignment: isTablet ? Alignment.centerLeft : Alignment.center,
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(maxWidth: contentMaxWidth),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      if (isTablet)
+                        Row(children: [const _SectionLabel(title: 'Dashboard')])
+                      else ...[
+                        const Align(
+                          alignment: Alignment.center,
+                          child: _SectionLabel(title: 'Dashboard'),
+                        ),
+                      ],
+                      const SizedBox(height: 12),
+                      Align(
+                        alignment: isTablet
+                            ? Alignment.centerLeft
+                            : Alignment.center,
+                        child: _InventoryViewSelector(
+                          selected: _inventoryView,
+                          onSelected: (value) => setState(() {
+                            _inventoryView = value;
+                            _inventoryPageByView[value] = 0;
+                          }),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 620),
+                          child: _buildDashboardSearchField(),
+                        ),
                       ),
                     ],
-                    const SizedBox(height: 12),
-                    Align(
-                      alignment: isTablet
-                          ? Alignment.centerLeft
-                          : Alignment.center,
-                      child: _InventoryViewSelector(
-                        selected: _inventoryView,
-                        onSelected: (value) => setState(() {
-                          _inventoryView = value;
-                          _inventoryPageByView[value] = 0;
-                        }),
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: ConstrainedBox(
-                        constraints: const BoxConstraints(maxWidth: 620),
-                        child: _buildDashboardSearchField(),
-                      ),
-                    ),
-                  ],
+                  ),
                 ),
               ),
             ),
           ),
-        ),
 
-        // ── Inventory list ────────────────────────────────────────────────
-        SliverPadding(
-          padding: EdgeInsets.fromLTRB(
-            horizontalPadding,
-            0,
-            horizontalPadding,
-            0,
-          ),
-          sliver: SliverToBoxAdapter(
-            child: Align(
-              alignment: Alignment.topCenter,
-              child: ConstrainedBox(
-                constraints: BoxConstraints(maxWidth: inventoryMaxWidth),
-                child: _buildAdminInventoryList(),
-              ),
-            ),
-          ),
-        ),
-
-        // ── "Performance" label + History ─────────────────────────────────
-        SliverToBoxAdapter(
-          child: Container(
-            color: _C.surface,
-            padding: EdgeInsets.fromLTRB(
-              isTablet ? 24 : 20,
-              isTablet ? 10 : 12,
-              isTablet ? 24 : 20,
-              10,
-            ),
-            child: Align(
-              alignment: isTablet ? Alignment.centerLeft : Alignment.center,
-              child: ConstrainedBox(
-                constraints: BoxConstraints(maxWidth: contentMaxWidth),
-                child: Column(
-                  crossAxisAlignment: isTablet
-                      ? CrossAxisAlignment.start
-                      : CrossAxisAlignment.center,
-                  children: [
-                    const _SectionLabel(title: 'Performance'),
-                    const SizedBox(height: 10),
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      alignment: WrapAlignment.center,
-                      children: [_HistoryButton(onTap: _showHistory)],
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ),
-
-        // ── Performance cards ─────────────────────────────────────────────
-        SliverSafeArea(
-          top: false,
-          bottom: false,
-          sliver: SliverPadding(
+          // ── Inventory list ────────────────────────────────────────────────
+          SliverPadding(
             padding: EdgeInsets.fromLTRB(
               horizontalPadding,
               0,
@@ -1258,41 +1202,102 @@ class _DashboardPageState extends State<DashboardPage>
               child: Align(
                 alignment: Alignment.topCenter,
                 child: ConstrainedBox(
-                  constraints: BoxConstraints(maxWidth: contentMaxWidth),
-                  child: _buildPerformanceData(),
+                  constraints: BoxConstraints(maxWidth: inventoryMaxWidth),
+                  child: _buildAdminInventoryList(),
                 ),
               ),
             ),
           ),
-        ),
 
-        // The staff navigation floats over the body. Reserve space after the
-        // receipt cards so the last card and the pager remain scrollable into
-        // view when there are several receipts.
-        const SliverToBoxAdapter(child: SizedBox(height: 180)),
-      ],
-    ));
+          // ── "Performance" label + History ─────────────────────────────────
+          SliverToBoxAdapter(
+            child: Container(
+              color: _C.surface,
+              padding: EdgeInsets.fromLTRB(
+                isTablet ? 24 : 20,
+                isTablet ? 10 : 12,
+                isTablet ? 24 : 20,
+                10,
+              ),
+              child: Align(
+                alignment: isTablet ? Alignment.centerLeft : Alignment.center,
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(maxWidth: contentMaxWidth),
+                  child: Column(
+                    crossAxisAlignment: isTablet
+                        ? CrossAxisAlignment.start
+                        : CrossAxisAlignment.center,
+                    children: [
+                      const _SectionLabel(title: 'Performance'),
+                      const SizedBox(height: 10),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        alignment: WrapAlignment.center,
+                        children: [_HistoryButton(onTap: _showHistory)],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+
+          // ── Performance cards ─────────────────────────────────────────────
+          SliverSafeArea(
+            top: false,
+            bottom: false,
+            sliver: SliverPadding(
+              padding: EdgeInsets.fromLTRB(
+                horizontalPadding,
+                0,
+                horizontalPadding,
+                0,
+              ),
+              sliver: SliverToBoxAdapter(
+                child: Align(
+                  alignment: Alignment.topCenter,
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(maxWidth: contentMaxWidth),
+                    child: _buildPerformanceData(),
+                  ),
+                ),
+              ),
+            ),
+          ),
+
+          // The staff navigation floats over the body. Reserve space after the
+          // receipt cards so the last card and the pager remain scrollable into
+          // view when there are several receipts.
+          const SliverToBoxAdapter(child: SizedBox(height: 180)),
+        ],
+      ),
+    );
   }
 
   // ── Admin inventory list ──────────────────────────────────────────────────
   Widget _buildAdminInventoryList() {
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      key: ValueKey(_staffInventoryIds.join('|')),
       stream: _staffInventoryStream(),
       builder: (context, snapshot) {
         if (_isResolvingStaffIdentity) {
           return const _DashboardLoadingSkeleton();
         }
-        if (snapshot.hasError) {
+        if (snapshot.hasError && _cachedStaffInventoryDocs.isEmpty) {
           return _ErrorCard(message: 'Error loading inventory');
         }
-        if (snapshot.hasData) {
+        if (snapshot.hasData &&
+            (!snapshot.data!.metadata.isFromCache ||
+                snapshot.data!.docs.isNotEmpty)) {
           unawaited(
-            LocalDatabaseSyncService().cacheCollectionDocs(
-              'staff_inventory',
+            LocalDatabaseSyncService().cacheStaffInventorySnapshot(
+              _staffInventoryIds,
               snapshot.data!.docs.map((doc) {
                 final data = doc.data();
                 return {...data, '_localDocId': doc.id};
               }),
+              authoritative: !snapshot.data!.metadata.isFromCache,
             ),
           );
         }
@@ -1305,7 +1310,7 @@ class _DashboardPageState extends State<DashboardPage>
             .map(_CachedDoc.fromFirestore)
             .toList();
         final docs =
-            (liveDocs == null ||
+            (_cachedStaffInventoryDocs.isNotEmpty || liveDocs == null ||
                 (liveDocs.isEmpty && _cachedStaffInventoryDocs.isNotEmpty))
             ? _cachedStaffInventoryDocs
             : liveDocs!;
@@ -1320,7 +1325,9 @@ class _DashboardPageState extends State<DashboardPage>
         return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
           stream: _rootInventoryStream,
           builder: (context, rootSnapshot) {
-            if (rootSnapshot.hasData) {
+            if (rootSnapshot.hasData &&
+                (!rootSnapshot.data!.metadata.isFromCache ||
+                    rootSnapshot.data!.docs.isNotEmpty)) {
               unawaited(
                 LocalDatabaseSyncService().cacheCollectionDocs(
                   'sales_inventory',
@@ -1416,7 +1423,7 @@ class _DashboardPageState extends State<DashboardPage>
               final items = isCoffee
                   ? [
                       {
-                        'name': data['name'] ?? 'Coffee',
+                        'name': data['name'] ?? 'Beverages',
                         'price': data['basePrice'] ?? 0,
                         'stock': 999,
                         'startingStock': 999,
@@ -1432,6 +1439,7 @@ class _DashboardPageState extends State<DashboardPage>
 
               inventoryDocs.add({
                 ...data,
+                'publicId': rootData['publicId'] ?? data['publicId'],
                 'staffDocId': doc.id,
                 'sourceInventoryId': sourceId,
                 'categoryTimestamp': rootData['timestamp'] ?? data['timestamp'],
@@ -1531,7 +1539,7 @@ class _DashboardPageState extends State<DashboardPage>
                           : _inventoryView == 'bundle'
                           ? 'No bundles found.'
                           : _inventoryView == 'coffee'
-                          ? 'No coffee items found.'
+                          ? 'No beverage items found.'
                           : 'No category items found.',
                     ),
                   )
@@ -1575,14 +1583,14 @@ class _DashboardPageState extends State<DashboardPage>
 
                     // Derive a friendly category label
                     final nameLower = name.toLowerCase();
-                    final coffeeId = data['coffeeId']?.toString().trim() ?? '';
+                    final coffeeId = inventoryDisplayId(data);
                     String category = sourceId.isEmpty
                         ? 'Category item'
                         : 'ID: ${_buildCategoryDisplayId(data)}';
                     if (data['isCoffee'] == true) {
                       category = coffeeId.isNotEmpty
-                          ? 'Coffee - $coffeeId'
-                          : 'Coffee';
+                          ? 'Beverages - $coffeeId'
+                          : 'Beverages';
                     }
 
                     return Padding(
@@ -1750,7 +1758,7 @@ class _DashboardPageState extends State<DashboardPage>
                   'This item has no available stock. Staff cannot open unavailable items. Please contact admin.',
                   style: TextStyle(
                     fontSize: 14,
-                    color: Color(0xFFE91E63),
+                    color: AppColors.primary,
                     height: 1.5,
                   ),
                 ),
@@ -1822,8 +1830,7 @@ class _DashboardPageState extends State<DashboardPage>
               final userId = data['userId']?.toString() ?? '';
               if (staffId.isNotEmpty && userId != staffId) return false;
               final dt = timestamp.toDate();
-              return !dt.isBefore(today) &&
-                  dt.isBefore(tomorrow);
+              return !dt.isBefore(today) && dt.isBefore(tomorrow);
             }
 
             for (final data in [...localSales, ...firestoreSales]) {
@@ -1931,7 +1938,7 @@ class _PagerControls extends StatelessWidget {
               fixedSize: const Size(44, 44),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(14),
-                side: const BorderSide(color: Color(0xFFF8BBD0)),
+                side: const BorderSide(color: AppColors.blush),
               ),
             ),
           ),
@@ -1941,7 +1948,7 @@ class _PagerControls extends StatelessWidget {
             decoration: BoxDecoration(
               color: Colors.white,
               borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: const Color(0xFFF8BBD0)),
+              border: Border.all(color: AppColors.blush),
             ),
             child: Text(
               '${currentPage + 1} / $pageCount',
@@ -1963,7 +1970,7 @@ class _PagerControls extends StatelessWidget {
               fixedSize: const Size(44, 44),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(14),
-                side: const BorderSide(color: Color(0xFFF8BBD0)),
+                side: const BorderSide(color: AppColors.blush),
               ),
             ),
           ),
@@ -1987,7 +1994,7 @@ class _InventoryViewSelector extends StatelessWidget {
     final options = [
       ('categories', Icons.category_outlined, 'Categories'),
       ('bundle', Icons.inventory_2_outlined, 'Bundle'),
-      ('coffee', Icons.coffee_outlined, 'Coffee'),
+      ('coffee', Icons.coffee_outlined, 'Beverages'),
     ];
 
     return SingleChildScrollView(
@@ -2077,7 +2084,7 @@ class _HistoryButton extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
         decoration: BoxDecoration(
           gradient: const LinearGradient(
-            colors: [_C.primaryLight, _C.primary],
+            colors: [AppColors.accent, _C.primary],
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
           ),
@@ -2196,7 +2203,7 @@ class _ReceiptCard extends StatelessWidget {
           borderRadius: BorderRadius.circular(18),
           boxShadow: [
             BoxShadow(
-              color: Colors.pink.withOpacity(0.08),
+              color: AppColors.brand.withOpacity(0.08),
               blurRadius: 14,
               offset: const Offset(0, 5),
             ),
@@ -2209,7 +2216,7 @@ class _ReceiptCard extends StatelessWidget {
               padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
               decoration: const BoxDecoration(
                 gradient: LinearGradient(
-                  colors: [Color(0xFFC2105C), Color(0xFFF48FB1)],
+                  colors: [AppColors.primaryDark, AppColors.accent],
                   begin: Alignment.topLeft,
                   end: Alignment.bottomRight,
                 ),
@@ -2302,7 +2309,7 @@ class _ReceiptCard extends StatelessWidget {
                     final itemKind = item['isBundle'] == true
                         ? 'Bundle'
                         : item['isCoffee'] == true
-                        ? 'Coffee'
+                        ? 'Beverages'
                         : '';
                     final displayName = itemKind.isNotEmpty
                         ? '$name • $itemKind'
@@ -2342,10 +2349,7 @@ class _ReceiptCard extends StatelessWidget {
                         : paymentMode,
                   ),
                   if (subtotal > 0)
-                    _ReceiptLine(
-                      'Subtotal',
-                      '₱${subtotal.toStringAsFixed(2)}',
-                    ),
+                    _ReceiptLine('Subtotal', '₱${subtotal.toStringAsFixed(2)}'),
                   if (hasDiscount)
                     _ReceiptLine(
                       discountType.isNotEmpty
@@ -2394,7 +2398,7 @@ class _ReceiptLine extends StatelessWidget {
             child: Text(
               label,
               style: TextStyle(
-                color: Colors.pink.shade400,
+                color: AppColors.brand.shade400,
                 fontSize: strong ? 14 : 12,
                 fontWeight: strong ? FontWeight.w900 : FontWeight.w700,
               ),
@@ -2772,7 +2776,7 @@ class _Header extends StatelessWidget {
                 (lastName?.isNotEmpty ?? false))
             ? '${firstName ?? ''} ${lastName ?? ''}'.trim()
             : data['name']?.toString().trim() ?? 'Staff Name';
-        final staffId = data['staffId']?.toString().trim() ?? '#0000';
+        final staffId = publicItemId(data['staffId']?.toString().trim() ?? '');
         final role = data['role']?.toString().trim() ?? 'Staff Member';
         final photoUrl =
             data['photoUrl']?.toString() ?? data['profileImageUrl']?.toString();
@@ -2794,9 +2798,9 @@ class _Header extends StatelessWidget {
                   begin: Alignment.topCenter,
                   end: Alignment.bottomCenter,
                   colors: [
-                    Color.fromARGB(155, 145, 0, 75),
-                    Color.fromARGB(130, 235, 55, 145),
-                    Color.fromARGB(165, 175, 0, 95),
+                    Color.fromARGB(155, 148, 22, 58),
+                    Color.fromARGB(130, 185, 28, 73),
+                    Color.fromARGB(165, 112, 19, 46),
                   ],
                   stops: [0.0, 0.45, 1.0],
                 ),
@@ -2907,17 +2911,11 @@ class _Header extends StatelessWidget {
                             doc.id: doc.data(),
                         };
                         final cashDrawerBalance =
-                            cashDrawerSnapshot.data?.docs.fold<double>(0.0, (
+                            (cashDrawerSnapshot.data?.docs.isNotEmpty == true ? cashDrawerSnapshot.data!.docs : null)?.fold<double>(0.0, (
                               sum,
                               doc,
                             ) {
                               final data = cachedById[doc.id] ?? doc.data();
-                              Future.microtask(
-                                () => CashDrawerService.zeroIfPast24Hours(
-                                  doc.id,
-                                  data,
-                                ),
-                              );
                               return sum +
                                   ((data['balance'] as num?)?.toDouble() ??
                                       0.0);
@@ -3202,7 +3200,7 @@ class _GuideSheet extends StatelessWidget {
       (
         Icons.inventory_2_rounded,
         'Assigned inventory',
-        'Check Categories, Bundles, and Coffee. Only allocated and available items should appear.',
+        'Check Categories, Bundles, and Beverages. Only allocated and available items should appear.',
       ),
       (
         Icons.point_of_sale_rounded,
@@ -3255,7 +3253,7 @@ class _GuideSheet extends StatelessWidget {
                       height: 46,
                       decoration: BoxDecoration(
                         gradient: const LinearGradient(
-                          colors: [_C.primary, _C.primaryLight],
+                          colors: [_C.primary, AppColors.accent],
                           begin: Alignment.topLeft,
                           end: Alignment.bottomRight,
                         ),
@@ -3776,7 +3774,7 @@ class _StaffAvatar extends StatelessWidget {
   }
 
   Widget _fallback() => Container(
-    color: const Color(0xFFC2105C),
+    color: AppColors.primaryDark,
     child: const Icon(Icons.person_rounded, color: Color(0xFFFFD8B5), size: 38),
   );
 
@@ -4098,8 +4096,8 @@ class _ItemCardState extends State<_ItemCard> {
                                 )
                               : const LinearGradient(
                                   colors: [
-                                    Color(0xFFC2105C),
-                                    Color(0xFFF48FB1),
+                                    AppColors.primaryDark,
+                                    AppColors.accent,
                                   ],
                                   begin: Alignment.topLeft,
                                   end: Alignment.bottomRight,
@@ -4145,7 +4143,9 @@ class _ItemCardState extends State<_ItemCard> {
     if (sources.length < 2) return _buildImageSource(sources.first);
     return PageView.builder(
       controller: _imageController,
-      physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
+      physics: const AlwaysScrollableScrollPhysics(
+        parent: BouncingScrollPhysics(),
+      ),
       itemCount: sources.length,
       onPageChanged: (page) => _imageIndex = page,
       itemBuilder: (context, index) => _buildImageSource(sources[index]),
@@ -4301,7 +4301,7 @@ class _HistorySheetState extends State<_HistorySheet> {
       maxChildSize: 0.95,
       builder: (_, scrollController) => Container(
         decoration: const BoxDecoration(
-          color: Color(0xFFFFF8F5),
+          color: AppColors.background,
           borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
         ),
         child: Column(
@@ -4312,7 +4312,7 @@ class _HistorySheetState extends State<_HistorySheet> {
               width: 40,
               height: 4,
               decoration: BoxDecoration(
-                color: Colors.pink.shade200,
+                color: AppColors.brand.shade200,
                 borderRadius: BorderRadius.circular(2),
               ),
             ),
@@ -4471,7 +4471,7 @@ class _HistorySheetState extends State<_HistorySheet> {
                           child: Text(
                             'No receipt history yet.',
                             style: TextStyle(
-                              color: Colors.pink.shade400,
+                              color: AppColors.brand.shade400,
                               fontSize: 15,
                             ),
                           ),
@@ -4510,7 +4510,7 @@ class _HistorySheetState extends State<_HistorySheet> {
                                       border: Border.all(
                                         color: selected
                                             ? _C.primary
-                                            : Colors.pink.shade200,
+                                            : AppColors.brand.shade200,
                                       ),
                                     ),
                                     child: Text(
@@ -4520,7 +4520,7 @@ class _HistorySheetState extends State<_HistorySheet> {
                                         fontWeight: FontWeight.w700,
                                         color: selected
                                             ? Colors.white
-                                            : Colors.pink.shade600,
+                                            : AppColors.brand.shade600,
                                       ),
                                     ),
                                   ),
@@ -4561,7 +4561,7 @@ class _HistorySheetState extends State<_HistorySheet> {
                           const Divider(
                             height: 1,
                             thickness: 1,
-                            color: Color(0xFFEDD9C8),
+                            color: AppColors.border,
                           ),
                           Expanded(
                             child: filteredReceipts.isEmpty
@@ -4569,7 +4569,7 @@ class _HistorySheetState extends State<_HistorySheet> {
                                     child: Text(
                                       'No receipt record',
                                       style: TextStyle(
-                                        color: Colors.pink.shade400,
+                                        color: AppColors.brand.shade400,
                                         fontSize: 15,
                                         fontWeight: FontWeight.w700,
                                       ),
@@ -4688,7 +4688,7 @@ class _HistoryEntryCard extends StatelessWidget {
     String title,
   ) {
     final titleLower = title.toLowerCase();
-    return titleLower.contains('coffee') ||
+    return (titleLower.contains('coffee') || titleLower.contains('beverage')) ||
         titleLower.contains('smoothie') ||
         titleLower.contains('latte') ||
         titleLower.contains('espresso') ||
@@ -4781,7 +4781,7 @@ class _HistoryEntryCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(
-            color: Colors.pink.withOpacity(0.08),
+            color: AppColors.brand.withOpacity(0.08),
             blurRadius: 12,
             offset: const Offset(0, 4),
           ),
@@ -4879,7 +4879,7 @@ class _HistoryEntryCard extends StatelessWidget {
                     ),
                     decoration: BoxDecoration(
                       gradient: const LinearGradient(
-                        colors: [Color(0xFFC2105C), Color(0xFFF48FB1)],
+                        colors: [AppColors.primaryDark, AppColors.accent],
                       ),
                       borderRadius: BorderRadius.circular(12),
                     ),
@@ -4914,7 +4914,7 @@ class _HistoryEntryCard extends StatelessWidget {
                 ],
                 if (itemsList.isNotEmpty) ...[
                   const SizedBox(height: 10),
-                  const Divider(height: 1, color: Color(0xFFF0E0D6)),
+                  const Divider(height: 1, color: AppColors.border),
                   const SizedBox(height: 8),
                   ...itemsList.asMap().entries.map((entry) {
                     final index = entry.key;
@@ -4943,7 +4943,7 @@ class _HistoryEntryCard extends StatelessWidget {
                                   style: const TextStyle(
                                     fontSize: 13,
                                     fontWeight: FontWeight.w600,
-                                    color: Color(0xFFE91E63),
+                                    color: AppColors.primary,
                                   ),
                                 ),
                               ),
@@ -4951,7 +4951,7 @@ class _HistoryEntryCard extends StatelessWidget {
                                 '$soldQty / $startQty sold',
                                 style: TextStyle(
                                   fontSize: 12,
-                                  color: Colors.pink.shade400,
+                                  color: AppColors.brand.shade400,
                                 ),
                               ),
                             ],
@@ -4973,7 +4973,7 @@ class _HistoryEntryCard extends StatelessWidget {
                             child: LinearProgressIndicator(
                               value: progress.toDouble(),
                               minHeight: 6,
-                              backgroundColor: Colors.pink.shade100,
+                              backgroundColor: AppColors.brand.shade100,
                               valueColor: AlwaysStoppedAnimation<Color>(
                                 progress > 0.7
                                     ? Colors.green.shade500
@@ -5010,7 +5010,7 @@ class _PerformanceCard extends StatelessWidget {
     String title,
   ) {
     final titleLower = title.toLowerCase();
-    return titleLower.contains('coffee') ||
+    return (titleLower.contains('coffee') || titleLower.contains('beverage')) ||
         titleLower.contains('smoothie') ||
         titleLower.contains('latte') ||
         titleLower.contains('espresso') ||
@@ -5119,7 +5119,7 @@ class _PerformanceCard extends StatelessWidget {
           borderRadius: BorderRadius.circular(20),
           boxShadow: [
             BoxShadow(
-              color: Colors.pink.withOpacity(0.10),
+              color: AppColors.brand.withOpacity(0.10),
               blurRadius: 16,
               offset: const Offset(0, 6),
             ),
@@ -5133,7 +5133,7 @@ class _PerformanceCard extends StatelessWidget {
               padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
               decoration: const BoxDecoration(
                 gradient: LinearGradient(
-                  colors: [Color(0xFFC2105C), Color(0xFFF48FB1)],
+                  colors: [AppColors.primaryDark, AppColors.accent],
                   begin: Alignment.topLeft,
                   end: Alignment.bottomRight,
                 ),
@@ -5210,7 +5210,7 @@ class _PerformanceCard extends StatelessWidget {
                                 ),
                                 const SizedBox(width: 4),
                                 Text(
-                                  coffeeId.isNotEmpty ? coffeeId : 'Coffee',
+                                  coffeeId.isNotEmpty ? coffeeId : 'Beverages',
                                   style: const TextStyle(
                                     color: Colors.white,
                                     fontSize: 10,
@@ -5272,7 +5272,7 @@ class _PerformanceCard extends StatelessWidget {
                             style: TextStyle(
                               fontSize: 12,
                               fontWeight: FontWeight.w700,
-                              color: Color(0xFFE91E63),
+                              color: AppColors.primary,
                               letterSpacing: 0.5,
                             ),
                           ),
@@ -5301,7 +5301,7 @@ class _PerformanceCard extends StatelessWidget {
                       ],
                     ),
                     const SizedBox(height: 8),
-                    Container(height: 1, color: const Color(0xFFF0E0D6)),
+                    Container(height: 1, color: AppColors.border),
                     const SizedBox(height: 8),
                     ...itemsList.asMap().entries.map((entry) {
                       final index = entry.key;
@@ -5342,7 +5342,7 @@ class _PerformanceCard extends StatelessWidget {
                                     style: const TextStyle(
                                       fontSize: 14,
                                       fontWeight: FontWeight.w500,
-                                      color: Color(0xFFC2105C),
+                                      color: AppColors.primaryDark,
                                     ),
                                   ),
                                 ),
@@ -5404,7 +5404,7 @@ class _PerformanceCard extends StatelessWidget {
                       );
                     }),
                     const SizedBox(height: 8),
-                    Container(height: 1, color: const Color(0xFFF0E0D6)),
+                    Container(height: 1, color: AppColors.border),
                     const SizedBox(height: 12),
 
                     if (totalStart > 0 ||
@@ -5594,7 +5594,7 @@ class _SummaryRow extends StatelessWidget {
           label,
           style: const TextStyle(
             fontSize: 13,
-            color: Color(0xFFE91E63),
+            color: AppColors.primary,
             fontWeight: FontWeight.w500,
           ),
         ),
@@ -5649,7 +5649,7 @@ class _DashboardLoadingSkeleton extends StatelessWidget {
       width: width,
       height: height,
       decoration: BoxDecoration(
-        color: const Color(0xFFFFE1EC),
+        color: AppColors.blush,
         borderRadius: BorderRadius.circular(10),
       ),
     );
@@ -5658,7 +5658,14 @@ class _DashboardLoadingSkeleton extends StatelessWidget {
       padding: const EdgeInsets.symmetric(vertical: 18),
       child: Column(
         children: [
-          const Padding(padding: EdgeInsets.all(12), child: SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2))),
+          const Padding(
+            padding: EdgeInsets.all(12),
+            child: SizedBox(
+              width: 24,
+              height: 24,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+          ),
           Container(
             width: double.infinity,
             height: compact ? 128 : 166,
@@ -5674,7 +5681,7 @@ class _DashboardLoadingSkeleton extends StatelessWidget {
                     width: 96,
                     height: 120,
                     decoration: BoxDecoration(
-                      color: const Color(0xFFFFE1EC),
+                      color: AppColors.blush,
                       borderRadius: BorderRadius.circular(14),
                     ),
                   ),
@@ -5698,7 +5705,7 @@ class _DashboardLoadingSkeleton extends StatelessWidget {
                   width: 46,
                   height: 46,
                   decoration: BoxDecoration(
-                    color: const Color(0xFFFFE1EC),
+                    color: AppColors.blush,
                     borderRadius: BorderRadius.circular(14),
                   ),
                 ),
@@ -5725,12 +5732,12 @@ class _EmptyState extends StatelessWidget {
       child: Center(
         child: Column(
           children: [
-            Icon(icon, size: 48, color: Colors.pink.shade200),
+            Icon(icon, size: 48, color: AppColors.brand.shade200),
             const SizedBox(height: 12),
             Text(
               label,
               style: TextStyle(
-                color: Colors.pink.shade400,
+                color: AppColors.brand.shade400,
                 fontSize: 15,
                 fontWeight: FontWeight.w600,
               ),
@@ -5739,7 +5746,7 @@ class _EmptyState extends StatelessWidget {
               const SizedBox(height: 4),
               Text(
                 sublabel!,
-                style: TextStyle(color: Colors.pink.shade300, fontSize: 13),
+                style: TextStyle(color: AppColors.brand.shade300, fontSize: 13),
                 textAlign: TextAlign.center,
               ),
             ],
@@ -5780,7 +5787,7 @@ class _ArcPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final paint = Paint()
-      ..color = const Color(0xFFFFF8F5)
+      ..color = AppColors.background
       ..style = PaintingStyle.fill;
 
     final path = Path()

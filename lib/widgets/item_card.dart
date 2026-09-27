@@ -1,3 +1,4 @@
+import 'package:sales_tracking/theme/app_colors.dart';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -52,7 +53,7 @@ class ItemCard extends StatelessWidget {
                     child: Container(
                       width: 70,
                       decoration: BoxDecoration(
-                        color: const Color(0xFFF48FB1),
+                        color: AppColors.rose,
                         borderRadius: BorderRadius.circular(18),
                       ),
                       // image is placed directly inside the pink container,
@@ -131,7 +132,7 @@ class ItemCard extends StatelessWidget {
               width: 30,
               height: 30,
               decoration: const BoxDecoration(
-                color: Color(0xFFF48FB1),
+                color: AppColors.rose,
                 shape: BoxShape.circle,
               ),
             ),

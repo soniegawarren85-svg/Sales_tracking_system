@@ -1,3 +1,7 @@
+import '../../widgets/void_reason_dialog.dart';
+import '../../services/catalog_image_service.dart';
+import 'package:sales_tracking/theme/app_colors.dart';
+import '../../services/short_id_service.dart';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -8,11 +12,11 @@ import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 
 // ─── Color Palette ──────────────────────────────────────────────────────────
-const _primary = Color(0xFFE91E63);
-const _primaryDeep = Color(0xFFC2105C);
-const _primaryLight = Color(0xFFF48FB1);
-const _bg = Color(0xFFFFF8F3);
-const _border = Color(0xFFF8BBD0);
+const _primary = AppColors.primary;
+const _primaryDeep = AppColors.primaryDark;
+const _primaryLight = AppColors.rose;
+const _bg = AppColors.background;
+const _border = AppColors.blush;
 const _cardBg = Color(0xFFFFFFFF);
 
 // ─── Entry Point ────────────────────────────────────────────────────────────
@@ -44,6 +48,7 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
   final _sizes = <_OptionDraft>[];
   final _imagePicker = ImagePicker();
   Uint8List? _coffeeImageBytes;
+  Future<String?>? _coffeeUpload;
   bool _savingProduct = false;
 
   // Animation controllers
@@ -55,9 +60,9 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
   void initState() {
     super.initState();
     _sizes.addAll([
-      _OptionDraft(name: 'Small', priceDelta: '0'),
-      _OptionDraft(name: 'Medium', priceDelta: '20'),
-      _OptionDraft(name: 'Large', priceDelta: '40'),
+      _OptionDraft(name: 'Small', priceDelta: ''),
+      _OptionDraft(name: 'Medium', priceDelta: ''),
+      _OptionDraft(name: 'Large', priceDelta: ''),
     ]);
 
     _formFadeCtrl = AnimationController(
@@ -83,7 +88,7 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
             _showEditProductDialog(result.docs.first);
         } catch (_) {
           if (mounted)
-            _showSnack('Unable to open this coffee item.', isError: true);
+            _showSnack('Unable to open this beverage item.', isError: true);
         }
       });
     }
@@ -193,9 +198,9 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
     _sizes
       ..clear()
       ..addAll([
-        _OptionDraft(name: 'Small', priceDelta: '0'),
-        _OptionDraft(name: 'Medium', priceDelta: '20'),
-        _OptionDraft(name: 'Large', priceDelta: '40'),
+        _OptionDraft(name: 'Small', priceDelta: ''),
+        _OptionDraft(name: 'Medium', priceDelta: ''),
+        _OptionDraft(name: 'Large', priceDelta: ''),
       ]);
   }
 
@@ -210,9 +215,9 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
       if (picked == null) return;
       final bytes = await picked.readAsBytes();
       if (!mounted) return;
-      setState(() => _coffeeImageBytes = bytes);
+      setState(() { _coffeeImageBytes = bytes; _coffeeUpload = _uploadCoffeeImage(bytes).catchError((_) => null); });
     } catch (e) {
-      debugPrint('Coffee image pick failed: $e');
+      debugPrint('Beverages image pick failed: $e');
       if (mounted) {
         _showSnack('Unable to select image. Please try again.', isError: true);
       }
@@ -220,20 +225,7 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
   }
 
   Future<String?> _uploadCoffeeImage(Uint8List? bytes) async {
-    if (bytes == null || bytes.isEmpty) return null;
-    try {
-      final timestamp = DateTime.now().millisecondsSinceEpoch;
-      final imageRef = FirebaseStorage.instance.ref().child(
-        'coffee_images/$timestamp.jpg',
-      );
-      final upload = await imageRef
-          .putData(bytes, SettableMetadata(contentType: 'image/jpeg'))
-          .timeout(const Duration(seconds: 90));
-      return upload.ref.getDownloadURL();
-    } catch (e) {
-      debugPrint('Coffee image upload failed, using local data URL: $e');
-      return 'data:image/jpeg;base64,${base64Encode(bytes)}';
-    }
+    return uploadCatalogImage(bytes, folder: 'coffee_images');
   }
 
   // ─── Save Global Option ────────────────────────────────────────────────────
@@ -266,6 +258,10 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
   Future<void> _saveProduct() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
 
+    if (_sizes.any((size) { final price = num.tryParse(size.priceController.text); return price == null || !price.isFinite || price <= 0; })) {
+      _showSnack('Enter a valid selling price for every size.', isError: true);
+      return;
+    }
     final sizes = _sizes
         .map(
           (s) => {
@@ -283,12 +279,9 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
 
     setState(() => _savingProduct = true);
     try {
-      final imageUrl = await _uploadCoffeeImage(_coffeeImageBytes).timeout(
-        const Duration(seconds: 18),
-        onTimeout: () => _coffeeImageBytes == null
-            ? null
-            : 'data:image/jpeg;base64,${base64Encode(_coffeeImageBytes!)}',
-      );
+      final imageUrl = await (_coffeeUpload ?? _uploadCoffeeImage(_coffeeImageBytes));
+      if (_coffeeImageBytes != null && imageUrl == null) throw StateError('Picture could not upload. Please retry.');
+      final publicCoffeeId = await ShortIdService.next('CF');
       final coffeeId = await _firestore.runTransaction<String>((
         transaction,
       ) async {
@@ -300,8 +293,7 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
         final current = (counterSnap.data()?['current'] as num?)?.toInt() ?? 0;
         final next = current + 1;
         final now = DateTime.now();
-        final coffeeId =
-            '${now.year}${now.month}${now.day}-${next.toString().padLeft(3, '0')}';
+        final coffeeId = publicCoffeeId;
 
         transaction.set(counterRef, {
           'current': next,
@@ -310,9 +302,10 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
 
         transaction.set(productRef, {
           'coffeeId': coffeeId,
+          'publicId': coffeeId,
           'coffeeIdNumber': next,
           'name': _flavorNameController.text.trim(),
-          'basePrice': _parsePrice(_flavorPriceController.text),
+          'basePrice': 0,
           'description': _descriptionController.text.trim(),
           'imageUrl': imageUrl ?? '',
           'sizes': sizes,
@@ -331,12 +324,13 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
         _flavorNameController.clear();
         _flavorPriceController.clear();
         _descriptionController.clear();
-        _coffeeImageBytes = null;
+        _coffeeImageBytes = null; _coffeeUpload = null;
         _resetSizes();
       });
-      _showSnack('Coffee product saved! ID: $coffeeId');
+      _showSnack('Beverages product saved! ID: $coffeeId');
       if (widget.createOnly) Navigator.pop(context);
     } catch (e) {
+      _coffeeUpload = null;
       _showSnack('Failed: $e', isError: true);
     } finally {
       if (mounted) setState(() => _savingProduct = false);
@@ -368,7 +362,7 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
                   Icon(Icons.coffee_rounded, color: Colors.white, size: 22),
                   SizedBox(width: 10),
                   Text(
-                    'Create Coffee Flavor',
+                    'Create Beverages Flavor',
                     style: TextStyle(
                       color: Colors.white,
                       fontSize: 17,
@@ -391,30 +385,11 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
               decoration: _inputDeco('Flavor Name', Icons.label_rounded),
             ),
             const SizedBox(height: 10),
-            TextFormField(
-              controller: _flavorPriceController,
-              validator: (v) =>
-                  _parsePrice(v ?? '') <= 0 ? 'Enter a valid price' : null,
-              keyboardType: TextInputType.number,
-              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-              decoration: _inputDeco(
-                'Flavor Price (PHP)',
-                Icons.payments_rounded,
-              ),
-            ),
-            const SizedBox(height: 10),
-            TextFormField(
-              controller: _descriptionController,
-              minLines: 2,
-              maxLines: 4,
-              decoration: _inputDeco('Description', Icons.notes_rounded),
-            ),
-            const SizedBox(height: 14),
             _CoffeeImagePicker(
               imageBytes: _coffeeImageBytes,
               imageUrl: '',
               onPick: _pickCoffeeImage,
-              onRemove: () => setState(() => _coffeeImageBytes = null),
+              onRemove: () => setState(() { _coffeeImageBytes = null; _coffeeUpload = null; }),
             ),
             const SizedBox(height: 22),
 
@@ -422,7 +397,7 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
             _sectionHeader('Sizes & Price', Icons.local_drink_rounded),
             const SizedBox(height: 4),
             Text(
-              'Set a price delta (added on top of base price) for each size.',
+              'Set the selling price for each size.',
               style: TextStyle(color: Colors.grey.shade500, fontSize: 12),
             ),
             const SizedBox(height: 12),
@@ -451,9 +426,9 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
                           controller: size.priceController,
                           keyboardType: TextInputType.number,
                           inputFormatters: [
-                            FilteringTextInputFormatter.digitsOnly,
+                            FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
                           ],
-                          decoration: _inputDeco('+ PHP', Icons.add),
+                          decoration: _inputDeco('Price (₱)', Icons.payments_outlined),
                         ),
                       ),
                       const SizedBox(width: 4),
@@ -531,8 +506,8 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
                 child: TextField(
                   controller: priceController,
                   keyboardType: TextInputType.number,
-                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                  decoration: _inputDeco('+ PHP', Icons.add_rounded),
+                  inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
+                  decoration: _inputDeco('+ ₱', Icons.add_rounded),
                 ),
               ),
             ],
@@ -585,7 +560,10 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
                       0,
                     ),
                     onDelete: () async {
+                      final reason = await showVoidReasonDialog(context, '${data['name'] ?? 'Add-on'}');
+                      if (reason == null) return;
                       await doc.reference.update({
+                        'voidReason': reason, 'deletedAt': Timestamp.now(),
                         'isDeleted': true,
                         'updatedAt': FieldValue.serverTimestamp(),
                       });
@@ -622,7 +600,7 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
           children: [
             Row(
               children: [
-                _sectionHeader('Coffee Products', Icons.list_alt_rounded),
+                _sectionHeader('Beverages Products', Icons.list_alt_rounded),
                 const Spacer(),
                 Container(
                   padding: const EdgeInsets.symmetric(
@@ -651,7 +629,7 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
                   child: Padding(
                     padding: const EdgeInsets.symmetric(vertical: 10),
                     child: Text(
-                      'No coffee products yet.',
+                      'No beverage products yet.',
                       style: TextStyle(color: Colors.grey.shade500),
                     ),
                   ),
@@ -665,7 +643,10 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
                   firestore: _firestore,
                   onEdit: () => _showEditProductDialog(entry.value),
                   onDelete: () async {
+                    final reason = await showVoidReasonDialog(context, '${entry.value.data()['name'] ?? 'Beverage'}');
+                    if (reason == null) return;
                     await entry.value.reference.update({
+                      'voidReason': reason, 'deletedAt': Timestamp.now(),
                       'isDeleted': true,
                       'updatedAt': FieldValue.serverTimestamp(),
                     });
@@ -718,12 +699,12 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
         .map(
           (size) => _OptionDraft(
             name: size['name']?.toString() ?? '',
-            priceDelta: ((size['priceDelta'] ?? 0) as num).toStringAsFixed(0),
+            priceDelta: (((size['priceDelta'] ?? 0) as num) + ((data['basePrice'] ?? 0) as num)).toStringAsFixed(2),
           ),
         )
         .toList();
     if (sizeDrafts.isEmpty) {
-      sizeDrafts.add(_OptionDraft(name: 'Small', priceDelta: '0'));
+      sizeDrafts.add(_OptionDraft(name: 'Small', priceDelta: ''));
     }
 
     await showDialog<void>(
@@ -732,7 +713,7 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
         return StatefulBuilder(
           builder: (context, setDialogState) {
             return AlertDialog(
-              title: const Text('Edit Coffee'),
+              title: const Text('Edit Beverages'),
               content: SingleChildScrollView(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
@@ -745,26 +726,6 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
                       ),
                     ),
                     const SizedBox(height: 10),
-                    TextField(
-                      controller: priceController,
-                      keyboardType: TextInputType.number,
-                      inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                      decoration: _inputDeco(
-                        'Flavor Price (PHP)',
-                        Icons.payments_rounded,
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    TextField(
-                      controller: descriptionController,
-                      minLines: 2,
-                      maxLines: 4,
-                      decoration: _inputDeco(
-                        'Description',
-                        Icons.notes_rounded,
-                      ),
-                    ),
-                    const SizedBox(height: 12),
                     _CoffeeImagePicker(
                       imageBytes: editImageBytes.isEmpty
                           ? null
@@ -787,7 +748,7 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
                             removeExistingImage = false;
                           });
                         } catch (e) {
-                          debugPrint('Coffee image pick failed: $e');
+                          debugPrint('Beverages image pick failed: $e');
                           if (mounted) {
                             _showSnack(
                               'Unable to select image. Please try again.',
@@ -825,9 +786,9 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
                                 controller: size.priceController,
                                 keyboardType: TextInputType.number,
                                 inputFormatters: [
-                                  FilteringTextInputFormatter.digitsOnly,
+                                  FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
                                 ],
-                                decoration: _inputDeco('+ PHP', Icons.add),
+                                decoration: _inputDeco('Price (₱)', Icons.payments_outlined),
                               ),
                             ),
                             IconButton(
@@ -886,7 +847,7 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
                         .toList();
                     await doc.reference.update({
                       'name': nameController.text.trim(),
-                      'basePrice': _parsePrice(priceController.text),
+                      'basePrice': 0,
                       'description': descriptionController.text.trim(),
                       'imageUrl': ?newImageUrl,
                       if (removeExistingImage) 'imageUrl': '',
@@ -894,7 +855,7 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
                       'updatedAt': FieldValue.serverTimestamp(),
                     });
                     if (dialogContext.mounted) Navigator.pop(dialogContext);
-                    _showSnack('Coffee updated!');
+                    _showSnack('Beverages updated!');
                   },
                   child: const Text('Save'),
                 ),
@@ -920,7 +881,7 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
         backgroundColor: _bg,
         appBar: AppBar(
           automaticallyImplyLeading: false,
-          title: const Text('Add coffee'),
+          title: const Text('Add beverage'),
           actions: [
             IconButton(
               tooltip: 'Close',
@@ -949,7 +910,7 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
           elevation: 0,
           centerTitle: false,
           title: const Text(
-            'Coffee Menu',
+            'Beverages Menu',
             style: TextStyle(fontWeight: FontWeight.w900, fontSize: 20),
           ),
           bottom: const TabBar(
@@ -1052,8 +1013,8 @@ class _CoffeeImagePicker extends StatelessWidget {
           Expanded(
             child: Text(
               imageBytes != null || hasNetworkImage
-                  ? 'Coffee image selected'
-                  : 'Upload coffee image',
+                  ? 'Beverages image selected'
+                  : 'Upload beverage image',
               style: const TextStyle(
                 color: _primaryDeep,
                 fontWeight: FontWeight.w800,
@@ -1143,12 +1104,12 @@ class _ProductCardState extends State<_ProductCard>
     final basePrice = (data['basePrice'] ?? 0) as num;
     final description = data['description']?.toString() ?? '';
     final imageUrl = data['imageUrl']?.toString() ?? '';
-    final coffeeId = data['coffeeId']?.toString();
+    final coffeeId = (data['publicId'] ?? data['coffeeId'])?.toString();
     final coffeeIdNumber = (data['coffeeIdNumber'] as num?)?.toInt();
     final displayId =
         coffeeId ??
         (coffeeIdNumber == null
-            ? 'No Coffee ID'
+            ? 'No Beverages ID'
             : _formatCoffeeId(coffeeIdNumber));
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
@@ -1208,7 +1169,7 @@ class _ProductCardState extends State<_ProductCard>
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            data['name']?.toString() ?? 'Coffee',
+                            data['name']?.toString() ?? 'Beverages',
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(
@@ -1228,7 +1189,7 @@ class _ProductCardState extends State<_ProductCard>
                                 textColor: _primaryDeep,
                               ),
                               _MiniTag(
-                                label: 'PHP ${basePrice.toStringAsFixed(0)}',
+                                label: '₱${basePrice.toStringAsFixed(0)}',
                                 color: const Color(0xFFE8F5E9),
                                 textColor: const Color(0xFF2E7D32),
                               ),
@@ -1343,7 +1304,7 @@ class _ProductCardState extends State<_ProductCard>
                                 ),
                                 if (delta > 0)
                                   Text(
-                                    '+PHP ${delta.toStringAsFixed(0)}',
+                                    '+₱${delta.toStringAsFixed(0)}',
                                     style: const TextStyle(
                                       color: Colors.black38,
                                       fontSize: 11,
@@ -1362,7 +1323,7 @@ class _ProductCardState extends State<_ProductCard>
                                     borderRadius: BorderRadius.circular(20),
                                   ),
                                   child: Text(
-                                    'PHP ${total.toStringAsFixed(0)}',
+                                    '₱${total.toStringAsFixed(0)}',
                                     style: const TextStyle(
                                       color: Colors.white,
                                       fontWeight: FontWeight.w800,
@@ -1494,7 +1455,7 @@ class _FirestoreOptionList extends StatelessWidget {
                 ),
                 child: Text(
                   delta > 0
-                      ? '${data['name']} +PHP ${delta.toStringAsFixed(0)}'
+                      ? '${data['name']} +₱${delta.toStringAsFixed(0)}'
                       : '${data['name']}',
                   style: const TextStyle(
                     color: _primaryDeep,
@@ -1668,7 +1629,7 @@ class _AnimatedChipState extends State<_AnimatedChip>
         side: BorderSide(color: _primary.withOpacity(0.3)),
         label: Text(
           widget.price != '0'
-              ? '${widget.label}  +PHP ${widget.price}'
+              ? '${widget.label}  +₱${widget.price}'
               : widget.label,
           style: const TextStyle(
             color: _primaryDeep,
@@ -1770,7 +1731,7 @@ class _AnimatedSaveButtonState extends State<_AnimatedSaveButton>
                         Icon(Icons.save_rounded, size: 20),
                         SizedBox(width: 8),
                         Text(
-                          'Save Coffee Flavor',
+                          'Save Beverages Flavor',
                           style: TextStyle(
                             fontWeight: FontWeight.w900,
                             fontSize: 15,

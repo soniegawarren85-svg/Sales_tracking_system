@@ -1,3 +1,7 @@
+import '../../widgets/staff_deactivation_dialog.dart';
+import '../../widgets/inventory_records_table.dart';
+import 'package:sales_tracking/theme/app_colors.dart';
+import '../../services/public_item_id.dart';
 import '../../widgets/admin_staff_branches.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -168,11 +172,11 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    backgroundColor: const Color(0xFFFFF4F8),
+    backgroundColor: AppColors.surfaceTint,
     floatingActionButton: FloatingActionButton(
       tooltip: 'Create staff account',
       shape: const CircleBorder(),
-      backgroundColor: const Color(0xFFE91E63),
+      backgroundColor: AppColors.primary,
       foregroundColor: Colors.white,
       onPressed: _showCreateStaffSheet,
       child: const Icon(Icons.add),
@@ -197,56 +201,89 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
         final inactive = accepted
             .where((member) => member.isInactiveByLogin)
             .length;
-        return ListView(
-          padding: const EdgeInsets.only(bottom: 100),
-          children: [
-            _buildHeader(context),
-            Padding(
-              padding: const EdgeInsets.all(16),
-              child: _buildStatsRow(
-                total: staff.length,
-                active: accepted.length - inactive,
-                pending: deactivated.length,
-                deactivated: inactive,
-                onDeactivated: () => _showDeactivatedStaffSheet(deactivated),
+        return CustomScrollView(
+          slivers: [
+            SliverAppBar(
+              pinned: true,
+              automaticallyImplyLeading: false,
+              expandedHeight: 125,
+              backgroundColor: AppColors.primaryDeep,
+              foregroundColor: Colors.white,
+              flexibleSpace: const FlexibleSpaceBar(
+                expandedTitleScale: 1,
+                titlePadding: EdgeInsets.fromLTRB(22, 0, 22, 16),
+                title: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text('Staff Section', style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w700)),
+                  SizedBox(height: 3),
+                  Text('Manage staff accounts', style: TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.normal)),
+                ]),
+                background: DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [AppColors.primaryDeep, AppColors.primaryDark],
+                    ),
+                  ),
+                ),
               ),
             ),
+            SliverList(
+              delegate: SliverChildListDelegate([
+                Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: _buildStatsRow(
+                    total: staff.length,
+                    active: accepted.length - inactive,
+                    pending: deactivated.length,
+                    deactivated: inactive,
+                  ),
+                ),
 
-            const Padding(
-              padding: EdgeInsets.all(16),
-              child: AdminStaffBranches(),
-            ),
-            const Padding(
-              padding: EdgeInsets.all(16),
-              child: Text(
-                'Staff Accounts',
-                style: TextStyle(
-                  fontSize: 22,
-                  fontWeight: FontWeight.bold,
-                  color: Color(0xFFAD1457),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: _buildDeactivatedStaffButton(deactivated),
                 ),
-              ),
-            ),
-            if (accepted.isEmpty)
-              const Padding(
-                padding: EdgeInsets.all(24),
-                child: Text('No active staff accounts. Tap + to create one.'),
-              ),
-            ...accepted.asMap().entries.map(
-              (entry) => Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 6,
+                const Padding(
+                  padding: EdgeInsets.all(16),
+                  child: AdminStaffBranches(),
                 ),
-                child: _AnimatedAdminCard(
-                  index: entry.key,
-                  admin: entry.value,
-                  isInactiveByLogin: entry.value.isInactiveByLogin,
-                  onDeactivate: () =>
-                      _updateAdminStatus(entry.value, 'deactivated'),
-                  onActivate: () => _updateAdminStatus(entry.value, 'accepted'),
+
+                const Padding(
+                  padding: EdgeInsets.all(16),
+                  child: Text(
+                    'Staff Accounts',
+                    style: TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.bold,
+                      color: AppColors.primaryDark,
+                    ),
+                  ),
                 ),
-              ),
+                if (accepted.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.all(24),
+                    child: Text(
+                      'No active staff accounts. Tap + to create one.',
+                    ),
+                  ),
+                ...accepted.asMap().entries.map(
+                  (entry) => Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 6,
+                    ),
+                    child: _AnimatedAdminCard(
+                      index: entry.key,
+                      admin: entry.value,
+                      isInactiveByLogin: entry.value.isInactiveByLogin,
+                      onDeactivate: () =>
+                          _updateAdminStatus(entry.value, 'deactivated'),
+                      onActivate: () =>
+                          _updateAdminStatus(entry.value, 'accepted'),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 100),
+              ]),
             ),
           ],
         );
@@ -292,7 +329,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                   height: 260,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    color: const Color(0xFFAD1457).withOpacity(0.07),
+                    color: AppColors.primaryDark.withOpacity(0.07),
                   ),
                 ),
               ),
@@ -304,7 +341,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                   height: 200,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    color: const Color(0xFFBC2B8A).withOpacity(0.06),
+                    color: AppColors.primary.withOpacity(0.06),
                   ),
                 ),
               ),
@@ -341,7 +378,10 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                           height: 18,
                           decoration: BoxDecoration(
                             gradient: const LinearGradient(
-                              colors: [Color(0xFFAD1457), Color(0xFFBC2B8A)],
+                              colors: [
+                                AppColors.primaryDark,
+                                AppColors.primary,
+                              ],
                               begin: Alignment.topCenter,
                               end: Alignment.bottomCenter,
                             ),
@@ -352,7 +392,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                         const Text(
                           'All Staff',
                           style: TextStyle(
-                            color: Color(0xFF880E4F),
+                            color: AppColors.primaryDeep,
                             fontWeight: FontWeight.w800,
                             fontSize: 16,
                             letterSpacing: 0.2,
@@ -365,7 +405,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                             height: 16,
                             child: CircularProgressIndicator(
                               strokeWidth: 2,
-                              color: Color(0xFFAD1457),
+                              color: AppColors.primaryDark,
                             ),
                           ),
                       ],
@@ -416,7 +456,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
       width: double.infinity,
       decoration: BoxDecoration(
         gradient: const LinearGradient(
-          colors: [Color(0xFFAD1457), Color(0xFFE91E63), Color(0xFFBC2B8A)],
+          colors: [AppColors.primaryDark, AppColors.primary, AppColors.primary],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
@@ -426,7 +466,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
         ),
         boxShadow: [
           BoxShadow(
-            color: const Color(0xFFAD1457).withOpacity(0.38),
+            color: AppColors.primaryDark.withOpacity(0.38),
             blurRadius: 28,
             offset: const Offset(0, 14),
           ),
@@ -527,7 +567,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                     'Staff Management',
                     style: TextStyle(
                       color: Colors.white,
-                      fontSize: 34,
+                      fontSize: 20,
                       fontWeight: FontWeight.w900,
                       letterSpacing: 0.3,
                       height: 1.1,
@@ -563,29 +603,28 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
         _buildStatCard(
           label: 'Total',
           count: total,
-          colors: [const Color(0xFFAD1457), const Color(0xFFBC2B8A)],
+          colors: [AppColors.primaryDeep, AppColors.primaryDark],
           icon: Icons.groups_rounded,
         ),
         const SizedBox(width: 10),
         _buildStatCard(
           label: 'Active',
           count: active,
-          colors: [const Color(0xFFAD1457), const Color(0xFFF06292)],
+          colors: [AppColors.primaryDeep, AppColors.primaryDark],
           icon: Icons.verified_user_rounded,
         ),
         const SizedBox(width: 10),
         _buildStatCard(
           label: 'Deactivated',
-          onTap: onDeactivated,
           count: pending,
-          colors: [const Color(0xFFAD1457), const Color(0xFFF06292)],
+          colors: [AppColors.primaryDeep, AppColors.primaryDark],
           icon: Icons.pending_rounded,
         ),
         const SizedBox(width: 10),
         _buildStatCard(
           label: 'Inactive',
           count: deactivated,
-          colors: [const Color(0xFFAD1457), const Color(0xFFF06292)],
+          colors: [AppColors.primaryDeep, AppColors.primaryDark],
           icon: Icons.block_rounded,
         ),
       ],
@@ -615,9 +654,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
 
   Widget _buildDeactivatedStaffButton(List<AdminModel> deactivatedStaff) {
     return InkWell(
-      onTap: deactivatedStaff.isEmpty
-          ? null
-          : () => _showDeactivatedStaffSheet(deactivatedStaff),
+      onTap: () => _showDeactivatedStaffSheet(deactivatedStaff),
       borderRadius: BorderRadius.circular(18),
       child: Container(
         width: double.infinity,
@@ -625,10 +662,10 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(18),
-          border: Border.all(color: const Color(0xFFF8BBD0), width: 1.2),
+          border: Border.all(color: AppColors.blush, width: 1.2),
           boxShadow: [
             BoxShadow(
-              color: const Color(0xFFAD1457).withOpacity(0.08),
+              color: AppColors.primaryDark.withOpacity(0.08),
               blurRadius: 14,
               offset: const Offset(0, 6),
             ),
@@ -640,12 +677,12 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
               width: 38,
               height: 38,
               decoration: BoxDecoration(
-                color: const Color(0xFFFFF0F3),
+                color: AppColors.surfaceTint,
                 borderRadius: BorderRadius.circular(12),
               ),
               child: const Icon(
                 Icons.restore_rounded,
-                color: Color(0xFFF06292),
+                color: AppColors.accent,
                 size: 20,
               ),
             ),
@@ -657,14 +694,14 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                   Text(
                     'Deactivated Staff',
                     style: TextStyle(
-                      color: Color(0xFF880E4F),
+                      color: AppColors.primaryDeep,
                       fontSize: 14,
                       fontWeight: FontWeight.w800,
                     ),
                   ),
                   SizedBox(height: 2),
                   Text(
-                    'View and restore inactive staff',
+                    'View and restore deactivated staff',
                     style: TextStyle(
                       color: Colors.grey,
                       fontSize: 11,
@@ -677,13 +714,13 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
               decoration: BoxDecoration(
-                color: const Color(0xFFFFF0F3),
+                color: AppColors.surfaceTint,
                 borderRadius: BorderRadius.circular(20),
               ),
               child: Text(
                 '${deactivatedStaff.length}',
                 style: const TextStyle(
-                  color: Color(0xFFF06292),
+                  color: AppColors.accent,
                   fontWeight: FontWeight.w900,
                   fontSize: 13,
                 ),
@@ -695,144 +732,142 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
     );
   }
 
-  void _showDeactivatedStaffSheet(List<AdminModel> deactivatedStaff) {
-    showModalBottomSheet<void>(
+  void _showDeactivatedStaffSheet(List<AdminModel> staff) {
+    showDialog<void>(
       context: context,
-      backgroundColor: Colors.transparent,
-      isScrollControlled: true,
-      builder: (sheetContext) {
-        return Container(
-          constraints: BoxConstraints(
-            maxHeight: MediaQuery.of(sheetContext).size.height * 0.78,
-          ),
-          decoration: const BoxDecoration(
-            color: Color(0xFFFDF6F9),
-            borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
-          ),
-          padding: const EdgeInsets.fromLTRB(18, 14, 18, 24),
+      builder: (dialogContext) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        child: SizedBox(
+          width: 1000,
+          height: MediaQuery.sizeOf(context).height * .75,
           child: Column(
-            mainAxisSize: MainAxisSize.min,
             children: [
               Container(
-                width: 46,
-                height: 5,
-                decoration: BoxDecoration(
-                  color: const Color(0xFFF8BBD0),
-                  borderRadius: BorderRadius.circular(10),
+                padding: const EdgeInsets.all(20),
+                decoration: const BoxDecoration(
+                  color: AppColors.primaryDark,
+                  borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
                 ),
-              ),
-              const SizedBox(height: 18),
-              Row(
-                children: [
-                  const Icon(
-                    Icons.restore_rounded,
-                    color: Color(0xFFAD1457),
-                    size: 22,
-                  ),
-                  const SizedBox(width: 10),
-                  const Expanded(
-                    child: Text(
-                      'Deactivated Staff',
-                      style: TextStyle(
-                        color: Color(0xFF880E4F),
-                        fontSize: 18,
-                        fontWeight: FontWeight.w900,
+                child: Row(
+                  children: [
+                    const Expanded(
+                      child: Text(
+                        'Deactivated staff',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                        ),
                       ),
                     ),
-                  ),
-                  IconButton(
-                    onPressed: () => Navigator.of(sheetContext).pop(),
-                    icon: const Icon(Icons.close_rounded),
-                    color: const Color(0xFF880E4F),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 10),
-              Flexible(
-                child: ListView.builder(
-                  shrinkWrap: true,
-                  itemCount: deactivatedStaff.length,
-                  itemBuilder: (context, index) {
-                    final staff = deactivatedStaff[index];
-                    return Container(
-                      margin: const EdgeInsets.only(bottom: 12),
-                      padding: const EdgeInsets.all(14),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(18),
-                        boxShadow: [
-                          BoxShadow(
-                            color: const Color(0xFFAD1457).withOpacity(0.08),
-                            blurRadius: 14,
-                            offset: const Offset(0, 6),
-                          ),
-                        ],
-                      ),
-                      child: Row(
-                        children: [
-                          CircleAvatar(
-                            radius: 24,
-                            backgroundColor: const Color(0xFFE91E63),
-                            child: Text(
-                              staff.initials,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontWeight: FontWeight.w900,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  '${staff.firstName} ${staff.lastName}',
-                                  style: const TextStyle(
-                                    color: Color(0xFF880E4F),
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.w800,
-                                  ),
-                                ),
-                                if (staff.email.isNotEmpty)
-                                  Text(
-                                    staff.email,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(
-                                      color: Colors.grey.shade500,
-                                      fontSize: 12,
-                                    ),
-                                  ),
-                              ],
-                            ),
-                          ),
-                          TextButton.icon(
-                            onPressed: () async {
-                              await _updateAdminStatus(staff, 'accepted');
-                              if (sheetContext.mounted) {
-                                Navigator.of(sheetContext).pop();
-                              }
-                            },
-                            icon: const Icon(Icons.restore_rounded, size: 16),
-                            label: const Text('Restore'),
-                            style: TextButton.styleFrom(
-                              foregroundColor: const Color(0xFFAD1457),
-                              textStyle: const TextStyle(
-                                fontWeight: FontWeight.w800,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    );
-                  },
+                    IconButton(
+                      onPressed: () => Navigator.pop(dialogContext),
+                      icon: const Icon(Icons.close, color: Colors.white),
+                    ),
+                  ],
                 ),
               ),
+              Expanded(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.all(20),
+                  child: InventoryRecordsTable(
+                    headings: const ['Staff ID', 'Staff', 'Reason', 'Actions'],
+                    flex: const {0: 1, 1: 2, 2: 3, 3: 2},
+                    rows: staff
+                        .map(
+                          (member) => <Widget>[
+                            Text(publicItemId(member.staffId)),
+                            Text('${member.firstName} ${member.lastName}', style: const TextStyle(fontWeight: FontWeight.bold)),
+                            Text(
+                              '${member.details['deactivationReason'] ?? 'Not recorded'}',
+                            ),
+                            Wrap(
+                              children: [
+                                IconButton(
+                                  tooltip: 'View info',
+                                  icon: const Icon(Icons.info_outline),
+                                  onPressed: () => showDialog<void>(
+                                    context: context,
+                                    builder: (context) => AlertDialog(
+                                      title: Text(
+                                        '${member.firstName} ${member.lastName}',
+                                      ),
+                                      content: SizedBox(
+                                        width: 480,
+                                        child: SingleChildScrollView(
+                                          child: Column(
+                                            mainAxisSize: MainAxisSize.min,
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              for (final key in [
+                                                'staffId',
+                                                'firstName',
+                                                'middleName',
+                                                'lastName',
+                                                'email',
+                                                'age',
+                                                'gender',
+                                                'phone',
+                                                'contactNumber',
+                                                'address',
+                                                'role',
+                                                'status',
+                                                'deactivationReason',
+                                              ])
+                                                if (member.details[key] != null)
+                                                  Padding(
+                                                    padding:
+                                                        const EdgeInsets.symmetric(
+                                                          vertical: 5,
+                                                        ),
+                                                    child: Text(
+                                                      '$key: ${member.details[key]}',
+                                                    ),
+                                                  ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                      actions: [
+                                        TextButton(
+                                          onPressed: () =>
+                                              Navigator.pop(context),
+                                          child: const Text('Close'),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                                IconButton(
+                                  tooltip: 'Restore',
+                                  icon: const Icon(Icons.restore),
+                                  onPressed: () async {
+                                    await _updateAdminStatus(
+                                      member,
+                                      'accepted',
+                                    );
+                                    if (dialogContext.mounted)
+                                      Navigator.pop(dialogContext);
+                                  },
+                                ),
+                              ],
+                            ),
+                          ],
+                        )
+                        .toList(),
+                  ),
+                ),
+              ),
+              if (staff.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.all(20),
+                  child: Text('No deactivated staff.'),
+                ),
             ],
           ),
-        );
-      },
+        ),
+      ),
     );
   }
 
@@ -847,8 +882,8 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
             decoration: BoxDecoration(
               gradient: LinearGradient(
                 colors: [
-                  const Color(0xFFAD1457).withOpacity(0.10),
-                  const Color(0xFFBC2B8A).withOpacity(0.15),
+                  AppColors.primaryDark.withOpacity(0.10),
+                  AppColors.primary.withOpacity(0.15),
                 ],
               ),
               shape: BoxShape.circle,
@@ -856,7 +891,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
             child: Icon(
               Icons.groups_2_outlined,
               size: 55,
-              color: const Color(0xFFAD1457).withOpacity(0.45),
+              color: AppColors.primaryDark.withOpacity(0.45),
             ),
           ),
           const SizedBox(height: 22),
@@ -865,7 +900,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
             style: TextStyle(
               fontSize: 20,
               fontWeight: FontWeight.w800,
-              color: Color(0xFF880E4F),
+              color: AppColors.primaryDeep,
             ),
           ),
           const SizedBox(height: 10),
@@ -884,11 +919,25 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
   }
 
   Future<void> _updateAdminStatus(AdminModel admin, String newStatus) async {
+    String? reason;
+    if (newStatus == 'deactivated') {
+      reason = await showDialog<String>(
+        context: context,
+        builder: (_) => StaffDeactivationDialog(
+          name: '${admin.firstName} ${admin.lastName}',
+        ),
+      );
+      if (reason == null) return;
+    }
     try {
       await FirebaseFirestore.instance
           .collection('staff_requests')
           .doc(admin.id)
-          .update({'status': newStatus});
+          .update({
+            'status': newStatus,
+            if (reason != null) 'deactivationReason': reason,
+            if (reason != null) 'deactivatedAt': FieldValue.serverTimestamp(),
+          });
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -896,7 +945,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
             newStatus == 'accepted' ? 'Staff activated.' : 'Staff deactivated.',
           ),
           behavior: SnackBarBehavior.floating,
-          backgroundColor: const Color(0xFFAD1457),
+          backgroundColor: AppColors.primaryDark,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(14),
           ),
@@ -908,7 +957,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
         const SnackBar(
           content: Text('Failed to update staff status.'),
           behavior: SnackBarBehavior.floating,
-          backgroundColor: Color(0xFFAD1457),
+          backgroundColor: AppColors.primaryDark,
         ),
       );
     }
@@ -941,9 +990,9 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
             decoration: BoxDecoration(
               gradient: const LinearGradient(
                 colors: [
-                  Color(0xFFAD1457),
-                  Color(0xFFBC2B8A),
-                  Color(0xFFFF6B9D),
+                  AppColors.primaryDark,
+                  AppColors.primary,
+                  AppColors.accent,
                 ],
                 begin: Alignment.centerLeft,
                 end: Alignment.centerRight,
@@ -951,7 +1000,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
               borderRadius: BorderRadius.circular(20),
               boxShadow: [
                 BoxShadow(
-                  color: const Color(0xFFE91E63).withOpacity(0.30),
+                  color: AppColors.primary.withOpacity(0.30),
                   blurRadius: 20,
                   offset: const Offset(0, 8),
                 ),
@@ -986,7 +1035,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                         style: TextStyle(
                           color: Colors.white,
                           fontWeight: FontWeight.w800,
-                          fontSize: 15,
+                          fontSize: 20,
                           letterSpacing: 0.2,
                         ),
                       ),
@@ -1068,7 +1117,11 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
       width: double.infinity,
       decoration: BoxDecoration(
         gradient: const LinearGradient(
-          colors: [Color(0xFFFF80AB), Color(0xFFF06292), Color(0xFFE91E8C)],
+          colors: [
+            AppColors.primaryDeep,
+            AppColors.primaryDark,
+            AppColors.primaryDark,
+          ],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
@@ -1078,7 +1131,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
         ),
         boxShadow: [
           BoxShadow(
-            color: const Color(0xFFE91E63).withOpacity(0.35),
+            color: AppColors.primary.withOpacity(0.35),
             blurRadius: 28,
             offset: const Offset(0, 14),
           ),
@@ -1157,7 +1210,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                     'Staff Section',
                     style: TextStyle(
                       color: Colors.white,
-                      fontSize: 34,
+                      fontSize: 20,
                       fontWeight: FontWeight.w900,
                       letterSpacing: 0.3,
                       height: 1.1,
@@ -1187,19 +1240,19 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
       child: Container(
         height: 48,
         decoration: BoxDecoration(
-          color: const Color(0xFFF48FB1).withOpacity(0.10),
+          color: AppColors.rose.withOpacity(0.10),
           borderRadius: BorderRadius.circular(15),
         ),
         child: TabBar(
           controller: _tabController,
           indicator: BoxDecoration(
             gradient: const LinearGradient(
-              colors: [Color(0xFFFF5F96), Color(0xFFE91E8C)],
+              colors: [Color(0xFFFF5F96), AppColors.primary],
             ),
             borderRadius: BorderRadius.circular(13),
             boxShadow: [
               BoxShadow(
-                color: const Color(0xFFE91E63).withOpacity(0.30),
+                color: AppColors.primary.withOpacity(0.30),
                 blurRadius: 10,
                 offset: const Offset(0, 4),
               ),
@@ -1208,7 +1261,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
           indicatorSize: TabBarIndicatorSize.tab,
           dividerColor: Colors.transparent,
           labelColor: Colors.white,
-          unselectedLabelColor: const Color(0xFFF06292),
+          unselectedLabelColor: AppColors.accent,
           labelStyle: const TextStyle(
             fontWeight: FontWeight.w700,
             fontSize: 13,
@@ -1262,7 +1315,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
           borderRadius: BorderRadius.circular(22),
           boxShadow: [
             BoxShadow(
-              color: Colors.pink.withOpacity(0.08),
+              color: AppColors.brand.withOpacity(0.08),
               blurRadius: 18,
               offset: const Offset(0, 7),
             ),
@@ -1274,7 +1327,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
             const Text(
               'Staff Create Account',
               style: TextStyle(
-                color: Color(0xFF3D2C2C),
+                color: AppColors.text,
                 fontWeight: FontWeight.w900,
                 fontSize: 20,
               ),
@@ -1371,7 +1424,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                   style: const TextStyle(fontWeight: FontWeight.w800),
                 ),
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFFE91E8C),
+                  backgroundColor: AppColors.primary,
                   foregroundColor: Colors.white,
                   elevation: 0,
                   shape: RoundedRectangleBorder(
@@ -1426,15 +1479,15 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
           fillColor: const Color(0xFFFFF8FA),
           border: OutlineInputBorder(
             borderRadius: BorderRadius.circular(16),
-            borderSide: const BorderSide(color: Color(0xFFF8BBD0)),
+            borderSide: const BorderSide(color: AppColors.blush),
           ),
           enabledBorder: OutlineInputBorder(
             borderRadius: BorderRadius.circular(16),
-            borderSide: const BorderSide(color: Color(0xFFF8BBD0)),
+            borderSide: const BorderSide(color: AppColors.blush),
           ),
           focusedBorder: OutlineInputBorder(
             borderRadius: BorderRadius.circular(16),
-            borderSide: const BorderSide(color: Color(0xFFE91E8C), width: 1.5),
+            borderSide: const BorderSide(color: AppColors.primary, width: 1.5),
           ),
         ),
       ),
@@ -1485,7 +1538,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
             decoration: BoxDecoration(
               gradient: LinearGradient(
                 colors: [
-                  const Color(0xFFF48FB1).withOpacity(0.12),
+                  AppColors.rose.withOpacity(0.12),
                   const Color(0xFFFFCDD2).withOpacity(0.22),
                 ],
               ),
@@ -1494,7 +1547,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
             child: Icon(
               icon,
               size: 52,
-              color: const Color(0xFFF48FB1).withOpacity(0.50),
+              color: AppColors.rose.withOpacity(0.50),
             ),
           ),
           const SizedBox(height: 22),
@@ -1523,10 +1576,10 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
 
   Widget _buildApplicantCard(StaffApplicant applicant, int index) {
     final List<List<Color>> gradients = [
-      [const Color(0xFFF48FB1), const Color(0xFFE91E8C)],
-      [const Color(0xFFFFB3C6), const Color(0xFFF06292)],
-      [const Color(0xFFCE93D8), const Color(0xFFAB47BC)],
-      [const Color(0xFF80DEEA), const Color(0xFF26C6DA)],
+      [AppColors.primaryDeep, AppColors.primaryDark],
+      [AppColors.primaryDeep, AppColors.primaryDark],
+      [AppColors.primaryDeep, AppColors.primaryDark],
+      [AppColors.primaryDeep, AppColors.primaryDark],
     ];
     final gradient = gradients[index % gradients.length];
 
@@ -1537,7 +1590,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
         borderRadius: BorderRadius.circular(22),
         boxShadow: [
           BoxShadow(
-            color: Colors.pink.withOpacity(0.07),
+            color: AppColors.brand.withOpacity(0.07),
             blurRadius: 16,
             offset: const Offset(0, 6),
           ),
@@ -1596,7 +1649,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                       Text(
                         '${applicant.firstName} ${applicant.lastName}',
                         style: const TextStyle(
-                          color: Color(0xFF3D2C2C),
+                          color: AppColors.text,
                           fontWeight: FontWeight.w800,
                           fontSize: 15,
                         ),
@@ -1666,7 +1719,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                     child: Container(
                       padding: const EdgeInsets.symmetric(vertical: 11),
                       decoration: BoxDecoration(
-                        color: const Color(0xFFFFF0F3),
+                        color: AppColors.surfaceTint,
                         borderRadius: BorderRadius.circular(13),
                         border: Border.all(color: Colors.red.shade100),
                       ),
@@ -1744,10 +1797,10 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
 
   Widget _buildAcceptedCard(StaffApplicant applicant, int index) {
     final List<List<Color>> gradients = [
-      [const Color(0xFFF48FB1), const Color(0xFFE91E8C)],
-      [const Color(0xFFFFB3C6), const Color(0xFFF06292)],
-      [const Color(0xFFCE93D8), const Color(0xFFAB47BC)],
-      [const Color(0xFF80DEEA), const Color(0xFF26C6DA)],
+      [AppColors.primaryDeep, AppColors.primaryDark],
+      [AppColors.primaryDeep, AppColors.primaryDark],
+      [AppColors.primaryDeep, AppColors.primaryDark],
+      [AppColors.primaryDeep, AppColors.primaryDark],
     ];
     final gradient = gradients[index % gradients.length];
 
@@ -1759,7 +1812,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
           borderRadius: BorderRadius.circular(22),
           boxShadow: [
             BoxShadow(
-              color: Colors.pink.withOpacity(0.08),
+              color: AppColors.brand.withOpacity(0.08),
               blurRadius: 18,
               offset: const Offset(0, 7),
             ),
@@ -1818,7 +1871,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(
-                  color: Color(0xFF3D2C2C),
+                  color: AppColors.text,
                   fontWeight: FontWeight.w800,
                   fontSize: 14,
                   height: 1.3,
@@ -1828,7 +1881,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
             const SizedBox(height: 4),
             if (applicant.staffId.isNotEmpty)
               Text(
-                'ID: ${applicant.staffId}',
+                'ID: ${publicItemId(applicant.staffId)}',
                 style: const TextStyle(color: Color(0xFF7A6D6D), fontSize: 11),
               ),
             const SizedBox(height: 5),
@@ -1897,11 +1950,25 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
     StaffApplicant applicant,
     String newStatus,
   ) async {
+    String? reason;
+    if (newStatus == 'deactivated') {
+      reason = await showDialog<String>(
+        context: context,
+        builder: (_) => StaffDeactivationDialog(
+          name: '${applicant.firstName} ${applicant.lastName}',
+        ),
+      );
+      if (reason == null) return;
+    }
     try {
       await FirebaseFirestore.instance
           .collection('staff_requests')
           .doc(applicant.id)
-          .update({'status': newStatus});
+          .update({
+            'status': newStatus,
+            if (reason != null) 'deactivationReason': reason,
+            if (reason != null) 'deactivatedAt': FieldValue.serverTimestamp(),
+          });
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -1913,7 +1980,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                 : 'Applicant declined.',
           ),
           behavior: SnackBarBehavior.floating,
-          backgroundColor: const Color(0xFFE91E63),
+          backgroundColor: AppColors.primary,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(14),
           ),
@@ -1925,13 +1992,13 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
         const SnackBar(
           content: Text('Unable to update applicant status.'),
           behavior: SnackBarBehavior.floating,
-          backgroundColor: Color(0xFFC2105C),
+          backgroundColor: AppColors.primaryDark,
         ),
       );
     }
   }
 
-  String _pad(int value, [int width = 4]) =>
+  String _pad(int value, [int width = 3]) =>
       value.toString().padLeft(width, '0');
 
   Future<String> _generateStaffId() async {
@@ -2068,7 +2135,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
         content: Text(message),
         behavior: SnackBarBehavior.floating,
         backgroundColor: isError
-            ? const Color(0xFFC2105C)
+            ? AppColors.primaryDark
             : const Color(0xFF4A7C59),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
       ),
@@ -2077,10 +2144,10 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
 
   void _showStaffDetails(StaffApplicant applicant, int index) {
     final List<List<Color>> gradients = [
-      [const Color(0xFFF48FB1), const Color(0xFFE91E8C)],
-      [const Color(0xFFFFB3C6), const Color(0xFFF06292)],
-      [const Color(0xFFCE93D8), const Color(0xFFAB47BC)],
-      [const Color(0xFF80DEEA), const Color(0xFF26C6DA)],
+      [AppColors.primaryDeep, AppColors.primaryDark],
+      [AppColors.primaryDeep, AppColors.primaryDark],
+      [AppColors.primaryDeep, AppColors.primaryDark],
+      [AppColors.primaryDeep, AppColors.primaryDark],
     ];
     final gradient = gradients[index % gradients.length];
 
@@ -2115,7 +2182,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                   borderRadius: BorderRadius.circular(30),
                   boxShadow: [
                     BoxShadow(
-                      color: Colors.pink.withOpacity(0.18),
+                      color: AppColors.brand.withOpacity(0.18),
                       blurRadius: 35,
                       offset: const Offset(0, 12),
                     ),
@@ -2205,7 +2272,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                                 label: 'Staff ID',
                                 value: applicant.staffId.isEmpty
                                     ? 'N/A'
-                                    : applicant.staffId,
+                                    : publicItemId(applicant.staffId),
                                 gradient: gradient,
                               ),
                               _buildDetailRow(
@@ -2256,12 +2323,12 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                                       vertical: 14,
                                     ),
                                     decoration: BoxDecoration(
-                                      color: const Color(0xFFC2105C),
+                                      color: AppColors.primaryDark,
                                       borderRadius: BorderRadius.circular(16),
                                       boxShadow: [
                                         BoxShadow(
                                           color: const Color(
-                                            0xFFC2105C,
+                                            0xFF963B58,
                                           ).withOpacity(0.30),
                                           blurRadius: 12,
                                           offset: const Offset(0, 5),
@@ -2338,7 +2405,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(15),
-        border: Border.all(color: const Color(0xFFF48FB1).withOpacity(0.15)),
+        border: Border.all(color: AppColors.rose.withOpacity(0.15)),
       ),
       child: Row(
         children: [
@@ -2373,7 +2440,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                 Text(
                   value,
                   style: const TextStyle(
-                    color: Color(0xFF3D2C2C),
+                    color: AppColors.text,
                     fontSize: 13,
                     fontWeight: FontWeight.w600,
                   ),
@@ -2627,10 +2694,10 @@ class _AnimatedAdminCardState extends State<_AnimatedAdminCard>
   @override
   Widget build(BuildContext context) {
     final List<List<Color>> gradients = [
-      [const Color(0xFFAD1457), const Color(0xFFBC2B8A)],
-      [const Color(0xFFAD1457), const Color(0xFFE91E8C)],
-      [const Color(0xFF5C6BC0), const Color(0xFFAD1457)],
-      [const Color(0xFFE91E63), const Color(0xFFFF5F96)],
+      [AppColors.primaryDeep, AppColors.primaryDark],
+      [AppColors.primaryDeep, AppColors.primaryDark],
+      [AppColors.primaryDeep, AppColors.primaryDark],
+      [AppColors.primaryDeep, AppColors.primaryDark],
     ];
     final gradient = gradients[widget.index % gradients.length];
 
@@ -2639,10 +2706,10 @@ class _AnimatedAdminCardState extends State<_AnimatedAdminCard>
     final isPending = widget.admin.status == 'pending';
 
     final Color statusColor = isActive
-        ? const Color(0xFFAD1457)
+        ? AppColors.primaryDark
         : isPending
-        ? const Color(0xFFAD1457)
-        : const Color(0xFFF06292);
+        ? AppColors.primaryDark
+        : AppColors.accent;
     final String statusLabel = isActive
         ? 'Active'
         : isPending
@@ -2732,7 +2799,7 @@ class _AnimatedAdminCardState extends State<_AnimatedAdminCard>
                             Text(
                               '${widget.admin.firstName} ${widget.admin.lastName}',
                               style: const TextStyle(
-                                color: Color(0xFF880E4F),
+                                color: AppColors.primaryDeep,
                                 fontWeight: FontWeight.w800,
                                 fontSize: 15,
                               ),
@@ -2786,6 +2853,17 @@ class _AnimatedAdminCardState extends State<_AnimatedAdminCard>
                         ),
                       ),
 
+                      if (widget.admin.status == 'accepted')
+                        FilledButton(
+                          style: FilledButton.styleFrom(
+                            backgroundColor: AppColors.primaryDeep,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                          ),
+                          onPressed: widget.onDeactivate,
+                          child: const Text('Deactivate'),
+                        ),
                       // Expand chevron
                       AnimatedRotation(
                         turns: _expanded ? 0.5 : 0.0,
@@ -2822,7 +2900,7 @@ class _AnimatedAdminCardState extends State<_AnimatedAdminCard>
                             '${widget.admin.details['middleName'] ?? ''}',
                             widget.admin.lastName,
                           ].where((value) => value.trim().isNotEmpty).join(' '),
-                          'Staff ID': widget.admin.staffId,
+                          'Staff ID': publicItemId(widget.admin.staffId),
                           'Username':
                               '${widget.admin.details['username'] ?? widget.admin.staffId}',
                           'Age':
@@ -2897,8 +2975,8 @@ class _AnimatedAdminCardState extends State<_AnimatedAdminCard>
                               decoration: BoxDecoration(
                                 gradient: const LinearGradient(
                                   colors: [
-                                    Color(0xFFAD1457),
-                                    Color(0xFFF06292),
+                                    AppColors.primaryDark,
+                                    AppColors.accent,
                                   ],
                                 ),
                                 borderRadius: BorderRadius.circular(13),
@@ -2925,38 +3003,6 @@ class _AnimatedAdminCardState extends State<_AnimatedAdminCard>
                                     'Activate Staff',
                                     style: TextStyle(
                                       color: Colors.white,
-                                      fontWeight: FontWeight.w700,
-                                      fontSize: 13,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        if (widget.admin.status == 'accepted')
-                          GestureDetector(
-                            onTap: widget.onDeactivate,
-                            child: Container(
-                              width: double.infinity,
-                              padding: const EdgeInsets.symmetric(vertical: 11),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFFFF0F3),
-                                borderRadius: BorderRadius.circular(13),
-                                border: Border.all(color: Colors.red.shade100),
-                              ),
-                              child: Row(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  Icon(
-                                    Icons.block_rounded,
-                                    color: Colors.red.shade400,
-                                    size: 15,
-                                  ),
-                                  const SizedBox(width: 5),
-                                  Text(
-                                    'Deactivate Staff',
-                                    style: TextStyle(
-                                      color: Colors.red.shade400,
                                       fontWeight: FontWeight.w700,
                                       fontSize: 13,
                                     ),
@@ -3012,7 +3058,7 @@ class _AnimatedAdminCardState extends State<_AnimatedAdminCard>
                 Text(
                   value,
                   style: const TextStyle(
-                    color: Color(0xFF880E4F),
+                    color: AppColors.primaryDeep,
                     fontSize: 13,
                     fontWeight: FontWeight.w600,
                   ),
@@ -3063,7 +3109,11 @@ class _StaffSectionHeaderDelegate extends SliverPersistentHeaderDelegate {
     return Container(
       decoration: BoxDecoration(
         gradient: const LinearGradient(
-          colors: [Color(0xFFFF80AB), Color(0xFFF06292), Color(0xFFE91E8C)],
+          colors: [
+            AppColors.primaryDeep,
+            AppColors.primaryDark,
+            AppColors.primaryDark,
+          ],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
@@ -3073,7 +3123,7 @@ class _StaffSectionHeaderDelegate extends SliverPersistentHeaderDelegate {
         ),
         boxShadow: [
           BoxShadow(
-            color: const Color(0xFFE91E63).withOpacity(0.22),
+            color: AppColors.primary.withOpacity(0.22),
             blurRadius: 22,
             offset: const Offset(0, 10),
           ),
@@ -3245,7 +3295,7 @@ class _StaffTabHeaderDelegate extends SliverPersistentHeaderDelegate {
     bool overlapsContent,
   ) {
     return Container(
-      color: const Color(0xFFFDF6F9),
+      color: AppColors.surface,
       alignment: Alignment.center,
       child: child,
     );

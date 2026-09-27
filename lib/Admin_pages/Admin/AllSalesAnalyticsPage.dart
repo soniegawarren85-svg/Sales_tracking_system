@@ -1,3 +1,4 @@
+import 'package:sales_tracking/theme/app_colors.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
@@ -12,9 +13,9 @@ class _AllSalesAnalyticsPageState extends State<AllSalesAnalyticsPage> {
   String _category = 'All';
   String _ranking = 'All';
 
-  static const _primary = Color(0xFFC2105C);
-  static const _primaryLight = Color(0xFFF48FB1);
-  static const _accent = Color(0xFFE91E63);
+  static const _primary = AppColors.primaryDark;
+  static const _primaryLight = AppColors.rose;
+  static const _accent = AppColors.primary;
   static const _bg = Color(0xFFFFF3F7);
   static const _textDark = Color(0xFF7A1845);
 
@@ -72,7 +73,7 @@ class _AllSalesAnalyticsPageState extends State<AllSalesAnalyticsPage> {
         _isExpired(item['expirationDate']?.toString() ?? '')) {
       return false;
     }
-    // Coffee products are stored separately from sales_inventory. Their sale
+    // Beverages products are stored separately from sales_inventory. Their sale
     // records carry their own marker, so they must not be rejected by the
     // category inventory key check above.
     final isCoffee = item['isCoffee'] == true ||
@@ -159,7 +160,7 @@ class _AllSalesAnalyticsPageState extends State<AllSalesAnalyticsPage> {
                   saleTotal += _money(item['price']) * qty;
                 final kind = item['isBundle'] == true
                     ? 'Bundle'
-                    : (item['isCoffee'] == true ? 'Coffee' : 'Categories');
+                    : (item['isCoffee'] == true ? 'Beverages' : 'Categories');
                 final current = items[name] ?? _SoldItem(name, 0, 0);
                 items[name] = _SoldItem(
                   name,
@@ -213,7 +214,7 @@ class _AllSalesAnalyticsPageState extends State<AllSalesAnalyticsPage> {
                     _chip('All', _category == 'All', () => setState(() => _category = 'All'), icon: Icons.apps_rounded),
                     _chip('Categories', _category == 'Categories', () => setState(() => _category = 'Categories'), icon: Icons.category_rounded),
                     _chip('Bundle', _category == 'Bundle', () => setState(() => _category = 'Bundle'), icon: Icons.card_giftcard_rounded),
-                    _chip('Coffee', _category == 'Coffee', () => setState(() => _category = 'Coffee'), icon: Icons.coffee_rounded),
+                    _chip('Beverages', _category == 'Beverages', () => setState(() => _category = 'Beverages'), icon: Icons.coffee_rounded),
                   ],
                 ),
                 const SizedBox(height: 14),
@@ -515,7 +516,7 @@ class _AllSalesAnalyticsPageState extends State<AllSalesAnalyticsPage> {
     switch (kind) {
       case 'Bundle':
         return Icons.card_giftcard_rounded;
-      case 'Coffee':
+      case 'Beverages':
         return Icons.coffee_rounded;
       default:
         return Icons.category_rounded;
@@ -675,7 +676,7 @@ class _SalesBars extends StatelessWidget {
                           gradient: const LinearGradient(
                             begin: Alignment.bottomCenter,
                             end: Alignment.topCenter,
-                            colors: [Color(0xFFC2105C), Color(0xFFE91E63)],
+                            colors: [AppColors.primaryDark, AppColors.primary],
                           ),
                           borderRadius: const BorderRadius.vertical(
                             top: Radius.circular(6),

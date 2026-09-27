@@ -1,3 +1,4 @@
+import 'package:sales_tracking/theme/app_colors.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/gestures.dart';
@@ -96,7 +97,7 @@ class _SignupScreenState extends State<SignupScreen>
           ],
         ),
         backgroundColor: isError
-            ? const Color(0xFFC2105C)
+            ? AppColors.primaryDark
             : const Color(0xFF4A7C59),
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -128,7 +129,7 @@ class _SignupScreenState extends State<SignupScreen>
       return currentCount;
     });
 
-    return 'STF-${_pad(transactionResult, 4)}';
+    return 'STF-${_pad(transactionResult, 3)}';
   }
 
   String _pad(int value, [int width = 2]) {
@@ -338,11 +339,11 @@ class _SignupScreenState extends State<SignupScreen>
         child: Container(
           padding: const EdgeInsets.all(28),
           decoration: BoxDecoration(
-            color: const Color(0xFFFDF6F0),
+            color: AppColors.background,
             borderRadius: BorderRadius.circular(24),
             boxShadow: [
               BoxShadow(
-                color: const Color(0xFFE91E63).withOpacity(0.15),
+                color: AppColors.primary.withOpacity(0.15),
                 blurRadius: 40,
                 offset: const Offset(0, 12),
               ),
@@ -357,14 +358,14 @@ class _SignupScreenState extends State<SignupScreen>
                 height: 72,
                 decoration: BoxDecoration(
                   gradient: const LinearGradient(
-                    colors: [Color(0xFFE91E63), Color(0xFFF48FB1)],
+                    colors: [AppColors.primary, AppColors.accent],
                     begin: Alignment.topLeft,
                     end: Alignment.bottomRight,
                   ),
                   shape: BoxShape.circle,
                   boxShadow: [
                     BoxShadow(
-                      color: const Color(0xFFE91E63).withOpacity(0.3),
+                      color: AppColors.primary.withOpacity(0.3),
                       blurRadius: 20,
                       offset: const Offset(0, 6),
                     ),
@@ -385,7 +386,7 @@ class _SignupScreenState extends State<SignupScreen>
                 style: GoogleFonts.outfit(
                   fontSize: 22,
                   fontWeight: FontWeight.w800,
-                  color: const Color(0xFFC2105C),
+                  color: AppColors.primaryDark,
                   letterSpacing: -0.5,
                 ),
                 textAlign: TextAlign.center,
@@ -400,7 +401,7 @@ class _SignupScreenState extends State<SignupScreen>
                   height: 3,
                   decoration: BoxDecoration(
                     gradient: const LinearGradient(
-                      colors: [Color(0xFFE91E63), Color(0xFFF48FB1)],
+                      colors: [AppColors.primary, AppColors.accent],
                     ),
                     borderRadius: BorderRadius.circular(2),
                   ),
@@ -417,10 +418,10 @@ class _SignupScreenState extends State<SignupScreen>
                   vertical: 12,
                 ),
                 decoration: BoxDecoration(
-                  color: const Color(0xFFF8BBD0).withOpacity(0.35),
+                  color: AppColors.blush.withOpacity(0.35),
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(
-                    color: const Color(0xFFF48FB1).withOpacity(0.4),
+                    color: AppColors.rose.withOpacity(0.4),
                     width: 1,
                   ),
                 ),
@@ -428,7 +429,7 @@ class _SignupScreenState extends State<SignupScreen>
                   children: [
                     const Icon(
                       Icons.info_outline_rounded,
-                      color: Color(0xFFE91E63),
+                      color: AppColors.primary,
                       size: 16,
                     ),
                     const SizedBox(width: 8),
@@ -437,7 +438,7 @@ class _SignupScreenState extends State<SignupScreen>
                         'Please wait for admin approval. You will be notified once your account is approved.',
                         style: GoogleFonts.dmSans(
                           fontSize: 12,
-                          color: const Color(0xFFC2105C),
+                          color: AppColors.primaryDark,
                           fontWeight: FontWeight.w500,
                           height: 1.5,
                         ),
@@ -459,14 +460,14 @@ class _SignupScreenState extends State<SignupScreen>
                 child: DecoratedBox(
                   decoration: BoxDecoration(
                     gradient: const LinearGradient(
-                      colors: [Color(0xFFE91E63), Color(0xFFC2105C)],
+                      colors: [AppColors.primary, AppColors.primaryDark],
                       begin: Alignment.topLeft,
                       end: Alignment.bottomRight,
                     ),
                     borderRadius: BorderRadius.circular(14),
                     boxShadow: [
                       BoxShadow(
-                        color: const Color(0xFFE91E63).withOpacity(0.35),
+                        color: AppColors.primary.withOpacity(0.35),
                         blurRadius: 16,
                         offset: const Offset(0, 6),
                       ),
@@ -506,7 +507,7 @@ class _SignupScreenState extends State<SignupScreen>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFFDF6F0),
+      backgroundColor: AppColors.background,
       body: Stack(
         children: [
           // ── Decorative blobs ───────────────────────────────────────────
@@ -518,7 +519,7 @@ class _SignupScreenState extends State<SignupScreen>
               height: 200,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: const Color(0xFFF8BBD0).withOpacity(0.35),
+                color: AppColors.blush.withOpacity(0.35),
               ),
             ),
           ),
@@ -530,7 +531,7 @@ class _SignupScreenState extends State<SignupScreen>
               height: 120,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: const Color(0xFFF5A0C8).withOpacity(0.2),
+                color: AppColors.rose.withOpacity(0.2),
               ),
             ),
           ),
@@ -583,7 +584,7 @@ class _SignupScreenState extends State<SignupScreen>
           ),
           decoration: const BoxDecoration(
             gradient: LinearGradient(
-              colors: [Color(0xFFC2105C), Color(0xFFE91E63), Color(0xFFF48FB1)],
+              colors: [AppColors.primaryDark, AppColors.primary, AppColors.accent],
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
             ),
@@ -749,7 +750,7 @@ class _SignupScreenState extends State<SignupScreen>
           style: GoogleFonts.outfit(
             fontSize: 34,
             fontWeight: FontWeight.w800,
-            color: const Color(0xFFC2105C),
+            color: AppColors.primaryDark,
             height: 1.05,
             letterSpacing: -1.0,
           ),
@@ -762,7 +763,7 @@ class _SignupScreenState extends State<SignupScreen>
               height: 3,
               decoration: BoxDecoration(
                 gradient: const LinearGradient(
-                  colors: [Color(0xFFE91E63), Color(0xFFF48FB1)],
+                  colors: [AppColors.primary, AppColors.accent],
                 ),
                 borderRadius: BorderRadius.circular(2),
               ),
@@ -773,7 +774,7 @@ class _SignupScreenState extends State<SignupScreen>
                 'Sign up to continue',
                 style: GoogleFonts.dmSans(
                   fontSize: 12,
-                  color: const Color(0xFFE91E63),
+                  color: AppColors.primary,
                   fontWeight: FontWeight.w400,
                 ),
               ),
@@ -865,7 +866,7 @@ class _SignupScreenState extends State<SignupScreen>
               _obscurePassword
                   ? Icons.visibility_off_outlined
                   : Icons.visibility_outlined,
-              color: const Color(0xFFF48FB1),
+              color: AppColors.rose,
               size: 20,
             ),
             onPressed: () =>
@@ -884,7 +885,7 @@ class _SignupScreenState extends State<SignupScreen>
               _obscureConfirmPassword
                   ? Icons.visibility_off_outlined
                   : Icons.visibility_outlined,
-              color: const Color(0xFFF48FB1),
+              color: AppColors.rose,
               size: 20,
             ),
             onPressed: () => setState(
@@ -908,7 +909,7 @@ class _SignupScreenState extends State<SignupScreen>
                   text: 'Already have an account? ',
                   style: GoogleFonts.dmSans(
                     fontSize: 13,
-                    color: const Color(0xFF2A1010),
+                    color: AppColors.text,
                     fontWeight: FontWeight.w500,
                   ),
                 ),
@@ -916,7 +917,7 @@ class _SignupScreenState extends State<SignupScreen>
                   text: 'Sign In',
                   style: GoogleFonts.dmSans(
                     fontSize: 13,
-                    color: const Color(0xFFE91E63),
+                    color: AppColors.primary,
                     fontWeight: FontWeight.w700,
                   ),
                   recognizer: TapGestureRecognizer()
@@ -939,7 +940,7 @@ class _SignupScreenState extends State<SignupScreen>
           height: 30,
           decoration: BoxDecoration(
             gradient: const LinearGradient(
-              colors: [Color(0xFFE91E63), Color(0xFFF48FB1)],
+              colors: [AppColors.primary, AppColors.accent],
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
             ),
@@ -953,7 +954,7 @@ class _SignupScreenState extends State<SignupScreen>
           style: GoogleFonts.outfit(
             fontSize: 15,
             fontWeight: FontWeight.w700,
-            color: const Color(0xFFC2105C),
+            color: AppColors.primaryDark,
             letterSpacing: -0.3,
           ),
         ),
@@ -1000,19 +1001,19 @@ class _SignupScreenState extends State<SignupScreen>
         duration: const Duration(milliseconds: 200),
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-          color: isSelected ? const Color(0xFFE91E63) : Colors.white,
+          color: isSelected ? AppColors.primary : Colors.white,
           borderRadius: BorderRadius.circular(16),
           border: Border.all(
             color: isSelected
-                ? const Color(0xFFE91E63)
-                : const Color(0xFFF48FB1).withOpacity(0.4),
+                ? AppColors.primary
+                : AppColors.rose.withOpacity(0.4),
             width: isSelected ? 0 : 1.5,
           ),
           boxShadow: [
             BoxShadow(
               color: isSelected
-                  ? const Color(0xFFE91E63).withOpacity(0.3)
-                  : const Color(0xFFE91E63).withOpacity(0.06),
+                  ? AppColors.primary.withOpacity(0.3)
+                  : AppColors.primary.withOpacity(0.06),
               blurRadius: isSelected ? 18 : 10,
               offset: const Offset(0, 4),
             ),
@@ -1025,7 +1026,7 @@ class _SignupScreenState extends State<SignupScreen>
               children: [
                 Icon(
                   icon,
-                  color: isSelected ? Colors.white : const Color(0xFFE91E63),
+                  color: isSelected ? Colors.white : AppColors.primary,
                   size: 22,
                 ),
                 const Spacer(),
@@ -1039,14 +1040,14 @@ class _SignupScreenState extends State<SignupScreen>
                     border: Border.all(
                       color: isSelected
                           ? Colors.white
-                          : const Color(0xFFF48FB1),
+                          : AppColors.rose,
                       width: 2,
                     ),
                   ),
                   child: isSelected
                       ? const Icon(
                           Icons.check_rounded,
-                          color: Color(0xFFE91E63),
+                          color: AppColors.primary,
                           size: 12,
                         )
                       : null,
@@ -1059,7 +1060,7 @@ class _SignupScreenState extends State<SignupScreen>
               style: GoogleFonts.outfit(
                 fontSize: 15,
                 fontWeight: FontWeight.w700,
-                color: isSelected ? Colors.white : const Color(0xFFC2105C),
+                color: isSelected ? Colors.white : AppColors.primaryDark,
               ),
             ),
             const SizedBox(height: 4),
@@ -1070,7 +1071,7 @@ class _SignupScreenState extends State<SignupScreen>
                 fontWeight: FontWeight.w400,
                 color: isSelected
                     ? Colors.white.withOpacity(0.8)
-                    : const Color(0xFF9E5070),
+                    : AppColors.textMuted,
                 height: 1.4,
               ),
             ),
@@ -1096,7 +1097,7 @@ class _SignupScreenState extends State<SignupScreen>
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(
-            color: const Color(0xFFE91E63).withOpacity(0.07),
+            color: AppColors.primary.withOpacity(0.07),
             blurRadius: 20,
             offset: const Offset(0, 4),
           ),
@@ -1109,24 +1110,24 @@ class _SignupScreenState extends State<SignupScreen>
         maxLines: obscureText ? 1 : maxLines,
         style: GoogleFonts.dmSans(
           fontSize: 15,
-          color: const Color(0xFF2A1010),
+          color: AppColors.text,
           fontWeight: FontWeight.w500,
         ),
         decoration: InputDecoration(
           labelText: label,
           labelStyle: GoogleFonts.dmSans(
             fontSize: 13,
-            color: const Color(0xFFF48FB1),
+            color: AppColors.rose,
             fontWeight: FontWeight.w500,
           ),
           floatingLabelStyle: GoogleFonts.dmSans(
             fontSize: 12,
-            color: const Color(0xFFE91E63),
+            color: AppColors.primary,
             fontWeight: FontWeight.w600,
           ),
           prefixIcon: Padding(
             padding: const EdgeInsets.only(left: 16, right: 8),
-            child: Icon(icon, color: const Color(0xFFF48FB1), size: 20),
+            child: Icon(icon, color: AppColors.rose, size: 20),
           ),
           prefixIconConstraints: const BoxConstraints(
             minWidth: 0,
@@ -1143,7 +1144,7 @@ class _SignupScreenState extends State<SignupScreen>
           ),
           focusedBorder: OutlineInputBorder(
             borderRadius: BorderRadius.circular(16),
-            borderSide: const BorderSide(color: Color(0xFFE91E63), width: 1.5),
+            borderSide: const BorderSide(color: AppColors.primary, width: 1.5),
           ),
           filled: true,
           fillColor: Colors.white,
@@ -1163,14 +1164,14 @@ class _SignupScreenState extends State<SignupScreen>
       height: 56,
       decoration: BoxDecoration(
         gradient: const LinearGradient(
-          colors: [Color(0xFFE91E63), Color(0xFFC2105C)],
+          colors: [AppColors.primary, AppColors.primaryDark],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(
-            color: const Color(0xFFE91E63).withOpacity(0.4),
+            color: AppColors.primary.withOpacity(0.4),
             blurRadius: 20,
             offset: const Offset(0, 8),
           ),
@@ -1233,7 +1234,7 @@ class _CredentialPreview extends StatelessWidget {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFFF8BBD0)),
+        border: Border.all(color: AppColors.blush),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1242,7 +1243,7 @@ class _CredentialPreview extends StatelessWidget {
             label,
             style: GoogleFonts.dmSans(
               fontSize: 11,
-              color: const Color(0xFF9E5070),
+              color: AppColors.textMuted,
               fontWeight: FontWeight.w700,
             ),
           ),
@@ -1251,7 +1252,7 @@ class _CredentialPreview extends StatelessWidget {
             value,
             style: GoogleFonts.dmSans(
               fontSize: 15,
-              color: const Color(0xFFC2105C),
+              color: AppColors.primaryDark,
               fontWeight: FontWeight.w800,
               letterSpacing: 0.3,
             ),
@@ -1265,7 +1266,7 @@ class _CredentialPreview extends StatelessWidget {
 class _WavePainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
-    final paint = Paint()..color = const Color(0xFFFDF6F0);
+    final paint = Paint()..color = AppColors.background;
     final path = Path();
     path.moveTo(0, size.height);
     path.cubicTo(

@@ -1,3 +1,4 @@
+import 'package:sales_tracking/theme/app_colors.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'AllSalesAnalyticsPage.dart';
@@ -6,9 +7,9 @@ import 'AllSalesAnalyticsPage.dart';
 //  Design tokens
 // ─────────────────────────────────────────────────────────────
 class _C {
-  static const primary = Color(0xFFC2105C);
-  static const deep = Color(0xFF9C1650);
-  static const soft = Color(0xFFF48FB1);
+  static const primary = AppColors.primaryDark;
+  static const deep = AppColors.primaryDark;
+  static const soft = AppColors.rose;
   static const bg = Color(0xFFFDF4F8);
   static const ink = Color(0xFF2B1A22);
   static const muted = Color(0xFF8A7480);
@@ -99,14 +100,14 @@ class _BranchSalesReportPageState extends State<BranchSalesReportPage> {
   }
 
   String _categoryFor(Map<String, dynamic> item) {
-    if (item['isCoffee'] == true) return 'Coffee';
+    if (item['isCoffee'] == true) return 'Beverages';
     if (item['isBundle'] == true) return 'Bundle';
     return 'Categories';
   }
 
   IconData _categoryIcon(String c) {
     switch (c) {
-      case 'Coffee':
+      case 'Beverages':
         return Icons.coffee_rounded;
       case 'Bundle':
         return Icons.inventory_2_rounded;
@@ -341,7 +342,7 @@ class _BranchSalesReportPageState extends State<BranchSalesReportPage> {
               final categories = <String>{
                 'All',
                 if (_branchId != null) 'Categories',
-                if (_branchId != null) 'Coffee',
+                if (_branchId != null) 'Beverages',
                 if (_branchId != null) 'Bundle',
                 if (todaySales.any(
                   (sale) => (sale.data()['items'] as List<dynamic>? ?? [])
@@ -349,10 +350,10 @@ class _BranchSalesReportPageState extends State<BranchSalesReportPage> {
                       .any(
                         (item) =>
                             _categoryFor(Map<String, dynamic>.from(item)) ==
-                            'Coffee',
+                            'Beverages',
                       ),
                 ))
-                  'Coffee',
+                  'Beverages',
                 if (todaySales.any(
                   (sale) => (sale.data()['items'] as List<dynamic>? ?? [])
                       .whereType<Map>()
@@ -1013,7 +1014,7 @@ class _BranchSalesReportPageState extends State<BranchSalesReportPage> {
           Container(
             padding: const EdgeInsets.all(11),
             decoration: BoxDecoration(
-              color: const Color(0xFFFCE4EE),
+              color: AppColors.blush,
               borderRadius: BorderRadius.circular(14),
             ),
             child: const Icon(
@@ -1101,7 +1102,7 @@ class _BranchSalesReportPageState extends State<BranchSalesReportPage> {
         ? _C.dangerBg
         : saleHasReduced
         ? _C.amberBg
-        : const Color(0xFFFCE4EE);
+        : AppColors.blush;
     final IconData icon = saleIsRefund
         ? Icons.replay_rounded
         : saleHasReduced
@@ -1204,7 +1205,7 @@ class _BranchSalesReportPageState extends State<BranchSalesReportPage> {
                         vertical: 3,
                       ),
                       decoration: BoxDecoration(
-                        color: refunded ? _C.dangerBg : const Color(0xFFFCE4EE),
+                        color: refunded ? _C.dangerBg : AppColors.blush,
                         borderRadius: BorderRadius.circular(8),
                       ),
                       child: Text(
@@ -1272,7 +1273,7 @@ class _BranchSalesReportPageState extends State<BranchSalesReportPage> {
               width: double.infinity,
               padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(
-                color: const Color(0xFFFFF7FA),
+                color: AppColors.surface,
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(color: _C.line),
               ),
@@ -1576,7 +1577,7 @@ class _CountBadge extends StatelessWidget {
       key: ValueKey(count),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
       decoration: BoxDecoration(
-        color: const Color(0xFFFCE4EE),
+        color: AppColors.blush,
         borderRadius: BorderRadius.circular(20),
       ),
       child: Text(
@@ -1642,7 +1643,7 @@ class _EmptyState extends StatelessWidget {
               Container(
                 padding: const EdgeInsets.all(20),
                 decoration: const BoxDecoration(
-                  color: Color(0xFFFCE4EE),
+                  color: AppColors.blush,
                   shape: BoxShape.circle,
                 ),
                 child: Icon(icon, size: 36, color: _C.primary),

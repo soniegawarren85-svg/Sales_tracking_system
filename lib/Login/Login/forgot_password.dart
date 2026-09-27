@@ -1,3 +1,4 @@
+import 'package:sales_tracking/theme/app_colors.dart';
 import 'dart:math';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -35,7 +36,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(message),
-        backgroundColor: error ? const Color(0xFFC2105C) : Colors.green,
+        backgroundColor: error ? AppColors.primaryDark : Colors.green,
         behavior: SnackBarBehavior.floating,
       ),
     );
@@ -186,9 +187,9 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFFFF8F3),
+      backgroundColor: AppColors.background,
       appBar: AppBar(
-        backgroundColor: const Color(0xFFE91E63),
+        backgroundColor: AppColors.primary,
         foregroundColor: Colors.white,
         title: const Text('Forgot Password'),
       ),
@@ -204,7 +205,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
                   ? 'OTP Verification'
                   : 'Verified',
               style: const TextStyle(
-                color: Color(0xFFC2105C),
+                color: AppColors.primaryDark,
                 fontSize: 24,
                 fontWeight: FontWeight.w900,
               ),

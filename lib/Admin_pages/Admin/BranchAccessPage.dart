@@ -1,3 +1,4 @@
+import 'package:sales_tracking/theme/app_colors.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
@@ -214,13 +215,13 @@ class _BranchAccessPageState extends State<BranchAccessPage> {
           decoration: BoxDecoration(
             color: Colors.white,
             borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: const Color(0xFFF8BBD0)),
+            border: Border.all(color: AppColors.blush),
           ),
           child: Row(
             children: [
               const Icon(
                 Icons.account_balance_wallet_rounded,
-                color: Color(0xFFD81B60),
+                color: AppColors.primary,
               ),
               const SizedBox(width: 10),
               const Expanded(
@@ -232,7 +233,7 @@ class _BranchAccessPageState extends State<BranchAccessPage> {
               Text(
                 '₱${total.toStringAsFixed(2)}',
                 style: const TextStyle(
-                  color: Color(0xFF9C1650),
+                  color: AppColors.primaryDark,
                   fontSize: 17,
                   fontWeight: FontWeight.w900,
                 ),
@@ -421,7 +422,7 @@ class _BranchAccessPageState extends State<BranchAccessPage> {
                                       return ListTile(
                                         leading: const Icon(
                                           Icons.inventory_2_rounded,
-                                          color: Color(0xFFD81B60),
+                                          color: AppColors.primary,
                                         ),
                                         title: Text(
                                           data['name']?.toString() ??
@@ -470,7 +471,7 @@ class _BranchAccessPageState extends State<BranchAccessPage> {
       style: const TextStyle(
         fontSize: 16,
         fontWeight: FontWeight.w800,
-        color: Color(0xFF9C1650),
+        color: AppColors.primaryDark,
       ),
     ),
   );
@@ -595,7 +596,7 @@ class _BranchAccessPageState extends State<BranchAccessPage> {
                         isVoided
                             ? Icons.block_rounded
                             : Icons.storefront_rounded,
-                        color: isVoided ? Colors.red : const Color(0xFFD81B60),
+                        color: isVoided ? Colors.red : AppColors.primary,
                       ),
                       title: Text(
                         data['name']?.toString() ?? 'Branch',
@@ -612,7 +613,7 @@ class _BranchAccessPageState extends State<BranchAccessPage> {
                         style: TextStyle(
                           color: isVoided
                               ? Colors.red
-                              : const Color(0xFFD81B60),
+                              : AppColors.primary,
                           fontSize: 10,
                           fontWeight: FontWeight.w900,
                         ),
@@ -702,8 +703,8 @@ class _BranchAccessPageState extends State<BranchAccessPage> {
 
   @override
   Widget build(BuildContext context) {
-    const background = Color(0xFFF5EEF0);
-    const primary = Color(0xFFD81B60);
+    const background = AppColors.background;
+    const primary = AppColors.primary;
 
     return Scaffold(
       backgroundColor: background,
@@ -970,12 +971,12 @@ class _BranchCard extends StatelessWidget {
               width: 48,
               height: 48,
               decoration: BoxDecoration(
-                color: const Color(0xFFFCE4EC),
+                color: AppColors.blush,
                 borderRadius: BorderRadius.circular(14),
               ),
               child: const Icon(
                 Icons.storefront_rounded,
-                color: Color(0xFFD81B60),
+                color: AppColors.primary,
               ),
             ),
             const SizedBox(width: 14),
@@ -997,7 +998,7 @@ class _BranchCard extends StatelessWidget {
                       child: Text(
                         'CURRENT BRANCH',
                         style: TextStyle(
-                          color: Color(0xFFD81B60),
+                          color: AppColors.primary,
                           fontSize: 10,
                           fontWeight: FontWeight.w800,
                         ),
@@ -1023,7 +1024,7 @@ class _BranchCard extends StatelessWidget {
                 tooltip: 'Edit branch',
                 onPressed: onEdit,
                 icon: const Icon(Icons.edit_rounded),
-                color: const Color(0xFFD81B60),
+                color: AppColors.primary,
               ),
               IconButton(
                 tooltip: 'Void branch',
@@ -1037,7 +1038,7 @@ class _BranchCard extends StatelessWidget {
                   ? Icons.check_circle_rounded
                   : Icons.chevron_right_rounded,
               color: isActive
-                  ? const Color(0xFFD81B60)
+                  ? AppColors.primary
                   : const Color(0xFFBDB5BE),
             ),
           ],
@@ -1065,7 +1066,7 @@ class _EmptyBranches extends StatelessWidget {
         children: [
           const Icon(
             Icons.account_tree_outlined,
-            color: Color(0xFFD81B60),
+            color: AppColors.primary,
             size: 42,
           ),
           const SizedBox(height: 10),

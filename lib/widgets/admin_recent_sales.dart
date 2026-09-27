@@ -1,3 +1,5 @@
+import '../services/inventory_display_ids.dart';
+import 'package:sales_tracking/theme/app_colors.dart';
 import '../services/public_item_id.dart';
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -31,7 +33,8 @@ String _date(BuildContext context, dynamic value) {
 }
 
 class AdminRecentSales extends StatefulWidget {
-  const AdminRecentSales({super.key});
+  const AdminRecentSales({super.key, this.firestore});
+  final FirebaseFirestore? firestore;
   @override
   State<AdminRecentSales> createState() => _AdminRecentSalesState();
 }
@@ -50,7 +53,7 @@ class _AdminRecentSalesState extends State<AdminRecentSales> {
     final now = DateTime.now();
     final start = DateTime(now.year, now.month, now.day);
     final end = DateTime(now.year, now.month, now.day + 1);
-    _sales = FirebaseFirestore.instance
+    _sales = (widget.firestore ?? FirebaseFirestore.instance)
         .collection('completed_sales')
         .where('timestamp', isGreaterThanOrEqualTo: Timestamp.fromDate(start))
         .where('timestamp', isLessThan: Timestamp.fromDate(end))
@@ -76,7 +79,7 @@ class _AdminRecentSalesState extends State<AdminRecentSales> {
     color: Colors.white,
     shape: RoundedRectangleBorder(
       borderRadius: BorderRadius.circular(18),
-      side: const BorderSide(color: Color(0xFFF8BBD0)),
+      side: const BorderSide(color: AppColors.blush),
     ),
     child: Padding(
       padding: const EdgeInsets.all(16),
@@ -85,7 +88,7 @@ class _AdminRecentSalesState extends State<AdminRecentSales> {
         children: [
           const Row(
             children: [
-              Icon(Icons.receipt_long_outlined, color: Color(0xFFE91E63)),
+              Icon(Icons.receipt_long_outlined, color: AppColors.primary),
               SizedBox(width: 10),
               Text(
                 'Recent Sales',
@@ -126,97 +129,116 @@ class _AdminRecentSalesState extends State<AdminRecentSales> {
                   padding: EdgeInsets.all(24),
                   child: Text('No sales recorded today.'),
                 );
-              final pages = (docs.length / 10).ceil();
+              final pages = (docs.length / 5).ceil();
               final page = _page.clamp(0, pages - 1);
               return Column(
                 children: [
                   LayoutBuilder(
-                    builder: (context, constraints) => SingleChildScrollView(
-                      scrollDirection: Axis.horizontal,
-                      child: ConstrainedBox(
-                        constraints: BoxConstraints(
-                          minWidth: constraints.maxWidth,
-                        ),
-                        child: DataTable(
-                          columnSpacing: 24,
-                          dataRowMinHeight: 60,
-                          dataRowMaxHeight: 92,
-                          headingRowColor: const WidgetStatePropertyAll(
-                            Color(0xFFFCE4EC),
-                          ),
-                          columns:
-                              const [
-                                    'Receipt ID',
-                                    'Items',
-                                    'Quantity',
-                                    'Total',
-                                    'Date & time',
-                                    'Status',
-                                    'Action',
-                                  ]
-                                  .map((name) => DataColumn(label: Text(name)))
-                                  .toList(),
-                          rows: docs.skip(page * 10).take(10).map((doc) {
-                            final sale = doc.data();
-                            final items = saleItems(sale);
-                            return DataRow(
-                              cells: [
-                                DataCell(
-                                  SelectableText(
-                                    '${sale['salesId'] ?? doc.id}',
+                    builder: (context, constraints) {
+                      final width = constraints.maxWidth >= 760
+                          ? (constraints.maxWidth - 16) / 2
+                          : constraints.maxWidth;
+                      return Wrap(
+                        spacing: 16,
+                        runSpacing: 16,
+                        children: docs.skip(page * 5).take(5).map((doc) {
+                          final sale = doc.data();
+                          final items = saleItems(sale);
+                          return SizedBox(
+                            width: width,
+                            child: Container(
+                              padding: const EdgeInsets.all(18),
+                              decoration: BoxDecoration(
+                                color: AppColors.surface,
+                                borderRadius: BorderRadius.circular(20),
+                                border: Border.all(color: AppColors.border),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Wrap(
+                                    alignment: WrapAlignment.spaceBetween,
+                                    spacing: 12,
+                                    runSpacing: 8,
+                                    children: [
+                                      Chip(
+                                        avatar: const Icon(
+                                          Icons.receipt_long,
+                                          size: 18,
+                                        ),
+                                        label: Text(
+                                          '${sale['salesId'] ?? doc.id}',
+                                        ),
+                                      ),
+                                      TextButton.icon(
+                                        onPressed: () => showDialog<void>(
+                                          context: context,
+                                          builder: (_) => ReceiptDetails(
+                                            id: doc.id,
+                                            sale: sale,
+                                          ),
+                                        ),
+                                        icon: const Icon(
+                                          Icons.open_in_new,
+                                          size: 16,
+                                        ),
+                                        label: const Text('View all details'),
+                                      ),
+                                    ],
                                   ),
-                                ),
-                                DataCell(
-                                  SizedBox(
-                                    width: 190,
-                                    child: Text(
-                                      items
-                                          .map(
-                                            (item) =>
-                                                '${item['name'] ?? 'Item'}${item['variant'] == null ? '' : ' (${item['variant']})'}',
-                                          )
-                                          .join(', '),
-                                      maxLines: 3,
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                  ),
-                                ),
-                                DataCell(
-                                  Text(
-                                    '${items.fold<double>(0, (sum, item) => sum + saleNumber(item['quantity'])).toStringAsFixed(0)}',
-                                  ),
-                                ),
-                                DataCell(
+                                  const SizedBox(height: 12),
                                   Text(
                                     _money(sale['total']),
                                     style: const TextStyle(
-                                      fontWeight: FontWeight.w700,
+                                      fontSize: 26,
+                                      fontWeight: FontWeight.w800,
+                                      color: AppColors.primaryDark,
                                     ),
                                   ),
-                                ),
-                                DataCell(
-                                  Text(_date(context, sale['timestamp'])),
-                                ),
-                                DataCell(Text(saleStatus(sale))),
-                                DataCell(
-                                  IconButton(
-                                    tooltip: 'View receipt',
-                                    icon: const Icon(Icons.visibility_outlined),
-                                    onPressed: () => showDialog<void>(
-                                      context: context,
-                                      builder: (_) => _ReceiptDetails(
-                                        id: doc.id,
-                                        sale: sale,
+                                  const SizedBox(height: 8),
+                                  Text(
+                                    items
+                                        .map(
+                                          (item) =>
+                                              '${item['variant'] ?? item['name'] ?? 'Item'}',
+                                        )
+                                        .join(', '),
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                  const SizedBox(height: 16),
+                                  Wrap(
+                                    spacing: 12,
+                                    runSpacing: 6,
+                                    children: [
+                                      Text(
+                                        '${items.fold<double>(0, (sum, item) => sum + saleNumber(item['quantity'])).toStringAsFixed(0)} items',
                                       ),
+                                      Text('${sale['paymentMode'] ?? 'Cash'}'),
+                                      Text(
+                                        saleStatus(sale),
+                                        style: const TextStyle(
+                                          color: AppColors.primary,
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const Divider(height: 24),
+                                  Text(
+                                    _date(context, sale['timestamp']),
+                                    style: const TextStyle(
+                                      color: AppColors.textMuted,
+                                      fontSize: 12,
                                     ),
                                   ),
-                                ),
-                              ],
-                            );
-                          }).toList(),
-                        ),
-                      ),
-                    ),
+                                ],
+                              ),
+                            ),
+                          );
+                        }).toList(),
+                      );
+                    },
                   ),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.end,
@@ -248,8 +270,8 @@ class _AdminRecentSalesState extends State<AdminRecentSales> {
   );
 }
 
-class _ReceiptDetails extends StatelessWidget {
-  const _ReceiptDetails({required this.id, required this.sale});
+class ReceiptDetails extends StatelessWidget {
+  const ReceiptDetails({required this.id, required this.sale});
   final String id;
   final Map<String, dynamic> sale;
   Widget _line(String label, dynamic value) => Padding(
@@ -271,7 +293,35 @@ class _ReceiptDetails extends StatelessWidget {
   );
   @override
   Widget build(BuildContext context) => AlertDialog(
-    title: Text('Receipt ${sale['salesId'] ?? id}'),
+    backgroundColor: AppColors.surface,
+    titlePadding: EdgeInsets.zero,
+    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+    title: Container(
+      padding: const EdgeInsets.all(24),
+      decoration: const BoxDecoration(
+        color: AppColors.primaryDeep,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      child: Row(
+        children: [
+          const CircleAvatar(
+            backgroundColor: AppColors.blush,
+            child: Icon(Icons.receipt_long, color: AppColors.primary),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              'Receipt ${sale['salesId'] ?? id}',
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 20,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+        ],
+      ),
+    ),
     content: SizedBox(
       width: 600,
       child: SingleChildScrollView(
@@ -289,11 +339,22 @@ class _ReceiptDetails extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    '${item['name'] ?? 'Item'}',
+                    '${item['isBundle'] == true
+                        ? 'Bundle'
+                        : item['isCoffee'] == true
+                        ? 'Beverages'
+                        : item['name'] ?? 'Item'}',
                     style: const TextStyle(fontWeight: FontWeight.w700),
                   ),
-                  if (item['variant'] != null)
-                    _line('Variant', item['variant']),
+                  if (item['variant'] != null ||
+                      item['isBundle'] == true ||
+                      item['isCoffee'] == true)
+                    _line(
+                      'Variant',
+                      (item['variant']?.toString().trim().isNotEmpty ?? false)
+                          ? item['variant']
+                          : item['name'],
+                    ),
                   _ReceiptItemId(item: Map<String, dynamic>.from(item)),
                   _line(
                     'Quantity × unit price',
@@ -319,7 +380,22 @@ class _ReceiptDetails extends StatelessWidget {
               _line('Discount type', sale['discountType']),
               _line('Discount ID', sale['discountProofId']),
             ],
-            _line('Total', _money(sale['total'])),
+            Container(
+              margin: const EdgeInsets.symmetric(vertical: 12),
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: AppColors.blush,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: DefaultTextStyle(
+                style: const TextStyle(
+                  color: AppColors.primaryDeep,
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                ),
+                child: _line('Total', _money(sale['total'])),
+              ),
+            ),
             _line('Payment method', sale['paymentMode']),
             if ('${sale['paymentMode']}'.trim().toLowerCase() == 'gcash')
               _line('GCash transaction ID', sale['gcashTransactionId']),
@@ -362,50 +438,39 @@ class _ReceiptItemIdState extends State<_ReceiptItemId> {
   late final Future<String?> identifier = resolve();
   Future<String?> resolve() async {
     final item = widget.item;
-    final explicit =
-        item['variantId'] ??
-        item['publicItemId'] ??
-        item['bundleId'] ??
-        item['coffeeId'];
-    if (explicit != null && '$explicit'.isNotEmpty) return '$explicit';
-    final raw = '${item['itemId'] ?? item['id'] ?? ''}';
-    if (RegExp(r'^(VAR-|COF-|BND-|BUNDLE-)').hasMatch(raw)) return raw;
-    final sources = [
-      item['sourceInventoryId'],
-      item['itemId'],
-      item['id'],
-    ].where((value) => value != null && '$value'.trim().isNotEmpty);
-    final source = sources.firstOrNull;
-    if (source == null || '$source'.trim().isEmpty || '$source'.contains('/'))
-      return null;
     for (final collection in ['sales_inventory', 'coffee_products']) {
-      final data =
-          (await FirebaseFirestore.instance
-                  .collection(collection)
-                  .doc('$source')
-                  .get())
-              .data();
-      if (data == null) continue;
-      if (data['bundleId'] != null) return '${data['bundleId']}';
-      if (data['coffeeId'] != null) return '${data['coffeeId']}';
-      final matches = (data['items'] as List? ?? [])
-          .whereType<Map>()
-          .where(
-            (variant) =>
-                variant['id'] == item['itemId'] ||
-                variant['name'] == item['variant'],
-          )
-          .toList();
-      if (matches.length == 1) return matches.single['id']?.toString();
+      final snapshot = await FirebaseFirestore.instance
+          .collection(collection)
+          .get();
+      for (final doc in snapshot.docs) {
+        final data = doc.data();
+        final source = item['sourceInventoryId'] ?? item['productId'];
+        final rawId = item['itemId'] ?? item['id'] ?? item['variantId'];
+        if ((source == doc.id || rawId == doc.id) &&
+            (data['isBundle'] == true || data['items'] == null)) {
+          return inventoryDisplayId(data);
+        }
+        final matches = (data['items'] as List? ?? [])
+            .whereType<Map>()
+            .where(
+              (variant) =>
+                  variant['id'] == rawId ||
+                  (source == doc.id && variant['name'] == item['variant']),
+            )
+            .toList();
+        if (matches.length == 1)
+          return inventoryDisplayId(Map<String, dynamic>.from(matches.single));
+      }
     }
-    return null;
+    final fallback = inventoryDisplayId(item);
+    return fallback == '--' ? null : fallback;
   }
 
   @override
   Widget build(BuildContext context) => FutureBuilder<String?>(
     future: identifier,
     builder: (context, snapshot) =>
-        const _ReceiptDetails(id: '', sale: {})._line(
+        const ReceiptDetails(id: '', sale: {})._line(
           'Item ID',
           snapshot.connectionState == ConnectionState.waiting
               ? 'Loading...'
@@ -459,7 +524,7 @@ class _ReceiptIdentityState extends State<_ReceiptIdentity> {
     builder: (context, snapshot) {
       final resolved = snapshot.data ?? {};
       final sale = widget.sale;
-      final details = _ReceiptDetails(id: '', sale: sale);
+      final details = ReceiptDetails(id: '', sale: sale);
       return Column(
         children: [
           details._line(

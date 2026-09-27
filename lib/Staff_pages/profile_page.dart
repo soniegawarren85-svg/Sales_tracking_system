@@ -1,3 +1,4 @@
+import 'package:sales_tracking/theme/app_colors.dart';
 import '../services/staff_login_session.dart';
 import 'dart:convert';
 import 'dart:typed_data';
@@ -28,15 +29,14 @@ class _ProfilePageState extends State<ProfilePage>
   late Animation<Offset> _slideAnim;
 
   // ── Pink palette ────────────────────────────────────────────────
-  static const Color _pinkDark = Color(0xFFC2105C);
-  static const Color _pinkMid = Color(0xFFE91E63);
-  static const Color _pinkLight = Color(0xFFF48FB1);
+  static const Color _pinkDark = AppColors.primaryDark;
+  static const Color _pinkMid = AppColors.primary;
   static const Color _accent = Color(0xFFD4873A);
   static const Color _accentLight = Color(0xFFF0A855);
-  static const Color _bg = Color(0xFFFFF0F6);
-  static const Color _cardBg = Color(0xFFFFF4F8);
-  static const Color _border = Color(0xFFF8BBD0);
-  static const Color _textSoft = Color(0xFF8B496B);
+  static const Color _bg = AppColors.background;
+  static const Color _cardBg = AppColors.surfaceTint;
+  static const Color _border = AppColors.blush;
+  static const Color _textSoft = AppColors.textMuted;
   String? _staffDocId;
   bool _isUploadingProfilePhoto = false;
   String? _lastProfilePhotoUrl;
@@ -142,7 +142,7 @@ class _ProfilePageState extends State<ProfilePage>
                     padding: const EdgeInsets.fromLTRB(24, 22, 24, 18),
                     decoration: const BoxDecoration(
                       gradient: LinearGradient(
-                        colors: [Color(0xFF8B0035), _pinkDark],
+                        colors: [AppColors.primaryDeep, _pinkDark],
                         begin: Alignment.topLeft,
                         end: Alignment.bottomRight,
                       ),
@@ -512,7 +512,7 @@ class _ProfilePageState extends State<ProfilePage>
         return Container(
           decoration: const BoxDecoration(
             gradient: LinearGradient(
-              colors: [Color(0xFF8B0035), _pinkDark, _pinkMid, _pinkLight],
+              colors: [AppColors.primaryDeep, _pinkDark, _pinkMid, AppColors.accent],
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
             ),
@@ -741,7 +741,7 @@ class _ProfilePageState extends State<ProfilePage>
     return Container(
       decoration: const BoxDecoration(
         gradient: LinearGradient(
-          colors: [Color(0xFF8B0035), _pinkDark, _pinkMid],
+          colors: [AppColors.primaryDeep, _pinkDark, _pinkMid],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
@@ -798,7 +798,7 @@ class _ProfilePageState extends State<ProfilePage>
     return Container(
       decoration: const BoxDecoration(
         gradient: LinearGradient(
-          colors: [Color(0xFF8B0035), _pinkDark, _pinkMid],
+          colors: [AppColors.primaryDeep, _pinkDark, _pinkMid],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
@@ -1032,7 +1032,7 @@ class _ProfilePageState extends State<ProfilePage>
                           width: 42,
                           height: 42,
                           decoration: BoxDecoration(
-                            color: const Color(0xFFFFEAF2),
+                            color: AppColors.blush,
                             borderRadius: BorderRadius.circular(14),
                           ),
                           child: const Icon(
@@ -1185,7 +1185,7 @@ class _ProfilePageState extends State<ProfilePage>
           width: 36,
           height: 36,
           decoration: BoxDecoration(
-            color: const Color(0xFFFFEAF2),
+            color: AppColors.blush,
             borderRadius: BorderRadius.circular(12),
           ),
           child: Icon(icon, size: 18, color: _pinkDark),
@@ -1265,7 +1265,7 @@ class _ProfilePageState extends State<ProfilePage>
             width: 38,
             height: 38,
             decoration: BoxDecoration(
-              color: const Color(0xFFFFEAF2),
+              color: AppColors.blush,
               borderRadius: BorderRadius.circular(12),
             ),
             child: Icon(icon, size: 19, color: _pinkDark),
@@ -1502,11 +1502,11 @@ class _EditProfileSheetState extends State<_EditProfileSheet>
   bool _isSaving = false;
 
   // ── Pink palette (local copy) ───────────────────────────────────
-  static const Color _pinkDark = Color(0xFFC2105C);
-  static const Color _pinkMid = Color(0xFFE91E63);
+  static const Color _pinkDark = AppColors.primaryDark;
+  static const Color _pinkMid = AppColors.primary;
   static const Color _accent = Color(0xFFD4873A);
   static const Color _accentLight = Color(0xFFF0A855);
-  static const Color _border = Color(0xFFF8BBD0);
+  static const Color _border = AppColors.blush;
   // ────────────────────────────────────────────────────────────────
 
   @override
@@ -1665,7 +1665,7 @@ class _EditProfileSheetState extends State<_EditProfileSheet>
                     padding: const EdgeInsets.fromLTRB(20, 18, 20, 18),
                     decoration: BoxDecoration(
                       gradient: const LinearGradient(
-                        colors: [Color(0xFF8B0035), _pinkDark, _pinkMid],
+                        colors: [AppColors.primaryDeep, _pinkDark, _pinkMid],
                         begin: Alignment.topLeft,
                         end: Alignment.bottomRight,
                       ),
@@ -1980,7 +1980,7 @@ class _PasswordField extends StatelessWidget {
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(14),
-          borderSide: const BorderSide(color: Color(0xFFC2105C), width: 2),
+          borderSide: const BorderSide(color: AppColors.primaryDark, width: 2),
         ),
       ),
     );
@@ -2190,7 +2190,7 @@ class _SectionLabel extends StatelessWidget {
           padding: const EdgeInsets.all(8),
           decoration: BoxDecoration(
             gradient: const LinearGradient(
-              colors: [Color(0xFFC2105C), Color(0xFFE91E63)],
+              colors: [AppColors.primaryDark, AppColors.primary],
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
             ),
@@ -2204,7 +2204,7 @@ class _SectionLabel extends StatelessWidget {
           style: const TextStyle(
             fontSize: 15,
             fontWeight: FontWeight.w800,
-            color: Color(0xFF1A0A10),
+            color: AppColors.text,
           ),
         ),
       ],
@@ -2271,9 +2271,9 @@ class _SheetTextField extends StatelessWidget {
     this.inputFormatters,
   });
 
-  static const Color _pinkDark = Color(0xFFC2105C);
-  static const Color _border = Color(0xFFF8BBD0);
-  static const Color _cardBg = Color(0xFFFFF4F8);
+  static const Color _pinkDark = AppColors.primaryDark;
+  static const Color _border = AppColors.blush;
+  static const Color _cardBg = AppColors.surfaceTint;
 
   @override
   Widget build(BuildContext context) {
@@ -2289,7 +2289,7 @@ class _SheetTextField extends StatelessWidget {
         prefixIcon: Icon(icon, color: _pinkDark, size: 18),
         labelStyle: const TextStyle(color: _pinkDark, fontSize: 13),
         hintStyle: TextStyle(
-          color: const Color(0xFF8B496B).withOpacity(0.45),
+          color: AppColors.textMuted.withOpacity(0.45),
           fontSize: 13,
         ),
         enabledBorder: OutlineInputBorder(

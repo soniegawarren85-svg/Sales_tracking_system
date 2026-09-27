@@ -1,3 +1,4 @@
+import 'package:sales_tracking/theme/app_colors.dart';
 import 'package:flutter/material.dart';
 
 void showTopNotification(
@@ -99,7 +100,7 @@ class _TopNotificationOverlayState extends State<_TopNotificationOverlay>
                   color: widget.backgroundColor ??
                       (widget.isError
                           ? const Color(0xFFB71C1C)
-                          : const Color(0xFF8B0035)),
+                          : AppColors.primaryDeep),
                   borderRadius: BorderRadius.circular(16),
                   boxShadow: [
                     BoxShadow(

@@ -1,3 +1,10 @@
+import '../../services/bundle_stock_service.dart';
+import '../../widgets/bundle_details_dialog.dart';
+import '../../widgets/void_reason_dialog.dart';
+import '../../services/catalog_image_service.dart';
+import '../../widgets/admin_addons.dart';
+import 'package:sales_tracking/theme/app_colors.dart';
+import '../../services/short_id_service.dart';
 import '../../widgets/admin_category_sheet.dart';
 import '../../widgets/admin_item_editor.dart';
 import '../../widgets/admin_void_inventory.dart';
@@ -149,6 +156,7 @@ class InventoryPage extends StatefulWidget {
 class _InventoryPageState extends State<InventoryPage>
     with SingleTickerProviderStateMixin {
   String _catalogType = 'Categories';
+  bool _addonsTab = false;
   Uint8List? selectedImageBytes;
   final picker = ImagePicker();
   final _firestore = FirebaseFirestore.instance;
@@ -202,7 +210,7 @@ class _InventoryPageState extends State<InventoryPage>
       final expiryDate = DateTime.parse(expirationDate);
       final today = DateTime.now();
       return expiryDate.isBefore(
-        DateTime(today.year, today.month, today.day + 1),
+        DateTime(today.year, today.month, today.day),
       );
     } catch (e) {
       return false;
@@ -417,35 +425,7 @@ class _InventoryPageState extends State<InventoryPage>
     String folder = 'inventory_images',
     String? pickedMimeType,
   }) async {
-    if (bytes == null || bytes.isEmpty) return null;
-    try {
-      final timestamp = DateTime.now().millisecondsSinceEpoch;
-      final randomSuffix = Random().nextInt(999999).toString().padLeft(6, '0');
-      final contentType = _imageContentType(bytes, pickedMimeType);
-      final extension = _extensionForContentType(contentType);
-      final imagePath = '$folder/${timestamp}_$randomSuffix.$extension';
-      final imageRef = FirebaseStorage.instance.ref().child(imagePath);
-      final metadata = SettableMetadata(contentType: contentType);
-      final snapshotUpload = await imageRef
-          .putData(bytes, metadata)
-          .timeout(const Duration(seconds: 30));
-      return snapshotUpload.ref.getDownloadURL().timeout(
-        const Duration(seconds: 30),
-      );
-    } catch (uploadError) {
-      final contentType = _imageContentType(bytes, pickedMimeType);
-      final dataUrl = _imageDataUrl(bytes, contentType);
-      if (dataUrl != null) {
-        debugPrint(
-          'Storage upload unavailable, saved image directly in Firestore: $uploadError',
-        );
-        return dataUrl;
-      }
-      debugPrint(
-        'Image upload failed and fallback image is too large: $uploadError',
-      );
-      return null;
-    }
+    return uploadCatalogImage(bytes, folder: folder);
   }
 
   Future<void> _saveInventory(Map<String, dynamic> item) async {
@@ -3033,63 +3013,15 @@ class _InventoryPageState extends State<InventoryPage>
             _uploadInventoryImage(bytes, folder: 'inventory_item_images'),
       );
 
-  Future<void> _viewBundle(AdminCatalogEntry entry) => showDialog<void>(
-    context: context,
-    builder: (context) => AlertDialog(
-      title: Text(entry.name),
-      content: SizedBox(
-        width: 480,
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: catalogBundleContents(entry.source)
-                .map(
-                  (item) => ListTile(
-                    title: Text('${item['name'] ?? 'Item'}'),
-                    subtitle: Text(
-                      'Expires: ${item['expirationDate'] ?? 'Not recorded'}',
-                    ),
-                    trailing: Text('x${item['quantity'] ?? 1}'),
-                  ),
-                )
-                .toList(),
-          ),
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('Close'),
-        ),
-      ],
-    ),
-  );
+  Future<void> _viewBundle(AdminCatalogEntry entry) => showBundleDetails(context, entry);
 
   Future<void> _voidCatalogEntry(AdminCatalogEntry entry) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text('Void ${entry.name}?'),
-        content: const Text(
-          'This item will move to Void records and can be restored.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Void'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true) return;
+    final reason = await showVoidReasonDialog(context, entry.name);
+    if (reason == null) return;
     try {
       final ref = _firestore
           .collection(
-            entry.type == 'Coffee' ? 'coffee_products' : 'sales_inventory',
+            entry.type == 'Beverages' ? 'coffee_products' : 'sales_inventory',
           )
           .doc('${entry.source['id']}');
       await _firestore.runTransaction((tx) async {
@@ -3097,7 +3029,7 @@ class _InventoryPageState extends State<InventoryPage>
         final data = snapshot.data();
         if (data == null) throw StateError('Record no longer exists');
         if (entry.type != 'Categories') {
-          tx.update(ref, {'isDeleted': true, 'deletedAt': Timestamp.now()});
+          tx.update(ref, {'isDeleted': true, 'deletedAt': Timestamp.now(), 'voidReason': reason});
         } else {
           final items = (data['items'] as List? ?? [])
               .map((item) => Map<String, dynamic>.from(item as Map))
@@ -3108,7 +3040,7 @@ class _InventoryPageState extends State<InventoryPage>
           tx.update(ref, {
             'items': items,
             'removedItems': FieldValue.arrayUnion([
-              {...removed, 'removedAt': Timestamp.now()},
+              {...removed, 'removedAt': Timestamp.now(), 'voidReason': reason},
             ]),
           });
         }
@@ -3134,6 +3066,7 @@ class _InventoryPageState extends State<InventoryPage>
       save: (name) async {
         final data = <String, dynamic>{
           'name': name,
+          'publicId': await ShortIdService.next('CAT'),
           'items': <Map<String, dynamic>>[],
           'isBundle': false,
           'isDeleted': false,
@@ -3180,7 +3113,7 @@ class _InventoryPageState extends State<InventoryPage>
         upload: (bytes) =>
             _uploadInventoryImage(bytes, folder: 'inventory_item_images'),
       );
-    } else if (_catalogType == 'Coffee') {
+    } else if (_catalogType == 'Beverages') {
       await _openCreateSheet(const CoffeeMenuPage(createOnly: true));
     } else {
       final inventory = await _getInventoryList();
@@ -3195,6 +3128,17 @@ class _InventoryPageState extends State<InventoryPage>
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: PinkTheme.scaffoldBg,
+      floatingActionButton: _catalogType == 'Categories'
+          ? FloatingActionButton(
+              heroTag: 'inventory_add_item',
+              tooltip: 'Add item',
+              backgroundColor: AppColors.primaryDark,
+              foregroundColor: Colors.white,
+              shape: const CircleBorder(),
+              onPressed: _addCatalogItem,
+              child: const Icon(Icons.add_rounded, size: 30),
+            )
+          : null,
       body: SafeArea(
         child: Column(
           children: [
@@ -3219,7 +3163,7 @@ class _InventoryPageState extends State<InventoryPage>
                     child: Text(
                       'Inventory',
                       style: TextStyle(
-                        fontSize: 25,
+                        fontSize: 20,
                         fontWeight: FontWeight.w900,
                         color: Colors.white,
                       ),
@@ -3234,10 +3178,13 @@ class _InventoryPageState extends State<InventoryPage>
                 alignment: Alignment.centerLeft,
                 child: Wrap(
                   spacing: 10,
-                  children: ['Categories', 'Bundle', 'Coffee']
+                  children: ['Categories', 'Bundle', 'Beverages']
                       .map(
                         (type) => ChoiceChip(
-                          label: Text(type == 'Bundle' ? 'Bulk' : type),
+                          selectedColor: AppColors.primaryDark,
+                          checkmarkColor: Colors.white,
+                          labelStyle: TextStyle(color: _catalogType == type ? Colors.white : AppColors.primaryDark, fontWeight: FontWeight.w700),
+                          label: Text(type),
                           selected: _catalogType == type,
                           onSelected: (_) =>
                               setState(() => _catalogType = type),
@@ -3248,32 +3195,31 @@ class _InventoryPageState extends State<InventoryPage>
               ),
             ),
             Expanded(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.fromLTRB(20, 4, 20, 160),
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(20, 4, 20, 0),
                 child: AdminCatalog(
+                  pinnedControls: true,
                   type: _catalogType,
+                  onBeverageTabChanged: (value) => setState(() => _addonsTab = value),
                   onOpen: _openCatalogEntry,
                   onVoid: _voidCatalogEntry,
                   onView: _viewBundle,
                   onCategorySelected: (category) =>
                       _selectedCategory = category,
-                  actions: Row(
-                    mainAxisAlignment: MainAxisAlignment.end,
+                  actions: Wrap(
+                    alignment: WrapAlignment.end,
                     children: [
+                      if (_catalogType != 'Beverages' || !_addonsTab) TextButton.icon(
+                        icon: const Icon(Icons.add),
+                        label: Text(_catalogType == 'Categories' ? 'Add Category' : _catalogType == 'Bundle' ? 'Create Bundle' : 'Add Beverages'),
+                        onPressed: _catalogType == 'Categories' ? _showCategorySheet : _addCatalogItem,
+                      ),
+
+                      if (_catalogType == 'Beverages' && _addonsTab) TextButton.icon(onPressed: () => showAdminAddonEditor(context), icon: const Icon(Icons.add), label: const Text('Add add-ons')),
                       IconButton(
                         tooltip: 'Void records',
                         icon: const Icon(Icons.block, color: PinkTheme.primary),
-                        onPressed: () => Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => AdminVoidInventory(
-                              type: _catalogType,
-                              categoryId: _catalogType == 'Categories'
-                                  ? (_selectedCategory?['id'])?.toString()
-                                  : null,
-                            ),
-                          ),
-                        ),
+                        onPressed: () => showAdminInventoryRecords(context, type: _catalogType),
                       ),
                       IconButton(
                         tooltip: 'Expired inventory',
@@ -3281,18 +3227,7 @@ class _InventoryPageState extends State<InventoryPage>
                           Icons.event_busy,
                           color: Colors.deepOrange,
                         ),
-                        onPressed: () => Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => AdminVoidInventory(
-                              type: _catalogType,
-                              categoryId: _catalogType == 'Categories'
-                                  ? (_selectedCategory?['id'])?.toString()
-                                  : null,
-                              expired: true,
-                            ),
-                          ),
-                        ),
+                        onPressed: () => showAdminInventoryRecords(context, type: _catalogType, expired: true),
                       ),
                     ],
                   ),
@@ -3302,36 +3237,7 @@ class _InventoryPageState extends State<InventoryPage>
           ],
         ),
       ),
-      floatingActionButton: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [
-          FloatingActionButton(
-            heroTag: 'addInventoryItem',
-            tooltip: _catalogType == 'Bundle'
-                ? 'Add bundle'
-                : _catalogType == 'Coffee'
-                ? 'Add coffee'
-                : 'Add item',
-            onPressed: _addCatalogItem,
-            backgroundColor: PinkTheme.primary,
-            foregroundColor: Colors.white,
-            shape: const CircleBorder(),
-            child: const Icon(Icons.add),
-          ),
-          if (_catalogType == 'Categories') ...[
-            const SizedBox(height: 12),
-            FloatingActionButton.extended(
-              heroTag: 'addCategory',
-              onPressed: _showCategorySheet,
-              backgroundColor: PinkTheme.primary,
-              foregroundColor: Colors.white,
-              icon: const Icon(Icons.category_outlined),
-              label: const Text('Add Categories'),
-            ),
-          ],
-        ],
-      ),
+
     );
   }
 
@@ -3370,7 +3276,12 @@ class _InventoryPageState extends State<InventoryPage>
           'timestamp': data['timestamp'],
         });
       }
-      return inventory;
+      final coffees = await _firestore.collection('coffee_products').get();
+      for (final doc in coffees.docs) {
+        final sizes = bundleBeverageSizes(doc.id, doc.data());
+        if (sizes.isEmpty) continue;
+        inventory.add({'id': 'coffee:${doc.id}', 'sourceInventoryId': doc.id, 'sourceCollection': 'coffee_products', 'name': 'Beverages · ${doc.data()['name']}', 'items': sizes});
+      }      return inventory;
     } catch (e) {
       debugPrint('Error getting inventory list: $e');
       return [];
@@ -3386,7 +3297,7 @@ class _InventoryPageState extends State<InventoryPage>
             padding: const EdgeInsets.all(30),
             decoration: const BoxDecoration(
               gradient: LinearGradient(
-                colors: [PinkTheme.badgeBg, Color(0xFFFDE0EC)],
+                colors: [PinkTheme.badgeBg, AppColors.blush],
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
               ),
@@ -3450,6 +3361,7 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
     text: '1',
   );
   Uint8List? bundleImageBytes;
+  Future<String?>? _bundleUpload;
   final ImagePicker _bundlePicker = ImagePicker();
   final Map<String, Map<int, int>> selectedVariantQuantities = {};
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
@@ -3624,21 +3536,7 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
   }
 
   Future<String?> _uploadBundleImage() async {
-    final bytes = bundleImageBytes;
-    if (bytes == null || bytes.isEmpty) return null;
-    try {
-      final timestamp = DateTime.now().millisecondsSinceEpoch;
-      final imageRef = FirebaseStorage.instance.ref().child(
-        'bundle_images/$timestamp.jpg',
-      );
-      final snapshotUpload = await imageRef
-          .putData(bytes, SettableMetadata(contentType: 'image/jpeg'))
-          .timeout(const Duration(seconds: 30));
-      return snapshotUpload.ref.getDownloadURL();
-    } catch (e) {
-      debugPrint('Bundle image upload failed: $e');
-      return _bundleDataUrl(bytes);
-    }
+    return _bundleUpload ?? uploadCatalogImage(bundleImageBytes, folder: 'bundle_images');
   }
 
   Future<void> _pickBundleImage() async {
@@ -3652,7 +3550,10 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
       if (picked == null) return;
       final bytes = await picked.readAsBytes();
       if (!mounted) return;
-      setState(() => bundleImageBytes = bytes);
+      setState(() {
+        bundleImageBytes = bytes;
+        _bundleUpload = uploadCatalogImage(bytes, folder: 'bundle_images').catchError((_) => null);
+      });
     } catch (e) {
       debugPrint('Bundle image pick failed: $e');
       if (mounted) _showErrorSnack('Unable to select image. Please try again.');
@@ -3759,6 +3660,7 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
           continue;
         }
         final variant = variants[variantIndex] as Map<String, dynamic>? ?? {};
+        if (variant['untrackedStock'] == true) continue;
         final availableQty = _parseQuantity(
           variant['stock'] ?? variant['startingStock'],
         );
@@ -3823,7 +3725,7 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
           final availableQty = _parseQuantity(
             variant['stock'] ?? variant['startingStock'],
           );
-          if (totalQtyNeeded > availableQty) {
+          if (variant['untrackedStock'] != true && totalQtyNeeded > availableQty) {
             _showErrorSnack(
               'Not enough "${variant['name']}" in inventory.\nNeed: $totalQtyNeeded, Available: $availableQty',
             );
@@ -3832,135 +3734,33 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
           }
           selectedVariants.add({
             'itemId': itemId,
-            'variantIndex': variantIndex,
+            'sourceInventoryId': item['sourceInventoryId'] ?? itemId,
+            'sourceCollection': item['sourceCollection'] ?? 'sales_inventory',
+            'coffeeSize': variant['coffeeSize'],
+            'name': variant['name'],
+            'variantId': variant['id'],
+            'variantName': variant['name'],
             'quantity': quantity,
           });
         }
       }
 
-      final bundleId = _generateBundleId();
+      final bundleId = await ShortIdService.next('BND');
       final bundleImageUrl = await _uploadBundleImage();
+      if (bundleImageBytes != null && bundleImageUrl == null) {
+        _bundleUpload = null;
+        throw StateError('Picture could not upload. Please retry.');
+      }
 
-      final updatedItemsByDoc = await _firestore
-          .runTransaction<Map<String, List<dynamic>>>((transaction) async {
-            final selectedItems = <Map<String, String>>[];
-            final docsToUpdate = <String, List<dynamic>>{};
-            final docRefs = <String, DocumentReference<Map<String, dynamic>>>{};
-            final docNames = <String, String>{};
-
-            for (final selected in selectedVariants) {
-              final itemId = selected['itemId']?.toString() ?? '';
-              final variantIndex = selected['variantIndex'] as int? ?? -1;
-              final quantity = selected['quantity'] as int? ?? 0;
-              final totalQtyNeeded = quantity * bundleQty;
-              final docRef = _firestore
-                  .collection('sales_inventory')
-                  .doc(itemId);
-              docRefs[itemId] = docRef;
-
-              if (!docsToUpdate.containsKey(itemId)) {
-                final docSnapshot = await transaction.get(docRef);
-                final data = docSnapshot.data();
-
-                if (data == null) {
-                  throw Exception('Inventory item no longer exists.');
-                }
-
-                docsToUpdate[itemId] = List<dynamic>.from(
-                  data['items'] as List? ?? [],
-                );
-                docNames[itemId] = data['name']?.toString() ?? '';
-              }
-
-              final items = docsToUpdate[itemId]!;
-              if (variantIndex < 0 || variantIndex >= items.length) {
-                throw Exception('Selected variant no longer exists.');
-              }
-
-              final variant = Map<String, dynamic>.from(
-                items[variantIndex] as Map? ?? {},
-              );
-              final availableQty = _parseQuantity(
-                variant['stock'] ?? variant['startingStock'],
-              );
-
-              if (totalQtyNeeded > availableQty) {
-                throw Exception(
-                  'Not enough "${variant['name'] ?? 'variant'}" in inventory. Need: $totalQtyNeeded, Available: $availableQty',
-                );
-              }
-
-              final updatedStock = availableQty - totalQtyNeeded;
-              variant['stock'] = updatedStock.toString();
-              items[variantIndex] = variant;
-              docsToUpdate[itemId] = items;
-
-              selectedItems.add({
-                'parentName': docNames[itemId] ?? '',
-                'sourceInventoryId': itemId,
-                'variantId': variant['id'],
-                'name': variant['name']?.toString() ?? '',
-                'price': variant['price']?.toString() ?? '0',
-                'imageUrl': variant['imageUrl'] ?? '',
-                'expirationDate': variant['expirationDate'] ?? '',
-                'quantity': quantity.toString(),
-              });
-            }
-
-            final expirations =
-                selectedItems
-                    .map(
-                      (item) =>
-                          DateTime.tryParse('${item['expirationDate'] ?? ''}'),
-                    )
-                    .whereType<DateTime>()
-                    .toList()
-                  ..sort();
-            final expirationDate = expirations.isEmpty
-                ? ''
-                : expirations.first.toIso8601String();
-            final bundleInstances = List.generate(bundleQty, (index) {
-              return {
-                'number': index + 1,
-                'id': _bundleInstanceId(bundleId, index),
-                'expirationDate': expirationDate,
-                'status': 'available',
-                'items': selectedItems.map((item) {
-                  final quantity = _parseQuantity(item['quantity']);
-                  return {
-                    'name': item['name'] ?? 'Item',
-                    'price': item['price'] ?? '0',
-                    'quantity': quantity,
-                    'remaining': quantity,
-                  };
-                }).toList(),
-              };
-            });
-
-            for (final entry in docsToUpdate.entries) {
-              final docRef = docRefs[entry.key];
-              if (docRef != null) {
-                transaction.update(docRef, {'items': entry.value});
-              }
-            }
-
-            final bundleRef = _firestore.collection('sales_inventory').doc();
-            transaction.set(bundleRef, {
-              'name': name,
-              'price': price.isEmpty ? '0' : price,
-              'expirationDate': expirationDate,
-              'items': selectedItems,
-              'bundleCount': bundleQty,
-              'bundleId': bundleId,
-              'bundleInstances': bundleInstances,
-              'imageUrl': bundleImageUrl,
-              'timestamp': Timestamp.now(),
-              'isBundle': true,
-            });
-
-            return docsToUpdate;
-          });
-
+      final bundleRef = _firestore.collection('sales_inventory').doc();
+      final updatedItemsByDoc = await BundleStockService(_firestore).restock(
+        bundleRef.id, bundleQty, {}, ingredients: selectedVariants,
+        newBundle: {
+          'name': name, 'price': price.isEmpty ? '0' : price, 'bundleCount': 0,
+          'bundleId': bundleId, 'publicId': bundleId, 'items': selectedVariants,
+          'imageUrl': bundleImageUrl, 'timestamp': Timestamp.now(), 'isBundle': true, 'isDeleted': false,
+        },
+      );
       if (!mounted) return;
       await _loadBundles();
       if (!mounted) return;
@@ -3978,6 +3778,7 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
         }
         selectedVariantQuantities.clear();
         bundleImageBytes = null;
+        _bundleUpload = null;
       });
       bundleNameController.clear();
       bundlePriceController.clear();
@@ -4071,96 +3872,11 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
   }
 
   Future<void> _confirmDeleteBundle(Map<String, dynamic> bundle) async {
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (_) => Dialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-        child: Padding(
-          padding: const EdgeInsets.all(28),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                padding: const EdgeInsets.all(18),
-                decoration: BoxDecoration(
-                  color: PinkTheme.deleteRed.withOpacity(0.1),
-                  shape: BoxShape.circle,
-                ),
-                child: Icon(Icons.block, color: PinkTheme.deleteRed, size: 38),
-              ),
-              const SizedBox(height: 18),
-              Text(
-                'Void Bundle?',
-                style: const TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.w800,
-                  color: PinkTheme.textDark,
-                ),
-              ),
-              const SizedBox(height: 10),
-              Text(
-                'This will void "${bundle['name'] ?? 'bundle'}" from Bundles.',
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  fontSize: 14,
-                  color: PinkTheme.textMid,
-                  height: 1.5,
-                ),
-              ),
-              const SizedBox(height: 24),
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: () => Navigator.pop(context, false),
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: PinkTheme.textMid,
-                        side: const BorderSide(
-                          color: PinkTheme.divider,
-                          width: 1.5,
-                        ),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                      ),
-                      child: const Text(
-                        'Cancel',
-                        style: TextStyle(fontWeight: FontWeight.w600),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: ElevatedButton(
-                      onPressed: () => Navigator.pop(context, true),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: PinkTheme.deleteRed,
-                        foregroundColor: Colors.white,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                        elevation: 0,
-                      ),
-                      child: const Text(
-                        'Void',
-                        style: TextStyle(fontWeight: FontWeight.w700),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-
-    if (confirm == true && bundle['id'] != null) {
+    final reason = await showVoidReasonDialog(context, '${bundle['name'] ?? 'Bundle'}');
+    if (reason != null && bundle['id'] != null) {
       try {
         await _firestore.collection('sales_inventory').doc(bundle['id']).update(
-          {'isDeleted': true, 'deletedAt': Timestamp.now()},
+          {'isDeleted': true, 'deletedAt': Timestamp.now(), 'voidReason': reason},
         );
         await _markStaffInventoryDeleted(bundle['id'].toString());
         await _loadBundles();
@@ -4765,7 +4481,7 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
               padding: const EdgeInsets.all(28),
               decoration: const BoxDecoration(
                 gradient: LinearGradient(
-                  colors: [PinkTheme.badgeBg, Color(0xFFFDE0EC)],
+                  colors: [PinkTheme.badgeBg, AppColors.blush],
                 ),
                 shape: BoxShape.circle,
               ),
@@ -5210,7 +4926,7 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
                       if (bundleImageBytes != null)
                         IconButton(
                           onPressed: () =>
-                              setState(() => bundleImageBytes = null),
+                              setState(() { bundleImageBytes = null; _bundleUpload = null; }),
                           icon: const Icon(Icons.close_rounded),
                           color: PinkTheme.deleteRed,
                         ),
@@ -5409,7 +5125,7 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
                                             itemPrice != '0' &&
                                                     itemPrice.isNotEmpty
                                                 ? '₱$itemPrice  •  ${variants.length} variant${variants.length == 1 ? '' : 's'}'
-                                                : '${variants.length} variant${variants.length == 1 ? '' : 's'}',
+                                                : item['sourceCollection'] == 'coffee_products' ? '${variants.length} size${variants.length == 1 ? '' : 's'}' : '${variants.length} variant${variants.length == 1 ? '' : 's'}',
                                             style: const TextStyle(
                                               fontSize: 12,
                                               color: PinkTheme.textLight,
@@ -5563,7 +5279,7 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
                                                   ),
                                                   const SizedBox(height: 4),
                                                   Text(
-                                                    'Stock: $variantStock pcs',
+                                                    variant['untrackedStock'] == true ? 'Available · made to order' : 'Stock: $variantStock pcs',
                                                     style: const TextStyle(
                                                       fontSize: 11,
                                                       fontWeight:
@@ -5571,7 +5287,7 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
                                                       color: PinkTheme.textMid,
                                                     ),
                                                   ),
-                                                  if (quantity > 0) ...[
+                                                  if (quantity > 0 && variant['untrackedStock'] != true) ...[
                                                     const SizedBox(height: 2),
                                                     Text(
                                                       'Remaining: $remainingStock pcs',
@@ -5590,7 +5306,10 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
                                                 ],
                                               ),
                                             ),
-                                            // Quantity controls
+                                            // Beverage sizes are selected once per bundle.
+                                            if (item['sourceCollection'] == 'coffee_products')
+                                              Checkbox(value: isSelected, activeColor: PinkTheme.primary, onChanged: (selected) => _setVariantQuantity(itemId, variantIndex, selected == true ? 1 : 0))
+                                            else
                                             Row(
                                               children: [
                                                 InkWell(
@@ -7198,7 +6917,7 @@ class _RemovedInventoryPageState extends State<RemovedInventoryPage>
             padding: const EdgeInsets.all(30),
             decoration: BoxDecoration(
               gradient: const LinearGradient(
-                colors: [PinkTheme.badgeBg, Color(0xFFFDE0EC)],
+                colors: [PinkTheme.badgeBg, AppColors.blush],
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
               ),

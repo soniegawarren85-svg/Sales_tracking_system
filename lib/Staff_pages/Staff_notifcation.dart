@@ -1,3 +1,4 @@
+import 'package:sales_tracking/theme/app_colors.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
@@ -23,7 +24,7 @@ class StaffNotificationPage extends StatelessWidget {
 
     return Scaffold(
       appBar: AppBar(
-        backgroundColor: const Color(0xFFE91E63),
+        backgroundColor: AppColors.primary,
         title: Text(
           'Staff Reports',
           style: GoogleFonts.dmSans(fontWeight: FontWeight.w700),

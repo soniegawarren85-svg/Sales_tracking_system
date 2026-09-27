@@ -1,3 +1,4 @@
+import 'package:sales_tracking/theme/app_colors.dart';
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
@@ -158,11 +159,6 @@ class _AdminSalesOverviewState extends State<AdminSalesOverview> {
         ('Total sold', sold.toStringAsFixed(0), Icons.shopping_bag_outlined),
         if (branches) ...[
           ('Total receipts', '${sales.length}', Icons.receipt_long_outlined),
-          (
-            'Average receipt',
-            '₱${(sales.isEmpty ? 0 : amount / sales.length).toStringAsFixed(2)}',
-            Icons.insights_outlined,
-          ),
         ],
       ];
       return LayoutBuilder(
@@ -181,12 +177,12 @@ class _AdminSalesOverviewState extends State<AdminSalesOverview> {
                       decoration: BoxDecoration(
                         color: Colors.white,
                         borderRadius: BorderRadius.circular(20),
-                        border: Border.all(color: const Color(0xFFF8BBD0)),
+                        border: Border.all(color: AppColors.blush),
                       ),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Icon(value.$3, color: const Color(0xFFE91E63)),
+                          Icon(value.$3, color: AppColors.primary),
                           const SizedBox(height: 10),
                           FittedBox(
                             child: Text(
@@ -194,7 +190,7 @@ class _AdminSalesOverviewState extends State<AdminSalesOverview> {
                               style: const TextStyle(
                                 fontSize: 24,
                                 fontWeight: FontWeight.w800,
-                                color: Color(0xFFAD1457),
+                                color: AppColors.primaryDark,
                               ),
                             ),
                           ),
@@ -240,8 +236,8 @@ class _AdminBranchRankingState extends State<AdminBranchRanking> {
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(
       title: const Text('Branch sales report'),
-      backgroundColor: const Color(0xFFFCE4EC),
-      foregroundColor: const Color(0xFF880E4F),
+      backgroundColor: AppColors.blush,
+      foregroundColor: AppColors.primaryDeep,
     ),
     body: ListView(
       padding: const EdgeInsets.all(20),
@@ -351,8 +347,8 @@ class _AdminBranchRankingState extends State<AdminBranchRanking> {
                                     : (totals[id]! / max).clamp(0, 1),
                                 minHeight: 18,
                                 borderRadius: BorderRadius.circular(9),
-                                color: const Color(0xFFE91E63),
-                                backgroundColor: const Color(0xFFFCE4EC),
+                                color: AppColors.primary,
+                                backgroundColor: AppColors.blush,
                               ),
                               const SizedBox(height: 8),
                               Text('₱${totals[id]!.toStringAsFixed(2)}'),
@@ -387,6 +383,7 @@ class _AdminBranchRankingState extends State<AdminBranchRanking> {
 
 (DateTime, DateTime) branchReportRange(DateTime anchor, String period) {
   final day = DateTime(anchor.year, anchor.month, anchor.day);
+  if (period == 'Year') return (DateTime(day.year), DateTime(day.year + 1));
   if (period == 'Month')
     return (DateTime(day.year, day.month), DateTime(day.year, day.month + 1));
   if (period == 'Week') {

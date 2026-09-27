@@ -1,24 +1,59 @@
+import 'cash_drawer_service.dart';
+import 'local_write_lock.dart';
 import 'dart:async';
 import 'dart:convert';
+import 'sale_stock.dart';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'collection_storage.dart';
+import 'collection_storage_native.dart'
+    if (dart.library.js_interop) 'collection_storage_web.dart';
 
 class LocalDatabaseSyncService {
-  LocalDatabaseSyncService._();
+  LocalDatabaseSyncService._()
+      : _firestore = FirebaseFirestore.instance,
+        _storage = createCollectionStorage();
+
+  LocalDatabaseSyncService.forDatabase(this._firestore, {CollectionStorage? storage})
+      : _storage = storage ?? createCollectionStorage();
 
   static final LocalDatabaseSyncService _instance =
       LocalDatabaseSyncService._();
 
   factory LocalDatabaseSyncService() => _instance;
 
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  final FirebaseFirestore _firestore;
+  final CollectionStorage _storage;
 
   static const _keyPrefix = 'local_collection_v1_';
   final _completedSales =
       StreamController<List<Map<String, dynamic>>>.broadcast();
   final _collectionUpdates = StreamController<String>.broadcast();
+
+  final _salesLock = LocalWriteLock();
+  final _drawerLock = LocalWriteLock();
+  final _inventoryLock = LocalWriteLock();
+
+  /// A scoped query must not erase allocations belonging to other targets.
+  /// In particular, an empty direct-staff query can arrive before branch lookup.
+  Future<void> cacheStaffInventorySnapshot(
+    Iterable<String> targets,
+    Iterable<Map<String, dynamic>> incoming, {
+    bool authoritative = true,
+  }) => _inventoryLock.run(() async {
+    if (targets.isEmpty) return;
+    final current = await getCachedCollection('staff_inventory');
+    final byId = <String, Map<String, dynamic>>{
+      for (final row in current.where(
+        (row) =>
+            !authoritative || !targets.contains(row['staffId']?.toString()),
+      ))
+        '${row['_localDocId']}': row,
+      for (final row in incoming) '${row['_localDocId']}': row,
+    };
+    await cacheCollectionDocs('staff_inventory', byId.values);
+  });
 
   String _key(String collection) => '$_keyPrefix$collection';
 
@@ -65,20 +100,19 @@ class LocalDatabaseSyncService {
     String collection,
   ) async {
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final raw = prefs.getString(_key(collection));
+      final raw = await _storage.read(_key(collection));
       // Callers add newly-created offline orders to this list, so it must be
       // mutable even when this device has not cached a sale yet.
       if (raw == null || raw.isEmpty) return <Map<String, dynamic>>[];
       final decoded = jsonDecode(raw);
-      if (decoded is! List) return <Map<String, dynamic>>[];
+      if (decoded is! List) throw const FormatException('Invalid offline collection');
       return decoded
           .whereType<Map>()
           .map((item) => Map<String, dynamic>.from(_decode(item) as Map))
           .toList();
     } catch (e) {
       debugPrint('Unable to read local $collection cache: $e');
-      return <Map<String, dynamic>>[];
+      rethrow;
     }
   }
 
@@ -87,83 +121,125 @@ class LocalDatabaseSyncService {
     Iterable<Map<String, dynamic>> docs,
   ) async {
     try {
-      final records = docs
-          .map((doc) => Map<String, dynamic>.from(doc))
-          .toList();
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(_key(collection), jsonEncode(_encode(records)));
+      var records = docs.map((doc) => Map<String, dynamic>.from(doc)).toList();
+      if (collection == 'staff_inventory') {
+        final receipts = await getCachedCollection('completed_sales');
+        for (final receipt in receipts.where(
+          (sale) => sale['stockSyncRequired'] == true,
+        )) {
+          final lines = (receipt['items'] as List? ?? [])
+              .whereType<Map>()
+              .map((item) => Map<String, dynamic>.from(item))
+              .toList();
+          records = records
+              .map(
+                (record) => applySaleStock(
+                  record,
+                  '${receipt['salesId']}',
+                  lines
+                      .where(
+                        (line) =>
+                            line['staffInventoryDocId'] ==
+                            record['_localDocId'],
+                      )
+                      .toList(),
+                ),
+              )
+              .toList();
+        }
+      }
+      final encoded = jsonEncode(_encode(records));
+      if (await _storage.read(_key(collection)) == encoded) return;
+      await _storage.write(_key(collection), encoded);
       if (collection == 'completed_sales' && !_completedSales.isClosed) {
         _completedSales.add(records);
       }
       if (!_collectionUpdates.isClosed) _collectionUpdates.add(collection);
     } catch (e) {
       debugPrint('Unable to save local $collection cache: $e');
+      rethrow;
     }
   }
 
   /// Keeps cloud/cache receipts available to the offline drawer after restart.
-  Future<void> mergeCompletedSales(
-    Iterable<Map<String, dynamic>> incoming,
-  ) async {
-    final cached = await getCachedCollection('completed_sales');
-    final merged = <String, Map<String, dynamic>>{};
-    String key(Map<String, dynamic> sale, int fallback) =>
-        sale['salesId']?.toString() ??
-        sale['localId']?.toString() ??
-        sale['_localDocId']?.toString() ??
-        'unknown-$fallback';
-    for (var i = 0; i < cached.length; i++) {
-      merged[key(cached[i], i)] = cached[i];
-    }
-    var offset = cached.length;
-    for (final sale in incoming) {
-      final item = Map<String, dynamic>.from(sale);
-      final saleKey = key(item, offset++);
-      final existing = merged[saleKey];
-      merged[saleKey] = {
-        ...?existing,
-        ...item,
-        '_localDocId': item['_localDocId'] ?? existing?['_localDocId'] ?? saleKey,
-      };
-    }
-    await cacheCollectionDocs('completed_sales', merged.values);
-  }
+  Future<void> mergeCompletedSales(Iterable<Map<String, dynamic>> incoming) =>
+      _salesLock.run(() async {
+        final cached = await getCachedCollection('completed_sales');
+        final merged = <String, Map<String, dynamic>>{};
+        String key(Map<String, dynamic> sale, int fallback) =>
+            sale['salesId']?.toString() ??
+            sale['localId']?.toString() ??
+            sale['_localDocId']?.toString() ??
+            'unknown-$fallback';
+        for (var i = 0; i < cached.length; i++) {
+          merged[key(cached[i], i)] = cached[i];
+        }
+        var offset = cached.length;
+        for (final sale in incoming) {
+          final item = Map<String, dynamic>.from(sale);
+          final saleKey = key(item, offset++);
+          final existing = merged[saleKey];
+          merged[saleKey] = {
+            ...?existing,
+            ...item,
+            '_localDocId':
+                item['_localDocId'] ?? existing?['_localDocId'] ?? saleKey,
+          };
+        }
+        await cacheCollectionDocs('completed_sales', merged.values);
+      });
 
   /// Updates cached drawer details from Firestore without replacing a drawer
   /// value that was rebuilt locally from today's receipts.
   Future<List<Map<String, dynamic>>> mergeCashDrawerSnapshot(
     Iterable<Map<String, dynamic>> serverDrawers,
-  ) async {
+  ) => _drawerLock.run(() async {
     final cached = await getCachedCollection('staff_cash_drawer');
-    final cachedById = {
-      for (final drawer in cached)
-        drawer['_localDocId']?.toString() ?? drawer['id']?.toString() ?? '':
-            drawer,
+    final pending = await getCachedCollection('pending_cash_drawer_changes');
+    final receipts = await getCachedCollection('completed_sales');
+    final byId = {
+      for (final row in cached) row['_localDocId']?.toString(): row,
     };
-    final merged = <Map<String, dynamic>>[];
-    for (final serverDrawer in serverDrawers) {
-      final id = serverDrawer['_localDocId']?.toString() ?? '';
-      final local = cachedById[id];
-      final localDate = _asDate(local?['offlineReceiptBalanceDate']);
-      final value = Map<String, dynamic>.from(serverDrawer);
-      if (local != null && _isToday(localDate)) {
-        value['balance'] = local['balance'];
-        value['offlineReceiptBalanceDate'] = local['offlineReceiptBalanceDate'];
-        value['localReceiptIds'] = local['localReceiptIds'];
+    for (final server in serverDrawers) {
+      final id = server['_localDocId']?.toString();
+      final applied = List<String>.from(
+        server['appliedOfflineMutationIds'] as List? ?? [],
+      );
+      final row = CashDrawerService.forDay(server, DateTime.now(), receipts: receipts.where((receipt) => receipt['branchId'] == id));
+      if (id != null && server['drawerDate'] != CashDrawerService.dayKey(DateTime.now())) {
+        unawaited(CashDrawerService.ensureToday(_firestore, id).catchError((Object error) { debugPrint('Drawer reset deferred: $error'); }));
       }
-      merged.add(value);
+      row['localReceiptIds'] = {
+        ...List<String>.from(byId[id]?['localReceiptIds'] as List? ?? []),
+        ...pending
+            .where((movement) => movement['drawerId'] == id)
+            .map((movement) => movement['receiptId']?.toString() ?? ''),
+      }.where((id) => id.isNotEmpty).toList();
+      for (final movement in pending) {
+        if (CashDrawerService.dayKey(_asDate(movement['createdAt']) ?? DateTime.now()) != CashDrawerService.dayKey(DateTime.now()) || movement['drawerId'] != id ||
+            applied.contains(movement['_localDocId']))
+          continue;
+        row['balance'] =
+            ((row['balance'] as num?)?.toDouble() ?? 0) +
+            ((movement['cashDelta'] as num?)?.toDouble() ?? 0);
+        row['gcashBalance'] =
+            ((row['gcashBalance'] as num?)?.toDouble() ?? 0) +
+            ((movement['gcashDelta'] as num?)?.toDouble() ?? 0);
+      }
+      byId[id] = row;
     }
+    final merged = byId.values.toList();
     await cacheCollectionDocs('staff_cash_drawer', merged);
     return merged;
-  }
+  });
 
   Future<void> refreshCoreCollectionsFromFirebase() async {
-    for (final collection in const ['sales_inventory']) {
+    for (final collection in const ['sales_inventory', 'coffee_products']) {
       try {
         final snapshot = await _firestore
             .collection(collection)
-            .limit(1000)
-            .get(const GetOptions(source: Source.server));
+            .get(const GetOptions(source: Source.server))
+            .timeout(const Duration(seconds: 5));
         await cacheCollectionDocs(
           collection,
           snapshot.docs.map((doc) => {...doc.data(), '_localDocId': doc.id}),
@@ -182,6 +258,21 @@ class LocalDatabaseSyncService {
   }
 
   Stream<String> get collectionUpdates => _collectionUpdates.stream;
+
+  Future<void> rolloverCashDrawers() => _drawerLock.run(() async {
+    final drawers = await getCachedCollection('staff_cash_drawer');
+    final receipts = await getCachedCollection('completed_sales');
+    var changed = false;
+    for (var i = 0; i < drawers.length; i++) {
+      final data = drawers[i];
+      if (data['drawerDate'] == CashDrawerService.dayKey(DateTime.now())) continue;
+      final id = '${data['_localDocId'] ?? data['id'] ?? ''}';
+      drawers[i] = CashDrawerService.forDay(data, DateTime.now(), receipts: receipts.where((receipt) => receipt['branchId'] == id));
+      changed = true;
+      if (id.isNotEmpty) unawaited(CashDrawerService.ensureToday(_firestore, id).catchError((Object error) { debugPrint('Drawer reset deferred: $error'); }));
+    }
+    if (changed) await cacheCollectionDocs('staff_cash_drawer', drawers);
+  });
 
   DateTime? _asDate(dynamic value) {
     if (value is Timestamp) return value.toDate();
@@ -217,10 +308,11 @@ class LocalDatabaseSyncService {
     var changed = false;
     for (var index = 0; index < drawers.length; index++) {
       final drawer = Map<String, dynamic>.from(drawers[index]);
-      final drawerId = drawer['_localDocId']?.toString() ??
-          drawer['id']?.toString() ?? '';
+      final drawerId =
+          drawer['_localDocId']?.toString() ?? drawer['id']?.toString() ?? '';
       if (drawerId.isEmpty) continue;
-      final opening = (drawer['dailyOpeningCash'] as num?)?.toDouble() ??
+      final opening =
+          (drawer['dailyOpeningCash'] as num?)?.toDouble() ??
           (drawer['openingCash'] as num?)?.toDouble();
       // A drawer without an opening amount cannot be rebuilt safely.
       if (opening == null) continue;
@@ -229,12 +321,17 @@ class LocalDatabaseSyncService {
       for (final receipt in receipts) {
         if (receipt['branchId']?.toString() != drawerId ||
             receipt['paymentMode']?.toString().toLowerCase() != 'cash' ||
-            !_isToday(_asDate(receipt['timestamp']))) continue;
-        final receiptId = receipt['salesId']?.toString() ??
-            receipt['_localDocId']?.toString() ?? '';
+            !_isToday(_asDate(receipt['timestamp'])))
+          continue;
+        final receiptId =
+            receipt['salesId']?.toString() ??
+            receipt['_localDocId']?.toString() ??
+            '';
         if (receiptId.isEmpty || !seenReceiptIds.add(receiptId)) continue;
-        todayCashSales += (receipt['cashDrawerDelta'] as num?)?.toDouble() ??
-            (receipt['total'] as num?)?.toDouble() ?? 0.0;
+        todayCashSales +=
+            (receipt['cashDrawerDelta'] as num?)?.toDouble() ??
+            (receipt['total'] as num?)?.toDouble() ??
+            0.0;
       }
       final rebuilt = opening + todayCashSales;
       if ((drawer['balance'] as num?)?.toDouble() != rebuilt) {
@@ -356,7 +453,8 @@ class LocalDatabaseSyncService {
     required String staffId,
     String receiptId = '',
     String gcashTransactionId = '',
-  }) async {
+    DateTime? occurredAt,
+  }) => _drawerLock.run(() async {
     if (drawerId.trim().isEmpty) return;
     final drawers = await getCachedCollection('staff_cash_drawer');
     final index = drawers.indexWhere(
@@ -367,11 +465,36 @@ class LocalDatabaseSyncService {
     final drawer = index >= 0
         ? Map<String, dynamic>.from(drawers[index])
         : <String, dynamic>{'_localDocId': drawerId};
+    final queue = await getCachedCollection('pending_cash_drawer_changes');
+    final id = receiptId.isNotEmpty
+        ? 'receipt-$receiptId'
+        : _firestore.collection('staff_cash_drawer').doc().id;
+    if ((drawer['appliedOfflineMutationIds'] as List? ?? []).contains(id))
+      return;
+    if (!queue.any((change) => change['_localDocId'] == id))
+      queue.add({
+        '_localDocId': id,
+        'drawerId': drawerId,
+        'cashDelta': cashDelta,
+        'gcashDelta': gcashDelta,
+        'staffId': staffId,
+        'receiptId': receiptId,
+        'gcashTransactionId': gcashTransactionId,
+        'createdAt': occurredAt ?? DateTime.now(),
+      });
+    await cacheCollectionDocs('pending_cash_drawer_changes', queue);
+    if ((drawer['localReceiptIds'] as List? ?? []).contains(receiptId) &&
+        receiptId.isNotEmpty)
+      return;
+    final todayReceipts = await getCachedCollection('completed_sales');
+    drawer.addAll(CashDrawerService.forDay(drawer, DateTime.now(), receipts: todayReceipts.where((receipt) => receipt['branchId'] == drawerId)));
+    final movementDate = _asDate(queue.firstWhere((change) => change['_localDocId'] == id)['createdAt']) ?? DateTime.now();
+    final sameDay = CashDrawerService.dayKey(movementDate) == CashDrawerService.dayKey(DateTime.now());
     drawer['_localDocId'] = drawerId;
     drawer['balance'] =
-        ((drawer['balance'] as num?)?.toDouble() ?? 0) + cashDelta;
+        ((drawer['balance'] as num?)?.toDouble() ?? 0) + (sameDay ? cashDelta : 0);
     drawer['gcashBalance'] =
-        ((drawer['gcashBalance'] as num?)?.toDouble() ?? 0) + gcashDelta;
+        ((drawer['gcashBalance'] as num?)?.toDouble() ?? 0) + (sameDay ? gcashDelta : 0);
     drawer['staffId'] = drawerId;
     drawer['branchId'] = drawerId;
     drawer['handledByStaffId'] = staffId;
@@ -392,59 +515,61 @@ class LocalDatabaseSyncService {
       drawers.add(drawer);
     }
     await cacheCollectionDocs('staff_cash_drawer', drawers);
-
-    final queue = await getCachedCollection('pending_cash_drawer_changes');
-    final id = _firestore.collection('staff_cash_drawer').doc().id;
-    queue.add({
-      '_localDocId': id,
-      'drawerId': drawerId,
-      'cashDelta': cashDelta,
-      'gcashDelta': gcashDelta,
-      'staffId': staffId,
-      'receiptId': receiptId,
-      'gcashTransactionId': gcashTransactionId,
-      'createdAt': DateTime.now(),
-    });
-    await cacheCollectionDocs('pending_cash_drawer_changes', queue);
     unawaited(syncPendingCashDrawerChanges());
-  }
+  });
 
+  bool _syncingDrawer = false;
   Future<void> syncPendingCashDrawerChanges() async {
-    final queue = await getCachedCollection('pending_cash_drawer_changes');
-    for (final change in List<Map<String, dynamic>>.from(queue)) {
-      final id = change['_localDocId']?.toString() ?? '';
-      final drawerId = change['drawerId']?.toString() ?? '';
-      if (id.isEmpty || drawerId.isEmpty) continue;
-      try {
-        final ref = _firestore.collection('staff_cash_drawer').doc(drawerId);
-        await _firestore.runTransaction((transaction) async {
-          final snapshot = await transaction.get(ref);
-          final applied = List<String>.from(
-            snapshot.data()?['appliedOfflineMutationIds'] as List? ?? const [],
-          );
-          if (applied.contains(id)) return;
-          transaction.set(ref, {
-            'balance': FieldValue.increment(
-              (change['cashDelta'] as num?)?.toDouble() ?? 0,
-            ),
-            'gcashBalance': FieldValue.increment(
-              (change['gcashDelta'] as num?)?.toDouble() ?? 0,
-            ),
-            'staffId': drawerId,
-            'branchId': drawerId,
-            'handledByStaffId': change['staffId'],
-            if ((change['gcashTransactionId']?.toString() ?? '').isNotEmpty)
-              'lastGcashTransactionId': change['gcashTransactionId'],
-            'appliedOfflineMutationIds': FieldValue.arrayUnion([id]),
-            'updatedAt': FieldValue.serverTimestamp(),
-          }, SetOptions(merge: true));
-        });
-        queue.removeWhere((item) => item['_localDocId']?.toString() == id);
-        await cacheCollectionDocs('pending_cash_drawer_changes', queue);
-      } catch (_) {
-        // Still offline or temporarily unavailable; leave the change queued.
-        return;
+    if (_syncingDrawer) return;
+    _syncingDrawer = true;
+    try {
+      final queue = await getCachedCollection('pending_cash_drawer_changes');
+      for (final change in List<Map<String, dynamic>>.from(queue)) {
+        final id = change['_localDocId']?.toString() ?? '';
+        final drawerId = change['drawerId']?.toString() ?? '';
+        if (id.isEmpty || drawerId.isEmpty) continue;
+        try {
+          final ref = _firestore.collection('staff_cash_drawer').doc(drawerId);
+          await CashDrawerService.ensureToday(_firestore, drawerId);
+          await _firestore.runTransaction((transaction) async {
+            final snapshot = await transaction.get(ref);
+            final applied = List<String>.from(
+              snapshot.data()?['appliedOfflineMutationIds'] as List? ??
+                  const [],
+            );
+            if (applied.contains(id)) return;
+            final now = DateTime.now();
+            final current = CashDrawerService.forDay(snapshot.data() ?? {}, now);
+            final sameDay = CashDrawerService.dayKey(_asDate(change['createdAt']) ?? now) == CashDrawerService.dayKey(now);
+            transaction.set(ref, {
+              ...current,
+              'balance': (current['balance'] as num? ?? 0) + (sameDay ? (change['cashDelta'] as num? ?? 0) : 0),
+              'gcashBalance': (current['gcashBalance'] as num? ?? 0) + (sameDay ? (change['gcashDelta'] as num? ?? 0) : 0),
+              'staffId': drawerId,
+              'branchId': drawerId,
+              'handledByStaffId': change['staffId'],
+              if ((change['gcashTransactionId']?.toString() ?? '').isNotEmpty)
+                'lastGcashTransactionId': change['gcashTransactionId'],
+              'appliedOfflineMutationIds': [...applied, id],
+              'updatedAt': FieldValue.serverTimestamp(),
+            }, SetOptions(merge: true));
+          });
+          await _drawerLock.run(() async {
+            final remaining = await getCachedCollection(
+              'pending_cash_drawer_changes',
+            );
+            remaining.removeWhere(
+              (item) => item['_localDocId']?.toString() == id,
+            );
+            await cacheCollectionDocs('pending_cash_drawer_changes', remaining);
+          });
+        } catch (_) {
+          // Still offline or temporarily unavailable; leave the change queued.
+          return;
+        }
       }
+    } finally {
+      _syncingDrawer = false;
     }
   }
 
@@ -454,15 +579,29 @@ class LocalDatabaseSyncService {
     final docId = salesId?.isNotEmpty == true
         ? salesId!
         : _firestore.collection('completed_sales').doc().id;
-    final cached = await getCachedCollection('completed_sales');
-    final local = {...payload, '_localDocId': docId, 'localOnly': true};
-    final index = cached.indexWhere((item) => item['_localDocId'] == docId);
-    if (index >= 0) {
-      cached[index] = local;
-    } else {
-      cached.insert(0, local);
+    final local = {
+      ...payload,
+      '_localDocId': docId,
+      'localOnly': true,
+      'drawerSyncRequired': true,
+    };
+    await _salesLock.run(() async {
+      final cached = await getCachedCollection('completed_sales');
+
+      final index = cached.indexWhere((item) => item['_localDocId'] == docId);
+      if (index >= 0) {
+        cached[index] = local;
+      } else {
+        cached.insert(0, local);
+      }
+      await cacheCollectionDocs('completed_sales', cached);
+    });
+
+    await _ensureSaleDrawer(local);
+    if (payload['stockSyncRequired'] == true) {
+      final stock = await getCachedCollection('staff_inventory');
+      await cacheCollectionDocs('staff_inventory', stock);
     }
-    await cacheCollectionDocs('completed_sales', cached);
 
     final cloudPayload = Map<String, dynamic>.from(payload);
     cloudPayload.remove('localOnly');
@@ -486,30 +625,113 @@ class LocalDatabaseSyncService {
     unawaited(_uploadCompletedSale(docId, cloudPayload));
   }
 
+  final Set<String> _uploadingSales = {};
   Future<void> _uploadCompletedSale(
     String docId,
     Map<String, dynamic> payload,
   ) async {
+    if (!_uploadingSales.add(docId)) return;
     try {
-      await _firestore
-          .collection('completed_sales')
-          .doc(docId)
-          .set(payload, SetOptions(merge: true));
+      final ref = _firestore.collection('completed_sales').doc(docId);
+      if (payload['stockSyncRequired'] == true) {
+        final lines = (payload['items'] as List? ?? [])
+            .whereType<Map>()
+            .map((item) => Map<String, dynamic>.from(item))
+            .toList();
+        final ids = lines
+            .map((line) => '${line['staffInventoryDocId'] ?? ''}')
+            .where((id) => id.isNotEmpty)
+            .toSet();
+        await _firestore.runTransaction((tx) async {
+          final receipt = await tx.get(ref);
+          if (receipt.data()?['stockApplied'] == true) return;
+          final stock = <DocumentSnapshot<Map<String, dynamic>>>[];
+          for (final id in ids) {
+            stock.add(
+              await tx.get(_firestore.collection('staff_inventory').doc(id)),
+            );
+          }
+          for (final doc in stock) {
+            if (!doc.exists)
+              throw StateError(
+                'Allocated inventory no longer exists: ${doc.id}',
+              );
+            final updated = applySaleStock(
+              doc.data()!,
+              docId,
+              lines
+                  .where((line) => line['staffInventoryDocId'] == doc.id)
+                  .toList(),
+            );
+            tx.update(doc.reference, updated);
+          }
+          tx.set(ref, {
+            ...payload,
+            'stockApplied': true,
+            'stockSyncRequired': false,
+          }, SetOptions(merge: true));
+        });
+      } else {
+        await ref.set(payload, SetOptions(merge: true));
+      }
+      await _salesLock.run(() async {
+        final cached = await getCachedCollection('completed_sales');
+        for (final sale in cached) {
+          if (sale['_localDocId'] == docId) {
+            sale['localOnly'] = false;
+            sale['stockSyncRequired'] = false;
+          }
+        }
+        await cacheCollectionDocs('completed_sales', cached);
+      });
     } catch (e) {
       debugPrint('Completed sale remains queued locally: $e');
+    } finally {
+      _uploadingSales.remove(docId);
     }
   }
 
   /// Re-sends receipts that were saved before the app closed while offline.
   /// Reusing the stable local ID makes this idempotent (no duplicate sale).
+  Future<void> _ensureSaleDrawer(Map<String, dynamic> sale) async {
+    final cash =
+        (sale['paymentMode'] ?? 'Cash').toString().toLowerCase() == 'cash';
+    await recordCashDrawerChange(
+      drawerId: sale['branchId']?.toString() ?? '',
+      cashDelta: cash
+          ? (sale['cashDrawerDelta'] as num? ?? sale['total'] as num? ?? 0)
+                .toDouble()
+          : 0,
+      gcashDelta: cash ? 0 : (sale['total'] as num? ?? 0).toDouble(),
+      staffId: sale['userId']?.toString() ?? '',
+      receiptId: sale['salesId']?.toString() ?? '',
+      gcashTransactionId: sale['gcashTransactionId']?.toString() ?? '',
+      occurredAt: _asDate(sale['timestamp']),
+    );
+    await _salesLock.run(() async {
+      final latest = await getCachedCollection('completed_sales');
+      for (final row in latest) {
+        if (row['_localDocId'] == sale['_localDocId'])
+          row['drawerSyncRequired'] = false;
+      }
+      await cacheCollectionDocs('completed_sales', latest);
+    });
+  }
+
   Future<void> syncPendingSales() async {
     final sales = await getCachedCollection('completed_sales');
+    for (final sale in sales.where(
+      (item) => item['drawerSyncRequired'] == true,
+    )) {
+      await _ensureSaleDrawer(sale);
+    }
     for (final sale in sales.where((item) => item['localOnly'] == true)) {
       final id = sale['_localDocId']?.toString() ?? '';
       if (id.isEmpty) continue;
       final payload = Map<String, dynamic>.from(sale)
         ..remove('_localDocId')
         ..remove('localOnly')
+        ..remove('drawerSyncRequired')
         ..remove('syncedAt');
       final timestamp = payload['timestamp'];
       if (timestamp is DateTime)

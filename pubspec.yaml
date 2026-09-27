@@ -36,6 +36,7 @@ dependencies:
   cupertino_icons: ^1.0.8
   curved_navigation_bar: ^1.0.5
   google_fonts: ^6.1.0
+  image: ^4.10.1
   image_picker: ^1.0.4
   shared_preferences: ^2.2.0
   firebase_core: ^2.32.0
@@ -44,6 +45,10 @@ dependencies:
   firebase_storage: ^11.0.0
   connectivity_plus: ^6.1.5
   crypto: ^3.0.7
+  file_picker: ^8.0.7
+  pdf: ^3.12.0
+  printing: ^5.13.1
+  idb_shim: ^2.9.2
 
 dev_dependencies:
   flutter_test:
@@ -55,6 +60,7 @@ dev_dependencies:
   # package. See that file for information about deactivating specific lint
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
+  fake_cloud_firestore: ^2.5.2
 
 # Disable web platform to avoid Firebase web compatibility issues
 platforms:
@@ -77,6 +83,7 @@ flutter:
 
   # Assets
   assets:
+    - Assets/fonts/
     - Assets/Image/Bg.jpg
     - Assets/Image/Final_bg.jpg
     - Assets/Image/T.jpg

@@ -1,3 +1,4 @@
+import 'package:sales_tracking/theme/app_colors.dart';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -8,13 +9,13 @@ import 'BranchSalesReportPage.dart';
 
 // ─── THEME ──────────────────────────────────────────────────────────
 class _C {
-  static const espresso = Color(0xFFC2105C);
-  static const mocha = Color(0xFFE91E63);
-  static const caramel = Color(0xFFF48FB1);
-  static const latte = Color(0xFFF5A0C8);
-  static const cream = Color(0xFFF7F1EB);
-  static const milk = Color(0xFFFDF9F5);
-  static const foam = Color(0xFFEDE3D7);
+  static const espresso = AppColors.primaryDark;
+  static const mocha = AppColors.primary;
+  static const caramel = AppColors.rose;
+  static const latte = AppColors.rose;
+  static const cream = AppColors.background;
+  static const milk = AppColors.surface;
+  static const foam = AppColors.border;
   static const gold = Color(0xFFD4A853);
   static const sage = Color(0xFF7A9E7E); // sold / positive
   static const dustRose = Color(0xFFBF7B6E); // remaining
@@ -918,7 +919,7 @@ class _AdminReceiptCard extends StatelessWidget {
                     final kind = item['isBundle'] == true
                         ? 'Bundle'
                         : item['isCoffee'] == true
-                        ? 'Coffee'
+                        ? 'Beverages'
                         : '';
                     final displayName = kind.isEmpty ? name : '$name • $kind';
                     final quantity = _quantity(item['quantity']);
@@ -1104,7 +1105,7 @@ class _SalesCardState extends State<_SalesCard>
             final kind = item['isBundle'] == true
                 ? 'Bundle'
                 : item['isCoffee'] == true
-                ? 'Coffee'
+                ? 'Beverages'
                 : '';
             final displayName = [
               variant.isNotEmpty ? '$name ($variant)' : name,
@@ -1145,7 +1146,7 @@ class _SalesCardState extends State<_SalesCard>
           _receiptTimestamp = timestamp;
           _orderedItems = receiptItems;
           _orderedCategory = firstIsCoffee
-              ? 'Coffee'
+              ? 'Beverages'
               : firstIsBundle
               ? 'Bundle'
               : firstCategory;
@@ -1210,7 +1211,7 @@ class _SalesCardState extends State<_SalesCard>
           final variant = item['variant']?.toString().trim() ?? '';
           final coffeeSize = item['coffeeSize']?.toString().trim() ?? '';
           orderedCategory ??= item['isCoffee'] == true
-              ? 'Coffee'
+              ? 'Beverages'
               : item['isBundle'] == true
               ? 'Bundle'
               : (item['category']?.toString().trim().isNotEmpty == true

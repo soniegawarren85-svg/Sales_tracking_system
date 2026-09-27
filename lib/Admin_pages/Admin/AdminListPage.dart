@@ -1,3 +1,4 @@
+import 'package:sales_tracking/theme/app_colors.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
@@ -30,9 +31,9 @@ class AdminListPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFFDF6F9),
+      backgroundColor: AppColors.surface,
       appBar: AppBar(
-        backgroundColor: const Color(0xFFF48FB1),
+        backgroundColor: AppColors.rose,
         title: const Text('Admins'),
         elevation: 0,
       ),
@@ -86,7 +87,7 @@ class AdminListPage extends StatelessWidget {
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
                         gradient: const LinearGradient(
-                          colors: [Color(0xFFF48FB1), Color(0xFFFF80AB)],
+                          colors: [AppColors.rose, AppColors.rose],
                           begin: Alignment.topLeft,
                           end: Alignment.bottomRight,
                         ),

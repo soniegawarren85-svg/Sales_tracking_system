@@ -1,3 +1,11 @@
+import '../../widgets/branch_editor_dialog.dart';
+import '../../services/bundle_stock_service.dart';
+import 'dart:async';
+import '../../widgets/branch_report_dialog.dart';
+import '../../services/inventory_display_ids.dart';
+import 'package:sales_tracking/theme/app_colors.dart';
+import '../../services/analytics_hours.dart';
+import '../../services/short_id_service.dart';
 import '../../widgets/branch_daily_summary.dart';
 import '../../widgets/historical_cash_drawer.dart';
 import '../../widgets/admin_sales_overview.dart';
@@ -9,14 +17,14 @@ import 'package:flutter/services.dart';
 import '../../services/cash_drawer_service.dart';
 
 // ── Color Palette ─────────────────────────────────────────────────
-const kPrimary = Color(0xFFE91E63);
-const kDeep = Color(0xFFC2105C);
-const kLight = Color(0xFFF48FB1);
-const kAccent = Color(0xFFF8BBD0);
-const kCream = Color(0xFFFFF8F3);
-const kBannerTop = Color(0xFF8B0038);
-const kBannerMid = Color(0xFFC2105C);
-const kBannerBot = Color(0xFFE91E63);
+const kPrimary = AppColors.primary;
+const kDeep = AppColors.primaryDark;
+const kLight = AppColors.rose;
+const kAccent = AppColors.blush;
+const kCream = AppColors.background;
+const kBannerTop = AppColors.primaryDeep;
+const kBannerMid = AppColors.primaryDark;
+const kBannerBot = AppColors.primary;
 // ──────────────────────────────────────────────────────────────────
 
 class _RefundBadge extends StatelessWidget {
@@ -91,7 +99,7 @@ class _AssignInventoryTile extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
-        color: enabled ? const Color(0xFFFFF8F3) : Colors.grey.shade100,
+        color: enabled ? AppColors.background : Colors.grey.shade100,
         borderRadius: BorderRadius.circular(14),
         border: Border.all(color: kAccent.withOpacity(0.7)),
       ),
@@ -212,7 +220,7 @@ class _AssignCoffeeTile extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
-        color: selected ? kPrimary.withOpacity(0.08) : const Color(0xFFFFF8F3),
+        color: selected ? kPrimary.withOpacity(0.08) : AppColors.background,
         borderRadius: BorderRadius.circular(14),
         border: Border.all(
           color: selected ? kPrimary : kAccent.withOpacity(0.7),
@@ -302,46 +310,14 @@ class _AssignModeButton extends StatelessWidget {
   }
 }
 
-class _PinnedBudgetHeaderDelegate extends SliverPersistentHeaderDelegate {
-  final double minHeight;
-  final double maxHeight;
-  final Widget child;
-
-  const _PinnedBudgetHeaderDelegate({
-    required this.minHeight,
-    required this.maxHeight,
-    required this.child,
-  });
-
-  @override
-  double get minExtent => minHeight;
-
-  @override
-  double get maxExtent => maxHeight;
-
-  @override
-  Widget build(
-    BuildContext context,
-    double shrinkOffset,
-    bool overlapsContent,
-  ) {
-    return SizedBox.expand(child: child);
-  }
-
-  @override
-  bool shouldRebuild(covariant _PinnedBudgetHeaderDelegate oldDelegate) {
-    return minHeight != oldDelegate.minHeight ||
-        maxHeight != oldDelegate.maxHeight ||
-        child != oldDelegate.child;
-  }
-}
-
 class _BudgetPageState extends State<BudgetPage>
     with SingleTickerProviderStateMixin {
   final _budgetControllers = <String, TextEditingController>{};
   final _branchSearchController = TextEditingController();
   final _allocationSearchController = TextEditingController();
   final _currentAllocations = <String, double>{};
+  final _inventorySources = <String, Map<String, dynamic>>{};
+  final _displaySubscriptions = <StreamSubscription<QuerySnapshot<Map<String, dynamic>>>>[];
   final _branchInventoryStreams =
       <String, Stream<QuerySnapshot<Map<String, dynamic>>>>{};
   final _firestore = FirebaseFirestore.instance;
@@ -369,7 +345,14 @@ class _BudgetPageState extends State<BudgetPage>
   @override
   void initState() {
     super.initState();
-    _branchesStream = _firestore
+    for (final collection in ['sales_inventory', 'coffee_products', 'coffee_addons']) {
+      _displaySubscriptions.add(_firestore.collection(collection).snapshots().listen((snapshot) {
+        if (!mounted) return;
+        setState(() {
+          for (final doc in snapshot.docs) { _inventorySources[doc.id] = doc.data(); }
+        });
+      }, onError: (Object error) { debugPrint('Unable to refresh inventory display IDs: $error'); }));
+    }    _branchesStream = _firestore
         .collection('branches')
         .orderBy('name')
         .snapshots();
@@ -387,6 +370,7 @@ class _BudgetPageState extends State<BudgetPage>
 
   @override
   void dispose() {
+    for (final subscription in _displaySubscriptions) { subscription.cancel(); }
     for (var c in _budgetControllers.values) {
       c.dispose();
     }
@@ -457,8 +441,8 @@ class _BudgetPageState extends State<BudgetPage>
             : (sameDrawerDay ? currentBalance + budget : budget);
         transaction.set(cashDrawerRef, {
           'balance': nextBalance,
-          'openingCash': replaceDailyOpening ? budget : nextBalance,
-          'dailyOpeningCash': replaceDailyOpening ? budget : nextBalance,
+          'openingCash': replaceDailyOpening ? budget : (cashDrawerSnapshot.data()?['dailyOpeningCash'] ?? cashDrawerSnapshot.data()?['openingCash'] ?? budget),
+          'dailyOpeningCash': replaceDailyOpening ? budget : (cashDrawerSnapshot.data()?['dailyOpeningCash'] ?? cashDrawerSnapshot.data()?['openingCash'] ?? budget),
           'drawerDate': dateKey,
           'updatedAt': now,
           'staffId': targetId,
@@ -516,7 +500,7 @@ class _BudgetPageState extends State<BudgetPage>
       final expiryDate = DateTime.parse(expirationDate);
       final today = DateTime.now();
       return expiryDate.isBefore(
-        DateTime(today.year, today.month, today.day + 1),
+        DateTime(today.year, today.month, today.day),
       );
     } catch (_) {
       return false;
@@ -552,7 +536,7 @@ class _BudgetPageState extends State<BudgetPage>
 
   bool _isActiveAllocationDocument(Map<String, dynamic> data) {
     if (data['isDeleted'] == true ||
-        _isExpiredInventoryItem(data['expirationDate']?.toString() ?? '')) {
+        (data['isBundle'] != true && _isExpiredInventoryItem(data['expirationDate']?.toString() ?? ''))) {
       return false;
     }
     if (data['isBundle'] == true) {
@@ -693,7 +677,7 @@ class _BudgetPageState extends State<BudgetPage>
     final safeName = name == null || name.isEmpty ? 'Inventory' : name;
 
     if (data['isCoffee'] == true) {
-      return '$safeName - Coffee';
+      return '$safeName - Beverages';
     }
 
     if (data['isAddon'] == true) {
@@ -726,43 +710,8 @@ class _BudgetPageState extends State<BudgetPage>
     return items.isEmpty ? safeName : '$safeName - ${items.join(', ')}';
   }
 
-  bool _hasExpiredAssignedBundleItem(Map<String, dynamic> data) {
-    final bundleItems = data['items'] as List<dynamic>? ?? [];
-    for (final raw in bundleItems) {
-      if (raw is! Map) continue;
-      final item = Map<String, dynamic>.from(raw);
-      if (_isExpiredInventoryItem(item['expirationDate']?.toString() ?? '')) {
-        return true;
-      }
-    }
-
-    final instances = data['bundleInstances'] as List<dynamic>? ?? [];
-    for (final rawInstance in instances) {
-      if (rawInstance is! Map) continue;
-      final instance = Map<String, dynamic>.from(rawInstance);
-      final items = instance['items'] as List<dynamic>? ?? [];
-      for (final raw in items) {
-        if (raw is! Map) continue;
-        final item = Map<String, dynamic>.from(raw);
-        if (_isExpiredInventoryItem(item['expirationDate']?.toString() ?? '')) {
-          return true;
-        }
-      }
-    }
-    return false;
-  }
-
-  int _availableAssignedBundleCount(Map<String, dynamic> data) {
-    final instances = data['bundleInstances'] as List<dynamic>? ?? [];
-    if (instances.isEmpty) return _parseInt(data['bundleCount']);
-    return instances.where((raw) {
-      if (raw is! Map) return false;
-      final status =
-          raw['status']?.toString().trim().toLowerCase() ?? 'available';
-      return status == 'available';
-    }).length;
-  }
-
+  bool _hasExpiredAssignedBundleItem(Map<String, dynamic> data) => availableBundleStock(data) == 0;
+  int _availableAssignedBundleCount(Map<String, dynamic> data) => availableBundleStock(data);
   Future<List<QueryDocumentSnapshot<Map<String, dynamic>>>>
   _activeAssignedInventoryDocs(
     List<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
@@ -922,7 +871,7 @@ class _BudgetPageState extends State<BudgetPage>
             ? item['name'].toString()
             : name,
         'type': data['isCoffee'] == true
-            ? 'Coffee'
+            ? 'Beverages'
             : data['isAddon'] == true
             ? 'Add-on'
             : 'Item',
@@ -1142,7 +1091,7 @@ class _BudgetPageState extends State<BudgetPage>
       context: context,
       builder: (dialogContext) {
         return Dialog(
-          backgroundColor: const Color(0xFFFFF8F3),
+          backgroundColor: AppColors.background,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(22),
           ),
@@ -1350,13 +1299,14 @@ class _BudgetPageState extends State<BudgetPage>
     String staffId,
     String staffName, {
     bool isBranch = false,
+    String? onlyType,
   }) async {
     final qtyControllers = <String, TextEditingController>{};
     final selectedCoffeeIds = <String>{};
     final selectedAddonIds = <String>{};
-    var showCategories = true;
-    var showCoffee = false;
-    var showAddons = false;
+    var showCategories = onlyType == null || onlyType == 'Category' || onlyType == 'Categories';
+    var showCoffee = onlyType == 'Beverages';
+    var showAddons = onlyType == 'Add-on';
 
     await showDialog<void>(
       context: context,
@@ -1364,7 +1314,7 @@ class _BudgetPageState extends State<BudgetPage>
         return StatefulBuilder(
           builder: (context, setDialogState) {
             return Dialog(
-              backgroundColor: const Color(0xFFFFF8F3),
+              backgroundColor: AppColors.background,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(24),
               ),
@@ -1465,10 +1415,10 @@ class _BudgetPageState extends State<BudgetPage>
                             final bundleDocs = activeDocs.where((doc) {
                               final data = doc.data();
                               return data['isBundle'] == true &&
-                                  _parseInt(data['bundleCount']) > 0;
+                                  availableBundleStock(data) > 0;
                             }).toList();
                             final coffeeDocs = coffeeSnapshot?.docs ?? [];
-                            final addonDocs = addonSnapshot?.docs ?? [];
+                            final addonDocs = (addonSnapshot?.docs ?? []).where((doc) => doc.data()['isDeleted'] != true && !bundleExpired(doc.data(), DateTime.now())).toList();
                             final docs = showAddons
                                 ? addonDocs
                                 : showCoffee
@@ -1477,7 +1427,7 @@ class _BudgetPageState extends State<BudgetPage>
                                 ? categoryDocs
                                 : bundleDocs;
 
-                            if (categoryDocs.isEmpty &&
+                            if (onlyType == null && categoryDocs.isEmpty &&
                                 bundleDocs.isNotEmpty &&
                                 showCategories &&
                                 !showCoffee &&
@@ -1487,7 +1437,7 @@ class _BudgetPageState extends State<BudgetPage>
                               });
                             }
 
-                            if (categoryDocs.isEmpty &&
+                            if (onlyType == null && categoryDocs.isEmpty &&
                                 bundleDocs.isEmpty &&
                                 coffeeDocs.isEmpty &&
                                 addonDocs.isEmpty) {
@@ -1498,6 +1448,7 @@ class _BudgetPageState extends State<BudgetPage>
 
                             return Column(
                               children: [
+                                if (onlyType == null)
                                 Row(
                                   children: [
                                     Expanded(
@@ -1534,7 +1485,7 @@ class _BudgetPageState extends State<BudgetPage>
                                       child: _AssignModeButton(
                                         selected: showCoffee,
                                         icon: Icons.coffee_rounded,
-                                        label: 'Coffee (${coffeeDocs.length})',
+                                        label: 'Beverages (${coffeeDocs.length})',
                                         onTap: () => setDialogState(() {
                                           showCategories = false;
                                           showCoffee = true;
@@ -1567,7 +1518,7 @@ class _BudgetPageState extends State<BudgetPage>
                                                 : showAddons
                                                 ? 'No add-ons available.'
                                                 : showCoffee
-                                                ? 'No coffee products available.'
+                                                ? 'No beverage products available.'
                                                 : 'No active bundles available.',
                                           ),
                                         )
@@ -1617,9 +1568,9 @@ class _BudgetPageState extends State<BudgetPage>
                                               return _AssignCoffeeTile(
                                                 title:
                                                     data['name']?.toString() ??
-                                                    'Coffee',
+                                                    'Beverages',
                                                 subtitle:
-                                                    '${data['category'] ?? 'Coffee'} - P${_parsePrice(data['basePrice']).toStringAsFixed(2)} - $sizes sizes',
+                                                    '${data['category'] ?? 'Beverages'} - P${_parsePrice(data['basePrice']).toStringAsFixed(2)} - $sizes sizes',
                                                 selected: selectedCoffeeIds
                                                     .contains(productId),
                                                 onChanged: (checked) {
@@ -1799,36 +1750,21 @@ class _BudgetPageState extends State<BudgetPage>
     Set<String> coffeeProductIds = const {},
     Set<String> addonIds = const {},
   }) async {
+    final deliveryId = _firestore.collection('allocation_checklist').doc().id;
+    void stage(Transaction transaction, DocumentReference<Map<String, dynamic>> target, Map<String, dynamic> payload, SetOptions options) {
+      transaction.set(_firestore.collection('allocation_checklist').doc('${deliveryId}_${target.id}'), {
+        ...payload, 'targetDocId': target.id, 'status': 'pending', 'deliveryId': deliveryId,
+      });
+    }
     final selected = quantities.entries
         .where((entry) => entry.value > 0)
         .toList();
     if (selected.isEmpty && coffeeProductIds.isEmpty && addonIds.isEmpty) {
       _showSnack(
-        'Select coffee, add-ons, or enter at least one quantity',
+        'Select beverages, add-ons, or enter at least one quantity',
         Colors.orange.shade700,
       );
       return;
-    }
-
-    final assignedStockByItem = <String, int>{};
-    for (final sourceDocId in quantities.keys.map((key) => key.split('::').first).toSet()) {
-      final assignedSnapshot = await _firestore
-          .collection('staff_inventory')
-          .where('sourceInventoryId', isEqualTo: sourceDocId)
-          .get();
-      for (final assignedDoc in assignedSnapshot.docs) {
-        final assignedItems =
-            (assignedDoc.data()['items'] as List<dynamic>? ?? []).whereType<Map>();
-        for (final rawItem in assignedItems) {
-          final assignedItem = Map<String, dynamic>.from(rawItem);
-          final itemKey = assignedItem['id']?.toString().isNotEmpty == true
-              ? assignedItem['id'].toString()
-              : assignedItem['name']?.toString() ?? '';
-          assignedStockByItem['$sourceDocId::$itemKey'] =
-              (assignedStockByItem['$sourceDocId::$itemKey'] ?? 0) +
-              _parseInt(assignedItem['stock'] ?? assignedItem['startingStock']);
-        }
-      }
     }
 
     final selectedAddonOptions = <Map<String, dynamic>>[];
@@ -1838,8 +1774,9 @@ class _BudgetPageState extends State<BudgetPage>
           .doc(addonId)
           .get();
       final addonData = addonSnapshot.data();
-      if (addonData == null || addonData['isDeleted'] == true) continue;
+      if (addonData == null || addonData['isDeleted'] == true || bundleExpired(addonData, DateTime.now())) continue;
       selectedAddonOptions.add({
+        ...addonData,
         'id': addonId,
         'name': addonData['name']?.toString() ?? 'Add-on',
         'priceDelta': _parsePrice(addonData['priceDelta']),
@@ -1856,7 +1793,7 @@ class _BudgetPageState extends State<BudgetPage>
 
       final sourceSnapshots =
           <String, DocumentSnapshot<Map<String, dynamic>>>{};
-      final staffSnapshots = <String, DocumentSnapshot<Map<String, dynamic>>>{};
+
       final coffeeSnapshots =
           <String, DocumentSnapshot<Map<String, dynamic>>>{};
       for (final coffeeId in coffeeProductIds) {
@@ -1876,8 +1813,9 @@ class _BudgetPageState extends State<BudgetPage>
             _firestore.collection('coffee_addons').doc(addonId),
           );
           final addonData = addonSnapshot.data();
-          if (addonData == null || addonData['isDeleted'] == true) continue;
+          if (addonData == null || addonData['isDeleted'] == true || bundleExpired(addonData, DateTime.now())) continue;
           options.add({
+            ...addonData,
             'id': addonId,
             'name': addonData['name']?.toString() ?? 'Add-on',
             'priceDelta': _parsePrice(addonData['priceDelta']),
@@ -1897,11 +1835,8 @@ class _BudgetPageState extends State<BudgetPage>
         final sourceRef = _firestore
             .collection('sales_inventory')
             .doc(sourceDocId);
-        final staffRef = _firestore
-            .collection('staff_inventory')
-            .doc(_staffInventoryDocId(staffId, sourceDocId));
         sourceSnapshots[sourceDocId] = await transaction.get(sourceRef);
-        staffSnapshots[sourceDocId] = await transaction.get(staffRef);
+
       }
 
       for (final coffeeId in coffeeProductIds) {
@@ -1910,7 +1845,7 @@ class _BudgetPageState extends State<BudgetPage>
         final staffRef = _firestore
             .collection('staff_inventory')
             .doc(_staffInventoryDocId(staffId, 'coffee_$coffeeId'));
-        transaction.set(staffRef, {
+        stage(transaction, staffRef, {
           ...coffeeData,
           'staffId': staffId,
           'staffName': staffName,
@@ -1931,13 +1866,16 @@ class _BudgetPageState extends State<BudgetPage>
         final staffRef = _firestore
             .collection('staff_inventory')
             .doc(_staffInventoryDocId(staffId, 'addon_$addonId'));
-        transaction.set(staffRef, {
+        stage(transaction, staffRef, {
           'staffId': staffId,
           'staffName': staffName,
           'sourceInventoryId': addonId,
           'sourceCollection': 'coffee_addons',
+          'publicId': addon['publicId'] ?? addon['addonId'],
           'name': addon['name'] ?? 'Add-on',
           'priceDelta': addon['priceDelta'] ?? 0,
+          'expirationDate': addon['expirationDate'] ?? '',
+          'imageUrl': addon['imageUrl'] ?? '',
           'isAddon': true,
           'isCoffee': false,
           'isBundle': false,
@@ -1955,18 +1893,19 @@ class _BudgetPageState extends State<BudgetPage>
             .collection('staff_inventory')
             .doc(_staffInventoryDocId(staffId, sourceDocId));
         final sourceSnapshot = sourceSnapshots[sourceDocId]!;
-        final staffSnapshot = staffSnapshots[sourceDocId]!;
+
         final sourceData = sourceSnapshot.data();
         if (sourceData == null) continue;
 
         final isBundle = sourceData['isBundle'] == true;
-        final staffData = staffSnapshot.data();
+        final Map<String, dynamic>? staffData = null; // Pending delivery contains only the new quantities.
         final selectedForDoc = grouped[sourceDocId]!;
 
         if (isBundle) {
           final qty = selectedForDoc['bundle'] ?? 0;
           if (qty <= 0) continue;
           final currentStock = _parseInt(sourceData['bundleCount']);
+          if (qty > availableBundleStock(sourceData)) throw StateError('Not enough available bundle stock.');
           if (qty > currentStock) {
             throw Exception(
               'Not enough bundle stock for ${sourceData['name']}',
@@ -1991,8 +1930,7 @@ class _BudgetPageState extends State<BudgetPage>
           final selectedInstances = sourceInstances
               .where(
                 (instance) =>
-                    (instance['status']?.toString() ?? 'available') ==
-                    'available',
+                    bundleInstanceAvailable(instance, sourceData),
               )
               .take(qty)
               .map(
@@ -2003,13 +1941,13 @@ class _BudgetPageState extends State<BudgetPage>
                 },
               )
               .toList();
-          if (selectedInstances.length < qty) {
+          if (sourceInstances.isEmpty && selectedInstances.length < qty) {
             final items = sourceData['items'] as List<dynamic>? ?? [];
             for (var i = selectedInstances.length; i < qty; i++) {
               final number = currentStaffCount + i + 1;
               selectedInstances.add({
                 'number': number,
-                'id': '${sourceData['bundleId'] ?? sourceDocId}-$number',
+                'id': '${sourceData['bundleId'] ?? sourceDocId}-$deliveryId-$number',
                 'status': 'available',
                 'assignedAt': assignedAt,
                 'items': items,
@@ -2028,7 +1966,7 @@ class _BudgetPageState extends State<BudgetPage>
             'bundleInstances': remainingSourceInstances,
             'updatedAt': FieldValue.serverTimestamp(),
           });
-          transaction.set(staffRef, {
+          stage(transaction, staffRef, {
             ...sourceData,
             'staffId': staffId,
             'staffName': staffName,
@@ -2067,15 +2005,6 @@ class _BudgetPageState extends State<BudgetPage>
             var stock = rawItem.containsKey('stock')
               ? _parseInt(rawItem['stock'])
               : _parseInt(rawItem['startingStock']);
-            if (stock <= 0) {
-            final itemKey = rawItem['id']?.toString().isNotEmpty == true
-              ? rawItem['id'].toString()
-              : rawItem['name']?.toString() ?? '';
-            stock = (_parseInt(rawItem['startingStock']) -
-                (assignedStockByItem['$sourceDocId::$itemKey'] ?? 0))
-              .clamp(0, _parseInt(rawItem['startingStock']))
-              .toInt();
-            }
           if (qty > stock) {
             throw Exception('Not enough stock for ${rawItem['name']}');
           }
@@ -2127,7 +2056,7 @@ class _BudgetPageState extends State<BudgetPage>
           'items': updatedSourceItems,
           'updatedAt': FieldValue.serverTimestamp(),
         });
-        transaction.set(staffRef, {
+        stage(transaction, staffRef, {
           ...sourceData,
           'staffId': staffId,
           'staffName': staffName,
@@ -2141,59 +2070,8 @@ class _BudgetPageState extends State<BudgetPage>
       }
     });
 
-    if (selectedAddonOptions.isNotEmpty) {
-      final coffeeSnapshot = await _firestore
-          .collection('staff_inventory')
-          .where('staffId', isEqualTo: staffId)
-          .where('isCoffee', isEqualTo: true)
-          .get();
-      final batch = _firestore.batch();
-      var updates = 0;
-      for (final doc in coffeeSnapshot.docs) {
-        final data = doc.data();
-        if (data['isDeleted'] == true) continue;
-        final currentOptions = (data['addonOptions'] as List<dynamic>? ?? [])
-            .whereType<Map>()
-            .map((entry) => Map<String, dynamic>.from(entry))
-            .toList();
-        var changed = false;
-        for (final addon in selectedAddonOptions) {
-          final selectedAddonId = addon['id']?.toString() ?? '';
-          if (selectedAddonId.isEmpty ||
-              currentOptions.any((item) => item['id'] == selectedAddonId)) {
-            continue;
-          }
-          currentOptions.add(addon);
-          changed = true;
-        }
-        if (!changed) continue;
-        batch.update(doc.reference, {
-          'addonOptions': currentOptions,
-          'updatedAt': FieldValue.serverTimestamp(),
-        });
-        updates++;
-      }
-      if (updates > 0) {
-        await batch.commit();
-      } else if (coffeeProductIds.isEmpty) {
-        _showSnack(
-          'Assign coffee first before assigning add-ons',
-          Colors.orange.shade700,
-        );
-        return;
-      }
-    }
-
-    await _firestore.collection('staff_inventory_history').add({
-      'staffId': staffId,
-      'staffName': staffName,
-      'type': 'assignment',
-      'quantities': quantities,
-      'createdAt': FieldValue.serverTimestamp(),
-    });
-
     if (!mounted) return;
-    _showSnack('Inventory assigned to $staffName', Colors.green.shade600);
+    _showSnack('Allocation sent to $staffName checklist', Colors.green.shade600);
   }
 
   Future<List<QueryDocumentSnapshot<Map<String, dynamic>>>> _loadReportDocs(
@@ -2370,23 +2248,15 @@ class _BudgetPageState extends State<BudgetPage>
     required List<String> staffIds,
     required List<String> staffNames,
   }) {
-    final reportDay = _analyticsDate ?? DateTime.now();
-    showDialog<void>(context: context, builder: (dialogContext) => AlertDialog(
-      title: Row(children: [Expanded(child: Text('$branchName Daily Report')), IconButton(onPressed: () => Navigator.pop(dialogContext), icon: const Icon(Icons.close))]),
-      content: SizedBox(width: 620, child: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text(_reportDateLabel(reportDay)), const SizedBox(height: 16),
-        BranchDailySummary(branchId: branchId, day: reportDay),
-      ]))),
-    ));
+    showBranchReport(context, branchId: branchId, branchName: branchName);
   }
-
   void _showReportDetail(String staffId, String staffName) {
     showDialog<void>(
       context: context,
       barrierDismissible: true,
       builder: (context) {
         return Dialog(
-          backgroundColor: const Color(0xFFFFF8F3),
+          backgroundColor: AppColors.background,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(24),
           ),
@@ -2728,7 +2598,7 @@ class _BudgetPageState extends State<BudgetPage>
       context: context,
       builder: (context) => StatefulBuilder(
         builder: (context, setDialogState) => Dialog(
-          backgroundColor: const Color(0xFFFFF8F3),
+          backgroundColor: AppColors.background,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(22),
           ),
@@ -2782,7 +2652,7 @@ class _BudgetPageState extends State<BudgetPage>
                   SingleChildScrollView(
                     scrollDirection: Axis.horizontal,
                     child: Row(
-                      children: ['All', 'Categories', 'Bundle', 'Coffee items']
+                      children: ['All', 'Categories', 'Bundle', 'Beverages items']
                           .map(
                             (label) => Padding(
                               padding: const EdgeInsets.only(right: 7),
@@ -2847,12 +2717,12 @@ class _BudgetPageState extends State<BudgetPage>
                                 selectedFilter == 'All' ||
                                 (selectedFilter == 'Bundle' &&
                                     itemText.contains('bundle')) ||
-                                (selectedFilter == 'Coffee items' &&
-                                    (itemText.contains('coffee') ||
+                                (selectedFilter == 'Beverages items' &&
+                                    ((itemText.contains('coffee') || itemText.contains('beverage')) ||
                                         itemText.contains('smoothie'))) ||
                                 (selectedFilter == 'Categories' &&
                                     !itemText.contains('bundle') &&
-                                    !itemText.contains('coffee') &&
+                                    !(itemText.contains('coffee') || itemText.contains('beverage')) &&
                                     !itemText.contains('smoothie'));
                             if (!matchesSearch || !matchesFilter) {
                               return const SizedBox.shrink();
@@ -3082,7 +2952,7 @@ class _BudgetPageState extends State<BudgetPage>
                   width: double.infinity,
                   padding: const EdgeInsets.all(14),
                   decoration: BoxDecoration(
-                    color: const Color(0xFFFFF8F3),
+                    color: AppColors.background,
                     borderRadius: BorderRadius.circular(16),
                     border: Border.all(color: kAccent.withOpacity(0.45)),
                   ),
@@ -3112,7 +2982,7 @@ class _BudgetPageState extends State<BudgetPage>
                       child: Container(
                         padding: const EdgeInsets.all(14),
                         decoration: BoxDecoration(
-                          color: const Color(0xFFF8F2F5),
+                          color: AppColors.background,
                           borderRadius: BorderRadius.circular(16),
                         ),
                         child: Column(
@@ -3144,7 +3014,7 @@ class _BudgetPageState extends State<BudgetPage>
                       child: Container(
                         padding: const EdgeInsets.all(14),
                         decoration: BoxDecoration(
-                          color: const Color(0xFFF8F2F5),
+                          color: AppColors.background,
                           borderRadius: BorderRadius.circular(16),
                         ),
                         child: Column(
@@ -3182,7 +3052,7 @@ class _BudgetPageState extends State<BudgetPage>
                 Container(
                   padding: const EdgeInsets.all(14),
                   decoration: BoxDecoration(
-                    color: const Color(0xFFF5F0F5),
+                    color: AppColors.background,
                     borderRadius: BorderRadius.circular(16),
                   ),
                   child: Row(
@@ -3206,7 +3076,7 @@ class _BudgetPageState extends State<BudgetPage>
                 Container(
                   padding: const EdgeInsets.all(14),
                   decoration: BoxDecoration(
-                    color: const Color(0xFFF5F0F5),
+                    color: AppColors.background,
                     borderRadius: BorderRadius.circular(16),
                   ),
                   child: Row(
@@ -3324,7 +3194,7 @@ class _BudgetPageState extends State<BudgetPage>
                           margin: const EdgeInsets.only(bottom: 10),
                           padding: const EdgeInsets.all(12),
                           decoration: BoxDecoration(
-                            color: const Color(0xFFF8F2F5),
+                            color: AppColors.background,
                             borderRadius: BorderRadius.circular(14),
                           ),
                           child: Column(
@@ -3505,7 +3375,7 @@ class _BudgetPageState extends State<BudgetPage>
                       margin: const EdgeInsets.only(bottom: 10),
                       padding: const EdgeInsets.all(12),
                       decoration: BoxDecoration(
-                        color: const Color(0xFFF8F2F5),
+                        color: AppColors.background,
                         borderRadius: BorderRadius.circular(14),
                       ),
                       child: Column(
@@ -3599,7 +3469,7 @@ class _BudgetPageState extends State<BudgetPage>
                         Container(
                           padding: const EdgeInsets.all(14),
                           decoration: BoxDecoration(
-                            color: const Color(0xFFFFF0F3),
+                            color: AppColors.surfaceTint,
                             borderRadius: BorderRadius.circular(16),
                           ),
                           child: Row(
@@ -3650,7 +3520,7 @@ class _BudgetPageState extends State<BudgetPage>
                             margin: const EdgeInsets.only(bottom: 10),
                             padding: const EdgeInsets.all(12),
                             decoration: BoxDecoration(
-                              color: const Color(0xFFF8F2F5),
+                              color: AppColors.background,
                               borderRadius: BorderRadius.circular(14),
                             ),
                             child: Column(
@@ -3838,7 +3708,7 @@ class _BudgetPageState extends State<BudgetPage>
       barrierDismissible: true,
       builder: (context) {
         return Dialog(
-          backgroundColor: const Color(0xFFFFF8F3),
+          backgroundColor: AppColors.background,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(24),
           ),
@@ -4187,7 +4057,7 @@ class _BudgetPageState extends State<BudgetPage>
                                           vertical: 6,
                                         ),
                                         decoration: BoxDecoration(
-                                          color: const Color(0xFFF5F0F5),
+                                          color: AppColors.background,
                                           borderRadius: BorderRadius.circular(
                                             8,
                                           ),
@@ -4281,7 +4151,7 @@ class _BudgetPageState extends State<BudgetPage>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF5EEF0),
+      backgroundColor: AppColors.background,
       floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
       floatingActionButton: _selectedBranchId == null
           ? FloatingActionButton(
@@ -4300,77 +4170,31 @@ class _BudgetPageState extends State<BudgetPage>
               ),
               enabled: _activeBranchStaffIds.isNotEmpty,
             ),
-      body: FadeTransition(
-        opacity: _fadeAnim,
-        child: SlideTransition(
-          position: _slideAnim,
-          child: CustomScrollView(
-            physics: const BouncingScrollPhysics(),
-            slivers: [
-              if (_selectedBranchId == null)
-                SliverToBoxAdapter(child: _buildHeader())
-              else
-                SliverPersistentHeader(
-                  pinned: true,
-                  delegate: _PinnedBudgetHeaderDelegate(
-                    minHeight: 118, maxHeight: 118,
-                    child: _buildSelectedBranchHeader(),
-                  ),
-                ),
-              if (_selectedBranchId != null)
-                SliverPersistentHeader(
-                  pinned: true,
-                  delegate: _PinnedBudgetHeaderDelegate(
-                    minHeight: 80,
-                    maxHeight: 80,
-                    child: Material(
-                      color: Colors.white,
-                      elevation: 2,
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 12),
-                        child: _buildAllocationSearch(),
-                      ),
-                    ),
-                  ),
-                ),
-              if (_selectedBranchId == null) ...[
-                const SliverToBoxAdapter(child: SizedBox(height: 14)),
-                SliverPersistentHeader(
-                  pinned: true,
-                  delegate: _PinnedBudgetHeaderDelegate(
-                    minHeight: 142,
-                    maxHeight: 142,
-                    child: _buildPinnedBudgetControls(),
-                  ),
-                ),
-              ],
-              if (_selectedBranchId == null) ...[
-                SliverToBoxAdapter(child: Padding(
-                  padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    TextButton.icon(icon: const Icon(Icons.calendar_month), label: Text(_analyticsDate == null ? 'Today' : _reportDateLabel(_analyticsDate!)), onPressed: () async {
-                      final picked = await showDatePicker(context: context, initialDate: _analyticsDate ?? DateTime.now(), firstDate: DateTime(2020), lastDate: DateTime.now());
-                      if (picked != null && mounted) setState(() { _analyticsDate = picked; _analyticsRange = 'Day'; });
-                    }),
-                    AdminSalesOverview(branches: true, todayOnly: true, selectedDate: _analyticsDate),
-                  ]),
-                )),
-                SliverToBoxAdapter(child: _buildBranchManagementSection()),
-                const SliverToBoxAdapter(child: SizedBox(height: 32)),
-              ] else
-                SliverFillRemaining(
-                  hasScrollBody: false,
-                  child: _buildSelectedBranchContent(),
-                ),
-            ],
-          ),
-        ),
-      ),
+      body: FadeTransition(opacity: _fadeAnim, child: SlideTransition(position: _slideAnim,
+        child: Column(children: [
+          SizedBox(height: 130, child: _selectedBranchId == null ? _buildHeader() : _buildSelectedBranchHeader()),
+          if (_selectedBranchId == null) _buildPinnedBudgetControls()
+          else Padding(padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12), child: _buildAllocationSearch()),
+          Expanded(child: ListView(padding: const EdgeInsets.only(bottom: 32), children: [
+            if (_selectedBranchId == null) ...[
+              Padding(padding: const EdgeInsets.all(16), child: AdminSalesOverview(branches: true, todayOnly: true, selectedDate: _analyticsDate)),
+              Padding(padding: const EdgeInsets.symmetric(horizontal: 16), child: Card(
+                color: Colors.white, child: Padding(padding: const EdgeInsets.all(18), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  const ListTile(contentPadding: EdgeInsets.zero,
+                    leading: CircleAvatar(backgroundColor: AppColors.blush, child: Icon(Icons.pie_chart_outline, color: kPrimary)),
+                    title: Text('Branch sales reports', style: TextStyle(fontWeight: FontWeight.w800)),
+                    subtitle: Text('Compare branches, review sales, and generate reports')),
+                  Align(alignment: Alignment.centerLeft, child: FilledButton.icon(onPressed: () => showBranchReport(context), icon: const Icon(Icons.assessment_outlined), label: const Text('View branches report'))),
+                ])))),
+              _buildBranchManagementSection(),
+            ] else _buildSelectedBranchContent(),
+          ])),
+        ]))),
     );
   }
-
   Widget _buildPinnedBudgetControls() {
     return Material(
-      color: const Color(0xFFF5EEF0),
+      color: AppColors.background,
       elevation: 4,
       shadowColor: kPrimary.withOpacity(0.10),
       child: Column(
@@ -4378,7 +4202,15 @@ class _BudgetPageState extends State<BudgetPage>
           const SizedBox(height: 12),
           _buildBranchToolbar(),
           const SizedBox(height: 10),
-          _buildBranchSearchField(),
+          Row(children: [
+            Expanded(child: _buildBranchSearchField()),
+            IconButton(tooltip: _analyticsDate == null ? 'Filter date: Today' : _reportDateLabel(_analyticsDate!),
+              icon: const Icon(Icons.calendar_month, color: kPrimary), onPressed: () async {
+                final picked = await showDatePicker(context: context, initialDate: _analyticsDate ?? DateTime.now(), firstDate: DateTime(2020), lastDate: DateTime.now());
+                if(picked != null && mounted) setState(() => _analyticsDate = picked);
+              }),
+            const SizedBox(width: 16),
+          ]),
           const SizedBox(height: 12),
         ],
       ),
@@ -4440,11 +4272,6 @@ class _BudgetPageState extends State<BudgetPage>
                 ),
               ),
               const SizedBox(width: 8),
-              IconButton(
-                tooltip: 'View branch report',
-                onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AdminBranchRanking())),
-                icon: const Icon(Icons.bar_chart_rounded, color: kPrimary),
-              ),
               StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
                 stream: _firestore
                     .collection('branches')
@@ -4797,8 +4624,8 @@ class _BudgetPageState extends State<BudgetPage>
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
       stream: _firestore.collection('daily_reports').where('branchId', isEqualTo: branchId).snapshots(),
       builder: (context, snapshot) {
-        if (snapshot.hasError) return amount('Closing Cash Drawer', 'Unable to load');
-        if (!snapshot.hasData) return amount('Closing Cash Drawer', 'Loading…');
+        if (snapshot.hasError) return amount('Cash Drawer', 'Unable to load');
+        if (!snapshot.hasData) return amount('Cash Drawer', 'Loading…');
         final reports = snapshot.data!.docs.where((doc) {
           final data = doc.data();
           return DateUtils.isSameDay(_reportDayFromData(data), day) &&
@@ -4810,7 +4637,7 @@ class _BudgetPageState extends State<BudgetPage>
         if (reports.isEmpty) return HistoricalCashDrawer(branchId: branchId, day: day);
         final report = reports.first.data();
         final closing = _parsePrice(report['closingCash'] ?? report['cashDrawerTotal']);
-        return amount('Closing Cash Drawer', '₱${closing.toStringAsFixed(2)}');
+        return amount('Cash Drawer', '₱${closing.toStringAsFixed(2)}');
       },
     );
   }
@@ -4820,7 +4647,7 @@ class _BudgetPageState extends State<BudgetPage>
     builder: (context, snapshot) {
       var revenue = 0.0;
       final now = DateTime.now();
-      final selectedDay = _analyticsDate ?? now;
+      final selectedDay = now;
       for (final doc in snapshot.data?.docs ?? const []) {
         final sale = doc.data();
         final timestamp = sale['timestamp'];
@@ -4905,7 +4732,7 @@ class _BudgetPageState extends State<BudgetPage>
     required String branchId,
     required String branchName,
   }) {
-    final now = _analyticsDate ?? DateTime.now();
+    final now = DateTime.now();
     var receiptQuery = '';
     var paymentFilter = 'All';
     final receiptsStream = _firestore
@@ -5159,7 +4986,7 @@ class _BudgetPageState extends State<BudgetPage>
             : b.value.compareTo(a.value));
       return Container(
         padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(color: const Color(0xFFFFFBFC), borderRadius: BorderRadius.circular(18), border: Border.all(color: kAccent)),
+        decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(18), border: Border.all(color: kAccent)),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           const Text('Sales Analytics', style: TextStyle(color: kBannerTop, fontSize: 17, fontWeight: FontWeight.w900)),
           const SizedBox(height: 4),
@@ -5275,7 +5102,7 @@ class _BudgetPageState extends State<BudgetPage>
   }
 
   void _showBranchLossItems(String branchId, String status, List<Map<String, dynamic>> records) {
-    final day = _analyticsDate ?? DateTime.now();
+    final day = DateTime.now();
     final range = _analyticsRange;
     final period = lossRecordPeriod(day, range);
     final matching = records.where((record) {
@@ -5292,7 +5119,7 @@ class _BudgetPageState extends State<BudgetPage>
   }
   Widget _buildPeriodBranchAnalytics(String branchId, String branchName) => _buildBranchActivity(branchId,
     (records) {
-      final now = _analyticsDate ?? DateTime.now();
+      final now = DateTime.now();
       final isRefundView = _analyticsStatus == 'Refund';
       final isReducedView = _analyticsStatus == 'Reduced';
       final rankingTitle = isRefundView ? (_sellingRank == 'Low Selling' ? 'Low refund items' : 'High refund items') : isReducedView ? (_sellingRank == 'Low Selling' ? 'Low reduced items' : 'High reduced items') : 'Best-selling items';
@@ -5303,10 +5130,12 @@ class _BudgetPageState extends State<BudgetPage>
           : rank;
       final today = DateTime(now.year, now.month, now.day);
       final weekStart = today.subtract(Duration(days: today.weekday - 1));
-      const dayStartHour = 10;
-      const dayEndHour = 19;
+      final hours = analyticsHours(now, records.map((record) {
+        final raw = record['timestamp'];
+        return raw is Timestamp ? raw.toDate() : raw is DateTime ? raw : DateTime.tryParse('$raw');
+      }).whereType<DateTime>());
       final count = _analyticsRange == 'Day'
-          ? dayEndHour - dayStartHour + 1
+          ? hours.length
           : _analyticsRange == 'Week'
           ? 7
           : 12;
@@ -5337,12 +5166,8 @@ class _BudgetPageState extends State<BudgetPage>
         final raw = data['timestamp'];
         final date = raw is Timestamp ? raw.toDate() : raw is DateTime ? raw : DateTime.tryParse(raw?.toString() ?? '');
         if (date == null || !matches(date)) continue;
-        if (_analyticsRange == 'Day' &&
-            (date.hour < dayStartHour || date.hour > dayEndHour)) {
-          continue;
-        }
         final bucket = _analyticsRange == 'Day'
-            ? date.hour - dayStartHour
+            ? hours.indexOf(date.hour)
             : _analyticsRange == 'Week'
             ? DateTime(date.year, date.month, date.day).difference(weekStart).inDays
             : date.month - 1;
@@ -5378,7 +5203,7 @@ class _BudgetPageState extends State<BudgetPage>
           if (_analyticsStatus == 'All' && !isCompleted) continue;
           final category = item['category']?.toString().toLowerCase() ?? '';
           final isBundle = item['isBundle'] == true;
-          final isCoffee = item['isCoffee'] == true || category.contains('coffee');
+          final isCoffee = item['isCoffee'] == true || (category.contains('coffee') || category.contains('beverage'));
 
           allQuantities[name] = (allQuantities[name] ?? 0) + quantity;
           if (isBundle) {
@@ -5392,7 +5217,7 @@ class _BudgetPageState extends State<BudgetPage>
       }
       final labels = List.generate(count, (i) {
         if (_analyticsRange == 'Day') {
-          final hour = i + dayStartHour;
+          final hour = hours[i];
           return '${hour % 12 == 0 ? 12 : hour % 12}${hour < 12 ? 'AM' : 'PM'}';
         }
         if (_analyticsRange == 'Week') {
@@ -5406,7 +5231,7 @@ class _BudgetPageState extends State<BudgetPage>
       final selectedQuantities = switch (_sellingType) {
         'Categories' => categoryQuantities,
         'Bundle' => bundleQuantities,
-        'Coffee Items' => coffeeQuantities,
+        'Beverages Items' => coffeeQuantities,
         _ => allQuantities,
       };
       final ranked = selectedQuantities.entries.toList()
@@ -5414,7 +5239,7 @@ class _BudgetPageState extends State<BudgetPage>
             ? a.value.compareTo(b.value)
             : b.value.compareTo(a.value));
       final rangeLabel = _analyticsRange == 'Day'
-          ? '${now.month}/${now.day}/${now.year} hourly sales (10AM–7PM)'
+          ? '${now.month}/${now.day}/${now.year} hourly sales'
           : _analyticsRange == 'Week'
           ? '${weekStart.month}/${weekStart.day} - ${weekStart.add(const Duration(days: 6)).month}/${weekStart.add(const Duration(days: 6)).day}/${now.year}'
           : 'January - December ${now.year}';
@@ -5427,7 +5252,7 @@ class _BudgetPageState extends State<BudgetPage>
           : const [kDeep, kPrimary];
       return Container(
         padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(color: const Color(0xFFFFFBFC), borderRadius: BorderRadius.circular(18), border: Border.all(color: kAccent)),
+        decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(18), border: Border.all(color: kAccent)),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           const Text('Sales Analytics', style: TextStyle(color: kBannerTop, fontSize: 17, fontWeight: FontWeight.w900)),
           const SizedBox(height: 4), Text(rangeLabel, style: const TextStyle(color: Colors.grey, fontSize: 12, fontWeight: FontWeight.w600)),
@@ -5436,7 +5261,7 @@ class _BudgetPageState extends State<BudgetPage>
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Expanded(
-                child: Wrap(spacing: 8, children: ['Day', 'Week', 'Month'].map((period) => ChoiceChip(label: Text(period), selected: _analyticsRange == period, selectedColor: kPrimary, labelStyle: TextStyle(color: _analyticsRange == period ? Colors.white : kDeep, fontWeight: FontWeight.w800), onSelected: (_) => setState(() => _analyticsRange = period))).toList()),
+                child: const Text('Today', style: TextStyle(color: kDeep, fontWeight: FontWeight.w700)),
               ),
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -5468,7 +5293,7 @@ class _BudgetPageState extends State<BudgetPage>
           if (_analyticsStatus == 'Refund' || _analyticsStatus == 'Reduced') Padding(padding: const EdgeInsets.only(top: 8), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('Total loss: ₱${totalLoss.toStringAsFixed(2)}', style: const TextStyle(color: Color(0xFFD32F2F), fontWeight: FontWeight.w900)), TextButton.icon(onPressed: () => _showBranchLossItems(branchId, _analyticsStatus, records), icon: const Icon(Icons.visibility_outlined, size: 16), label: Text(_analyticsStatus == 'Refund' ? 'View Refund items' : 'View Reduced items'), style: TextButton.styleFrom(foregroundColor: kDeep, textStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800)))])),
           const SizedBox(height: 14), SizedBox(height: 240, child: BranchAnalyticsBars(values: amounts, labels: labels, colors: graphColors, refunds: _analyticsStatus == 'All' ? refundAmounts : null, reduced: _analyticsStatus == 'All' ? reducedAmounts : null, selectedStatus: _analyticsStatus)),
           const SizedBox(height: 16), Text(rankingTitle, style: const TextStyle(color: kDeep, fontWeight: FontWeight.w900)), const SizedBox(height: 8),
-          Wrap(spacing: 8, runSpacing: 8, children: ['All', 'Categories', 'Bundle', 'Coffee Items'].map((type) => ChoiceChip(label: Text(type), selected: _sellingType == type, selectedColor: kPrimary, labelStyle: TextStyle(color: _sellingType == type ? Colors.white : kDeep, fontWeight: FontWeight.w800), onSelected: (_) => setState(() => _sellingType = type))).toList()),
+          Wrap(spacing: 8, runSpacing: 8, children: ['All', 'Categories', 'Bundle', 'Beverages Items'].map((type) => ChoiceChip(label: Text(type), selected: _sellingType == type, selectedColor: kPrimary, labelStyle: TextStyle(color: _sellingType == type ? Colors.white : kDeep, fontWeight: FontWeight.w800), onSelected: (_) => setState(() => _sellingType = type))).toList()),
           const SizedBox(height: 8),
           Wrap(spacing: 8, children: ['All', 'Top Selling', 'Low Selling'].map((rank) => ChoiceChip(label: Text(rankLabel(rank)), selected: _sellingRank == rank, selectedColor: kPrimary, labelStyle: TextStyle(color: _sellingRank == rank ? Colors.white : kDeep, fontWeight: FontWeight.w800), onSelected: (_) => setState(() => _sellingRank = rank))).toList()),
           const SizedBox(height: 8),
@@ -5511,7 +5336,7 @@ class _BudgetPageState extends State<BudgetPage>
   Widget _buildAllocationCategories() => Wrap(
         spacing: 8,
         runSpacing: 8,
-        children: ['All', 'Categories', 'Bundle', 'Coffee']
+        children: ['All', 'Categories', 'Bundle', 'Beverages']
             .map(
               (filter) => ChoiceChip(
                 label: Text(filter),
@@ -5537,26 +5362,8 @@ class _BudgetPageState extends State<BudgetPage>
           hintText:
               'Search',
           prefixIcon: const Icon(Icons.search_rounded, color: kDeep),
-          suffixIcon: IconButton(
-            tooltip: 'Filter sales, revenue, and receipts by date',
-            icon: Icon(
-              Icons.calendar_month_rounded,
-              color: _analyticsDate == null ? kDeep : kPrimary,
-            ),
-            onPressed: () async {
-              final picked = await showDatePicker(
-                context: context,
-                initialDate: _analyticsDate ?? DateTime.now(),
-                firstDate: DateTime(2020),
-                lastDate: DateTime.now(),
-              );
-              if (picked != null && mounted) {
-                setState(() => _analyticsDate = picked);
-              }
-            },
-          ),
           filled: true,
-          fillColor: const Color(0xFFFFFBFC),
+          fillColor: AppColors.surface,
           border: OutlineInputBorder(
             borderRadius: BorderRadius.circular(12),
             borderSide: BorderSide(color: kAccent),
@@ -5682,7 +5489,7 @@ class _BudgetPageState extends State<BudgetPage>
           final matchesFilter =
               _allocationFilter == 'All' ||
               (_allocationFilter == 'Bundle' && row.type == 'Bundle') ||
-              (_allocationFilter == 'Coffee' && row.type == 'Coffee') ||
+              (_allocationFilter == 'Beverages' && row.type == 'Beverages') ||
               (_allocationFilter == 'Categories' && row.type == 'Category');
           final details =
               '${row.id} ${row.name} ${row.allocated} '
@@ -5703,7 +5510,7 @@ class _BudgetPageState extends State<BudgetPage>
               .where('branchId', isEqualTo: branchId)
               .snapshots(),
           builder: (context, salesSnapshot) {
-            final selectedDay = _analyticsDate ?? DateTime.now();
+            final selectedDay = DateTime.now();
             final soldByName = <String, int>{};
             for (final saleDoc in salesSnapshot.data?.docs ?? const []) {
               final sale = saleDoc.data();
@@ -5734,7 +5541,7 @@ class _BudgetPageState extends State<BudgetPage>
           width: double.infinity,
           padding: const EdgeInsets.all(8),
           decoration: BoxDecoration(
-            color: const Color(0xFFFFFBFC),
+            color: AppColors.surface,
             border: Border.all(color: kAccent.withOpacity(0.8)),
             borderRadius: BorderRadius.circular(16),
             boxShadow: [
@@ -5858,11 +5665,12 @@ class _BudgetPageState extends State<BudgetPage>
   List<_AllocationTableRow> _allocationRowsForDocument(
     QueryDocumentSnapshot<Map<String, dynamic>> doc,
   ) {
-    final data = doc.data();
+    final raw = doc.data();
+    final data = alignInventoryDisplayIds(raw, _inventorySources['${raw['sourceInventoryId']}'] ?? {});
     final type = data['isBundle'] == true
         ? 'Bundle'
         : data['isCoffee'] == true
-        ? 'Coffee'
+        ? 'Beverages'
         : 'Category';
     if (data['isBundle'] == true ||
         data['isCoffee'] == true ||
@@ -5878,12 +5686,7 @@ class _BudgetPageState extends State<BudgetPage>
         _AllocationTableRow(
           documentId: doc.id,
           itemId: null,
-          id:
-              (data['bundleId'] ??
-                      data['productId'] ??
-                      data['sourceInventoryId'] ??
-                      doc.id)
-                  .toString(),
+          id: inventoryDisplayId(data),
           name: data['name']?.toString() ?? 'Item',
           allocated: allocated,
           remaining: remaining,
@@ -5913,7 +5716,7 @@ class _BudgetPageState extends State<BudgetPage>
           return _AllocationTableRow(
             documentId: doc.id,
             itemId: item['id']?.toString(),
-            id: (item['id'] ?? doc.id).toString(),
+            id: inventoryDisplayId(item),
             name: item['name']?.toString() ?? 'Item',
             allocated: allocated,
             remaining: remaining,
@@ -5997,7 +5800,7 @@ class _BudgetPageState extends State<BudgetPage>
     }
 
     final ref = _firestore.collection('staff_inventory').doc(row.documentId);
-    final priceField = row.type == 'Coffee'
+    final priceField = row.type == 'Beverages'
         ? 'basePrice'
         : row.type == 'Add-on'
         ? 'priceDelta'
@@ -6032,6 +5835,7 @@ class _BudgetPageState extends State<BudgetPage>
         branchId,
         'Branch',
         isBranch: true,
+        onlyType: row.type,
       );
     }
   }
@@ -6040,8 +5844,8 @@ class _BudgetPageState extends State<BudgetPage>
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Remove allocation?'),
-        content: Text('Remove "${row.name}" from this branch?'),
+        title: const Text('Void allocation?'),
+        content: Text('Void "${row.name}" from this branch?'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
@@ -6049,8 +5853,8 @@ class _BudgetPageState extends State<BudgetPage>
           ),
           ElevatedButton(
             onPressed: () => Navigator.pop(context, true),
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-            child: const Text('Remove'),
+            style: ElevatedButton.styleFrom(backgroundColor: AppColors.primaryDark, foregroundColor: Colors.white),
+            child: const Text('Void'),
           ),
         ],
       ),
@@ -6078,7 +5882,7 @@ class _BudgetPageState extends State<BudgetPage>
       });
     }
     if (mounted)
-      _showSnack('${row.name} removed from branch', Colors.green.shade600);
+      _showSnack('${row.name} voided from branch', Colors.green.shade600);
   }
 
   Widget _buildBranchAllocationPanel({
@@ -6355,45 +6159,15 @@ class _BudgetPageState extends State<BudgetPage>
   }
 
   Future<void> _showCreateBranchDialog() async {
-    final controller = TextEditingController();
-    final name = await showDialog<String>(
-      context: context,
-      builder: (dialogContext) {
-        return AlertDialog(
-          title: const Text('Create Branch'),
-          content: TextField(
-            controller: controller,
-            autofocus: true,
-            textCapitalization: TextCapitalization.words,
-            decoration: const InputDecoration(
-              labelText: 'Branch name',
-              hintText: 'SM Dagupan',
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext),
-              child: const Text('Cancel'),
-            ),
-            ElevatedButton(
-              onPressed: () {
-                final name = controller.text.trim();
-                if (name.isEmpty) return;
-                Navigator.pop(dialogContext, name);
-              },
-              child: const Text('Create'),
-            ),
-          ],
-        );
-      },
-    );
-    controller.dispose();
-    if (name == null || name.isEmpty) return;
+    final values = await showDialog<Map<String, dynamic>>(context: context, builder: (_) => const BranchEditorDialog());
+    if (values == null) return;
     try {
       final branchRef = _firestore.collection('branches').doc();
+      final code = await ShortIdService.next('BR');
       await branchRef.set({
-        'name': name,
-        'branchCode': _branchCode(branchRef.id),
+        ...values,
+        'branchCode': code,
+        'publicId': code,
         'staffIds': <String>[],
         'staffNames': <String>[],
         'createdAt': FieldValue.serverTimestamp(),
@@ -6409,40 +6183,13 @@ class _BudgetPageState extends State<BudgetPage>
     String branchId,
     String currentName,
   ) async {
-    final controller = TextEditingController(text: currentName);
-    final name = await showDialog<String>(
-      context: context,
-      builder: (dialogContext) {
-        return AlertDialog(
-          title: const Text('Edit Branch'),
-          content: TextField(
-            controller: controller,
-            autofocus: true,
-            textCapitalization: TextCapitalization.words,
-            decoration: const InputDecoration(labelText: 'Branch name'),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext),
-              child: const Text('Cancel'),
-            ),
-            ElevatedButton(
-              onPressed: () {
-                final name = controller.text.trim();
-                if (name.isEmpty) return;
-                Navigator.pop(dialogContext, name);
-              },
-              child: const Text('Save'),
-            ),
-          ],
-        );
-      },
-    );
-    controller.dispose();
-    if (name == null || name.isEmpty || name == currentName) return;
     try {
+    final existing = await _firestore.collection('branches').doc(branchId).get();
+    if (!mounted) return;
+    final values = await showDialog<Map<String, dynamic>>(context: context, builder: (_) => BranchEditorDialog(initial: {...?existing.data(), 'name': currentName}));
+    if (values == null) return;
       await _firestore.collection('branches').doc(branchId).update({
-        'name': name,
+        ...values,
         'updatedAt': FieldValue.serverTimestamp(),
       });
       if (mounted) _showSnack('Branch updated', Colors.green.shade600);
@@ -6499,7 +6246,7 @@ class _BudgetPageState extends State<BudgetPage>
       context: context,
       builder: (dialogContext) {
         return Dialog(
-          backgroundColor: const Color(0xFFFFF8F3),
+          backgroundColor: AppColors.background,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(22),
           ),
@@ -6684,7 +6431,7 @@ class _BudgetPageState extends State<BudgetPage>
                 })
                 .toList();
             return Dialog(
-              backgroundColor: const Color(0xFFFFF8F3),
+              backgroundColor: AppColors.background,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(22),
               ),
@@ -7141,7 +6888,7 @@ class _BudgetPageState extends State<BudgetPage>
           ),
 
           Padding(
-            padding: const EdgeInsets.fromLTRB(20, 52, 20, 28),
+            padding: const EdgeInsets.fromLTRB(20, 24, 20, 24),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [
@@ -7555,7 +7302,7 @@ class _BudgetPageState extends State<BudgetPage>
 
     // Cycle avatar bg colors
     final avatarColors = [
-      [const Color(0xFFE91E63), const Color(0xFF8B0038)],
+      [AppColors.primary, AppColors.primaryDeep],
       [const Color(0xFF5C6BC0), const Color(0xFF3A4BAA)],
       [const Color(0xFF26A69A), const Color(0xFF1A7A6E)],
       [const Color(0xFFF57C00), const Color(0xFFBF5000)],
@@ -7748,7 +7495,7 @@ class _BudgetPageState extends State<BudgetPage>
                       child: Container(
                         padding: const EdgeInsets.all(14),
                         decoration: BoxDecoration(
-                          color: const Color(0xFFF8F2F5),
+                          color: AppColors.background,
                           borderRadius: BorderRadius.circular(16),
                           border: Border.all(
                             color: kAccent.withOpacity(0.45),
@@ -8130,7 +7877,7 @@ class _BudgetPageState extends State<BudgetPage>
           width: double.infinity,
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
-            color: const Color(0xFFFFF8F3),
+            color: AppColors.background,
             borderRadius: BorderRadius.circular(16),
             border: Border.all(color: kAccent.withOpacity(0.65), width: 1),
           ),

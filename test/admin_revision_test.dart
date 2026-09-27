@@ -152,13 +152,13 @@ void main() {
     },
   );
 
-  testWidgets('Coffee edit shows size prices without a stock field', (
+  testWidgets('Beverages edit shows size prices without a stock field', (
     tester,
   ) async {
     final entry = AdminCatalogEntry(
       id: 'coffee',
       name: 'Latte',
-      type: 'Coffee',
+      type: 'Beverages',
       source: const {'id': 'coffee'},
       images: const [],
       details: const {

@@ -1,3 +1,4 @@
+import 'package:sales_tracking/theme/app_colors.dart';
 import 'package:flutter/material.dart';
 
 DateTimeRange lossRecordPeriod(DateTime anchor, String range) {
@@ -23,7 +24,7 @@ String lossItemCategory(Map item) {
   if (item['isCoffee'] == true ||
       (item['category']?.toString().toLowerCase() ?? '').contains('coffee') ||
       (item['coffeeSize']?.toString().isNotEmpty ?? false)) {
-    return 'Coffee';
+    return 'Beverages';
   }
   return 'Categories';
 }
@@ -147,7 +148,7 @@ class _BranchLossRecordsDialogState extends State<BranchLossRecordsDialog> {
                           style: const TextStyle(
                             fontSize: 20,
                             fontWeight: FontWeight.w800,
-                            color: Color(0xFFC2105C),
+                            color: AppColors.primaryDark,
                           ),
                         ),
                         Text(periodLabel),
@@ -195,7 +196,7 @@ class _BranchLossRecordsDialogState extends State<BranchLossRecordsDialog> {
                       spacing: 8,
                       runSpacing: 4,
                       children: [
-                        ...['All', 'Categories', 'Bundle', 'Coffee'].map(
+                        ...['All', 'Categories', 'Bundle', 'Beverages'].map(
                           (category) => ChoiceChip(
                             label: Text(category),
                             selected: _category == category,

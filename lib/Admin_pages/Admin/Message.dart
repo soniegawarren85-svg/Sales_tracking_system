@@ -1,3 +1,4 @@
+import 'package:sales_tracking/theme/app_colors.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
@@ -7,13 +8,14 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-const _chatPink = Color(0xFFE91E63);
-const _chatDeep = Color(0xFFC2105C);
-const _chatBg = Color(0xFFFFF8F3);
+const _chatPink = AppColors.primary;
+const _chatDeep = AppColors.primaryDark;
+const _chatBg = AppColors.background;
 const _chatMint = Color(0xFF2ECC71);
 
 class MessagePage extends StatefulWidget {
-  const MessagePage({super.key});
+  const MessagePage({super.key, this.initialContactId});
+  final String? initialContactId;
 
   @override
   State<MessagePage> createState() => _MessagePageState();
@@ -29,6 +31,7 @@ class _MessagePageState extends State<MessagePage> {
   @override
   void initState() {
     super.initState();
+    _selectedId = widget.initialContactId;
     _loadMe();
   }
 

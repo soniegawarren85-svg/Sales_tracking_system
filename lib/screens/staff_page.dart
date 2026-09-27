@@ -1,3 +1,4 @@
+import 'package:sales_tracking/theme/app_colors.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'dart:math';
@@ -11,17 +12,17 @@ import '../bones/bottom_nav.dart';
 
 // ─── Design Tokens ────────────────────────────────────────────────────────────
 class _AppColors {
-  static const cream = Color(0xFFFDF6EE);
+  static const cream = AppColors.background;
   static const parchment = Color(0xFFFCE8F2);
-  static const choco = Color(0xFFE91E63);
-  static const chocoMid = Color(0xFFF48FB1);
-  static const chocoLight = Color(0xFFF8BBD0);
+  static const choco = AppColors.primary;
+  static const chocoMid = AppColors.rose;
+  static const chocoLight = AppColors.blush;
   static const gold = Color(0xFFFFC1E3);
   static const goldLight = Color(0xFFFFE4ED);
-  static const dustyRose = Color(0xFFF8BBD0);
+  static const dustyRose = AppColors.blush;
   static const blush = Color(0xFFFFEBF0);
-  static const textMid = Color(0xFFAD1457);
-  static const textLight = Color(0xFFAD1457);
+  static const textMid = AppColors.primaryDark;
+  static const textLight = AppColors.primaryDark;
   static const divider = Color(0xFFF5C2D0);
   static const success = Color(0xFF4A7C59);
   static const white = Color(0xFFFFFFFF);
@@ -200,7 +201,7 @@ class _ItemCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isCoffeeInfo = startingStock == 'Coffee';
+    final isCoffeeInfo = startingStock == 'Beverages';
 
     return Container(
       margin: const EdgeInsets.only(bottom: 16),
@@ -608,7 +609,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
       return {
         'name': sizeName,
         'price': (basePrice + delta).toStringAsFixed(0),
-        'startingStock': 'Coffee',
+        'startingStock': 'Beverages',
         'addonLabel': addonLabel,
       };
     }).toList();
@@ -616,7 +617,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
 
   Future<void> _markCoffeeLowStock() async {
     if (!_isCoffee || _staffInventoryDocId.isEmpty) return;
-    final flavor = widget.selectedItem ?? 'Coffee flavor';
+    final flavor = widget.selectedItem ?? 'Beverages flavor';
     try {
       await FirebaseFirestore.instance
           .collection('staff_inventory')
@@ -627,7 +628,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
           }, SetOptions(merge: true));
       await FirebaseFirestore.instance.collection('admin_notifications').add({
         'type': 'coffee_low_stock',
-        'title': 'Coffee flavor is running low',
+        'title': 'Beverages flavor is running low',
         'message': '$flavor is marked as running low.',
         'itemName': flavor,
         'staffInventoryDocId': _staffInventoryDocId,
@@ -636,7 +637,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
       });
       if (mounted) _showSnack('$flavor marked as running low');
     } catch (e) {
-      if (mounted) _showSnack('Unable to mark coffee: $e');
+      if (mounted) _showSnack('Unable to mark beverage: $e');
     }
   }
 
@@ -1258,7 +1259,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                                 ),
                                 child: Text(
                                   _isCoffee
-                                      ? 'Coffee'
+                                      ? 'Beverages'
                                       : _isRemainingMode
                                       ? 'Remaining Stock'
                                       : 'Starting Stock',
@@ -1273,7 +1274,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                               const SizedBox(height: 8),
                               Text(
                                 _isCoffee
-                                    ? 'Coffee Details'
+                                    ? 'Beverages Details'
                                     : 'Daily Inventory',
                                 style: GoogleFonts.playfairDisplay(
                                   fontSize: 30,
@@ -1285,7 +1286,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                               const SizedBox(height: 4),
                               Text(
                                 _isCoffee
-                                    ? '${widget.selectedItem ?? 'Coffee'} Coffee'
+                                    ? '${widget.selectedItem ?? 'Beverages'} Beverages'
                                     : widget.selectedItem ?? 'Item',
                                 style: GoogleFonts.dmSans(
                                   color: Colors.white.withOpacity(0.75),
@@ -1308,7 +1309,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                         // Reminder banner
                         _ReminderBanner(
                           _isCoffee
-                              ? 'Available coffee sizes and add-ons for this flavor.'
+                              ? 'Available beverage sizes and add-ons for this flavor.'
                               : "Please enter today's "
                                     "${_isRemainingMode ? 'remaining' : 'starting'} "
                                     "stock before closing.",
@@ -1317,7 +1318,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
 
                         _SectionLabel(
                           _isCoffee
-                              ? '${widget.selectedItem ?? 'Coffee'} Coffee'
+                              ? '${widget.selectedItem ?? 'Beverages'} Beverages'
                               : _isRemainingMode
                               ? 'Enter Remaining Stock'
                               : 'Enter Starting Stock',
@@ -1376,7 +1377,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                         // ── Save / Calculate / Update Button ─────────────
                         if (_isCoffee)
                           _PrimaryButton(
-                            label: 'Mark Coffee Flavor Low',
+                            label: 'Mark Beverages Flavor Low',
                             icon: Icons.warning_amber_rounded,
                             onTap: _markCoffeeLowStock,
                           )
@@ -1686,7 +1687,7 @@ class RemainingInventorySummaryPage extends StatelessWidget {
                 Container(
                   decoration: BoxDecoration(
                     gradient: const LinearGradient(
-                      colors: [Color(0xFFF48FB1), Color(0xFFD81B60)],
+                      colors: [AppColors.accent, AppColors.primary],
                       begin: Alignment.topLeft,
                       end: Alignment.bottomRight,
                     ),

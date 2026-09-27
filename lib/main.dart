@@ -64,10 +64,10 @@ class _SessionGateState extends State<SessionGate> {
     final user = FirebaseAuth.instance.currentUser;
 
     if (user == null) {
-      if (lastRole == 'admin' || savedPublicId.isNotEmpty) {
+      if (lastRole == 'admin') {
         return const AdminDashboard();
       }
-      if (lastRole == 'staff' || savedUserId.isNotEmpty) {
+      if (lastRole == 'staff' || savedUserId.isNotEmpty || savedPublicId.isNotEmpty) {
         return const BottomNav();
       }
       await prefs.remove('lastRole');
