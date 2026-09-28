@@ -1,11 +1,11 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
-DateTime? cashRecordDate(dynamic value) => value is Timestamp
+DateTime? cashRecordDate(dynamic value) => (value is Timestamp
     ? value.toDate()
     : value is DateTime
     ? value
-    : DateTime.tryParse('$value');
+    : DateTime.tryParse('$value'))?.toLocal();
 
 double calculatedDailyCash(
   DateTime day,

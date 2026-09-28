@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import '../widgets/branch_daily_summary.dart';
 import '../widgets/historical_cash_drawer.dart';
 import 'inventory_display_ids.dart';
+import 'analytics_hours.dart';
 
 double reportValue(dynamic value) => num.tryParse('$value')?.toDouble() ?? 0;
 bool reportClosingAvailable(
@@ -92,6 +93,47 @@ class BranchReportData {
   BranchReportData(this.collections);
   List<Map<String, dynamic>> rows(String collection) =>
       collections[collection] ?? [];
+
+  List<int> hours(String? branch, DateTime day) {
+    final settings = rows(
+      'branches',
+    ).where((row) => branch == null || row['_id'] == branch).toList();
+    final openings =
+        settings
+            .map((row) => (row['openingMinutes'] as num?)?.toInt() ?? 600)
+            .toList()
+          ..sort();
+    final closings =
+        settings
+            .map((row) => (row['closingMinutes'] as num?)?.toInt() ?? 1140)
+            .toList()
+          ..sort();
+    return analyticsHours(
+      day,
+      [
+        ...sales(
+              branch,
+              DateUtils.dateOnly(day),
+              DateTime(day.year, day.month, day.day + 1),
+            )
+            .map((row) => cashRecordDate(row['timestamp'] ?? row['createdAt']))
+            .whereType<DateTime>(),
+        for (final setting in settings)
+          ...losses(
+                '${setting['_id']}',
+                DateUtils.dateOnly(day),
+                DateTime(day.year, day.month, day.day + 1),
+              )
+              .map(
+                (row) => cashRecordDate(row['createdAt'] ?? row['timestamp']),
+              )
+              .whereType<DateTime>(),
+      ],
+      openingMinutes: openings.firstOrNull ?? 600,
+      closingMinutes: closings.lastOrNull ?? 1140,
+    );
+  }
+
   static Future<BranchReportData> load() async {
     const names = [
       'branches',

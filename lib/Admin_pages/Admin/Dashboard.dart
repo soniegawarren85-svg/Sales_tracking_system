@@ -1,6 +1,5 @@
 import '../../widgets/admin_profile_label.dart';
 import 'dart:async';
-import '../../widgets/admin_message_preview.dart';
 import 'package:sales_tracking/theme/app_colors.dart';
 import '../../services/short_id_service.dart';
 import '../../Login/Login/Login.dart';
@@ -61,12 +60,24 @@ class _AdminDashboardState extends State<AdminDashboard>
   @override
   void initState() {
     super.initState();
-    _allocationNotices = FirebaseFirestore.instance.collection('admin_notifications').where('type', isEqualTo: 'allocation_declined').snapshots().listen((snapshot) {
-      for (final doc in snapshot.docs) {
-        if (doc.data()['toastShown'] != true) unawaited(_showAllocationNotice(doc.reference));
-      }
-    }, onError: (Object error) { debugPrint('Allocation notifications: $error'); });
-    ShortIdService.refresh().catchError((Object error) { debugPrint('Short ID update deferred: $error'); });
+    _allocationNotices = FirebaseFirestore.instance
+        .collection('admin_notifications')
+        .where('type', isEqualTo: 'allocation_declined')
+        .snapshots()
+        .listen(
+          (snapshot) {
+            for (final doc in snapshot.docs) {
+              if (doc.data()['toastShown'] != true)
+                unawaited(_showAllocationNotice(doc.reference));
+            }
+          },
+          onError: (Object error) {
+            debugPrint('Allocation notifications: $error');
+          },
+        );
+    ShortIdService.refresh().catchError((Object error) {
+      debugPrint('Short ID update deferred: $error');
+    });
     print('✅ AdminDashboard initialized');
     print('📦 Current entries: ${InventoryService().entries.length}');
     ExpiryNotificationService().checkAndNotifyExpiringItems();
@@ -91,23 +102,36 @@ class _AdminDashboardState extends State<AdminDashboard>
     _entranceController.forward();
   }
 
-  Future<void> _showAllocationNotice(DocumentReference<Map<String, dynamic>> ref) async {
+  Future<void> _showAllocationNotice(
+    DocumentReference<Map<String, dynamic>> ref,
+  ) async {
     if (!mounted) return;
     try {
-      final message = await FirebaseFirestore.instance.runTransaction<String?>((tx) async {
+      final message = await FirebaseFirestore.instance.runTransaction<String?>((
+        tx,
+      ) async {
         final data = (await tx.get(ref)).data();
         if (data == null || data['toastShown'] == true) return null;
-        tx.update(ref, {'toastShown': true, 'toastShownAt': FieldValue.serverTimestamp()});
+        tx.update(ref, {
+          'toastShown': true,
+          'toastShownAt': FieldValue.serverTimestamp(),
+        });
         return data['message']?.toString();
       });
       if (message != null && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(message), duration: const Duration(seconds: 8),
-          backgroundColor: AppColors.primary,
-        ));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(message),
+            duration: const Duration(seconds: 8),
+            backgroundColor: AppColors.primary,
+          ),
+        );
       }
-    } catch (error) { debugPrint('Allocation notice deferred: $error'); }
+    } catch (error) {
+      debugPrint('Allocation notice deferred: $error');
+    }
   }
+
   void _onBranchChanged() {
     if (mounted) {
       setState(() => _selectedIndex = 0);
@@ -486,7 +510,18 @@ class _AdminDashboardState extends State<AdminDashboard>
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: const Text('Logging out'),
+        backgroundColor: Colors.white,
+        surfaceTintColor: Colors.transparent,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        icon: const CircleAvatar(
+          radius: 28,
+          backgroundColor: AppColors.blush,
+          child: Icon(Icons.logout_rounded, color: AppColors.primary),
+        ),
+        title: const Text(
+          'Log out?',
+          style: TextStyle(fontWeight: FontWeight.w700),
+        ),
         content: const Text('Are you sure you want to log out?'),
         actions: [
           TextButton(
@@ -517,31 +552,22 @@ class _AdminDashboardState extends State<AdminDashboard>
   //  SIDEBAR  –  raspberry surface with hover + selection animation
   // ══════════════════════════════════════════════════════════════════════════
   void _showMessagesPreview(String adminId) {
-    showModalBottomSheet<void>(context: context, isScrollControlled: true,
-      showDragHandle: true, backgroundColor: AppColors.surface,
-      builder: (sheetContext) => SizedBox(
-        height: MediaQuery.sizeOf(context).height * .5,
-        child: Padding(padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-            const Text('Messages', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: AppColors.primaryDark)),
-            const SizedBox(height: 12),
-            Expanded(child: AdminMessagePreview(adminId: adminId, onOpen: (id) {
-              Navigator.pop(sheetContext);
-              Navigator.push(context, MaterialPageRoute(builder: (_) => MessagePage(initialContactId: id)));
-            })),            const SizedBox(height: 12),
-            FilledButton.icon(onPressed: () {
-              Navigator.pop(sheetContext);
-              Navigator.push(context, MaterialPageRoute(builder: (_) => const MessagePage()));
-            }, icon: const Icon(Icons.forum_outlined), label: const Text('View all messages')),
-          ])),
-      ));
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const MessagePage()),
+    );
   }
+
   Widget _buildSidebar() => Container(
     width: 192,
     decoration: const BoxDecoration(
       color: kSurfaceDark,
       boxShadow: [
-        BoxShadow(color: Color(0x14000000), blurRadius: 12, offset: Offset(3, 0)),
+        BoxShadow(
+          color: Color(0x14000000),
+          blurRadius: 12,
+          offset: Offset(3, 0),
+        ),
       ],
     ),
     child: Column(
@@ -971,7 +997,9 @@ class _SidebarTileState extends State<_SidebarTile> {
   Widget build(BuildContext context) {
     final bg = widget.selected
         ? Colors.white.withValues(alpha: 0.16)
-        : (_hovering ? Colors.white.withValues(alpha: 0.08) : Colors.transparent);
+        : (_hovering
+              ? Colors.white.withValues(alpha: 0.08)
+              : Colors.transparent);
 
     return MouseRegion(
       onEnter: (_) => setState(() => _hovering = true),
@@ -995,9 +1023,7 @@ class _SidebarTileState extends State<_SidebarTile> {
                 child: Icon(
                   widget.item.icon,
                   size: 18,
-                  color: widget.selected
-                      ? Colors.white
-                      : AppColors.blush,
+                  color: widget.selected ? Colors.white : AppColors.blush,
                 ),
               ),
               const SizedBox(width: 10),
@@ -1006,9 +1032,7 @@ class _SidebarTileState extends State<_SidebarTile> {
                   widget.item.label,
                   style: TextStyle(
                     fontSize: 12,
-                    color: widget.selected
-                        ? Colors.white
-                        : AppColors.blush,
+                    color: widget.selected ? Colors.white : AppColors.blush,
                     fontWeight: widget.selected
                         ? FontWeight.w700
                         : FontWeight.w400,

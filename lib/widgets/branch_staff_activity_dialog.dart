@@ -9,8 +9,8 @@ DateTime? sessionTime(dynamic value) =>
     value is Timestamp ? value.toDate() : DateTime.tryParse('$value');
 String sessionHours(Map<String, dynamic> session) {
   final start = sessionTime(session['loginAt']);
-  final end = sessionTime(session['logoutAt']);
-  if (start == null || end == null) return 'Not closed';
+  final end = sessionTime(session['logoutAt']) ?? DateTime.now();
+  if (start == null) return 'Not recorded';
   if (end.isBefore(start)) return 'Invalid times';
   final minutes = end.difference(start).inMinutes;
   return '${minutes ~/ 60}h ${minutes % 60}m';
@@ -32,8 +32,10 @@ class BranchStaffActivityDialog extends StatefulWidget {
     required this.branchId,
     required this.branchName,
     this.firestore,
+    this.userId,
   });
   final String branchId, branchName;
+  final String? userId;
   final FirebaseFirestore? firestore;
   @override
   State<BranchStaffActivityDialog> createState() =>
@@ -43,10 +45,13 @@ class BranchStaffActivityDialog extends StatefulWidget {
 class _BranchStaffActivityDialogState extends State<BranchStaffActivityDialog> {
   String _search = '';
   DateTime? _date;
-  bool _history = false;
+  late bool _history = widget.userId != null;
   late final sessions = (widget.firestore ?? FirebaseFirestore.instance)
       .collection('staff_login_sessions')
-      .where('branchId', isEqualTo: widget.branchId)
+      .where(
+        widget.userId == null ? 'branchId' : 'userId',
+        isEqualTo: widget.userId ?? widget.branchId,
+      )
       .snapshots();
   @override
   Widget build(BuildContext context) => Dialog(
@@ -68,7 +73,9 @@ class _BranchStaffActivityDialogState extends State<BranchStaffActivityDialog> {
               children: [
                 Expanded(
                   child: Text(
-                    'Activity Logs - ${widget.branchName}',
+                    widget.userId == null
+                        ? 'Activity Logs - ${widget.branchName}'
+                        : 'My Activity Logs',
                     style: const TextStyle(
                       fontSize: 21,
                       fontWeight: FontWeight.bold,
@@ -161,7 +168,7 @@ class _BranchStaffActivityDialogState extends State<BranchStaffActivityDialog> {
                     : records
                           .where(
                             (row) => seen.add(
-                              (row['userId'] ?? row['staffId']).toString(),
+                              '${row['userId'] ?? row['staffId']}::${row['deviceId'] ?? row['ipAddress'] ?? 'legacy'}',
                             ),
                           )
                           .toList();
@@ -255,7 +262,7 @@ class StaffSessionTable extends StatelessWidget {
                   session['logoutAt'] == null ? '—' : date(session['logoutAt']),
                 ),
                 Text(
-                  session['logoutAt'] == null ? 'Active' : 'Logged out',
+                  session['logoutAt'] == null ? 'Active' : 'Offline',
                   style: TextStyle(
                     color: session['logoutAt'] == null
                         ? Colors.green.shade700

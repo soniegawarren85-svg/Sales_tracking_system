@@ -178,6 +178,7 @@ class _DailyStockPageState extends State<DailyStockPage>
   Timer? _dailyReportTimer;
   StreamSubscription? _branchHoursSubscription;
   int _branchClosingMinutes = 1140;
+  String _activeBranchName = '';
   StreamSubscription? _budgetSubscription;
   StreamSubscription? _cashDrawerSubscription;
   bool _tabletOrientationLocked = false;
@@ -365,6 +366,7 @@ class _DailyStockPageState extends State<DailyStockPage>
         final branchId = _activeDrawerId();
         _branchHoursSubscription = FirebaseFirestore.instance.collection('branches').doc(branchId).snapshots().listen((snapshot) {
           if (!mounted || !snapshot.exists) return;
+          setState(() => _activeBranchName = '${snapshot.data()?['name'] ?? ''}');
           _branchClosingMinutes = (snapshot.data()?['closingMinutes'] as num?)?.toInt() ?? 1140;
           _runAutomaticDailyReportCheck(uid);
           _scheduleNextDailyReportCheck();
@@ -7360,6 +7362,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                                   child: _paymentQr(paymentMode),
                                 ),
                               ),
+                              Center(child: Text(_activeBranchName.isEmpty ? 'QR Code' : 'QR Code $_activeBranchName${_activeBranchName.toLowerCase().endsWith('branch') ? '' : ' Branch'}', style: const TextStyle(fontWeight: FontWeight.w600))),
                               const SizedBox(height: 12),
                             ],
                             if (_discountsAllowed) Material(color: Colors.transparent, child: InkWell(onTap: () => setState(() { isDiscountExpanded = !isDiscountExpanded;

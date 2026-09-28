@@ -1,5 +1,7 @@
 import 'package:sales_tracking/theme/app_colors.dart';
 import '../services/staff_login_session.dart';
+import '../widgets/branch_staff_activity_dialog.dart';
+import '../services/public_item_id.dart';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -503,7 +505,7 @@ class _ProfilePageState extends State<ProfilePage>
         final firstName = staffData['firstName'] ?? 'Staff';
         final lastName = staffData['lastName'] ?? 'Member';
         final email = staffData['email'] ?? 'No email';
-        final staffId = staffData['staffId'] ?? 'STF-000000-0000';
+        final staffId = publicItemId('${staffData['staffId'] ?? 'N/A'}');
         final photoUrl =
             staffData['photoUrl']?.toString() ??
             staffData['profileImageUrl']?.toString() ??
@@ -987,7 +989,7 @@ class _ProfilePageState extends State<ProfilePage>
           final address = staffData['address'] ?? 'N/A';
           final phone = staffData['phone'] ?? 'N/A';
           final age = staffData['age'] ?? 'N/A';
-          final staffId = staffData['staffId'] ?? 'N/A';
+          final staffId = publicItemId('${staffData['staffId'] ?? 'N/A'}');
           final role = staffData['role'] ?? 'Staff Member';
           final createdAt = staffData['createdAt'];
           final memberSince = createdAt is Timestamp
@@ -1064,6 +1066,16 @@ class _ProfilePageState extends State<ProfilePage>
                               ),
                             ],
                           ),
+                        ),
+                        TextButton.icon(
+                          onPressed: _staffDocId == null ? null : () => showDialog<void>(
+                            context: context,
+                            builder: (_) => BranchStaffActivityDialog(
+                              branchId: '', branchName: '', userId: _staffDocId,
+                            ),
+                          ),
+                          icon: const Icon(Icons.history),
+                          label: const Text('Activity Logs'),
                         ),
                       ],
                     ),

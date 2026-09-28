@@ -3,6 +3,22 @@ import 'package:sales_tracking/services/account_username.dart';
 import 'package:sales_tracking/services/inventory_display_ids.dart';
 
 void main() {
+  test('admin and staff login accept only three-digit account IDs', () {
+    for (final value in ['ADM-001', 'adm-002', 'STF-001']) {
+      expect(isValidAccountLoginUsername(value), isTrue);
+    }
+    for (final value in ['ADM-0001', 'ADM-01', 'STF-0001', 'ADM-OO1']) {
+      expect(isValidAccountLoginUsername(value), isFalse);
+    }
+    expect(accountUsernameAliases('ADM-001'), contains('ADM-0001'));
+  });
+  test('staff login requires exactly three numeric digits', () {
+    expect(isValidStaffLoginUsername('STF-001'), isTrue);
+    expect(isValidStaffLoginUsername(' stf-001 '), isTrue);
+    for (final value in ['STF-0001', 'STF-01', 'STF-OO1', 'STF-1']) {
+      expect(isValidStaffLoginUsername(value), isFalse);
+    }
+  });
   test('displayed usernames match legacy stored IDs', () {
     expect(normalizeAccountUsername('stf-001'), 'STF-001');
     expect(normalizeAccountUsername('STF-0001'), 'STF-001');

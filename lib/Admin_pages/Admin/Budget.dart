@@ -1,3 +1,4 @@
+import '../../widgets/assigned_branch_staff.dart';
 import '../../widgets/branch_editor_dialog.dart';
 import '../../services/bundle_stock_service.dart';
 import 'dart:async';
@@ -5117,7 +5118,9 @@ class _BudgetPageState extends State<BudgetPage>
       ),
     ));
   }
-  Widget _buildPeriodBranchAnalytics(String branchId, String branchName) => _buildBranchActivity(branchId,
+  Widget _buildPeriodBranchAnalytics(String branchId, String branchName) => StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+    stream: _firestore.collection('branches').doc(branchId).snapshots(),
+    builder: (context, branchSnapshot) => _buildBranchActivity(branchId,
     (records) {
       final now = DateTime.now();
       final isRefundView = _analyticsStatus == 'Refund';
@@ -5133,7 +5136,7 @@ class _BudgetPageState extends State<BudgetPage>
       final hours = analyticsHours(now, records.map((record) {
         final raw = record['timestamp'];
         return raw is Timestamp ? raw.toDate() : raw is DateTime ? raw : DateTime.tryParse('$raw');
-      }).whereType<DateTime>());
+      }).whereType<DateTime>(), openingMinutes: (branchSnapshot.data?.data()?['openingMinutes'] as num?)?.toInt() ?? 600, closingMinutes: (branchSnapshot.data?.data()?['closingMinutes'] as num?)?.toInt() ?? 1140);
       final count = _analyticsRange == 'Day'
           ? hours.length
           : _analyticsRange == 'Week'
@@ -5301,7 +5304,7 @@ class _BudgetPageState extends State<BudgetPage>
         ]),
       );
     },
-  );
+  ));
 
   Widget _buildBranchQuickActions({required String branchId, required String branchName, required List<String> staffIds, required List<String> staffNames, required TextEditingController controller, required bool enabled}) => Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.end, children: [
       if (_branchFabExpanded) ...[
@@ -6818,7 +6821,7 @@ class _BudgetPageState extends State<BudgetPage>
                 IconButton(
                   tooltip: 'Staff',
                   icon: const Icon(Icons.groups_rounded, color: Colors.white),
-                  onPressed: () => _showAssignBranchStaffDialog(branchId, name),
+                  onPressed: () => showAssignedBranchStaff(context, branchId),
                 ),
                 IconButton(
                   tooltip: 'Reports',

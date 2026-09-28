@@ -70,7 +70,7 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(find.text('Earlier'), findsOneWidget);
-    expect(find.text('Logged out'), findsOneWidget);
+    expect(find.text('Offline'), findsOneWidget);
     await sessions.doc('new').set({
       'branchId': 'b',
       'userId': 'u',

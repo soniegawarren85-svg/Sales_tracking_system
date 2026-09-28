@@ -51,6 +51,7 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
   Timer? _closingTimer;
   StreamSubscription<BranchReportData>? _liveSubscription;
   int _closingMinutes = 1140;
+  late String _branchName = widget.branchName ?? 'Branch';
   bool get closingReady => reportClosingAvailable(
     range.$1,
     range.$2,
@@ -63,7 +64,12 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
     if (widget.reportData == null)
       _liveSubscription = BranchReportData.watch().listen(
         (data) {
-          if (mounted) setState(() => _data = Future.value(data));
+          if (mounted)
+            setState(() {
+              _data = Future.value(data);
+              _branchName =
+                  '${data.rows('branches').where((row) => row['_id'] == widget.branchId).firstOrNull?['name'] ?? _branchName}';
+            });
         },
         onError: (Object error) {
           debugPrint('Report updates: $error');
@@ -89,7 +95,11 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
     return {
       for (final entry in values.entries)
         if (_period == 'Day' ||
-            !['Starting fund', 'Total cash drawer today'].contains(entry.key))
+            ![
+              'Starting fund',
+              'Total cash drawer today',
+              'Closing cash drawer',
+            ].contains(entry.key))
           (entry.key == 'Total cash drawer today' ? 'Cash drawer' : entry.key):
               entry.value,
     };
@@ -101,7 +111,7 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
   String money(num value) => '₱${value.toStringAsFixed(2)}';
   String get title => widget.branchId == null
       ? 'Branch sales report'
-      : '${widget.branchName} ${_period == 'Day'
+      : '$_branchName ${_period == 'Day'
             ? 'Daily'
             : _period == 'Week'
             ? 'Weekly'
@@ -184,8 +194,9 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
   (List<double>, List<double>, List<double>, List<String>) bars(
     BranchReportData data,
   ) {
+    final hours = data.hours(widget.branchId, range.$1);
     final count = _period == 'Day'
-        ? 24
+        ? hours.length
         : _period == 'Year'
         ? 12
         : range.$2.difference(range.$1).inDays;
@@ -193,7 +204,7 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
         refunds = List.filled(count, 0.0),
         reduced = List.filled(count, 0.0);
     int bucket(DateTime at) => _period == 'Day'
-        ? at.hour
+        ? hours.indexOf(at.hour)
         : _period == 'Year'
         ? at.month - 1
         : DateUtils.dateOnly(at).difference(range.$1).inDays;
@@ -219,7 +230,7 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
       List.generate(
         count,
         (i) => _period == 'Day'
-            ? '${(i) % 12 == 0 ? 12 : (i) % 12}${i < 12 ? 'AM' : 'PM'}'
+            ? '${hours[i] % 12 == 0 ? 12 : hours[i] % 12}${hours[i] < 12 ? 'AM' : 'PM'}'
             : _period == 'Year'
             ? const [
                 'Jan',
@@ -846,10 +857,14 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
                 ),
               ),
             ),
-            Text(
-              'Shop hours: ${timeLabel(openingMinutes)}–${timeLabel(_closingMinutes)}. Closing cash drawer is available from ${timeLabel(_closingMinutes)} and includes later cash orders that day. GCash is excluded.',
-              style: const TextStyle(fontSize: 12, color: AppColors.textMuted),
-            ),
+            if (_period == 'Day')
+              Text(
+                'Shop hours: ${timeLabel(openingMinutes)}–${timeLabel(_closingMinutes)}. Closing cash drawer is available from ${timeLabel(_closingMinutes)} and includes later cash orders that day. GCash is excluded.',
+                style: const TextStyle(
+                  fontSize: 12,
+                  color: AppColors.textMuted,
+                ),
+              ),
             const SizedBox(height: 12),
             OutlinedButton.icon(
               onPressed: () => showDialog<void>(

@@ -105,6 +105,7 @@ class _ItemEditorState extends State<_ItemEditor> {
     widget.entry?.source['items'],
   );
   bool _loadingIngredients = false;
+  bool _recipeChanged = false;
   @override
   void initState() {
     super.initState();
@@ -258,7 +259,10 @@ class _ItemEditorState extends State<_ItemEditor> {
         return;
       }
       if (_type == 'Bundle') {
-        await updateBundleMetadata(db, ref.id, changes);
+        await updateBundleMetadata(db, ref.id, {
+          ...changes,
+          if (_recipeChanged) 'items': _ingredients,
+        });
         if (mounted) Navigator.pop(context);
         return;
       }
@@ -364,12 +368,14 @@ class _ItemEditorState extends State<_ItemEditor> {
   Widget build(BuildContext context) => PopScope(
     canPop: !_saving,
     child: AlertDialog(
+      backgroundColor: Colors.white,
+      surfaceTintColor: Colors.transparent,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
       title: Text(
         widget.entry == null ? 'Add item' : 'Edit ${widget.entry!.name}',
       ),
       content: SizedBox(
-        width: 440,
+        width: 560,
         child: SingleChildScrollView(
           child: Form(
             key: _form,
@@ -465,6 +471,17 @@ class _ItemEditorState extends State<_ItemEditor> {
                     integer: true,
                   ),
                   const Divider(),
+                  const Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      'Bundle items',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
                   if (_loadingIngredients) const LinearProgressIndicator(),
                   ..._ingredients.asMap().entries.map((row) {
                     final item = row.value;
@@ -474,44 +491,82 @@ class _ItemEditorState extends State<_ItemEditor> {
                     );
                     return Padding(
                       padding: const EdgeInsets.symmetric(vertical: 8),
-                      child: DropdownButtonFormField<String>(
-                        key: ValueKey(
-                          '${row.key}-${_ingredientKey(item)}-${_ingredientOptions.length}',
-                        ),
-                        initialValue: exists ? _ingredientKey(item) : null,
-                        isExpanded: true,
-                        decoration: InputDecoration(
-                          labelText: 'Ingredient · x${item['quantity'] ?? 1}',
-                          helperText: exists
-                              ? 'Expires: ${item['expirationDate'] ?? 'Not recorded'}'
-                              : 'Select the replacement for ${item['name']}',
-                          border: const OutlineInputBorder(),
-                        ),
-                        items: _ingredientOptions
-                            .map(
-                              (option) => DropdownMenuItem(
-                                value: _ingredientKey(option),
-                                child: Text(
-                                  '${option['name']} (${option['publicId'] ?? option['variantId'] ?? ''})',
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                            )
-                            .toList(),
-                        onChanged: _saving
-                            ? null
-                            : (key) {
-                                if (key != null)
-                                  setState(
-                                    () => _ingredients[row.key] = {
-                                      ..._ingredientOptions.firstWhere(
-                                        (option) =>
-                                            _ingredientKey(option) == key,
+                      child: Column(
+                        children: [
+                          DropdownButtonFormField<String>(
+                            key: ValueKey(
+                              '${row.key}-${_ingredientKey(item)}-${_ingredientOptions.length}',
+                            ),
+                            initialValue: exists ? _ingredientKey(item) : null,
+                            isExpanded: true,
+                            decoration: InputDecoration(
+                              labelText: 'Item ${row.key + 1}',
+                              helperText: exists
+                                  ? 'Expires: ${item['expirationDate'] ?? 'Not recorded'}'
+                                  : 'Select the replacement for ${item['name']}',
+                              border: const OutlineInputBorder(),
+                            ),
+                            items: _ingredientOptions
+                                .where(
+                                  (option) =>
+                                      _ingredientKey(option) ==
+                                          _ingredientKey(item) ||
+                                      !_ingredients.any(
+                                        (selected) =>
+                                            _ingredientKey(selected) ==
+                                            _ingredientKey(option),
                                       ),
-                                      'quantity': item['quantity'] ?? 1,
-                                    },
-                                  );
-                              },
+                                )
+                                .map(
+                                  (option) => DropdownMenuItem(
+                                    value: _ingredientKey(option),
+                                    child: Text(
+                                      '${option['name']} (${option['publicId'] ?? option['variantId'] ?? ''})',
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                )
+                                .toList(),
+                            onChanged: _saving
+                                ? null
+                                : (key) {
+                                    _recipeChanged = true;
+                                    if (key != null)
+                                      setState(
+                                        () => _ingredients[row.key] = {
+                                          ..._ingredientOptions.firstWhere(
+                                            (option) =>
+                                                _ingredientKey(option) == key,
+                                          ),
+                                          'quantity': item['quantity'] ?? 1,
+                                        },
+                                      );
+                                  },
+                          ),
+                          const SizedBox(height: 12),
+                          TextFormField(
+                            key: ValueKey('quantity-${row.key}'),
+                            initialValue: '${item['quantity'] ?? 1}',
+                            enabled: !_saving,
+                            keyboardType: TextInputType.number,
+                            decoration: const InputDecoration(
+                              labelText: 'Quantity per bundle',
+                              border: OutlineInputBorder(),
+                              prefixIcon: Icon(Icons.numbers),
+                            ),
+                            validator: (value) =>
+                                (int.tryParse(value ?? '') ?? 0) <= 0
+                                ? 'Enter a quantity greater than zero'
+                                : null,
+                            onChanged: (value) {
+                              _recipeChanged = true;
+                              final quantity = int.tryParse(value);
+                              if (quantity != null)
+                                _ingredients[row.key]['quantity'] = quantity;
+                            },
+                          ),
+                          const SizedBox(height: 12),
+                        ],
                       ),
                     );
                   }),

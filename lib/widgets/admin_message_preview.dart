@@ -1,6 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
-import '../theme/app_colors.dart';
+import 'profile_avatar.dart';
 
 List<Map<String, dynamic>> messagePreviewContacts(
   String me,
@@ -72,48 +72,46 @@ class _AdminMessagePreviewState extends State<AdminMessagePreview> {
       .where('participantIds', arrayContains: widget.adminId)
       .snapshots();
   @override
-  Widget build(
-    BuildContext context,
-  ) => StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-    stream: accounts,
-    builder: (context, people) =>
-        StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-          stream: chats,
-          builder: (context, messages) {
-            if (people.hasError || messages.hasError)
-              return const Center(child: Text('Unable to load contacts.'));
-            if (!people.hasData || !messages.hasData)
-              return const Center(child: CircularProgressIndicator());
-            final rows = messagePreviewContacts(
-              widget.adminId,
-              people.data!.docs.map((doc) => {...doc.data(), '_id': doc.id}),
-              messages.data!.docs.map((doc) => doc.data()),
-            );
-            if (rows.isEmpty)
-              return const Center(child: Text('No available contacts.'));
-            return ListView.separated(
-              itemCount: rows.length,
-              separatorBuilder: (_, _) => const Divider(height: 1),
-              itemBuilder: (context, index) {
-                final row = rows[index];
-                return ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: const CircleAvatar(
-                    backgroundColor: AppColors.blush,
-                    child: Icon(Icons.person_outline, color: AppColors.primary),
+  Widget build(BuildContext context) =>
+      StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+        stream: accounts,
+        builder: (context, people) =>
+            StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+              stream: chats,
+              builder: (context, messages) {
+                if (people.hasError || messages.hasError)
+                  return const Center(child: Text('Unable to load contacts.'));
+                if (!people.hasData || !messages.hasData)
+                  return const Center(child: CircularProgressIndicator());
+                final rows = messagePreviewContacts(
+                  widget.adminId,
+                  people.data!.docs.map(
+                    (doc) => {...doc.data(), '_id': doc.id},
                   ),
-                  title: Text('${row['name']}'),
-                  subtitle: Text(
-                    '${row['lastMessage']}',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  trailing: const Icon(Icons.chevron_right),
-                  onTap: () => widget.onOpen('${row['_id']}'),
+                  messages.data!.docs.map((doc) => doc.data()),
+                );
+                if (rows.isEmpty)
+                  return const Center(child: Text('No available contacts.'));
+                return ListView.separated(
+                  itemCount: rows.length,
+                  separatorBuilder: (_, _) => const Divider(height: 1),
+                  itemBuilder: (context, index) {
+                    final row = rows[index];
+                    return ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: ProfileAvatar(data: row),
+                      title: Text('${row['name']}'),
+                      subtitle: Text(
+                        '${row['lastMessage']}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      trailing: const Icon(Icons.chevron_right),
+                      onTap: () => widget.onOpen('${row['_id']}'),
+                    );
+                  },
                 );
               },
-            );
-          },
-        ),
-  );
+            ),
+      );
 }

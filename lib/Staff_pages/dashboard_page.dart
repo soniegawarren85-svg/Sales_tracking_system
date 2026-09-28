@@ -179,6 +179,9 @@ class _DashboardPageState extends State<DashboardPage>
   };
   int _performancePage = 0;
   Timer? _drawerDayTimer;
+  late final Stream<List<Map<String, dynamic>>> _localReceiptsStream;
+  QuerySnapshot<Map<String, dynamic>>? _lastCachedAllocationSnapshot;
+  QuerySnapshot<Map<String, dynamic>>? _lastCachedRootSnapshot;
   StreamSubscription<StaffAllocationScope>? _allocationScopeSubscription;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _drawerCacheSubscription;
 
@@ -187,6 +190,7 @@ class _DashboardPageState extends State<DashboardPage>
   @override
   void initState() {
     super.initState();
+    _localReceiptsStream = LocalDatabaseSyncService().watchLocalCompletedSales();
     _drawerDayTimer = Timer.periodic(const Duration(seconds: 15), (_) => LocalDatabaseSyncService().rolloverCashDrawers());
     StaffLoginSession.flush();
     _rootInventoryStream = FirebaseFirestore.instance
@@ -1078,6 +1082,8 @@ class _DashboardPageState extends State<DashboardPage>
     final headerHeight = isTablet ? 260.0 : 300.0;
 
     return RefreshIndicator(
+      displacement: 24,
+      color: _C.primary,
       onRefresh: () async {
         try {
           await Future.wait([
@@ -1090,12 +1096,7 @@ class _DashboardPageState extends State<DashboardPage>
                   .where('userId', isEqualTo: _staffDocId)
                   .get(const GetOptions(source: Source.server)),
           ]).timeout(const Duration(seconds: 15));
-          await _initStaffIdentity();
           await _loadLocalDashboardCache();
-          if (mounted)
-            setState(() {
-              _staffInventoryStreamCache = null;
-            });
         } catch (_) {
           if (mounted)
             ScaffoldMessenger.of(context).showSnackBar(
@@ -1107,7 +1108,7 @@ class _DashboardPageState extends State<DashboardPage>
             );
         }
       },
-      child: CustomScrollView(
+      child: Stack(children: [CustomScrollView(
         controller: widget.scrollController,
         physics: const AlwaysScrollableScrollPhysics(
           parent: ClampingScrollPhysics(),
@@ -1272,6 +1273,11 @@ class _DashboardPageState extends State<DashboardPage>
           const SliverToBoxAdapter(child: SizedBox(height: 180)),
         ],
       ),
+      if (_isResolvingStaffIdentity) const Positioned(
+        top: 24, left: 0, right: 0,
+        child: Center(child: RefreshProgressIndicator()),
+      ),
+      ]),
     );
   }
 
@@ -1287,9 +1293,10 @@ class _DashboardPageState extends State<DashboardPage>
         if (snapshot.hasError && _cachedStaffInventoryDocs.isEmpty) {
           return _ErrorCard(message: 'Error loading inventory');
         }
-        if (snapshot.hasData &&
+        if (snapshot.hasData && !identical(snapshot.data, _lastCachedAllocationSnapshot) &&
             (!snapshot.data!.metadata.isFromCache ||
                 snapshot.data!.docs.isNotEmpty)) {
+          _lastCachedAllocationSnapshot = snapshot.data;
           unawaited(
             LocalDatabaseSyncService().cacheStaffInventorySnapshot(
               _staffInventoryIds,
@@ -1325,9 +1332,10 @@ class _DashboardPageState extends State<DashboardPage>
         return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
           stream: _rootInventoryStream,
           builder: (context, rootSnapshot) {
-            if (rootSnapshot.hasData &&
+            if (rootSnapshot.hasData && !identical(rootSnapshot.data, _lastCachedRootSnapshot) &&
                 (!rootSnapshot.data!.metadata.isFromCache ||
                     rootSnapshot.data!.docs.isNotEmpty)) {
+              _lastCachedRootSnapshot = rootSnapshot.data;
               unawaited(
                 LocalDatabaseSyncService().cacheCollectionDocs(
                   'sales_inventory',
@@ -1809,7 +1817,7 @@ class _DashboardPageState extends State<DashboardPage>
   // ── Performance data ───────────────────────────────────────────────────────
   Widget _buildPerformanceData() {
     return StreamBuilder<List<Map<String, dynamic>>>(
-      stream: LocalDatabaseSyncService().watchLocalCompletedSales(),
+      stream: _localReceiptsStream,
       builder: (context, localSnapshot) {
         return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
           stream: _receiptStream(),
@@ -5658,14 +5666,6 @@ class _DashboardLoadingSkeleton extends StatelessWidget {
       padding: const EdgeInsets.symmetric(vertical: 18),
       child: Column(
         children: [
-          const Padding(
-            padding: EdgeInsets.all(12),
-            child: SizedBox(
-              width: 24,
-              height: 24,
-              child: CircularProgressIndicator(strokeWidth: 2),
-            ),
-          ),
           Container(
             width: double.infinity,
             height: compact ? 128 : 166,

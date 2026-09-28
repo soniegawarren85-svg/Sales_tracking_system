@@ -25,8 +25,9 @@ class _ReportSalesTimelineState extends State<ReportSalesTimeline> {
   Widget build(BuildContext context) {
     final branches = widget.data.rows('branches');
     if (!branches.any((b) => b['_id'] == branch)) branch = null;
+    final hours = widget.data.hours(branch, widget.start);
     final points = widget.period == 'Day'
-        ? 24
+        ? hours.length
         : widget.period == 'Year'
         ? 12
         : widget.end.difference(widget.start).inDays;
@@ -36,7 +37,7 @@ class _ReportSalesTimelineState extends State<ReportSalesTimeline> {
     final labels = <String>[];
     for (var i = 0; i < points; i++) {
       final start = widget.period == 'Day'
-          ? widget.start.add(Duration(hours: i))
+          ? widget.start.add(Duration(hours: hours[i]))
           : widget.period == 'Year'
           ? DateTime(widget.start.year, i + 1)
           : widget.start.add(Duration(days: i));
@@ -47,7 +48,7 @@ class _ReportSalesTimelineState extends State<ReportSalesTimeline> {
           : start.add(const Duration(days: 1));
       labels.add(
         widget.period == 'Day'
-            ? '${i.toString().padLeft(2, '0')}:00'
+            ? '${hours[i] % 12 == 0 ? 12 : hours[i] % 12}${hours[i] < 12 ? 'AM' : 'PM'}'
             : widget.period == 'Year'
             ? const [
                 'Jan',

@@ -112,6 +112,10 @@ void main() {
     (tester) async {
       final data = fixture();
       final now = DateTime.now();
+      data.collections['branches']!.single['openingMinutes'] = 480;
+      for (final sale in data.collections['completed_sales']!) {
+        sale['timestamp'] = DateTime(now.year, now.month, now.day, 12);
+      }
       data.collections['completed_sales']!.add({
         '_id': 'refund',
         'salesId': 'R-1',
@@ -137,9 +141,9 @@ void main() {
       await tester.pumpAndSettle();
       final dynamic state = tester.state(find.byType(BranchReportDialog));
       final chart = state.bars(data);
-      expect(chart.$4.first, '12AM');
-      expect(chart.$4.last, '11PM');
-      expect(chart.$4.length, 24);
+      expect(chart.$4.first, '8AM');
+      expect(chart.$4.last, '7PM');
+      expect(chart.$4.length, 12);
       final legend = find.widgetWithText(ActionChip, 'Refund');
       for (var attempt = 0; attempt < 12 && legend.evaluate().isEmpty; attempt++) {
         await tester.drag(find.byType(ListView).first, const Offset(0, -250));

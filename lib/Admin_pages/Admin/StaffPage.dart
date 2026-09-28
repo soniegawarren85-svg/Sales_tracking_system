@@ -1,3 +1,4 @@
+import '../../widgets/profile_avatar.dart';
 import '../../widgets/staff_deactivation_dialog.dart';
 import '../../widgets/inventory_records_table.dart';
 import 'package:sales_tracking/theme/app_colors.dart';
@@ -209,21 +210,43 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
               expandedHeight: 125,
               backgroundColor: AppColors.primaryDeep,
               foregroundColor: Colors.white,
-              flexibleSpace: const FlexibleSpaceBar(
-                expandedTitleScale: 1,
-                titlePadding: EdgeInsets.fromLTRB(22, 0, 22, 16),
-                title: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text('Staff Section', style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w700)),
-                  SizedBox(height: 3),
-                  Text('Manage staff accounts', style: TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.normal)),
-                ]),
-                background: DecoratedBox(
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      colors: [AppColors.primaryDeep, AppColors.primaryDark],
+              flexibleSpace: LayoutBuilder(
+                builder: (context, constraints) {
+                  final opacity = ((constraints.maxHeight - 85) / 40).clamp(
+                    0.0,
+                    1.0,
+                  );
+                  return FlexibleSpaceBar(
+                    background: Padding(
+                      padding: const EdgeInsets.fromLTRB(22, 32, 22, 16),
+                      child: Opacity(
+                        opacity: opacity,
+                        child: const Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisAlignment: MainAxisAlignment.end,
+                          children: [
+                            Text(
+                              'Staff Section',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 24,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            SizedBox(height: 4),
+                            Text(
+                              'Manage staff accounts',
+                              style: TextStyle(
+                                color: Colors.white70,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
                     ),
-                  ),
-                ),
+                  );
+                },
               ),
             ),
             SliverList(
@@ -777,7 +800,12 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                         .map(
                           (member) => <Widget>[
                             Text(publicItemId(member.staffId)),
-                            Text('${member.firstName} ${member.lastName}', style: const TextStyle(fontWeight: FontWeight.bold)),
+                            Text(
+                              '${member.firstName} ${member.lastName}',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
                             Text(
                               '${member.details['deactivationReason'] ?? 'Not recorded'}',
                             ),
@@ -2779,15 +2807,9 @@ class _AnimatedAdminCardState extends State<_AnimatedAdminCard>
                             ),
                           ],
                         ),
-                        child: Center(
-                          child: Text(
-                            widget.admin.initials,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.w900,
-                              fontSize: 18,
-                            ),
-                          ),
+                        child: ProfileAvatar(
+                          data: widget.admin.details,
+                          radius: 27,
                         ),
                       ),
                       const SizedBox(width: 14),

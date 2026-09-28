@@ -8,7 +8,7 @@ class ProfileAvatar extends StatelessWidget {
   final double radius;
   @override
   Widget build(BuildContext context) {
-    final url = '${data['photoUrl'] ?? data['profileImageUrl'] ?? ''}';
+    final url = [data['photoUrl'], data['profileImageUrl']].map((value) => '${value ?? ''}'.trim()).where((value) => value.isNotEmpty).firstOrNull ?? '';
     final name = '${data['firstName'] ?? data['staffName'] ?? 'Staff'}'.trim();
     final fallback = Center(
       child: Text(name.isEmpty ? 'S' : name.substring(0, 1).toUpperCase()),

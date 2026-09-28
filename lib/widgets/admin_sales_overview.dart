@@ -157,9 +157,7 @@ class _AdminSalesOverviewState extends State<AdminSalesOverview> {
           Icons.payments_outlined,
         ),
         ('Total sold', sold.toStringAsFixed(0), Icons.shopping_bag_outlined),
-        if (branches) ...[
-          ('Total receipts', '${sales.length}', Icons.receipt_long_outlined),
-        ],
+        ('Total transactions', '${sales.length}', Icons.receipt_long_outlined),
       ];
       return LayoutBuilder(
         builder: (context, constraints) {

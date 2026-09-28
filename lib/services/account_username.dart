@@ -1,4 +1,10 @@
-/// Match public account IDs regardless of legacy zero padding or letter case.
+bool isValidStaffLoginUsername(String value) =>
+    RegExp(r'^STF-\d{3}$').hasMatch(value.trim().toUpperCase());
+
+bool isValidAccountLoginUsername(String value) =>
+    RegExp(r'^(STF|ADM)-\d{3}$').hasMatch(value.trim().toUpperCase());
+
+/// Match stored public account IDs regardless of legacy zero padding or case.
 String normalizeAccountUsername(String value) {
   final cleaned = value
       .trim()

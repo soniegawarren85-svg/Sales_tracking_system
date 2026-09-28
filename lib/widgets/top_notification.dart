@@ -6,6 +6,7 @@ void showTopNotification(
   String message, {
   bool isError = false,
   Color? backgroundColor,
+  Duration delay = Duration.zero,
 }) {
   final overlay = Overlay.maybeOf(context);
   if (overlay == null) return;
@@ -23,8 +24,16 @@ void showTopNotification(
       onDismiss: dismiss,
     ),
   );
-  overlay.insert(entry);
-  Future.delayed(const Duration(milliseconds: 2800), dismiss);
+  void insert() {
+    if (!overlay.mounted) return;
+    overlay.insert(entry);
+    Future.delayed(const Duration(milliseconds: 2800), dismiss);
+  }
+  if (delay == Duration.zero) {
+    insert();
+  } else {
+    Future.delayed(delay, insert);
+  }
 }
 
 class _TopNotificationOverlay extends StatefulWidget {

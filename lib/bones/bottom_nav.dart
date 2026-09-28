@@ -1,4 +1,7 @@
 import 'package:sales_tracking/theme/app_colors.dart';
+import 'dart:async';
+import 'package:shared_preferences/shared_preferences.dart';
+import '../widgets/branch_staff_activity_dialog.dart';
 import 'package:flutter/material.dart';
 import 'package:curved_navigation_bar/curved_navigation_bar.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -26,10 +29,67 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
   String? _salesInitialView;
   String? _salesInitialGroup;
   bool _openPendingOnSalesLaunch = false;
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _loginSubscription;
+
+  Future<void> _watchLogins() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    final uid =
+        FirebaseAuth.instance.currentUser?.uid ?? prefs.getString('lastUserId');
+    final ownId = prefs.getString('staffLoginSessionId');
+    if (uid == null || ownId == null) return;
+    final seen = <String>{};
+    DateTime? ownLogin;
+    _loginSubscription = FirebaseFirestore.instance
+        .collection('staff_login_sessions')
+        .where('userId', isEqualTo: uid)
+        .snapshots()
+        .listen(
+          (snapshot) {
+            for (final doc in snapshot.docs) {
+              if (doc.id == ownId)
+                ownLogin = sessionTime(doc.data()['loginAt']);
+            }
+            if (ownLogin == null || !mounted) return;
+            for (final doc in snapshot.docs) {
+              final login = sessionTime(doc.data()['loginAt']);
+              if (doc.id == ownId ||
+                  login == null ||
+                  login.isBefore(ownLogin!) ||
+                  doc.data()['logoutAt'] != null ||
+                  !seen.add(doc.id))
+                continue;
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  duration: const Duration(seconds: 12),
+                  content: const Text(
+                    'Another device has signed in to your staff account. Check your activity logs if this was not you.',
+                  ),
+                  action: SnackBarAction(
+                    label: 'View logs',
+                    onPressed: () => showDialog<void>(
+                      context: context,
+                      builder: (_) => BranchStaffActivityDialog(
+                        branchId: '',
+                        branchName: '',
+                        userId: uid,
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            }
+          },
+          onError: (Object error) {
+            debugPrint('Login alerts: $error');
+          },
+        );
+  }
 
   @override
   void initState() {
     super.initState();
+    _watchLogins();
     // listen for inventory updates so the dashboard can rebuild
     InventoryService().addListener(_onInventoryChanged);
     // initialize previous count so we can detect additions
@@ -38,6 +98,7 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
 
   @override
   void dispose() {
+    _loginSubscription?.cancel();
     InventoryService().removeListener(_onInventoryChanged);
     _scrollController.dispose();
     super.dispose();

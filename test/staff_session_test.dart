@@ -12,7 +12,7 @@ void main() {
       }),
       '8h 15m',
     );
-    expect(sessionHours({'loginAt': '2026-09-25T22:30:00'}), 'Not closed');
+    expect(sessionHours({'loginAt': DateTime.now().subtract(const Duration(minutes: 65)).toIso8601String()}), '1h 5m');
     expect(
       sessionHours({
         'loginAt': '2026-09-25T22:30:00',
@@ -55,7 +55,6 @@ void main() {
       );
       expect(find.text('Qwerty Pngovue'), findsOneWidget);
       expect(find.text('9h 0m'), findsOneWidget);
-      expect(find.byIcon(Icons.account_circle), findsOneWidget);
       expect(tester.takeException(), isNull);
     },
   );

@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'login_ip.dart';
 
 class StaffLoginSession {
+  static Future<void> _flushQueue = Future<void>.value();
   static Future<void> start(
     BuildContext context,
     String uid,
@@ -14,9 +15,16 @@ class StaffLoginSession {
   ) async {
     final loginAt = DateTime.now();
     try {
-      await flush();
+      unawaited(flush());
       final prefs = await SharedPreferences.getInstance();
-      await prefs.remove('staffLoginSessionId');
+      await close();
+      final deviceId =
+          prefs.getString('staffDeviceId') ??
+          FirebaseFirestore.instance
+              .collection('staff_login_sessions')
+              .doc()
+              .id;
+      await prefs.setString('staffDeviceId', deviceId);
       final query = FirebaseFirestore.instance.collection('branches');
       QuerySnapshot<Map<String, dynamic>> branches;
       try {
@@ -53,16 +61,16 @@ class StaffLoginSession {
           ),
         );
       }
-      String? ip;
-      try {
-        ip = await loginIp().timeout(const Duration(seconds: 3));
-      } catch (_) {}
+      final ipFuture = loginIp()
+          .timeout(const Duration(seconds: 3), onTimeout: () => null)
+          .catchError((_) => null);
       final ref = FirebaseFirestore.instance
           .collection('staff_login_sessions')
           .doc();
       final branch = assigned.where((doc) => doc.id == branchId).firstOrNull;
       final record = <String, dynamic>{
         'userId': uid,
+        'deviceId': deviceId,
         'staffId': staff['staffId'],
         'staffName': ['firstName', 'middleName', 'lastName']
             .map((key) => '${staff[key] ?? ''}'.trim())
@@ -74,7 +82,6 @@ class StaffLoginSession {
         'type': 'User',
         'loginAt': loginAt.toIso8601String(),
         'logoutAt': null,
-        'ipAddress': ip,
         'ipType': kIsWeb ? 'Public IP' : 'Device network IP',
       };
       await prefs.setString(
@@ -82,7 +89,17 @@ class StaffLoginSession {
         jsonEncode(record),
       );
       await prefs.setString('staffLoginSessionId', ref.id);
-      await flush();
+      unawaited(flush());
+      unawaited(
+        ipFuture
+            .then((ip) async {
+              if (ip != null)
+                await ref.set({'ipAddress': ip}, SetOptions(merge: true));
+            })
+            .catchError((Object error) {
+              debugPrint('Session IP: $error');
+            }),
+      );
     } catch (error) {
       debugPrint('Unable to record staff login: $error');
       if (context.mounted)
@@ -112,7 +129,15 @@ class StaffLoginSession {
   }
 
   // Keep failed/offline writes until a later successful login or logout.
-  static Future<void> flush() async {
+  static Future<void> flush() {
+    final next = _flushQueue.then((_) => _flushPending());
+    _flushQueue = next.catchError((Object error) {
+      debugPrint('Session sync deferred: $error');
+    });
+    return _flushQueue;
+  }
+
+  static Future<void> _flushPending() async {
     final prefs = await SharedPreferences.getInstance();
     for (final key in prefs.getKeys().where(
       (key) => key.startsWith('staffSessionPending.'),

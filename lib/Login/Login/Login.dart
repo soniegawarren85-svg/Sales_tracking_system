@@ -1,6 +1,6 @@
 import 'package:sales_tracking/theme/app_colors.dart';
 import '../../services/account_username.dart';
-import '../../../services/staff_login_session.dart';
+import 'package:sales_tracking/services/staff_login_session.dart';
 import 'dart:convert';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -12,9 +12,10 @@ import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../../../bones/bottom_nav.dart';
-import '../../../Admin_pages/Admin/Dashboard.dart';
+import 'package:sales_tracking/bones/bottom_nav.dart';
+import 'package:sales_tracking/Admin_pages/Admin/Dashboard.dart';
 import 'forgot_password.dart';
+import 'package:sales_tracking/widgets/top_notification.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -90,6 +91,15 @@ class _LoginScreenState extends State<LoginScreen>
   }
 
   void _showMessage(String message, {bool isError = false}) {
+    if (!mounted) return;
+    if (!isError && message.startsWith('Welcome')) {
+      showTopNotification(
+        context, message,
+        backgroundColor: const Color(0xFF4A7C59),
+        delay: const Duration(milliseconds: 400),
+      );
+      return;
+    }
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Row(
@@ -180,6 +190,7 @@ class _LoginScreenState extends State<LoginScreen>
     required String role,
     required String userId,
     required String publicId,
+    String firstName = '',
   }) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('offlineLogin.username', username);
@@ -190,6 +201,7 @@ class _LoginScreenState extends State<LoginScreen>
     await prefs.setString('offlineLogin.role', role);
     await prefs.setString('offlineLogin.userId', userId);
     await prefs.setString('offlineLogin.publicId', publicId);
+    await prefs.setString('offlineLogin.firstName', firstName);
   }
 
   Future<bool> _tryOfflineSignIn(String username, String password) async {
@@ -250,7 +262,8 @@ class _LoginScreenState extends State<LoginScreen>
       }
     }
     if (!mounted) return true;
-    _showMessage('Opened using saved offline data.');
+    final firstName = prefs.getString('offlineLogin.firstName') ?? '';
+    _showMessage(firstName.isEmpty ? 'Welcome!' : 'Welcome, $firstName!');
     Navigator.of(context).pushReplacement(
       MaterialPageRoute(
         builder: (_) => isAdmin ? const AdminDashboard() : const BottomNav(),
@@ -281,6 +294,7 @@ class _LoginScreenState extends State<LoginScreen>
       role: isAdmin ? 'admin' : 'staff',
       userId: accountDoc.id,
       publicId: publicId,
+      firstName: _welcomeName(data, ''),
     );
     await accountDoc.reference.update({
       'lastLoginAt': FieldValue.serverTimestamp(),
@@ -289,7 +303,7 @@ class _LoginScreenState extends State<LoginScreen>
     if (!isAdmin && mounted)
       await StaffLoginSession.start(context, accountDoc.id, data);
     _showMessage(
-      'Welcome back, ${_welcomeName(data, isAdmin ? 'Admin' : 'Staff')}!',
+      'Welcome, ${_welcomeName(data, isAdmin ? 'Admin' : 'Staff')}!',
     );
     Future.microtask(() {
       if (!mounted) return;
@@ -301,12 +315,13 @@ class _LoginScreenState extends State<LoginScreen>
     });
   }
 
-  Future<void> _signInEmergencyAdmin() async {
+  Future<void> _signInEmergencyAdmin(Map<String, dynamic> data) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('adminId', _emergencyAdminId);
     await prefs.setString('lastRole', 'admin');
     await prefs.setString('lastUserId', 'emergency-admin');
-    _showMessage('Welcome back, Admin!');
+    final name = _welcomeName(data, '');
+    _showMessage(name.isEmpty ? 'Welcome!' : 'Welcome, $name!');
     Future.microtask(() {
       if (!mounted) return;
       Navigator.of(context).pushReplacement(
@@ -454,6 +469,11 @@ class _LoginScreenState extends State<LoginScreen>
   }
 
   Future<void> _onSignInPressed() async {
+    final rawUsername = _usernameController.text.trim().toUpperCase();
+    if (!isValidAccountLoginUsername(rawUsername)) {
+      _showMessage('Wrong username or password.', isError: true);
+      return;
+    }
     final username = _normalizeUsername(_usernameController.text);
     final password = _passwordController.text.trim();
 
@@ -466,11 +486,11 @@ class _LoginScreenState extends State<LoginScreen>
     try {
       final accountDocs = await _findAccountsByUsername(username);
       if (_isEmergencyAdminLogin(username, password) && !accountDocs.any((doc)=>doc.data()['credentialsChangedAt'] != null)) {
-        await _signInEmergencyAdmin();
+        await _signInEmergencyAdmin(accountDocs.isEmpty ? {} : accountDocs.first.data());
         return;
       }
       if (accountDocs.isEmpty) {
-        _showMessage('No account found with this username.', isError: true);
+        _showMessage('Wrong username or password.', isError: true);
         return;
       }
 
@@ -523,9 +543,10 @@ class _LoginScreenState extends State<LoginScreen>
                 role: 'admin',
                 userId: accountDoc.id,
                 publicId: adminId,
+                firstName: _welcomeName(accountData, ''),
               );
               _showMessage(
-                'Welcome back, ${_welcomeName(accountData, 'Admin')}!',
+                'Welcome, ${_welcomeName(accountData, 'Admin')}!',
               );
               Future.microtask(() {
                 if (!mounted) return;
@@ -594,7 +615,7 @@ class _LoginScreenState extends State<LoginScreen>
         }
         if (lastAuthError != null) throw lastAuthError;
         _showMessage(
-          'This account has no email linked. Please contact admin.',
+          'Wrong username or password.',
           isError: true,
         );
         return;
@@ -646,6 +667,7 @@ class _LoginScreenState extends State<LoginScreen>
           role: isAdmin ? 'admin' : 'staff',
           userId: uid,
           publicId: publicId,
+          firstName: _welcomeName(data, ''),
         );
         await signedInDoc.reference.update({
           'lastLoginAt': FieldValue.serverTimestamp(),
@@ -653,7 +675,7 @@ class _LoginScreenState extends State<LoginScreen>
         if (!isAdmin && mounted)
           await StaffLoginSession.start(context, uid, data);
         _showMessage(
-          'Welcome back, ${_welcomeName(data, isAdmin ? 'Admin' : 'Staff')}!',
+          'Welcome, ${_welcomeName(data, isAdmin ? 'Admin' : 'Staff')}!',
         );
         Future.microtask(() {
           if (!mounted) return;
@@ -669,15 +691,8 @@ class _LoginScreenState extends State<LoginScreen>
 
       await FirebaseAuth.instance.signOut();
       _showMessage('Unable to sign in. Please contact support.', isError: true);
-    } on FirebaseAuthException catch (e) {
-      var message = 'Invalid credentials. Please try again.';
-      if (e.code == 'user-not-found') {
-        message = 'No account found with this username.';
-      } else if (e.code == 'wrong-password' || e.code == 'invalid-credential') {
-        message = 'Incorrect password. Please try again.';
-      } else if (e.code == 'invalid-email') {
-        message = 'Please enter a valid username.';
-      }
+    } on FirebaseAuthException {
+      const message = 'Wrong username or password.';
       _showMessage(message, isError: true);
     } catch (e) {
       if (await _tryOfflineSignIn(username, password)) return;
@@ -1213,11 +1228,8 @@ class _WavePainter extends CustomPainter {
 }
 
 String _welcomeName(Map<String, dynamic> data, String fallback) {
-  final name = ['firstName', 'middleName', 'lastName']
-      .map((key) => '${data[key] ?? ''}'.trim())
-      .where((part) => part.isNotEmpty)
-      .join(' ');
+  final name = '${data['firstName'] ?? ''}'.trim();
   if (name.isNotEmpty) return name;
   final display = (data['name'] ?? data['displayName'] ?? '').toString().trim();
-  return display.isEmpty ? fallback : display;
+  return display.isEmpty ? fallback : display.split(RegExp(r'\s+')).first;
 }
