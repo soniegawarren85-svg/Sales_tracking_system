@@ -4205,11 +4205,6 @@ class _BudgetPageState extends State<BudgetPage>
           const SizedBox(height: 10),
           Row(children: [
             Expanded(child: _buildBranchSearchField()),
-            IconButton(tooltip: _analyticsDate == null ? 'Filter date: Today' : _reportDateLabel(_analyticsDate!),
-              icon: const Icon(Icons.calendar_month, color: kPrimary), onPressed: () async {
-                final picked = await showDatePicker(context: context, initialDate: _analyticsDate ?? DateTime.now(), firstDate: DateTime(2020), lastDate: DateTime.now());
-                if(picked != null && mounted) setState(() => _analyticsDate = picked);
-              }),
             const SizedBox(width: 16),
           ]),
           const SizedBox(height: 12),

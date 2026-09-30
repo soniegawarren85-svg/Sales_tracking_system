@@ -212,6 +212,7 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
     final isTabletLandscape = size.width > size.height && hasTabletCanvas;
 
     return Scaffold(
+      resizeToAvoidBottomInset: false,
       backgroundColor: Colors.white,
       extendBody: true,
       body: IndexedStack(

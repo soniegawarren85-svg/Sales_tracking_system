@@ -50,6 +50,8 @@ void main() {
   testWidgets('Fixed size, sugar selection, add-on and cancellation', (
     tester,
   ) async {
+    await tester.binding.setSurfaceSize(const Size(1000, 1000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
     Map<String, dynamic>? result;
     await tester.pumpWidget(
       MaterialApp(
@@ -82,7 +84,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.textContaining('Cream (+'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Add bundle to order'));
+    await tester.tap(find.text('Done'));
     await tester.pumpAndSettle();
     expect(result!['price'], 520);
     expect((result!['bundleBeverages'] as List).single['sugarLevel'], '25%');

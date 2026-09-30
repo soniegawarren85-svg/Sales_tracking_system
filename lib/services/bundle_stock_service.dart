@@ -106,7 +106,11 @@ class BundleStockService {
     final requested = ingredients ?? bundleRows(initial['items']);
     final selectedSources = <String>{};
     for (final ingredient in requested) {
-      if (ingredient['sourceCollection'] == 'coffee_products') continue;
+      if ([
+        'coffee_products',
+        'coffee_addons',
+      ].contains(ingredient['sourceCollection']))
+        continue;
       final sourceId = '${ingredient['sourceInventoryId'] ?? ''}';
       if (sourceId.isNotEmpty) {
         selectedSources.add(sourceId);
@@ -156,6 +160,21 @@ class BundleStockService {
       final touched = <String>{};
       final fresh = <Map<String, dynamic>>[];
       final coffees = <String, Map<String, dynamic>>{};
+      final addons = <String, Map<String, dynamic>>{};
+      for (final ingredient in recipe.where(
+        (item) => item['sourceCollection'] == 'coffee_addons',
+      )) {
+        final addonId = '${ingredient['sourceInventoryId']}';
+        final data = (await tx.get(
+          db.collection('coffee_addons').doc(addonId),
+        )).data();
+        if (data == null ||
+            data['isDeleted'] == true ||
+            data['isAvailable'] == false ||
+            bundleExpired(data, DateTime.now()))
+          throw StateError('Add-on is unavailable.');
+        addons[addonId] = data;
+      }
       for (final ingredient in recipe.where(
         (item) => item['sourceCollection'] == 'coffee_products',
       )) {
@@ -168,6 +187,21 @@ class BundleStockService {
         coffees[coffeeId] = data;
       }
       for (final ingredient in recipe) {
+        if (ingredient['sourceCollection'] == 'coffee_addons') {
+          final data = addons['${ingredient['sourceInventoryId']}']!;
+          final count = bundleQuantity(ingredient['quantity']);
+          if (count < 1) throw StateError('Add-on quantity must be positive.');
+          fresh.add({
+            ...ingredient,
+            'name': data['name'],
+            'publicId': data['publicId'],
+            'isAddon': true,
+            'expirationDate': data['expirationDate'],
+            'quantity': count,
+            'remaining': count,
+          });
+          continue;
+        }
         if (ingredient['sourceCollection'] == 'coffee_products') {
           final coffeeId = '${ingredient['sourceInventoryId']}';
           final coffee = coffees[coffeeId]!;

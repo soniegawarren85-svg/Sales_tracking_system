@@ -1,3 +1,4 @@
+import '../../widgets/admin_message_preview.dart';
 import '../../widgets/admin_profile_label.dart';
 import 'dart:async';
 import 'package:sales_tracking/theme/app_colors.dart';
@@ -175,6 +176,7 @@ class _AdminDashboardState extends State<AdminDashboard>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      resizeToAvoidBottomInset: false,
       backgroundColor: kCreamWhite,
       body: SafeArea(
         child: Row(
@@ -552,9 +554,51 @@ class _AdminDashboardState extends State<AdminDashboard>
   //  SIDEBAR  –  raspberry surface with hover + selection animation
   // ══════════════════════════════════════════════════════════════════════════
   void _showMessagesPreview(String adminId) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => const MessagePage()),
+    void open(String? contact) {
+      Navigator.pop(context);
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => MessagePage(initialContactId: contact),
+        ),
+      );
+    }
+
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      showDragHandle: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (_) => SizedBox(
+        height: MediaQuery.sizeOf(context).height * .5,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(24, 0, 24, 16),
+          child: Column(
+            children: [
+              const Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'Messages',
+                  style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+                ),
+              ),
+              Expanded(
+                child: AdminMessagePreview(adminId: adminId, onOpen: open),
+              ),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton(
+                  onPressed: () => open(null),
+                  child: const Text('View all messages'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 

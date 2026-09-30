@@ -106,6 +106,7 @@ class _ItemEditorState extends State<_ItemEditor> {
   );
   bool _loadingIngredients = false;
   bool _recipeChanged = false;
+  String _ingredientTab = 'Categories';
   @override
   void initState() {
     super.initState();
@@ -199,6 +200,9 @@ class _ItemEditorState extends State<_ItemEditor> {
       _error = null;
     });
     try {
+      if (_type == 'Bundle' && (_ingredients.isEmpty || _ingredients.any((item) => bundleQuantity(item['quantity']) < 1))) {
+        throw StateError('Each bundle item needs a quantity greater than zero.');
+      }
       final url = _photo == null
           ? null
           : await (_upload ?? widget.upload(_photo!));
@@ -266,12 +270,32 @@ class _ItemEditorState extends State<_ItemEditor> {
         if (mounted) Navigator.pop(context);
         return;
       }
+      final linked = widget.entry == null
+          ? <DocumentReference<Map<String, dynamic>>>[]
+          : await bundleMetadataTargets(db, ref.id);
       await db.runTransaction((tx) async {
         final snapshot = await tx.get(ref);
+        final allocations =
+            <DocumentReference<Map<String, dynamic>>, Map<String, dynamic>>{};
+        for (final target in linked) {
+          final data = (await tx.get(target)).data();
+          if (data == null ||
+              data['isDeleted'] == true ||
+              (target.parent.id == 'allocation_checklist' &&
+                  data['status'] != 'pending'))
+            continue;
+          allocations[target] = data;
+        }
         final current = snapshot.data();
         if (current == null || current['isDeleted'] == true)
           throw StateError('This record is no longer active');
         if (_type != 'Categories') {
+          for (final target in allocations.keys) {
+            tx.update(target, {
+              'basePrice': changes['basePrice'],
+              'sizes': changes['sizes'],
+            });
+          }
           tx.update(ref, {
             ...changes,
             'updatedAt': FieldValue.serverTimestamp(),
@@ -294,6 +318,17 @@ class _ItemEditorState extends State<_ItemEditor> {
           if (index < 0 || items[index]['isDeleted'] == true)
             throw StateError('Item no longer available');
           items[index] = {...items[index], ...changes};
+          for (final target in allocations.entries) {
+            final assigned = (target.value['items'] as List? ?? [])
+                .whereType<Map>()
+                .map((item) => Map<String, dynamic>.from(item))
+                .toList();
+            final match = catalogItemIndex(assigned, widget.entry!.details);
+            if (match >= 0) {
+              assigned[match]['price'] = changes['price'];
+              tx.update(target.key, {'items': assigned});
+            }
+          }
         }
         tx.update(ref, {'items': items});
       });
@@ -368,11 +403,15 @@ class _ItemEditorState extends State<_ItemEditor> {
   Widget build(BuildContext context) => PopScope(
     canPop: !_saving,
     child: AlertDialog(
-      backgroundColor: Colors.white,
+      backgroundColor: AppColors.surfaceTint,
       surfaceTintColor: Colors.transparent,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
       title: Text(
         widget.entry == null ? 'Add item' : 'Edit ${widget.entry!.name}',
+        style: const TextStyle(
+          color: AppColors.primaryDark,
+          fontWeight: FontWeight.w800,
+        ),
       ),
       content: SizedBox(
         width: 560,
@@ -483,8 +522,53 @@ class _ItemEditorState extends State<_ItemEditor> {
                   ),
                   const SizedBox(height: 12),
                   if (_loadingIngredients) const LinearProgressIndicator(),
+                  Wrap(
+                    spacing: 8,
+                    children: [
+                      for (final type in ['Categories', 'Beverages'])
+                        ChoiceChip(
+                          label: Text(type),
+                          selected: _ingredientTab == type,
+                          onSelected: (_) =>
+                              setState(() => _ingredientTab = type),
+                        ),
+                    ],
+                  ),
+                  Wrap(
+                    spacing: 8,
+                    children: _ingredientOptions
+                        .where(
+                          (option) =>
+                              (option['sourceCollection'] ==
+                                      'coffee_products') ==
+                                  (_ingredientTab == 'Beverages') &&
+                              !_ingredients.any(
+                                (item) =>
+                                    _ingredientKey(item) ==
+                                    _ingredientKey(option),
+                              ),
+                        )
+                        .map(
+                          (option) => ActionChip(
+                            label: Text('Add ${option['name']}'),
+                            onPressed: _saving
+                                ? null
+                                : () => setState(() {
+                                    _recipeChanged = true;
+                                    _ingredients.add({
+                                      ...option,
+                                      'quantity': 1,
+                                    });
+                                  }),
+                          ),
+                        )
+                        .toList(),
+                  ),
                   ..._ingredients.asMap().entries.map((row) {
                     final item = row.value;
+                    if ((item['sourceCollection'] == 'coffee_products') !=
+                        (_ingredientTab == 'Beverages'))
+                      return const SizedBox.shrink();
                     final exists = _ingredientOptions.any(
                       (option) =>
                           _ingredientKey(option) == _ingredientKey(item),
@@ -507,6 +591,12 @@ class _ItemEditorState extends State<_ItemEditor> {
                               border: const OutlineInputBorder(),
                             ),
                             items: _ingredientOptions
+                                .where(
+                                  (option) =>
+                                      (option['sourceCollection'] ==
+                                          'coffee_products') ==
+                                      (_ingredientTab == 'Beverages'),
+                                )
                                 .where(
                                   (option) =>
                                       _ingredientKey(option) ==
@@ -549,10 +639,12 @@ class _ItemEditorState extends State<_ItemEditor> {
                             initialValue: '${item['quantity'] ?? 1}',
                             enabled: !_saving,
                             keyboardType: TextInputType.number,
-                            decoration: const InputDecoration(
-                              labelText: 'Quantity per bundle',
-                              border: OutlineInputBorder(),
-                              prefixIcon: Icon(Icons.numbers),
+                            decoration: InputDecoration(
+                              labelText: item['coffeeSize'] == null
+                                  ? 'Quantity per bundle'
+                                  : 'Qty per ${item['coffeeSize']}',
+                              border: const OutlineInputBorder(),
+                              prefixIcon: const Icon(Icons.numbers),
                             ),
                             validator: (value) =>
                                 (int.tryParse(value ?? '') ?? 0) <= 0

@@ -43,7 +43,7 @@ class _AdminVoidInventoryState extends State<AdminVoidInventory> {
   late String? _category = widget.categoryId;
   late String _type = widget.type;
   String _query = '';
-  DateTimeRange? _dates;
+  DateTime _day = DateUtils.dateOnly(DateTime.now());
   FirebaseFirestore get _db => widget.firestore ?? FirebaseFirestore.instance;
   final Set<String> _restoring = {};
   bool _expired(Map data) {
@@ -59,6 +59,26 @@ class _AdminVoidInventoryState extends State<AdminVoidInventory> {
   ) async {
     final key = '${ref.id}-${item?['id'] ?? item?['name'] ?? 'parent'}';
     if (_restoring.contains(key)) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Restore item?'),
+        content: const Text(
+          'Are you sure you want to restore this item to its category?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Restore'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
     setState(() => _restoring.add(key));
     try {
       await _db.runTransaction((transaction) async {
@@ -94,10 +114,16 @@ class _AdminVoidInventoryState extends State<AdminVoidInventory> {
           values.removeAt(index);
           final active = List<dynamic>.from(data['items'] as List? ?? []);
           active.add(restored);
-          transaction.update(ref, {'removedItems': values, 'items': active});
+          transaction.update(ref, {
+            'removedItems': values,
+            'items': active,
+            'isDeleted': false,
+            'deletedAt': FieldValue.delete(),
+            'voidReason': FieldValue.delete(),
+          });
         } else {
           values[index] = restored;
-          transaction.update(ref, {field: values});
+          transaction.update(ref, {field: values, 'isDeleted': false, 'deletedAt': FieldValue.delete(), 'voidReason': FieldValue.delete()});
         }
       });
       if (mounted)
@@ -149,13 +175,7 @@ class _AdminVoidInventoryState extends State<AdminVoidInventory> {
             ? data['expirationDate']
             : data['removedAt'] ?? data['deletedAt'],
       );
-      if (_dates != null &&
-          (date == null ||
-              date.isBefore(DateUtils.dateOnly(_dates!.start)) ||
-              !date.isBefore(
-                DateUtils.dateOnly(_dates!.end).add(const Duration(days: 1)),
-              )))
-        return;
+      if (date == null || !DateUtils.isSameDay(date, _day)) return;
       records.add((doc: doc, data: data, field: field, parent: parent));
     }
 
@@ -167,7 +187,18 @@ class _AdminVoidInventoryState extends State<AdminVoidInventory> {
       if (_type == 'Categories' && _category != null && doc.id != _category)
         continue;
       if (!widget.expired && data['isDeleted'] == true) {
-        add(doc, data, parent: true);
+        if (_type == 'Categories' &&
+            (data['items'] as List? ?? []).isNotEmpty) {
+          for (final item in (data['items'] as List).whereType<Map>()) {
+            add(doc, {
+              ...item,
+              'deletedAt': item['deletedAt'] ?? data['deletedAt'],
+              'voidReason': item['voidReason'] ?? data['voidReason'],
+            }, field: 'items');
+          }
+        } else {
+          add(doc, data, parent: true);
+        }
         continue;
       }
       if (data['isDeleted'] == true) continue;
@@ -254,8 +285,10 @@ class _AdminVoidInventoryState extends State<AdminVoidInventory> {
           headings: [
             'ID',
             'Item',
-            'Qty',
+            if (_type == 'Categories') 'Category',
+            if (widget.expired && _type == 'Beverages') 'Price' else 'Qty',
             'Status',
+            if (widget.expired && _type == 'Beverages') 'Availability',
             widget.expired ? 'Expiration date' : 'Voided on',
             if (!widget.expired) 'Reason',
             if (!widget.expired) 'Action',
@@ -296,10 +329,15 @@ class _AdminVoidInventoryState extends State<AdminVoidInventory> {
                     ),
                 ],
               ),
+              if (_type == 'Categories')
+                Text('${record.doc.data()['name'] ?? ''}'),
               Text(
-                '${record.field == 'bundleInstances' ? 1 : data['expiredQuantity'] ?? data['voidQuantity'] ?? data['stock'] ?? data['bundleCount'] ?? data['quantity'] ?? data['startingStock'] ?? '—'}',
+                widget.expired && _type == 'Beverages'
+                    ? '₱${data['price'] ?? data['priceDelta'] ?? 0}'
+                    : '${record.field == 'bundleInstances' ? 1 : data['expiredQuantity'] ?? data['voidQuantity'] ?? data['stock'] ?? data['bundleCount'] ?? data['quantity'] ?? data['startingStock'] ?? '—'}',
               ),
               Text(widget.expired ? 'Expired' : 'Voided'),
+              if (widget.expired && _type == 'Beverages') const Text('Expired'),
               Text(
                 date == null
                     ? 'Not recorded'
@@ -310,9 +348,13 @@ class _AdminVoidInventoryState extends State<AdminVoidInventory> {
                   '${data['voidReason'] ?? data['reason'] ?? 'Not recorded'}',
                 ),
               if (!widget.expired)
-                IconButton(
-                  tooltip: 'Restore',
-                  icon: const Icon(Icons.restore, color: AppColors.primaryDark),
+                FilledButton(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: Colors.amber,
+                    foregroundColor: Colors.black87,
+                    shape: const StadiumBorder(),
+                  ),
+                  child: const Text('Restore'),
                   onPressed: _restoring.isNotEmpty
                       ? null
                       : () => _restore(
@@ -359,30 +401,24 @@ class _AdminVoidInventoryState extends State<AdminVoidInventory> {
             decoration: InputDecoration(
               hintText: 'Search items',
               prefixIcon: const Icon(Icons.search),
-              helperText: _dates == null
-                  ? null
-                  : '${MaterialLocalizations.of(context).formatMediumDate(_dates!.start)} – ${MaterialLocalizations.of(context).formatMediumDate(_dates!.end)}',
+              helperText: MaterialLocalizations.of(
+                context,
+              ).formatFullDate(_day),
               suffixIcon: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  if (_dates != null)
-                    IconButton(
-                      tooltip: 'Clear date filter',
-                      icon: const Icon(Icons.clear),
-                      onPressed: () => setState(() => _dates = null),
-                    ),
                   IconButton(
                     tooltip: 'Filter by date',
                     icon: const Icon(Icons.calendar_month),
                     onPressed: () async {
-                      final dates = await showDateRangePicker(
+                      final dates = await showDatePicker(
                         context: context,
-                        initialDateRange: _dates,
+                        initialDate: _day,
                         firstDate: DateTime(2000),
                         lastDate: DateTime(2100),
                       );
                       if (dates != null && mounted)
-                        setState(() => _dates = dates);
+                        setState(() => _day = dates);
                     },
                   ),
                 ],
@@ -416,7 +452,10 @@ class _AdminVoidInventoryState extends State<AdminVoidInventory> {
                     );
                   if (!addons.hasData)
                     return const Center(child: CircularProgressIndicator());
-                  return _table([...snapshot.data!.docs, ...addons.data!.docs]);
+                  return _table([
+                    if (!widget.expired) ...snapshot.data!.docs,
+                    ...addons.data!.docs,
+                  ]);
                 },
               );
             },

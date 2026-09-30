@@ -89,6 +89,10 @@ class BundleBeverageDialog extends StatefulWidget {
 
 class _BundleBeverageDialogState extends State<BundleBeverageDialog> {
   late final drinks = bundleDrinkServings(widget.bundle);
+  final Set<int> _done = {};
+  int _active = 0;
+  String sizeOf(int index) =>
+      '${drinks[index]['coffeeSize'] ?? drinks[index]['variantId']}';
   @override
   Widget build(BuildContext context) => Dialog(
     clipBehavior: Clip.antiAlias,
@@ -125,66 +129,93 @@ class _BundleBeverageDialogState extends State<BundleBeverageDialog> {
             child: ListView(
               padding: const EdgeInsets.all(20),
               children: [
-                for (var index = 0; index < drinks.length; index++) ...[
-                  Text(
-                    '${drinks[index]['name']} · Drink ${index + 1}',
-                    style: const TextStyle(
-                      fontWeight: FontWeight.bold,
-                      fontSize: 17,
+                const Text(
+                  'Included in this bundle. Prepare each drink, then tap Done. The bundle is added after all drinks are ready.',
+                ),
+                const SizedBox(height: 12),
+                Wrap(
+                  spacing: 8,
+                  children: [
+                    for (final size in {
+                      for (var i = 0; i < drinks.length; i++)
+                        if (!_done.contains(i)) sizeOf(i),
+                    })
+                      ChoiceChip(
+                        label: Text(
+                          '$size (x${List.generate(drinks.length, (i) => i).where((i) => !_done.contains(i) && sizeOf(i) == size).length})',
+                        ),
+                        selected: sizeOf(_active) == size,
+                        onSelected: (_) => setState(
+                          () => _active = List.generate(drinks.length, (i) => i)
+                              .firstWhere(
+                                (i) => !_done.contains(i) && sizeOf(i) == size,
+                              ),
+                        ),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                for (final index in [_active])
+                  if (drinks.isNotEmpty && !_done.contains(index)) ...[
+                    Text(
+                      '${drinks[index]['name']} · Drink ${index + 1}',
+                      style: const TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 17,
+                      ),
                     ),
-                  ),
-                  Text(
-                    'Size: ${drinks[index]['coffeeSize'] ?? drinks[index]['variantId']} · Included in bundle',
-                  ),
-                  const SizedBox(height: 14),
-                  const Text('Sugar level'),
-                  Wrap(
-                    spacing: 8,
-                    children: ['0%', '25%', '50%', '75%', '100%']
-                        .map(
-                          (sugar) => ChoiceChip(
-                            label: Text(sugar),
-                            selected: drinks[index]['sugarLevel'] == sugar,
-                            selectedColor: AppColors.blush,
-                            onSelected: (_) => setState(
-                              () => drinks[index]['sugarLevel'] = sugar,
-                            ),
-                          ),
-                        )
-                        .toList(),
-                  ),
-                  if (widget.addons.isNotEmpty) ...[
-                    const SizedBox(height: 12),
-                    const Text('Optional add-ons'),
+                    Text(
+                      'Size: ${drinks[index]['coffeeSize'] ?? drinks[index]['variantId']} · Included in bundle',
+                    ),
+                    const SizedBox(height: 14),
+                    const Text('Sugar level'),
                     Wrap(
                       spacing: 8,
-                      children: widget.addons.map((addon) {
-                        final selected = (drinks[index]['addons'] as List)
-                            .cast<Map<String, dynamic>>();
-                        final chosen = selected.any(
-                          (entry) => entry['id'] == addon['id'],
-                        );
-                        return FilterChip(
-                          label: Text(
-                            '${addon['name']} (+₱${addon['priceDelta']})',
-                          ),
-                          selected: chosen,
-                          selectedColor: AppColors.blush,
-                          onSelected: (value) => setState(() {
-                            if (value) {
-                              selected.add({...addon});
-                            } else {
-                              selected.removeWhere(
-                                (entry) => entry['id'] == addon['id'],
-                              );
-                            }
-                          }),
-                        );
-                      }).toList(),
+                      children: ['0%', '25%', '50%', '75%', '100%']
+                          .map(
+                            (sugar) => ChoiceChip(
+                              label: Text(sugar),
+                              selected: drinks[index]['sugarLevel'] == sugar,
+                              selectedColor: AppColors.blush,
+                              onSelected: (_) => setState(
+                                () => drinks[index]['sugarLevel'] = sugar,
+                              ),
+                            ),
+                          )
+                          .toList(),
                     ),
+                    if (widget.addons.isNotEmpty) ...[
+                      const SizedBox(height: 12),
+                      const Text('Optional add-ons'),
+                      Wrap(
+                        spacing: 8,
+                        children: widget.addons.map((addon) {
+                          final selected = (drinks[index]['addons'] as List)
+                              .cast<Map<String, dynamic>>();
+                          final chosen = selected.any(
+                            (entry) => entry['id'] == addon['id'],
+                          );
+                          return FilterChip(
+                            label: Text(
+                              '${addon['name']} (+₱${addon['priceDelta']})',
+                            ),
+                            selected: chosen,
+                            selectedColor: AppColors.blush,
+                            onSelected: (value) => setState(() {
+                              if (value) {
+                                selected.add({...addon});
+                              } else {
+                                selected.removeWhere(
+                                  (entry) => entry['id'] == addon['id'],
+                                );
+                              }
+                            }),
+                          );
+                        }).toList(),
+                      ),
+                    ],
+                    const Divider(height: 32),
                   ],
-                  const Divider(height: 32),
-                ],
               ],
             ),
           ),
@@ -197,11 +228,23 @@ class _BundleBeverageDialogState extends State<BundleBeverageDialog> {
                 style: FilledButton.styleFrom(
                   backgroundColor: AppColors.primaryDark,
                 ),
-                onPressed: () => Navigator.pop(
-                  context,
-                  customizeBundle(widget.bundle, drinks),
-                ),
-                child: const Text('Add bundle to order'),
+                onPressed: () {
+                  _done.add(_active);
+                  if (_done.length >= drinks.length) {
+                    Navigator.pop(
+                      context,
+                      customizeBundle(widget.bundle, drinks),
+                    );
+                  } else {
+                    setState(
+                      () => _active = List.generate(
+                        drinks.length,
+                        (i) => i,
+                      ).firstWhere((i) => !_done.contains(i)),
+                    );
+                  }
+                },
+                child: const Text('Done'),
               ),
             ),
           ),

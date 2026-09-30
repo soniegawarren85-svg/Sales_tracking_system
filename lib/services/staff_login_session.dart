@@ -5,14 +5,16 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'login_ip.dart';
+import 'local_database_sync_service.dart';
 
 class StaffLoginSession {
   static Future<void> _flushQueue = Future<void>.value();
   static Future<void> start(
     BuildContext context,
     String uid,
-    Map<String, dynamic> staff,
-  ) async {
+    Map<String, dynamic> staff, {
+    bool offline = false,
+  }) async {
     final loginAt = DateTime.now();
     try {
       unawaited(flush());
@@ -26,21 +28,41 @@ class StaffLoginSession {
               .id;
       await prefs.setString('staffDeviceId', deviceId);
       final query = FirebaseFirestore.instance.collection('branches');
-      QuerySnapshot<Map<String, dynamic>> branches;
+      List<Map<String, dynamic>> branches;
       try {
-        branches = await query.get().timeout(const Duration(seconds: 5));
+        if (offline) {
+          branches = await LocalDatabaseSyncService().getCachedCollection(
+            'branches',
+          );
+        } else {
+          final snapshot = await query
+              .get(const GetOptions(source: Source.server))
+              .timeout(const Duration(seconds: 5));
+          branches = snapshot.docs
+              .map((doc) => {...doc.data(), '_localDocId': doc.id})
+              .toList();
+          await LocalDatabaseSyncService().cacheCollectionDocs(
+            'branches',
+            branches,
+          );
+        }
       } catch (_) {
-        branches = await query.get(const GetOptions(source: Source.cache));
+        branches = await LocalDatabaseSyncService().getCachedCollection(
+          'branches',
+        );
       }
-      final assigned = branches.docs.where((doc) {
-        final ids = doc.data()['staffIds'] as List? ?? [];
-        return doc.data()['isVoided'] != true &&
+      final assigned = branches.where((doc) {
+        final ids = doc['staffIds'] as List? ?? [];
+        return doc['isVoided'] != true &&
             (ids.contains(uid) ||
                 ids.contains(staff['staffId']) ||
-                (staff['branchIds'] as List? ?? []).contains(doc.id));
+                (staff['branchIds'] as List? ?? []).contains(
+                  doc['_localDocId'],
+                ));
       }).toList();
       String? branchId;
-      if (assigned.length == 1) branchId = assigned.single.id;
+      if (assigned.length == 1)
+        branchId = assigned.single['_localDocId']?.toString();
       if (assigned.length > 1 && context.mounted) {
         branchId = await showDialog<String>(
           context: context,
@@ -52,8 +74,9 @@ class StaffLoginSession {
               children: assigned
                   .map(
                     (branch) => SimpleDialogOption(
-                      onPressed: () => Navigator.pop(context, branch.id),
-                      child: Text('${branch.data()['name']}'),
+                      onPressed: () =>
+                          Navigator.pop(context, branch['_localDocId']),
+                      child: Text('${branch['name']}'),
                     ),
                   )
                   .toList(),
@@ -61,13 +84,15 @@ class StaffLoginSession {
           ),
         );
       }
-      final ipFuture = loginIp()
+      final ipFuture = (offline ? Future<String?>.value(null) : loginIp())
           .timeout(const Duration(seconds: 3), onTimeout: () => null)
           .catchError((_) => null);
       final ref = FirebaseFirestore.instance
           .collection('staff_login_sessions')
           .doc();
-      final branch = assigned.where((doc) => doc.id == branchId).firstOrNull;
+      final branch = assigned
+          .where((doc) => doc['_localDocId'] == branchId)
+          .firstOrNull;
       final record = <String, dynamic>{
         'userId': uid,
         'deviceId': deviceId,
@@ -78,7 +103,7 @@ class StaffLoginSession {
             .join(' '),
         'photoUrl': staff['photoUrl'] ?? staff['profileImageUrl'],
         'branchId': branchId,
-        'branchName': branch?.data()['name'],
+        'branchName': branch?['name'],
         'type': 'User',
         'loginAt': loginAt.toIso8601String(),
         'logoutAt': null,
@@ -125,7 +150,7 @@ class StaffLoginSession {
     record['logoutAt'] = DateTime.now().toIso8601String();
     await prefs.setString(key, jsonEncode(record));
     await prefs.remove('staffLoginSessionId');
-    await flush();
+    unawaited(flush());
   }
 
   // Keep failed/offline writes until a later successful login or logout.

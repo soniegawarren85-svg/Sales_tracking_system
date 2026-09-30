@@ -98,7 +98,7 @@ class _AdminCategorySheetState extends State<AdminCategorySheet> {
               ],
             ),
             const SizedBox(height: 12),
-            const Text('Create a category, then add its first item.'),
+            const Text('Save a category now. You can add items afterward.'),
             const SizedBox(height: 20),
             TextField(
               controller: _name,

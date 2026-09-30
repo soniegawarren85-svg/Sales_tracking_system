@@ -42,122 +42,126 @@ class AdminStaffBranches extends StatelessWidget {
             return LayoutBuilder(
               builder: (context, constraints) {
                 final columns = constraints.maxWidth >= 720 ? 2 : 1;
-                return Wrap(
-                  spacing: 14,
-                  runSpacing: 14,
-                  children: docs.map((doc) {
-                    final data = doc.data();
-                    final ids = (data['staffIds'] as List? ?? [])
-                        .map((id) => '$id')
-                        .toSet();
-                    final members = staff.data!.docs
-                        .where(
-                          (member) =>
-                              ids.contains(_staffKey(member)) &&
-                              member.data()['status'] == 'accepted',
-                        )
-                        .toList();
-                    return SizedBox(
-                      width:
-                          (constraints.maxWidth - (columns - 1) * 14) / columns,
-                      child: Card(
-                        color: AppColors.blush,
-                        clipBehavior: Clip.antiAlias,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(24),
-                        ),
-                        child: InkWell(
-                          onTap: () => showModalBottomSheet<void>(
-                            context: context,
-                            isScrollControlled: true,
-                            useSafeArea: true,
-                            showDragHandle: true,
-                            builder: (_) => SizedBox(
-                              height: MediaQuery.sizeOf(context).height * .65,
-                              child: _BranchStaffSheet(branch: doc.reference),
-                            ),
+                return SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: docs.map((doc) {
+                      final data = doc.data();
+                      final ids = (data['staffIds'] as List? ?? [])
+                          .map((id) => '$id')
+                          .toSet();
+                      final members = staff.data!.docs
+                          .where(
+                            (member) =>
+                                ids.contains(_staffKey(member)) &&
+                                member.data()['status'] == 'accepted',
+                          )
+                          .toList();
+                      return SizedBox(
+                        width: columns == 2
+                            ? constraints.maxWidth / 2
+                            : constraints.maxWidth * .9,
+                        child: Card(
+                          color: AppColors.blush,
+                          clipBehavior: Clip.antiAlias,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(24),
                           ),
-                          child: Padding(
-                            padding: const EdgeInsets.all(22),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  'Staff in ${data['name'] ?? 'Branch'}',
-                                  style: const TextStyle(
-                                    color: AppColors.primaryDark,
-                                    fontSize: 20,
-                                    fontWeight: FontWeight.w800,
+                          child: InkWell(
+                            onTap: () => showModalBottomSheet<void>(
+                              context: context,
+                              isScrollControlled: true,
+                              useSafeArea: true,
+                              showDragHandle: true,
+                              builder: (_) => SizedBox(
+                                height: MediaQuery.sizeOf(context).height * .65,
+                                child: _BranchStaffSheet(branch: doc.reference),
+                              ),
+                            ),
+                            child: Padding(
+                              padding: const EdgeInsets.all(22),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Staff in ${data['name'] ?? 'Branch'}',
+                                    style: const TextStyle(
+                                      color: AppColors.primaryDark,
+                                      fontSize: 20,
+                                      fontWeight: FontWeight.w800,
+                                    ),
                                   ),
-                                ),
-                                const SizedBox(height: 6),
-                                Text('${members.length} assigned staff'),
-                                const SizedBox(height: 18),
-                                Wrap(
-                                  spacing: 6,
-                                  runSpacing: 6,
-                                  children: [
-                                    ...members
-                                        .take(5)
-                                        .map(
-                                          (member) => Tooltip(
-                                            message: _staffName(member.data()),
-                                            child: ProfileAvatar(
-                                              data: member.data(),
+                                  const SizedBox(height: 6),
+                                  Text('${members.length} assigned staff'),
+                                  const SizedBox(height: 18),
+                                  Wrap(
+                                    spacing: 6,
+                                    runSpacing: 6,
+                                    children: [
+                                      ...members
+                                          .take(5)
+                                          .map(
+                                            (member) => Tooltip(
+                                              message: _staffName(
+                                                member.data(),
+                                              ),
+                                              child: ProfileAvatar(
+                                                data: member.data(),
+                                              ),
                                             ),
                                           ),
+                                      if (members.length > 5)
+                                        CircleAvatar(
+                                          child: Text('+${members.length - 5}'),
                                         ),
-                                    if (members.length > 5)
-                                      CircleAvatar(
-                                        child: Text('+${members.length - 5}'),
-                                      ),
-                                    if (members.isEmpty)
-                                      const CircleAvatar(
-                                        backgroundColor: Colors.white,
-                                        child: Icon(
-                                          Icons.person_outline,
-                                          color: AppColors.primary,
+                                      if (members.isEmpty)
+                                        const CircleAvatar(
+                                          backgroundColor: Colors.white,
+                                          child: Icon(
+                                            Icons.person_outline,
+                                            color: AppColors.primary,
+                                          ),
                                         ),
-                                      ),
-                                  ],
-                                ),
-                                const Divider(height: 28),
-                                FilledButton.icon(
-                                  label: const Text('Activity logs'),
-                                  onPressed: () => showBranchStaffActivity(
-                                    context,
-                                    doc.id,
-                                    '${data['name'] ?? 'Branch'}',
+                                    ],
                                   ),
-                                  icon: const Icon(Icons.history_rounded),
+                                  const Divider(height: 28),
+                                  FilledButton.icon(
+                                    label: const Text('Activity logs'),
+                                    onPressed: () => showBranchStaffActivity(
+                                      context,
+                                      doc.id,
+                                      '${data['name'] ?? 'Branch'}',
+                                    ),
+                                    icon: const Icon(Icons.history_rounded),
 
-                                  style: FilledButton.styleFrom(
-                                    foregroundColor: Colors.white,
-                                    backgroundColor: AppColors.primaryDark,
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(12),
+                                    style: FilledButton.styleFrom(
+                                      foregroundColor: Colors.white,
+                                      backgroundColor: AppColors.primaryDark,
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(12),
+                                      ),
                                     ),
                                   ),
-                                ),
-                                const SizedBox(height: 8),
-                                const Row(
-                                  children: [
-                                    Expanded(
-                                      child: Text('View & assign staff'),
-                                    ),
-                                    Icon(
-                                      Icons.arrow_forward,
-                                      color: AppColors.primary,
-                                    ),
-                                  ],
-                                ),
-                              ],
+                                  const SizedBox(height: 8),
+                                  const Row(
+                                    children: [
+                                      Expanded(
+                                        child: Text('View & assign staff'),
+                                      ),
+                                      Icon(
+                                        Icons.arrow_forward,
+                                        color: AppColors.primary,
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
                             ),
                           ),
                         ),
-                      ),
-                    );
-                  }).toList(),
+                      );
+                    }).toList(),
+                  ),
                 );
               },
             );

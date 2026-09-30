@@ -27,11 +27,11 @@ List<Map<String, dynamic>> currentCatalogCategories(
   for (final product in products) {
     if (product['isDeleted'] == true ||
         product['isVoided'] == true ||
-        product['isBundle'] == true)
+        product['isBundle'] == true ||
+        !catalogItemActive(product, now ?? DateTime.now()))
       continue;
-    if (!(product['items'] as List? ?? []).whereType<Map>().any(
-      (item) => catalogItemActive(item, now ?? DateTime.now()),
-    ))
+    final items = (product['items'] as List? ?? []).whereType<Map>();
+    if (!items.any((item) => catalogItemActive(item, now ?? DateTime.now())))
       continue;
     categories.putIfAbsent(catalogCategoryKey(product), () => product);
   }
@@ -390,61 +390,81 @@ class _AdminCatalogState extends State<AdminCatalog> {
                 ),
               ),
               const SizedBox(height: 12),
-              if (widget.type == 'Categories')
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: categories
-                      .map(
-                        (doc) => ChoiceChip(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 16,
-                            vertical: 8,
-                          ),
-                          selectedColor: AppColors.primaryDark,
-                          checkmarkColor: Colors.white,
-                          labelStyle: TextStyle(
-                            color: catalogCategoryKey(doc) == _category
-                                ? Colors.white
-                                : AppColors.primaryDark,
-                            fontWeight: FontWeight.w700,
-                          ),
-                          label: Text('${doc['name'] ?? 'Category'}'),
-                          selected: catalogCategoryKey(doc) == _category,
-                          onSelected: (_) {
-                            setState(() => _category = catalogCategoryKey(doc));
-                            widget.onCategorySelected?.call(doc);
-                          },
-                        ),
-                      )
-                      .toList(),
-                ),
-              if (widget.actions != null) widget.actions!,
-              if (!widget.gallery && widget.type == 'Beverages') ...[
-                const SizedBox(height: 12),
-                Wrap(
-                  spacing: 10,
-                  children: [
-                    for (final addon in [false, true])
-                      ChoiceChip(
-                        label: Text(addon ? 'Add-ons' : 'Beverages'),
-                        selected: _showAddons == addon,
-                        selectedColor: AppColors.primaryDark,
-                        checkmarkColor: Colors.white,
-                        labelStyle: TextStyle(
-                          color: _showAddons == addon
-                              ? Colors.white
-                              : AppColors.primaryDark,
-                          fontWeight: FontWeight.w700,
-                        ),
-                        onSelected: (_) => setState(() {
-                          _showAddons = addon;
-                          widget.onBeverageTabChanged?.call(addon);
-                        }),
-                      ),
-                  ],
-                ),
-              ],
+              Row(
+                children: [
+                  Expanded(
+                    child: SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: widget.type == 'Categories'
+                          ? Row(
+                              spacing: 8,
+                              children: categories
+                                  .map(
+                                    (doc) => ChoiceChip(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 16,
+                                        vertical: 8,
+                                      ),
+                                      selectedColor: AppColors.primaryDark,
+                                      checkmarkColor: Colors.white,
+                                      labelStyle: TextStyle(
+                                        color:
+                                            catalogCategoryKey(doc) == _category
+                                            ? Colors.white
+                                            : AppColors.primaryDark,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                      label: Text(
+                                        '${doc['name'] ?? 'Category'}',
+                                      ),
+                                      selected:
+                                          catalogCategoryKey(doc) == _category,
+                                      onSelected: (_) {
+                                        setState(
+                                          () => _category = catalogCategoryKey(
+                                            doc,
+                                          ),
+                                        );
+                                        widget.onCategorySelected?.call(doc);
+                                      },
+                                    ),
+                                  )
+                                  .toList(),
+                            )
+                          : Row(
+                              spacing: 8,
+                              children: [
+                                if (!widget.gallery &&
+                                    widget.type == 'Beverages') ...[
+                                  for (final addon in [false, true])
+                                    ChoiceChip(
+                                      label: Text(
+                                        addon ? 'Add-ons' : 'Beverages',
+                                      ),
+                                      selected: _showAddons == addon,
+                                      selectedColor: AppColors.primaryDark,
+                                      checkmarkColor: Colors.white,
+                                      labelStyle: TextStyle(
+                                        color: _showAddons == addon
+                                            ? Colors.white
+                                            : AppColors.primaryDark,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                      onSelected: (_) => setState(() {
+                                        _showAddons = addon;
+                                        widget.onBeverageTabChanged?.call(
+                                          addon,
+                                        );
+                                      }),
+                                    ),
+                                ],
+                              ],
+                            ),
+                    ),
+                  ),
+                  if (widget.actions != null) widget.actions!,
+                ],
+              ),
               const SizedBox(key: ValueKey('catalog-results'), height: 16),
               if (!widget.gallery && widget.type == 'Beverages' && !_showAddons)
                 const Padding(
@@ -534,13 +554,6 @@ class _AdminCatalogState extends State<AdminCatalog> {
             icon: const Icon(Icons.edit_outlined, size: 18),
             onPressed: () => widget.onOpen(entry),
           ),
-          if (entry.type == 'Bundle' && widget.onView != null)
-            IconButton(
-              tooltip: 'View contents',
-              visualDensity: VisualDensity.compact,
-              icon: const Icon(Icons.visibility_outlined, size: 18),
-              onPressed: () => widget.onView!(entry),
-            ),
           if (widget.onVoid != null)
             IconButton(
               tooltip: 'Void ${entry.name}',
@@ -578,15 +591,16 @@ class _AdminCatalogState extends State<AdminCatalog> {
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(fontWeight: FontWeight.w700),
                 ),
-                if (narrow) Text(
-                  entry.id,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontSize: 11,
-                    color: AppColors.textMuted,
+                if (narrow)
+                  Text(
+                    entry.id,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 11,
+                      color: AppColors.textMuted,
+                    ),
                   ),
-                ),
               ],
             ),
           ),
@@ -648,7 +662,13 @@ class _AdminCatalogState extends State<AdminCatalog> {
                             cell(const Text('Expiry'), 2),
                             cell(const Text('Stock')),
                           ],
-                          cell(const FittedBox(fit: BoxFit.scaleDown, alignment: Alignment.centerLeft, child: Text('Availability'))),
+                          cell(
+                            const FittedBox(
+                              fit: BoxFit.scaleDown,
+                              alignment: Alignment.centerLeft,
+                              child: Text('Availability'),
+                            ),
+                          ),
                           cell(const Text('Actions'), 2),
                         ],
                       ),
@@ -700,7 +720,21 @@ class _AdminCatalogState extends State<AdminCatalog> {
                       )
                     : Row(
                         children: [
-                          cell(Tooltip(message: entry.id, child: Text(entry.id, maxLines: 1, softWrap: false, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 11, color: AppColors.textMuted)))),
+                          cell(
+                            Tooltip(
+                              message: entry.id,
+                              child: Text(
+                                entry.id,
+                                maxLines: 1,
+                                softWrap: false,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  fontSize: 11,
+                                  color: AppColors.textMuted,
+                                ),
+                              ),
+                            ),
+                          ),
                           cell(identity(entry), 3),
                           if (beverages)
                             ...['Small', 'Medium', 'Large'].map(

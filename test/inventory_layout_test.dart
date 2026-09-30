@@ -23,6 +23,14 @@ void main() {
           },
       ],
     });
+    for (var i = 0; i < 5; i++) {
+      await db.collection('sales_inventory').doc('extra-$i').set({
+        'name': 'Category $i',
+        'items': [
+          {'name': 'Item $i', 'stock': 1},
+        ],
+      });
+    }
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
@@ -33,6 +41,10 @@ void main() {
               type: 'Categories',
               firestore: db,
               onOpen: (_) {},
+              actions: TextButton(
+                onPressed: () {},
+                child: const Text('Add Category'),
+              ),
             ),
           ),
         ),
@@ -44,6 +56,25 @@ void main() {
       find.widgetWithText(ChoiceChip, 'Cookies'),
     );
     final first = tester.getTopLeft(find.text('Cookie 0'));
+    final add = tester.getCenter(find.text('Add Category'));
+    expect(
+      tester.getCenter(find.widgetWithText(ChoiceChip, 'Cookies')).dy,
+      closeTo(add.dy, 1),
+    );
+    final categoryScroll = find.byWidgetPredicate(
+      (widget) =>
+          widget is SingleChildScrollView &&
+          widget.scrollDirection == Axis.horizontal,
+    );
+    await tester.drag(categoryScroll, const Offset(-400, 0));
+    await tester.pumpAndSettle();
+    expect(tester.getCenter(find.text('Add Category')), add);
+    expect(
+      tester.getTopLeft(find.widgetWithText(ChoiceChip, 'Cookies')).dx,
+      lessThan(category.dx),
+    );
+    await tester.drag(categoryScroll, const Offset(400, 0));
+    await tester.pumpAndSettle();
     await tester.drag(
       find.byKey(const ValueKey('inventory-table-scroll')),
       const Offset(0, -300),
@@ -59,7 +90,7 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   });
   for (final width in [390.0, 1100.0]) {
-    testWidgets('inventory fits $width without horizontal scroll', (
+    testWidgets('inventory fits $width with horizontal category controls', (
       tester,
     ) async {
       tester.view.physicalSize = Size(width, 900);
@@ -105,7 +136,7 @@ void main() {
               widget is SingleChildScrollView &&
               widget.scrollDirection == Axis.horizontal,
         ),
-        findsNothing,
+        findsOneWidget,
       );
       await tester.pumpWidget(const SizedBox());
     });

@@ -95,7 +95,10 @@ void main() {
     await tester.enterText(find.byType(TextField), 'Dubai');
     await tester.pumpAndSettle();
     expect(find.text('Red Velvet'), findsNothing);
-    await tester.tap(find.byTooltip('Restore'));
+    await tester.tap(find.text('Restore'));
+    await tester.pumpAndSettle();
+    expect(find.text('Restore item?'), findsOneWidget);
+    await tester.tap(find.widgetWithText(FilledButton, 'Restore').last);
     await tester.pumpAndSettle();
     final restored =
         (await db.collection('sales_inventory').doc('cookies').get()).data()!;
@@ -108,16 +111,18 @@ void main() {
     expect(find.text('Status'), findsOneWidget);
     await tester.tap(find.byTooltip('Filter by date'));
     await tester.pumpAndSettle();
-    expect(find.byType(DateRangePickerDialog), findsOneWidget);
+    expect(find.byType(DatePickerDialog), findsOneWidget);
     tester
         .state<NavigatorState>(find.byType(Navigator).last)
         .pop(
-          DateTimeRange(start: DateTime(2020, 1, 1), end: DateTime(2020, 1, 1)),
+          DateTime(2020, 1, 1),
         );
     await tester.pumpAndSettle();
     expect(find.text('Wrong entry'), findsNothing);
     expect(find.text('No records match your filters.'), findsOneWidget);
-    await tester.tap(find.byTooltip('Clear date filter'));
+    await tester.tap(find.byTooltip('Filter by date'));
+    await tester.pumpAndSettle();
+    tester.state<NavigatorState>(find.byType(Navigator).last).pop(DateTime.now());
     await tester.pumpAndSettle();
     expect(find.text('Wrong entry'), findsOneWidget);
     await tester.tap(find.byTooltip('Close'));
@@ -149,7 +154,14 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+    expect(find.text('Old Cream'), findsNothing);
+    await tester.tap(find.byTooltip('Filter by date'));
+    await tester.pumpAndSettle();
+    tester.state<NavigatorState>(find.byType(Navigator).last).pop(DateTime(2020, 1, 1));
+    await tester.pumpAndSettle();
     expect(find.text('Old Cream'), findsOneWidget);
+    expect(find.text('Qty'), findsNothing);
+    expect(find.text('Availability'), findsOneWidget);
     expect(find.text('Fresh Cream'), findsNothing);
     expect(find.byTooltip('Restore'), findsNothing);
     expect(tester.takeException(), isNull);

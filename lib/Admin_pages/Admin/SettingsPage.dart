@@ -398,6 +398,8 @@ class _SettingsPageState extends State<SettingsPage> {
                     ),
                   ),
 
+                  const SizedBox(height: 20),
+                  _LogoutButton(),
                   const SizedBox(height: 30),
                 ]),
               ),
@@ -1237,6 +1239,7 @@ class _LogoutButtonState extends State<_LogoutButton>
                         await prefs.remove('lastUserId');
                         await prefs.remove('adminId');
                         await FirebaseAuth.instance.signOut();
+                        if (!context.mounted) return;
                         Navigator.of(context).pushAndRemoveUntil(
                           MaterialPageRoute(
                             builder: (_) => const LoginScreen(),

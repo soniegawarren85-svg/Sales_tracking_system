@@ -209,9 +209,7 @@ class _InventoryPageState extends State<InventoryPage>
     try {
       final expiryDate = DateTime.parse(expirationDate);
       final today = DateTime.now();
-      return expiryDate.isBefore(
-        DateTime(today.year, today.month, today.day),
-      );
+      return expiryDate.isBefore(DateTime(today.year, today.month, today.day));
     } catch (e) {
       return false;
     }
@@ -3013,7 +3011,8 @@ class _InventoryPageState extends State<InventoryPage>
             _uploadInventoryImage(bytes, folder: 'inventory_item_images'),
       );
 
-  Future<void> _viewBundle(AdminCatalogEntry entry) => showBundleDetails(context, entry);
+  Future<void> _viewBundle(AdminCatalogEntry entry) =>
+      showBundleDetails(context, entry);
 
   Future<void> _voidCatalogEntry(AdminCatalogEntry entry) async {
     final reason = await showVoidReasonDialog(context, entry.name);
@@ -3029,7 +3028,11 @@ class _InventoryPageState extends State<InventoryPage>
         final data = snapshot.data();
         if (data == null) throw StateError('Record no longer exists');
         if (entry.type != 'Categories') {
-          tx.update(ref, {'isDeleted': true, 'deletedAt': Timestamp.now(), 'voidReason': reason});
+          tx.update(ref, {
+            'isDeleted': true,
+            'deletedAt': Timestamp.now(),
+            'voidReason': reason,
+          });
         } else {
           final items = (data['items'] as List? ?? [])
               .map((item) => Map<String, dynamic>.from(item as Map))
@@ -3077,6 +3080,25 @@ class _InventoryPageState extends State<InventoryPage>
       },
     );
     if (createdCategory != null && mounted) {
+      _selectedCategory = createdCategory;
+      final addFirst = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Category saved'),
+          content: const Text('Would you like to add its first item now?'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Not now'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('Add first item'),
+            ),
+          ],
+        ),
+      );
+      if (addFirst != true || !mounted) return;
       await showAdminItemEditor(
         context,
         category: createdCategory,
@@ -3183,7 +3205,12 @@ class _InventoryPageState extends State<InventoryPage>
                         (type) => ChoiceChip(
                           selectedColor: AppColors.primaryDark,
                           checkmarkColor: Colors.white,
-                          labelStyle: TextStyle(color: _catalogType == type ? Colors.white : AppColors.primaryDark, fontWeight: FontWeight.w700),
+                          labelStyle: TextStyle(
+                            color: _catalogType == type
+                                ? Colors.white
+                                : AppColors.primaryDark,
+                            fontWeight: FontWeight.w700,
+                          ),
                           label: Text(type),
                           selected: _catalogType == type,
                           onSelected: (_) =>
@@ -3200,7 +3227,8 @@ class _InventoryPageState extends State<InventoryPage>
                 child: AdminCatalog(
                   pinnedControls: true,
                   type: _catalogType,
-                  onBeverageTabChanged: (value) => setState(() => _addonsTab = value),
+                  onBeverageTabChanged: (value) =>
+                      setState(() => _addonsTab = value),
                   onOpen: _openCatalogEntry,
                   onVoid: _voidCatalogEntry,
                   onView: _viewBundle,
@@ -3209,26 +3237,54 @@ class _InventoryPageState extends State<InventoryPage>
                   actions: Wrap(
                     alignment: WrapAlignment.end,
                     children: [
-                      if (_catalogType != 'Beverages' || !_addonsTab) TextButton.icon(
-                        icon: const Icon(Icons.add),
-                        label: Text(_catalogType == 'Categories' ? 'Add Category' : _catalogType == 'Bundle' ? 'Create Bundle' : 'Add Beverages'),
-                        onPressed: _catalogType == 'Categories' ? _showCategorySheet : _addCatalogItem,
-                      ),
+                      if (_catalogType != 'Beverages' || !_addonsTab)
+                        TextButton.icon(
+                          icon: const Icon(Icons.add),
+                          label: Text(
+                            MediaQuery.sizeOf(context).width < 600
+                                ? 'Add'
+                                : _catalogType == 'Categories'
+                                ? 'Add Category'
+                                : _catalogType == 'Bundle'
+                                ? 'Create Bundle'
+                                : 'Add Beverages',
+                          ),
+                          onPressed: _catalogType == 'Categories'
+                              ? _showCategorySheet
+                              : _addCatalogItem,
+                        ),
 
-                      if (_catalogType == 'Beverages' && _addonsTab) TextButton.icon(onPressed: () => showAdminAddonEditor(context), icon: const Icon(Icons.add), label: const Text('Add add-ons')),
+                      if (_catalogType == 'Beverages' && _addonsTab)
+                        TextButton.icon(
+                          onPressed: () => showAdminAddonEditor(context),
+                          icon: const Icon(Icons.add),
+                          label: Text(
+                            MediaQuery.sizeOf(context).width < 600
+                                ? 'Add'
+                                : 'Add add-ons',
+                          ),
+                        ),
                       IconButton(
                         tooltip: 'Void records',
                         icon: const Icon(Icons.block, color: PinkTheme.primary),
-                        onPressed: () => showAdminInventoryRecords(context, type: _catalogType),
-                      ),
-                      IconButton(
-                        tooltip: 'Expired inventory',
-                        icon: const Icon(
-                          Icons.event_busy,
-                          color: Colors.deepOrange,
+                        onPressed: () => showAdminInventoryRecords(
+                          context,
+                          type: _catalogType,
                         ),
-                        onPressed: () => showAdminInventoryRecords(context, type: _catalogType, expired: true),
                       ),
+                      if (_catalogType != 'Beverages' || _addonsTab)
+                        IconButton(
+                          tooltip: 'Expired inventory',
+                          icon: const Icon(
+                            Icons.event_busy,
+                            color: Colors.deepOrange,
+                          ),
+                          onPressed: () => showAdminInventoryRecords(
+                            context,
+                            type: _catalogType,
+                            expired: true,
+                          ),
+                        ),
                     ],
                   ),
                 ),
@@ -3237,7 +3293,6 @@ class _InventoryPageState extends State<InventoryPage>
           ],
         ),
       ),
-
     );
   }
 
@@ -3280,8 +3335,31 @@ class _InventoryPageState extends State<InventoryPage>
       for (final doc in coffees.docs) {
         final sizes = bundleBeverageSizes(doc.id, doc.data());
         if (sizes.isEmpty) continue;
-        inventory.add({'id': 'coffee:${doc.id}', 'sourceInventoryId': doc.id, 'sourceCollection': 'coffee_products', 'name': 'Beverages · ${doc.data()['name']}', 'items': sizes});
-      }      return inventory;
+        inventory.add({
+          'id': 'coffee:${doc.id}',
+          'sourceInventoryId': doc.id,
+          'sourceCollection': 'coffee_products',
+          'name': 'Beverages · ${doc.data()['name']}',
+          'items': sizes,
+        });
+      }
+      final addons = await _firestore.collection('coffee_addons').get();
+      for (final doc in addons.docs) {
+        final data = doc.data();
+        if (!catalogItemActive(data, DateTime.now()) ||
+            data['isAvailable'] == false)
+          continue;
+        inventory.add({
+          'id': 'addon:${doc.id}',
+          'sourceInventoryId': doc.id,
+          'sourceCollection': 'coffee_addons',
+          'name': data['name'],
+          'items': [
+            {...data, 'id': doc.id, 'isAddon': true, 'untrackedStock': true},
+          ],
+        });
+      }
+      return inventory;
     } catch (e) {
       debugPrint('Error getting inventory list: $e');
       return [];
@@ -3369,6 +3447,9 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
   bool _isSaving = false;
   int _selectedTabIndex = 0;
   late List<Map<String, dynamic>> _inventory;
+  String _ingredientTab = 'Categories';
+  String? _ingredientCategory;
+  bool _includeAddonTab = false;
 
   // ── Animations
   late AnimationController _headerAnim;
@@ -3536,7 +3617,8 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
   }
 
   Future<String?> _uploadBundleImage() async {
-    return _bundleUpload ?? uploadCatalogImage(bundleImageBytes, folder: 'bundle_images');
+    return _bundleUpload ??
+        uploadCatalogImage(bundleImageBytes, folder: 'bundle_images');
   }
 
   Future<void> _pickBundleImage() async {
@@ -3552,7 +3634,10 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
       if (!mounted) return;
       setState(() {
         bundleImageBytes = bytes;
-        _bundleUpload = uploadCatalogImage(bytes, folder: 'bundle_images').catchError((_) => null);
+        _bundleUpload = uploadCatalogImage(
+          bytes,
+          folder: 'bundle_images',
+        ).catchError((_) => null);
       });
     } catch (e) {
       debugPrint('Bundle image pick failed: $e');
@@ -3725,7 +3810,8 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
           final availableQty = _parseQuantity(
             variant['stock'] ?? variant['startingStock'],
           );
-          if (variant['untrackedStock'] != true && totalQtyNeeded > availableQty) {
+          if (variant['untrackedStock'] != true &&
+              totalQtyNeeded > availableQty) {
             _showErrorSnack(
               'Not enough "${variant['name']}" in inventory.\nNeed: $totalQtyNeeded, Available: $availableQty',
             );
@@ -3733,6 +3819,7 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
             return;
           }
           selectedVariants.add({
+            'publicId': variant['publicId'],
             'itemId': itemId,
             'sourceInventoryId': item['sourceInventoryId'] ?? itemId,
             'sourceCollection': item['sourceCollection'] ?? 'sales_inventory',
@@ -3754,11 +3841,21 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
 
       final bundleRef = _firestore.collection('sales_inventory').doc();
       final updatedItemsByDoc = await BundleStockService(_firestore).restock(
-        bundleRef.id, bundleQty, {}, ingredients: selectedVariants,
+        bundleRef.id,
+        bundleQty,
+        {},
+        ingredients: selectedVariants,
         newBundle: {
-          'name': name, 'price': price.isEmpty ? '0' : price, 'bundleCount': 0,
-          'bundleId': bundleId, 'publicId': bundleId, 'items': selectedVariants,
-          'imageUrl': bundleImageUrl, 'timestamp': Timestamp.now(), 'isBundle': true, 'isDeleted': false,
+          'name': name,
+          'price': price.isEmpty ? '0' : price,
+          'bundleCount': 0,
+          'bundleId': bundleId,
+          'publicId': bundleId,
+          'items': selectedVariants,
+          'imageUrl': bundleImageUrl,
+          'timestamp': Timestamp.now(),
+          'isBundle': true,
+          'isDeleted': false,
         },
       );
       if (!mounted) return;
@@ -3872,11 +3969,18 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
   }
 
   Future<void> _confirmDeleteBundle(Map<String, dynamic> bundle) async {
-    final reason = await showVoidReasonDialog(context, '${bundle['name'] ?? 'Bundle'}');
+    final reason = await showVoidReasonDialog(
+      context,
+      '${bundle['name'] ?? 'Bundle'}',
+    );
     if (reason != null && bundle['id'] != null) {
       try {
         await _firestore.collection('sales_inventory').doc(bundle['id']).update(
-          {'isDeleted': true, 'deletedAt': Timestamp.now(), 'voidReason': reason},
+          {
+            'isDeleted': true,
+            'deletedAt': Timestamp.now(),
+            'voidReason': reason,
+          },
         );
         await _markStaffInventoryDeleted(bundle['id'].toString());
         await _loadBundles();
@@ -4925,8 +5029,10 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
                       ),
                       if (bundleImageBytes != null)
                         IconButton(
-                          onPressed: () =>
-                              setState(() { bundleImageBytes = null; _bundleUpload = null; }),
+                          onPressed: () => setState(() {
+                            bundleImageBytes = null;
+                            _bundleUpload = null;
+                          }),
                           icon: const Icon(Icons.close_rounded),
                           color: PinkTheme.deleteRed,
                         ),
@@ -5015,6 +5121,53 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
                 ),
                 const SizedBox(height: 16),
 
+                Wrap(
+                  spacing: 8,
+                  children: [
+                    for (final type in ['Categories', 'Beverages'])
+                      ChoiceChip(
+                        label: Text(type),
+                        selected: _ingredientTab == type,
+                        onSelected: (_) => setState(() {
+                          _ingredientTab = type;
+                          _includeAddonTab = false;
+                        }),
+                      ),
+                  ],
+                ),
+                if (_ingredientTab == 'Beverages')
+                  TextButton(
+                    onPressed: () =>
+                        setState(() => _includeAddonTab = !_includeAddonTab),
+                    child: Text(
+                      _includeAddonTab ? 'View beverages' : 'Add add-ons',
+                    ),
+                  ),
+                if (_ingredientTab == 'Categories')
+                  Wrap(
+                    spacing: 8,
+                    children: [
+                      for (final category in _inventory.where(
+                        (item) => item['sourceCollection'] == null,
+                      ))
+                        ChoiceChip(
+                          label: Text('${category['name']}'),
+                          selected:
+                              (_ingredientCategory ??
+                                  _inventory
+                                      .where(
+                                        (item) =>
+                                            item['sourceCollection'] == null,
+                                      )
+                                      .firstOrNull?['id']) ==
+                              category['id'],
+                          onSelected: (_) => setState(
+                            () => _ingredientCategory = '${category['id']}',
+                          ),
+                        ),
+                    ],
+                  ),
+                const SizedBox(height: 12),
                 if (_inventory.isEmpty)
                   Container(
                     padding: const EdgeInsets.all(28),
@@ -5047,6 +5200,22 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
                   ..._inventory.asMap().entries.map((entry) {
                     final idx = entry.key;
                     final item = entry.value;
+                    if (_ingredientTab == 'Categories'
+                        ? item['sourceCollection'] != null ||
+                              item['id'] !=
+                                  (_ingredientCategory ??
+                                      _inventory
+                                          .where(
+                                            (item) =>
+                                                item['sourceCollection'] ==
+                                                null,
+                                          )
+                                          .firstOrNull?['id'])
+                        : item['sourceCollection'] !=
+                              (_includeAddonTab
+                                  ? 'coffee_addons'
+                                  : 'coffee_products'))
+                      return const SizedBox.shrink();
                     final itemId = item['id']?.toString() ?? '';
                     final itemName = item['name']?.toString() ?? '';
                     final itemPrice = item['price']?.toString() ?? '0';
@@ -5125,7 +5294,10 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
                                             itemPrice != '0' &&
                                                     itemPrice.isNotEmpty
                                                 ? '₱$itemPrice  •  ${variants.length} variant${variants.length == 1 ? '' : 's'}'
-                                                : item['sourceCollection'] == 'coffee_products' ? '${variants.length} size${variants.length == 1 ? '' : 's'}' : '${variants.length} variant${variants.length == 1 ? '' : 's'}',
+                                                : item['sourceCollection'] ==
+                                                      'coffee_products'
+                                                ? '${variants.length} size${variants.length == 1 ? '' : 's'}'
+                                                : '${variants.length} variant${variants.length == 1 ? '' : 's'}',
                                             style: const TextStyle(
                                               fontSize: 12,
                                               color: PinkTheme.textLight,
@@ -5255,7 +5427,7 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
                                                   ),
                                                   const SizedBox(height: 2),
                                                   Text(
-                                                    'Item ID: ${variant['id']?.toString().isNotEmpty == true ? variant['id']?.toString() : 'N/A'}',
+                                                    'Item ID: ${variant['publicId'] ?? variant['coffeeId'] ?? 'Not recorded'}',
                                                     maxLines: 2,
                                                     overflow:
                                                         TextOverflow.ellipsis,
@@ -5279,7 +5451,10 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
                                                   ),
                                                   const SizedBox(height: 4),
                                                   Text(
-                                                    variant['untrackedStock'] == true ? 'Available · made to order' : 'Stock: $variantStock pcs',
+                                                    variant['untrackedStock'] ==
+                                                            true
+                                                        ? 'Available · made to order'
+                                                        : 'Stock: $variantStock pcs',
                                                     style: const TextStyle(
                                                       fontSize: 11,
                                                       fontWeight:
@@ -5287,7 +5462,9 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
                                                       color: PinkTheme.textMid,
                                                     ),
                                                   ),
-                                                  if (quantity > 0 && variant['untrackedStock'] != true) ...[
+                                                  if (quantity > 0 &&
+                                                      variant['untrackedStock'] !=
+                                                          true) ...[
                                                     const SizedBox(height: 2),
                                                     Text(
                                                       'Remaining: $remainingStock pcs',
@@ -5306,129 +5483,157 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
                                                 ],
                                               ),
                                             ),
-                                            // Beverage sizes are selected once per bundle.
-                                            if (item['sourceCollection'] == 'coffee_products')
-                                              Checkbox(value: isSelected, activeColor: PinkTheme.primary, onChanged: (selected) => _setVariantQuantity(itemId, variantIndex, selected == true ? 1 : 0))
-                                            else
-                                            Row(
-                                              children: [
-                                                InkWell(
-                                                  onTap: quantity > 0
-                                                      ? () => _decrementVariant(
-                                                          itemId,
-                                                          variantIndex,
-                                                        )
-                                                      : null,
-                                                  borderRadius:
-                                                      BorderRadius.circular(14),
-                                                  child: Container(
-                                                    width: 34,
-                                                    height: 34,
-                                                    decoration: BoxDecoration(
-                                                      color: quantity > 0
-                                                          ? PinkTheme.primary
-                                                                .withOpacity(
-                                                                  0.12,
-                                                                )
-                                                          : PinkTheme
-                                                                .inputBorder,
-                                                      borderRadius:
-                                                          BorderRadius.circular(
-                                                            12,
-                                                          ),
+                                            if (item['sourceCollection'] !=
+                                                null)
+                                              Checkbox(
+                                                value: isSelected,
+                                                activeColor: PinkTheme.primary,
+                                                onChanged: (selected) =>
+                                                    _setVariantQuantity(
+                                                      itemId,
+                                                      variantIndex,
+                                                      selected == true ? 1 : 0,
                                                     ),
-                                                    child: Icon(
-                                                      Icons.remove_rounded,
-                                                      color: quantity > 0
-                                                          ? PinkTheme.primary
-                                                          : PinkTheme.textLight,
-                                                      size: 18,
-                                                    ),
-                                                  ),
-                                                ),
-                                                const SizedBox(width: 6),
-                                                SizedBox(
-                                                  width: 76,
-                                                  child: TextFormField(
-                                                    key: ValueKey(
-                                                      '$itemId-$variantIndex-$quantity',
-                                                    ),
-                                                    initialValue: quantity
-                                                        .toString(),
-                                                    keyboardType:
-                                                        TextInputType.number,
-                                                    textAlign: TextAlign.center,
-                                                    decoration: InputDecoration(
-                                                      contentPadding:
-                                                          const EdgeInsets.symmetric(
-                                                            vertical: 10,
-                                                            horizontal: 8,
-                                                          ),
-                                                      border: OutlineInputBorder(
+                                              ),
+                                            if (item['sourceCollection'] ==
+                                                    null ||
+                                                (item['sourceCollection'] ==
+                                                        'coffee_products' &&
+                                                    isSelected))
+                                              Row(
+                                                children: [
+                                                  InkWell(
+                                                    onTap: quantity > 0
+                                                        ? () =>
+                                                              _decrementVariant(
+                                                                itemId,
+                                                                variantIndex,
+                                                              )
+                                                        : null,
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                          14,
+                                                        ),
+                                                    child: Container(
+                                                      width: 34,
+                                                      height: 34,
+                                                      decoration: BoxDecoration(
+                                                        color: quantity > 0
+                                                            ? PinkTheme.primary
+                                                                  .withOpacity(
+                                                                    0.12,
+                                                                  )
+                                                            : PinkTheme
+                                                                  .inputBorder,
                                                         borderRadius:
                                                             BorderRadius.circular(
                                                               12,
                                                             ),
-                                                        borderSide: BorderSide(
-                                                          color:
-                                                              PinkTheme.divider,
+                                                      ),
+                                                      child: Icon(
+                                                        Icons.remove_rounded,
+                                                        color: quantity > 0
+                                                            ? PinkTheme.primary
+                                                            : PinkTheme
+                                                                  .textLight,
+                                                        size: 18,
+                                                      ),
+                                                    ),
+                                                  ),
+                                                  const SizedBox(width: 6),
+                                                  SizedBox(
+                                                    width: 76,
+                                                    child: TextFormField(
+                                                      key: ValueKey(
+                                                        '$itemId-$variantIndex-$quantity',
+                                                      ),
+                                                      initialValue: quantity
+                                                          .toString(),
+                                                      keyboardType:
+                                                          TextInputType.number,
+                                                      textAlign:
+                                                          TextAlign.center,
+                                                      decoration: InputDecoration(
+                                                        labelText:
+                                                            variant['coffeeSize'] ==
+                                                                null
+                                                            ? 'Qty'
+                                                            : 'Qty ${variant['coffeeSize']}',
+                                                        contentPadding:
+                                                            const EdgeInsets.symmetric(
+                                                              vertical: 10,
+                                                              horizontal: 8,
+                                                            ),
+                                                        border: OutlineInputBorder(
+                                                          borderRadius:
+                                                              BorderRadius.circular(
+                                                                12,
+                                                              ),
+                                                          borderSide:
+                                                              BorderSide(
+                                                                color: PinkTheme
+                                                                    .divider,
+                                                              ),
                                                         ),
+                                                        enabledBorder:
+                                                            OutlineInputBorder(
+                                                              borderRadius:
+                                                                  BorderRadius.circular(
+                                                                    12,
+                                                                  ),
+                                                              borderSide: BorderSide(
+                                                                color: PinkTheme
+                                                                    .divider,
+                                                                width: 1.2,
+                                                              ),
+                                                            ),
                                                       ),
-                                                      enabledBorder:
-                                                          OutlineInputBorder(
-                                                            borderRadius:
-                                                                BorderRadius.circular(
-                                                                  12,
-                                                                ),
-                                                            borderSide:
-                                                                BorderSide(
-                                                                  color: PinkTheme
-                                                                      .divider,
-                                                                  width: 1.2,
-                                                                ),
-                                                          ),
-                                                    ),
-                                                    onChanged: (value) {
-                                                      final newQty =
-                                                          int.tryParse(value) ??
-                                                          0;
-                                                      _setVariantQuantity(
-                                                        itemId,
-                                                        variantIndex,
-                                                        newQty,
-                                                      );
-                                                    },
-                                                  ),
-                                                ),
-                                                const SizedBox(width: 6),
-                                                InkWell(
-                                                  onTap: () =>
-                                                      _incrementVariant(
-                                                        itemId,
-                                                        variantIndex,
-                                                      ),
-                                                  borderRadius:
-                                                      BorderRadius.circular(14),
-                                                  child: Container(
-                                                    width: 34,
-                                                    height: 34,
-                                                    decoration: BoxDecoration(
-                                                      color: PinkTheme.primary
-                                                          .withOpacity(0.18),
-                                                      borderRadius:
-                                                          BorderRadius.circular(
-                                                            12,
-                                                          ),
-                                                    ),
-                                                    child: const Icon(
-                                                      Icons.add_rounded,
-                                                      color: PinkTheme.primary,
-                                                      size: 18,
+                                                      onChanged: (value) {
+                                                        final newQty =
+                                                            int.tryParse(
+                                                              value,
+                                                            ) ??
+                                                            0;
+                                                        _setVariantQuantity(
+                                                          itemId,
+                                                          variantIndex,
+                                                          newQty,
+                                                        );
+                                                      },
                                                     ),
                                                   ),
-                                                ),
-                                              ],
-                                            ),
+                                                  const SizedBox(width: 6),
+                                                  InkWell(
+                                                    onTap: () =>
+                                                        _incrementVariant(
+                                                          itemId,
+                                                          variantIndex,
+                                                        ),
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                          14,
+                                                        ),
+                                                    child: Container(
+                                                      width: 34,
+                                                      height: 34,
+                                                      decoration: BoxDecoration(
+                                                        color: PinkTheme.primary
+                                                            .withOpacity(0.18),
+                                                        borderRadius:
+                                                            BorderRadius.circular(
+                                                              12,
+                                                            ),
+                                                      ),
+                                                      child: const Icon(
+                                                        Icons.add_rounded,
+                                                        color:
+                                                            PinkTheme.primary,
+                                                        size: 18,
+                                                      ),
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
                                           ],
                                         ),
                                       ),

@@ -1,3 +1,6 @@
+import 'dart:async';
+import '../../services/local_database_sync_service.dart';
+import '../../services/offline_login.dart';
 import 'package:sales_tracking/theme/app_colors.dart';
 import '../../services/account_username.dart';
 import 'package:sales_tracking/services/staff_login_session.dart';
@@ -94,7 +97,8 @@ class _LoginScreenState extends State<LoginScreen>
     if (!mounted) return;
     if (!isError && message.startsWith('Welcome')) {
       showTopNotification(
-        context, message,
+        context,
+        message,
         backgroundColor: const Color(0xFF4A7C59),
         delay: const Duration(milliseconds: 400),
       );
@@ -132,7 +136,8 @@ class _LoginScreenState extends State<LoginScreen>
     );
   }
 
-  String _normalizeUsername(String username) => normalizeAccountUsername(username);
+  String _normalizeUsername(String username) =>
+      normalizeAccountUsername(username);
 
   List<String> _authPasswordCandidates(String username, String password) {
     final candidates = <String>[password];
@@ -182,8 +187,7 @@ class _LoginScreenState extends State<LoginScreen>
   String _offlinePasswordHash(String username, String password) =>
       sha256.convert(utf8.encode('$username:$password')).toString();
 
-  /// A user must complete one successful online login first.  We keep only a
-  /// salted digest (never the password) and the minimum session details.
+  /// Remember a password digest per account after successful authentication.
   Future<void> _rememberOfflineAccount({
     required String username,
     required String password,
@@ -191,6 +195,7 @@ class _LoginScreenState extends State<LoginScreen>
     required String userId,
     required String publicId,
     String firstName = '',
+    required Map<String, dynamic> accountData,
   }) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('offlineLogin.username', username);
@@ -202,58 +207,68 @@ class _LoginScreenState extends State<LoginScreen>
     await prefs.setString('offlineLogin.userId', userId);
     await prefs.setString('offlineLogin.publicId', publicId);
     await prefs.setString('offlineLogin.firstName', firstName);
+    await prefs.setString(
+      'offlineAccount.' + _normalizeUsername(username),
+      jsonEncode({
+        'passwordHash': _offlinePasswordHash(
+          _normalizeUsername(username),
+          password,
+        ),
+        'version': offlineCredentialVersion(accountData),
+      }),
+    );
   }
 
   Future<bool> _tryOfflineSignIn(String username, String password) async {
     final prefs = await SharedPreferences.getInstance();
-    final savedUsername = prefs.getString('offlineLogin.username') ?? '';
-    final savedHash = prefs.getString('offlineLogin.passwordHash') ?? '';
-    final savedRole = prefs.getString('offlineLogin.role') ?? 'staff';
-
-    final normalizedSavedUsername = _normalizeUsername(savedUsername);
-    final normalizedUsername = _normalizeUsername(username);
-
-    final usernameMatches =
-        savedUsername.isNotEmpty &&
-        (savedUsername == username ||
-            normalizedSavedUsername == normalizedUsername ||
-            savedUsername.toUpperCase() == username.toUpperCase());
-
-    if (!usernameMatches ||
-        savedHash != _offlinePasswordHash(savedUsername, password)) {
+    final accounts = await LocalDatabaseSyncService().getCachedCollection(
+      'staff_requests',
+    );
+    final account = accounts
+        .where((row) => offlineUsernameMatches(row, username))
+        .firstOrNull;
+    if (account == null || !offlineAccountAllowed(account)) return false;
+    final saved = prefs.getString(
+      'offlineAccount.' + _normalizeUsername(username),
+    );
+    final remembered = saved == null
+        ? null
+        : Map<String, dynamic>.from(jsonDecode(saved));
+    final matchesRemembered =
+        remembered != null &&
+        remembered['version'] == offlineCredentialVersion(account) &&
+        remembered['passwordHash'] ==
+            _offlinePasswordHash(_normalizeUsername(username), password);
+    final legacyAdmin =
+        account['role'] == 'admin' &&
+        account['credentialsChangedAt'] == null &&
+        (_isAcceptedAdminPassword(password) ||
+            _isEmergencyAdminLogin(username, password));
+    if (!offlineStoredPasswordMatches(account, password) &&
+        !matchesRemembered &&
+        !legacyAdmin)
       return false;
-    }
-
+    final savedRole = (account['role'] ?? 'staff')
+        .toString()
+        .trim()
+        .toLowerCase();
+    final userId = account['_localDocId'].toString();
+    final publicId =
+        (account[savedRole == 'admin' ? 'adminId' : 'staffId'] ?? username)
+            .toString();
     final role = savedRole;
     final isAdmin = role == 'admin';
     await prefs.setString('lastRole', role);
-    await prefs.setString(
-      'lastUserId',
-      prefs.getString('offlineLogin.userId') ?? '',
-    );
-    await prefs.setString(
-      'lastStaffDocId',
-      prefs.getString('offlineLogin.userId') ?? '',
-    );
-    await prefs.setString(
-      'lastStaffPublicId',
-      prefs.getString('offlineLogin.publicId') ?? username,
-    );
-    if (isAdmin)
-      await prefs.setString(
-        'adminId',
-        prefs.getString('offlineLogin.publicId') ?? username,
-      );
+    await prefs.setString('lastUserId', userId);
+    await prefs.setString('lastStaffDocId', userId);
+    await prefs.setString('lastStaffPublicId', publicId);
+    if (isAdmin) await prefs.setString('adminId', publicId);
     if (!mounted) return true;
     if (!isAdmin) {
       try {
-        final uid = prefs.getString('offlineLogin.userId') ?? '';
-        final staff = await FirebaseFirestore.instance
-            .collection('staff_requests')
-            .doc(uid)
-            .get(const GetOptions(source: Source.cache));
+        final uid = userId;
         if (mounted)
-          await StaffLoginSession.start(context, uid, staff.data() ?? {});
+          await StaffLoginSession.start(context, uid, account, offline: true);
       } catch (_) {
         _showMessage(
           'Offline login opened; session details are unavailable.',
@@ -262,7 +277,7 @@ class _LoginScreenState extends State<LoginScreen>
       }
     }
     if (!mounted) return true;
-    final firstName = prefs.getString('offlineLogin.firstName') ?? '';
+    final firstName = _welcomeName(account, '');
     _showMessage(firstName.isEmpty ? 'Welcome!' : 'Welcome, $firstName!');
     Navigator.of(context).pushReplacement(
       MaterialPageRoute(
@@ -295,11 +310,18 @@ class _LoginScreenState extends State<LoginScreen>
       userId: accountDoc.id,
       publicId: publicId,
       firstName: _welcomeName(data, ''),
+      accountData: data,
     );
-    await accountDoc.reference.update({
-      'lastLoginAt': FieldValue.serverTimestamp(),
-      'isOnline': true,
-    });
+    unawaited(
+      accountDoc.reference
+          .update({
+            'lastLoginAt': FieldValue.serverTimestamp(),
+            'isOnline': true,
+          })
+          .catchError((Object error) {
+            debugPrint('Login status queued: $error');
+          }),
+    );
     if (!isAdmin && mounted)
       await StaffLoginSession.start(context, accountDoc.id, data);
     _showMessage(
@@ -392,14 +414,14 @@ class _LoginScreenState extends State<LoginScreen>
       final byId = await FirebaseFirestore.instance
           .collection('staff_requests')
           .where(field, whereIn: accountUsernameAliases(normalized))
-          .get();
+          .get(const GetOptions(source: Source.server));
       matches.addAll(byId.docs);
     }
 
     final byUsername = await FirebaseFirestore.instance
         .collection('staff_requests')
         .where('username', whereIn: accountUsernameAliases(normalized))
-        .get();
+        .get(const GetOptions(source: Source.server));
     matches.addAll(byUsername.docs);
 
     if (RegExp(r'^\d+$').hasMatch(idNumber)) {
@@ -407,7 +429,7 @@ class _LoginScreenState extends State<LoginScreen>
       final byRole = await FirebaseFirestore.instance
           .collection('staff_requests')
           .where('role', isEqualTo: role)
-          .get();
+          .get(const GetOptions(source: Source.server));
 
       for (final doc in byRole.docs) {
         final data = doc.data();
@@ -418,10 +440,7 @@ class _LoginScreenState extends State<LoginScreen>
           data['username'],
         ].map((value) => _normalizeUsername((value ?? '').toString()));
 
-        if (storedIds.any(
-          (storedId) =>
-              storedId == normalized,
-        )) {
+        if (storedIds.any((storedId) => storedId == normalized)) {
           matches.add(doc);
         }
       }
@@ -434,7 +453,7 @@ class _LoginScreenState extends State<LoginScreen>
 
     final adminFallback = await FirebaseFirestore.instance
         .collection('staff_requests')
-        .get();
+        .get(const GetOptions(source: Source.server));
     final adminDocs = adminFallback.docs.where((doc) {
       final data = doc.data();
       final role = (data['role'] ?? '').toString().trim().toLowerCase();
@@ -469,6 +488,7 @@ class _LoginScreenState extends State<LoginScreen>
   }
 
   Future<void> _onSignInPressed() async {
+    if (_isLoading) return;
     final rawUsername = _usernameController.text.trim().toUpperCase();
     if (!isValidAccountLoginUsername(rawUsername)) {
       _showMessage('Wrong username or password.', isError: true);
@@ -484,9 +504,16 @@ class _LoginScreenState extends State<LoginScreen>
 
     setState(() => _isLoading = true);
     try {
-      final accountDocs = await _findAccountsByUsername(username);
-      if (_isEmergencyAdminLogin(username, password) && !accountDocs.any((doc)=>doc.data()['credentialsChangedAt'] != null)) {
-        await _signInEmergencyAdmin(accountDocs.isEmpty ? {} : accountDocs.first.data());
+      final accountDocs = await _findAccountsByUsername(
+        username,
+      ).timeout(const Duration(seconds: 5));
+      if (_isEmergencyAdminLogin(username, password) &&
+          !accountDocs.any(
+            (doc) => doc.data()['credentialsChangedAt'] != null,
+          )) {
+        await _signInEmergencyAdmin(
+          accountDocs.isEmpty ? {} : accountDocs.first.data(),
+        );
         return;
       }
       if (accountDocs.isEmpty) {
@@ -495,7 +522,11 @@ class _LoginScreenState extends State<LoginScreen>
       }
 
       // Special handling for admin accounts with valid admin password
-      if (username.startsWith('ADM-') && _isAcceptedAdminPassword(password) && !accountDocs.any((doc)=>doc.data()['credentialsChangedAt'] != null)) {
+      if (username.startsWith('ADM-') &&
+          _isAcceptedAdminPassword(password) &&
+          !accountDocs.any(
+            (doc) => doc.data()['credentialsChangedAt'] != null,
+          )) {
         // For admin accounts, use the valid admin password for direct authentication
         for (final accountDoc in accountDocs) {
           final accountData = accountDoc.data();
@@ -526,9 +557,13 @@ class _LoginScreenState extends State<LoginScreen>
             }
 
             if (status == 'accepted') {
-              await accountDoc.reference.update({
-                'lastLoginAt': FieldValue.serverTimestamp(),
-              });
+              unawaited(
+                accountDoc.reference
+                    .update({'lastLoginAt': FieldValue.serverTimestamp()})
+                    .catchError((Object error) {
+                      debugPrint('Login status queued: $error');
+                    }),
+              );
               final adminId =
                   (accountData['adminId'] as String?) ??
                   (accountData['staffId'] as String?) ??
@@ -544,10 +579,9 @@ class _LoginScreenState extends State<LoginScreen>
                 userId: accountDoc.id,
                 publicId: adminId,
                 firstName: _welcomeName(accountData, ''),
+                accountData: accountData,
               );
-              _showMessage(
-                'Welcome, ${_welcomeName(accountData, 'Admin')}!',
-              );
+              _showMessage('Welcome, ${_welcomeName(accountData, 'Admin')}!');
               Future.microtask(() {
                 if (!mounted) return;
                 Navigator.of(context).pushReplacement(
@@ -572,15 +606,24 @@ class _LoginScreenState extends State<LoginScreen>
 
       for (final accountDoc in accountDocs) {
         final accountData = accountDoc.data();
-        final email = (accountData['authEmail'] ?? accountData['email'])?.toString().trim() ?? '';
+        final email =
+            (accountData['authEmail'] ?? accountData['email'])
+                ?.toString()
+                .trim() ??
+            '';
         if (email.isEmpty) continue;
 
-        for (final authPassword in accountData['credentialsChangedAt'] != null ? [password] : _authPasswordCandidates(username, password)) {
+        for (final authPassword
+            in accountData['credentialsChangedAt'] != null
+                ? [password]
+                : _authPasswordCandidates(username, password)) {
           try {
-            credential = await FirebaseAuth.instance.signInWithEmailAndPassword(
-              email: email,
-              password: authPassword,
-            );
+            credential = await FirebaseAuth.instance
+                .signInWithEmailAndPassword(
+                  email: email,
+                  password: authPassword,
+                )
+                .timeout(const Duration(seconds: 8));
             signedInDoc = accountDoc;
             break;
           } on FirebaseAuthException catch (e) {
@@ -604,7 +647,9 @@ class _LoginScreenState extends State<LoginScreen>
               .trim()
               .toLowerCase();
           final status = rawStatus.isEmpty ? 'accepted' : rawStatus;
-          if (status == 'accepted' && data['credentialsChangedAt'] == null && _storedPasswordMatches(data, password)) {
+          if (status == 'accepted' &&
+              data['credentialsChangedAt'] == null &&
+              _storedPasswordMatches(data, password)) {
             fallbackDoc = doc;
             break;
           }
@@ -614,10 +659,7 @@ class _LoginScreenState extends State<LoginScreen>
           return;
         }
         if (lastAuthError != null) throw lastAuthError;
-        _showMessage(
-          'Wrong username or password.',
-          isError: true,
-        );
+        _showMessage('Wrong username or password.', isError: true);
         return;
       }
 
@@ -658,7 +700,11 @@ class _LoginScreenState extends State<LoginScreen>
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString('lastRole', isAdmin ? 'admin' : 'staff');
         await prefs.setString('lastUserId', uid);
-        if (isAdmin) await prefs.setString('adminId', (data['adminId'] ?? data['staffId'] ?? username).toString());
+        if (isAdmin)
+          await prefs.setString(
+            'adminId',
+            (data['adminId'] ?? data['staffId'] ?? username).toString(),
+          );
         final publicId = (data[isAdmin ? 'adminId' : 'staffId'] ?? username)
             .toString();
         await _rememberOfflineAccount(
@@ -668,10 +714,15 @@ class _LoginScreenState extends State<LoginScreen>
           userId: uid,
           publicId: publicId,
           firstName: _welcomeName(data, ''),
+          accountData: data,
         );
-        await signedInDoc.reference.update({
-          'lastLoginAt': FieldValue.serverTimestamp(),
-        });
+        unawaited(
+          signedInDoc.reference
+              .update({'lastLoginAt': FieldValue.serverTimestamp()})
+              .catchError((Object error) {
+                debugPrint('Login status queued: $error');
+              }),
+        );
         if (!isAdmin && mounted)
           await StaffLoginSession.start(context, uid, data);
         _showMessage(
@@ -691,14 +742,39 @@ class _LoginScreenState extends State<LoginScreen>
 
       await FirebaseAuth.instance.signOut();
       _showMessage('Unable to sign in. Please contact support.', isError: true);
-    } on FirebaseAuthException {
-      const message = 'Wrong username or password.';
-      _showMessage(message, isError: true);
+    } on FirebaseAuthException catch (e) {
+      if (e.code == 'network-request-failed') {
+        await _offlineSignInOrMessage(username, password);
+      } else {
+        _showMessage('Wrong username or password.', isError: true);
+      }
+    } on TimeoutException {
+      await _offlineSignInOrMessage(username, password);
+    } on FirebaseException catch (e) {
+      if (e.code == 'unavailable' || e.code == 'deadline-exceeded') {
+        await _offlineSignInOrMessage(username, password);
+      } else {
+        _showMessage('Unable to sign in. Please try again.', isError: true);
+      }
     } catch (e) {
-      if (await _tryOfflineSignIn(username, password)) return;
       _showMessage('Unable to sign in. Please try again.', isError: true);
     } finally {
       if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _offlineSignInOrMessage(String username, String password) async {
+    try {
+      if (await _tryOfflineSignIn(username, password)) return;
+      _showMessage(
+        'Offline login unavailable. Check your password or connect to sync this account first.',
+        isError: true,
+      );
+    } catch (_) {
+      _showMessage(
+        'Unable to read saved login data. Please reconnect and try again.',
+        isError: true,
+      );
     }
   }
 
@@ -800,7 +876,11 @@ class _LoginScreenState extends State<LoginScreen>
           ),
           decoration: const BoxDecoration(
             gradient: LinearGradient(
-              colors: [AppColors.primaryDark, AppColors.primary, AppColors.accent],
+              colors: [
+                AppColors.primaryDark,
+                AppColors.primary,
+                AppColors.accent,
+              ],
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
             ),

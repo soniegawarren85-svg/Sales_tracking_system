@@ -306,6 +306,24 @@ class BranchReportData {
         start,
         end,
       ).fold(0, (sum, row) => sum + lossAmount(row)),
+      'Total discount': selected
+          .where((row) => !reportRefund(row))
+          .fold<double>(0, (sum, row) => sum + reportValue(row['discount'])),
+      'Total sold': selected
+          .where((row) => !reportRefund(row))
+          .fold<double>(
+            0,
+            (sum, sale) =>
+                sum +
+                (sale['items'] as List? ?? []).whereType<Map>().fold<double>(
+                  0,
+                  (sum, item) => sum + reportValue(item['quantity']),
+                ),
+          ),
+      'Total transactions': selected
+          .where((row) => !reportRefund(row))
+          .length
+          .toDouble(),
       'Closing cash drawer': openingFor(closingDay) + cash,
     };
   }
@@ -347,6 +365,7 @@ class BranchReportData {
           'publicId': match['publicId'] ?? match['id'],
           'name': match['name'] ?? item['variant'] ?? item['name'],
           'price': item['price'] ?? match['price'],
+          'expirationDate': item['expirationDate'] ?? match['expirationDate'],
           'type': 'Categories',
         };
     }
@@ -358,7 +377,16 @@ class BranchReportData {
             source['publicId'] ?? source['coffeeId'] ?? source['bundleId'],
         'name': source['name'],
         'price': item['price'] ?? source['price'],
-        'type': source['isBundle'] == true ? 'Bundle' : 'Beverages',
+        'expirationDate': item['expirationDate'] ?? source['expirationDate'],
+        'sizes': source['sizes'],
+        'basePrice': source['basePrice'],
+        'type': source['isBundle'] == true
+            ? 'Bundle'
+            : rows(
+                'coffee_addons',
+              ).any((addon) => addon['_id'] == source['_id'])
+            ? 'Add-ons'
+            : 'Beverages',
       };
     }
     return {
@@ -396,6 +424,10 @@ class BranchReportData {
           'price': reportValue(item['price']),
           'type': item['type'] ?? 'Categories',
           'status': 'Recorded',
+          'expirationDate': item['expirationDate'],
+          'sizes': item['sizes'],
+          'basePrice': item['basePrice'],
+          'remaining': null,
         },
       );
     }
@@ -449,15 +481,18 @@ class BranchReportData {
     for (final row in rows(
       'staff_inventory',
     ).where((row) => row['staffId'] == branch)) {
-      if (row['isAddon'] == true) continue;
       final at = cashRecordDate(row['assignedAt']);
       if (at != null && !at.isBefore(end)) continue;
-      final variants = row['isBundle'] == true || row['isCoffee'] == true
+      final variants =
+          row['isBundle'] == true ||
+              row['isCoffee'] == true ||
+              row['isAddon'] == true
           ? [row]
           : (row['items'] as List?)?.whereType<Map>().toList() ?? [row];
       for (final variant in variants) {
         if (row['isCoffee'] != true &&
             row['isBundle'] != true &&
+            row['isAddon'] != true &&
             reportValue(variant['stock'] ?? variant['startingStock']) <= 0)
           continue;
         final expired = cashRecordDate(variant['expirationDate']);
@@ -490,6 +525,18 @@ class BranchReportData {
           }
         }
         final item = ensure(variant, '${row['sourceInventoryId'] ?? ''}');
+        if (row['isAddon'] == true) item['type'] = 'Add-ons';
+        if (!end.isBefore(
+          DateUtils.dateOnly(DateTime.now()).add(const Duration(days: 1)),
+        )) {
+          final stock =
+              variant['stock'] ??
+              variant['bundleCount'] ??
+              variant['startingStock'];
+          if (stock != null)
+            item['remaining'] =
+                reportValue(item['remaining']) + reportValue(stock);
+        }
         item['status'] = deleted && removed != null && removed.isBefore(end)
             ? 'Archived'
             : expired != null && expired.isBefore(end)

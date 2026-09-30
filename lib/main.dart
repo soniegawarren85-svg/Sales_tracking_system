@@ -10,6 +10,7 @@ import 'theme/design.dart';
 import 'Login/Login/Login.dart';
 import 'Firebase.dart';
 import 'services/inventory_service.dart';
+import 'services/offline_login.dart';
 import 'bones/bottom_nav.dart';
 import 'Admin_pages/Admin/Dashboard.dart';
 import 'widgets/network_status_banner.dart';
@@ -19,6 +20,10 @@ void main() async {
   await initializeFirebase();
   // Initialize InventoryService to start listening to Firestore
   InventoryService().initialize();
+  OfflineAccountSync.start();
+  FirebaseAuth.instance.authStateChanges().listen(
+    (_) => OfflineAccountSync.start(),
+  );
   runApp(const MyApp());
 }
 
@@ -59,15 +64,16 @@ class _SessionGateState extends State<SessionGate> {
     final lastRole = prefs.getString('lastRole')?.trim().toLowerCase();
     final savedUserId = prefs.getString('lastUserId') ?? '';
     final savedPublicId = prefs.getString('lastStaffPublicId') ?? '';
-    final hasOfflineSession =
-        lastRole == 'admin' || lastRole == 'staff';
+    final hasOfflineSession = lastRole == 'admin' || lastRole == 'staff';
     final user = FirebaseAuth.instance.currentUser;
 
     if (user == null) {
       if (lastRole == 'admin') {
         return const AdminDashboard();
       }
-      if (lastRole == 'staff' || savedUserId.isNotEmpty || savedPublicId.isNotEmpty) {
+      if (lastRole == 'staff' ||
+          savedUserId.isNotEmpty ||
+          savedPublicId.isNotEmpty) {
         return const BottomNav();
       }
       await prefs.remove('lastRole');

@@ -44,8 +44,7 @@ class BranchStaffActivityDialog extends StatefulWidget {
 
 class _BranchStaffActivityDialogState extends State<BranchStaffActivityDialog> {
   String _search = '';
-  DateTime? _date;
-  late bool _history = widget.userId != null;
+  DateTime? _date = DateUtils.dateOnly(DateTime.now());
   late final sessions = (widget.firestore ?? FirebaseFirestore.instance)
       .collection('staff_login_sessions')
       .where(
@@ -130,16 +129,6 @@ class _BranchStaffActivityDialogState extends State<BranchStaffActivityDialog> {
                     icon: const Icon(Icons.clear),
                     onPressed: () => setState(() => _date = null),
                   ),
-                IconButton(
-                  tooltip: _history ? 'Latest sessions' : 'Session history',
-                  isSelected: _history,
-                  selectedIcon: const Icon(
-                    Icons.history,
-                    color: AppColors.primaryDark,
-                  ),
-                  icon: const Icon(Icons.history),
-                  onPressed: () => setState(() => _history = !_history),
-                ),
               ],
             ),
           ),
@@ -162,16 +151,7 @@ class _BranchStaffActivityDialogState extends State<BranchStaffActivityDialog> {
                   (a, b) => (sessionTime(b['loginAt']) ?? DateTime(1970))
                       .compareTo(sessionTime(a['loginAt']) ?? DateTime(1970)),
                 );
-                final seen = <String>{};
-                final latest = _history
-                    ? records
-                    : records
-                          .where(
-                            (row) => seen.add(
-                              '${row['userId'] ?? row['staffId']}::${row['deviceId'] ?? row['ipAddress'] ?? 'legacy'}',
-                            ),
-                          )
-                          .toList();
+                final latest = records;
                 final filtered = latest.where((row) {
                   final date = sessionTime(row['loginAt']);
                   return (_date == null ||

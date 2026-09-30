@@ -68,11 +68,14 @@ Future<void> showBundleDetails(
               child: SingleChildScrollView(
                 padding: const EdgeInsets.all(20),
                 child: InventoryRecordsTable(
-                  headings: const ['Item', 'Expiration date', 'Qty'],
-                  flex: const {0: 3, 1: 2, 2: .8},
+                  headings: const ['ID', 'Item', 'Expiration date', 'Qty'],
+                  flex: const {0: 1.3, 1: 3, 2: 2, 3: .8},
                   rows: items
                       .map(
                         (item) => <Widget>[
+                          Text(
+                            '${item['publicId'] ?? item['coffeeId'] ?? item['variantId'] ?? item['id'] ?? 'Not recorded'}',
+                          ),
                           Text(
                             '${item['name'] ?? 'Item'}',
                             style: const TextStyle(fontWeight: FontWeight.w700),
