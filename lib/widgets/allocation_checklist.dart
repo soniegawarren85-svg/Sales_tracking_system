@@ -1,44 +1,58 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
+import '../services/session_actor.dart';
 import 'package:flutter/material.dart';
 import '../services/allocation_checklist_service.dart';
+import '../services/checklist_status.dart';
 import '../theme/app_colors.dart';
+import 'checklist_return_dialog.dart';
+import 'return_batch_cards.dart';
 
 class AllocationChecklistButton extends StatelessWidget {
   final List<String> scopeIds;
   final FirebaseFirestore? database;
+  final bool isAdmin;
   const AllocationChecklistButton({
     super.key,
     required this.scopeIds,
     this.database,
+    this.isAdmin = false,
   });
 
   @override
   Widget build(BuildContext context) {
     final db = database ?? FirebaseFirestore.instance;
-    final ids = scopeIds.where((id) => id.isNotEmpty).toSet().take(30).toList();
-    if (ids.isEmpty) return const SizedBox.shrink();
+    final ids = scopeIds.where((id) => id.isNotEmpty).toSet().toList();
+    if (ids.isEmpty && !isAdmin) return const SizedBox.shrink();
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-      stream: db
-          .collection('allocation_checklist')
-          .where('staffId', whereIn: ids)
-          .snapshots(),
+      stream: checklistQuery(db, ids, isAdmin).snapshots(),
       builder: (context, snapshot) {
         final pending =
             snapshot.data?.docs
-                .where((doc) => doc.data()['status'] == 'pending')
+                .where(
+                  (doc) => ChecklistStatus.pending(doc.data(), admin: isAdmin),
+                )
                 .length ??
             0;
         return FilledButton.icon(
           style: FilledButton.styleFrom(
             backgroundColor: Colors.white,
             foregroundColor: AppColors.primary,
+            textStyle: const TextStyle(fontWeight: FontWeight.w800),
+            shape: const StadiumBorder(),
           ),
-          icon: const Icon(Icons.inventory_2_outlined),
-          label: Text('Checklist ($pending)'),
+          icon: Icon(
+            snapshot.hasError ? Icons.error_outline : Icons.checklist_rounded,
+          ),
+          label: Text(
+            !isAdmin
+                ? 'Checklist'
+                : snapshot.hasError
+                ? 'Checklist (!)'
+                : 'Checklist ($pending)',
+          ),
           onPressed: () => showDialog<void>(
             context: context,
-            builder: (_) => _ChecklistDialog(ids: ids, db: db),
+            builder: (_) => _ChecklistDialog(ids: ids, db: db, admin: isAdmin),
           ),
         );
       },
@@ -46,114 +60,390 @@ class AllocationChecklistButton extends StatelessWidget {
   }
 }
 
+Query<Map<String, dynamic>> checklistQuery(
+  FirebaseFirestore db,
+  List<String> ids,
+  bool admin,
+) {
+  final query = db.collection('allocation_checklist');
+  return admin ? query : query.where('staffId', whereIn: ids.take(30).toList());
+}
+
 class _ChecklistDialog extends StatefulWidget {
   final List<String> ids;
   final FirebaseFirestore db;
-  const _ChecklistDialog({required this.ids, required this.db});
+  final bool admin;
+  const _ChecklistDialog({
+    required this.ids,
+    required this.db,
+    required this.admin,
+  });
   @override
   State<_ChecklistDialog> createState() => _ChecklistDialogState();
 }
 
 class _ChecklistDialogState extends State<_ChecklistDialog> {
   String search = '', filter = 'All items';
+  int tab = 0;
   final busy = <String>{};
-  late final stream = widget.db
-      .collection('allocation_checklist')
-      .where('staffId', whereIn: widget.ids)
-      .snapshots();
+  late final stream = checklistQuery(
+    widget.db,
+    widget.ids,
+    widget.admin,
+  ).snapshots();
 
-  Future<void> decide(String id, bool accept) async {
-    String reason = '';
-    if (!accept) {
-      var declineReason = '';
-      final form = GlobalKey<FormState>();
-      final value = await showDialog<String>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('Decline allocation'),
-          content: Form(
-            key: form,
-            child: TextFormField(
-              onChanged: (value) => declineReason = value,
-              autofocus: true,
-              maxLines: 3,
-              decoration: const InputDecoration(
-                labelText: 'Reason',
-                hintText: 'Explain why this delivery cannot be accepted',
-              ),
-              validator: (value) => value == null || value.trim().isEmpty
-                  ? 'A reason is required'
-                  : null,
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () {
-                if (form.currentState!.validate())
-                  Navigator.pop(context, declineReason.trim());
-              },
-              child: const Text('Decline and return'),
-            ),
-          ],
+  String date(dynamic value) {
+    final parsed = value is Timestamp
+        ? value.toDate()
+        : DateTime.tryParse('$value');
+    return parsed == null ? 'Not recorded' : parsed.toLocal().toString();
+  }
+
+  Future<String?> askReason(bool admin, {bool decline = false}) async {
+    var reason = '';
+    final form = GlobalKey<FormState>();
+    return showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        constraints: const BoxConstraints(maxWidth: 420),
+        title: Text(
+          decline
+              ? 'Decline returned items'
+              : admin
+              ? 'Report Discrepancy'
+              : 'Report Issue',
         ),
-      );
-      if (value == null || !mounted) return;
-      reason = value;
+        content: Form(
+          key: form,
+          child: TextFormField(
+            autofocus: true,
+            maxLines: 3,
+            onChanged: (value) => reason = value,
+            decoration: InputDecoration(
+              labelText: 'Reason',
+              hintText: decline
+                  ? 'Explain to the staff why this return was declined'
+                  : 'Missing, extra, incorrect, or damaged items',
+            ),
+            validator: (value) => value == null || value.trim().isEmpty
+                ? 'A reason is required'
+                : null,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () {
+              if (form.currentState!.validate())
+                Navigator.pop(context, reason.trim());
+            },
+            child: Text(decline ? 'Decline return' : 'Submit report'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> actReturns(
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
+    bool accept,
+  ) async {
+    final reason = accept ? '' : await askReason(true, decline: true);
+    if (reason == null || !mounted) return;
+    String message;
+    var success = false;
+    try {
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) throw StateError('Please sign in again.');
+      final changed = await AllocationChecklistService(widget.db)
+          .decideReturns(
+            docs.map((doc) => doc.id).toList(),
+            accept: accept,
+            actorId: actor.id,
+            actorName: actor.name,
+            reason: reason,
+          )
+          .timeout(const Duration(seconds: 20));
+      success = changed > 0;
+      message = changed == 0
+          ? 'These returns have already been processed.'
+          : accept
+          ? '$changed returned item records accepted successfully.'
+          : '$changed returned item records declined. The staff can view your reason.';
+    } catch (error) {
+      message =
+          'Unable to confirm this decision: $error. Check the current status before trying again.';
     }
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        constraints: const BoxConstraints(maxWidth: 400),
+        icon: Icon(
+          success ? Icons.check_circle : Icons.info_outline,
+          color: success ? Colors.green.shade700 : AppColors.primaryDeep,
+        ),
+        title: Text(
+          success
+              ? accept
+                    ? 'Return accepted'
+                    : 'Return declined'
+              : 'Return status',
+        ),
+        content: Text(message),
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Done'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> act(String id, {bool report = false}) async {
+    if (busy.contains(id)) return;
     setState(() => busy.add(id));
     try {
-      final changed = await AllocationChecklistService(widget.db).decide(
-        id,
-        accept: accept,
-        staffId: FirebaseAuth.instance.currentUser!.uid,
-        reason: reason,
-      );
-      if (mounted)
+      final reason = report ? await askReason(widget.admin) : '';
+      if (reason == null || !mounted) return;
+      if (!report) {
+        final confirmed = await confirmChecklistReceipt(
+          context,
+          title: widget.admin
+              ? 'Receive returned items?'
+              : 'Receive allocated items?',
+          message:
+              'Confirm that all items have arrived and you have checked them. Proceed to mark this transaction as received.',
+        );
+        if (!confirmed || !mounted) return;
+      }
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) throw StateError('Please sign in again.');
+      final name = actor.name;
+      final service = AllocationChecklistService(widget.db);
+      final changed = report
+          ? await service.report(
+              id,
+              admin: widget.admin,
+              actorId: actor.id,
+              actorName: name,
+              reason: reason,
+              scopeIds: widget.ids,
+            )
+          : widget.admin
+          ? await service.confirmReturn(id, actorId: actor.id, actorName: name)
+          : await service.decide(
+              id,
+              accept: true,
+              staffId: actor.id,
+              actorName: name,
+              scopeIds: widget.ids,
+            );
+      if (!mounted) return;
+      if (report) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
               changed
-                  ? accept
-                        ? 'Allocation accepted. Inventory updated.'
-                        : 'Allocation returned. Admin notified.'
-                  : 'This allocation has already been processed.',
+                  ? 'Report submitted.'
+                  : 'This transaction has already been processed.',
             ),
           ),
         );
+      } else {
+        await showDialog<void>(
+          context: context,
+          builder: (context) => AlertDialog(
+            constraints: const BoxConstraints(maxWidth: 400),
+            icon: Icon(
+              changed ? Icons.check_circle : Icons.info_outline,
+              color: changed ? Colors.green.shade700 : AppColors.primaryDeep,
+            ),
+            title: Text(
+              changed ? 'Items received successfully' : 'Receipt status',
+            ),
+            content: Text(
+              changed
+                  ? 'Done. The items are marked as received.'
+                  : 'This transaction has already been processed.',
+            ),
+            actions: [
+              FilledButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Done'),
+              ),
+            ],
+          ),
+        );
+      }
     } catch (error) {
       if (mounted)
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Unable to process allocation: $error')),
+          SnackBar(content: Text('Unable to update checklist: $error')),
         );
     } finally {
       if (mounted) setState(() => busy.remove(id));
     }
   }
 
+  Widget record(QueryDocumentSnapshot<Map<String, dynamic>> doc) {
+    final data = doc.data();
+    final returned = data['kind'] == 'return';
+    if (returned)
+      return ReturnItemCard(
+        key: ValueKey(doc.id),
+        db: doc.reference.firestore,
+        data: data,
+      );
+    final type = AllocationChecklistService.type(data);
+    final items = returned
+        ? [data]
+        : type == 'Categories'
+        ? AllocationChecklistService.rows(data['items'])
+        : [data];
+    final actionable = ChecklistStatus.pending(data, admin: widget.admin);
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              '${data['name'] ?? 'Delivery'} · $type',
+              style: const TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                color: AppColors.primary,
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              ChecklistStatus.label(data) == ChecklistStatus.received
+                  ? 'Done · Received'
+                  : ChecklistStatus.label(data),
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
+            Text(
+              'Branch: ${data['branchName'] ?? data['staffName'] ?? data['staffId'] ?? 'Not recorded'}',
+            ),
+            Text('Date: ${date(data['createdAt'] ?? data['assignedAt'])}'),
+            Text(
+              returned
+                  ? 'Staff: ${data['submittedByName'] ?? data['staffName'] ?? data['submittedBy'] ?? 'Not recorded'}'
+                  : 'Allocated by: ${data['allocatedByName'] ?? data['allocatedBy'] ?? 'Not recorded (legacy delivery)'}',
+            ),
+            const Divider(),
+            for (final item in items)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 3),
+                child: Text(
+                  '${item['name'] ?? 'Item'} — ${returned
+                      ? item['quantity']
+                      : type == 'Beverages'
+                      ? 'Catalog access'
+                      : item['bundleCount'] ?? item['stock'] ?? item['startingStock'] ?? 0}',
+                ),
+              ),
+            if ('${data['reason'] ?? ''}'.isNotEmpty)
+              Text('Reason: ${data['reason']}'),
+            if (returned) ...[
+              Text(
+                'Return type: ${data['returnSourceCollection'] == 'completed_sales'
+                    ? 'Refund'
+                    : data['returnSourceCollection'] == 'stock_adjustments'
+                    ? 'Reduce'
+                    : 'Stock return'}',
+              ),
+              if (data['sourceDate'] != null)
+                Text('Original date: ${date(data['sourceDate'])}'),
+              if (data['sourceReceiptId'] != null)
+                Text('Receipt: ${data['sourceReceiptId']}'),
+              if (data['unitPrice'] != null)
+                Text('Unit price: ₱${data['unitPrice']}'),
+              if ((data['sourceItem'] as Map?)?['expirationDate'] != null)
+                Text(
+                  'Expiry: ${(data['sourceItem'] as Map)['expirationDate']}',
+                ),
+              if (data['sourceStaffName'] != null)
+                Text('Recorded by: ${data['sourceStaffName']}'),
+              if (data['returnSourceId'] != null)
+                Text('Source reference: ${data['returnSourceId']}'),
+            ],
+            if ('${data['issueReason'] ?? ''}'.isNotEmpty) ...[
+              Text('Reported: ${data['issueReason']}'),
+              Text(
+                'By ${data['reportedByName'] ?? data['reportedBy']} · ${date(data['reportedAt'])}',
+              ),
+            ],
+            if (data['confirmedAt'] != null || data['decidedAt'] != null)
+              Text(
+                'Confirmed by: ${data['confirmedByName'] ?? data['confirmedBy'] ?? data['decidedBy']}\n${date(data['confirmedAt'] ?? data['decidedAt'])}',
+              ),
+            if (returned &&
+                ChecklistStatus.label(data) == ChecklistStatus.completed)
+              const Text(
+                'Return received and recorded separately from sellable stock.',
+              ),
+            if (actionable) ...[
+              const SizedBox(height: 12),
+              Wrap(
+                alignment: WrapAlignment.end,
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  OutlinedButton(
+                    onPressed: busy.contains(doc.id)
+                        ? null
+                        : () => act(doc.id, report: true),
+                    child: Text(
+                      widget.admin ? 'Report Discrepancy' : 'Report Issue',
+                    ),
+                  ),
+                  FilledButton.icon(
+                    onPressed: busy.contains(doc.id) ? null : () => act(doc.id),
+                    icon: const Icon(Icons.check),
+                    label: Text(
+                      busy.contains(doc.id)
+                          ? 'Processing…'
+                          : widget.admin
+                          ? 'Confirm Return Received'
+                          : 'Confirm Received',
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) => Dialog(
-    insetPadding: const EdgeInsets.all(16),
+    insetPadding: const EdgeInsets.all(12),
     clipBehavior: Clip.antiAlias,
     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
     child: SizedBox(
-      width: 980,
-      height: 650,
+      width: 600,
+      height: 640,
       child: Column(
         children: [
           Container(
-            color: AppColors.primary,
-            padding: const EdgeInsets.all(20),
+            color: AppColors.primaryDeep,
+            padding: const EdgeInsets.all(16),
             child: Row(
               children: [
-                const Icon(Icons.inventory_2_outlined, color: Colors.white),
+                const Icon(Icons.checklist_rounded, color: Colors.white),
                 const SizedBox(width: 12),
                 const Expanded(
                   child: Text(
-                    'Allocation checklist',
+                    'Checklist',
                     style: TextStyle(
                       color: Colors.white,
                       fontSize: 22,
@@ -162,151 +452,146 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
                   ),
                 ),
                 IconButton(
-                  onPressed: busy.isEmpty ? () => Navigator.pop(context) : null,
+                  tooltip: 'Close checklist',
+                  onPressed: () => Navigator.pop(context),
                   icon: const Icon(Icons.close, color: Colors.white),
                 ),
               ],
             ),
           ),
           Padding(
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.all(12),
             child: TextField(
               onChanged: (value) =>
                   setState(() => search = value.trim().toLowerCase()),
               decoration: const InputDecoration(
                 prefixIcon: Icon(Icons.search),
-                hintText: 'Search items or categories',
+                hintText: 'Search items, branch, staff, or status',
               ),
             ),
           ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: ['All items', 'Categories', 'Bundle', 'Beverages']
-                    .map(
-                      (type) => ChoiceChip(
-                        label: Text(type),
-                        selected: filter == type,
-                        onSelected: (_) => setState(() => filter = type),
-                      ),
-                    )
-                    .toList(),
-              ),
-            ),
-          ),
-          const SizedBox(height: 12),
           Expanded(
             child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
               stream: stream,
               builder: (context, snapshot) {
                 if (snapshot.hasError)
                   return const Center(
-                    child: Text('Unable to load checklist. Please try again.'),
+                    child: Text(
+                      'Unable to load checklist. Please reopen to retry.',
+                    ),
                   );
                 if (!snapshot.hasData)
                   return const Center(child: CircularProgressIndicator());
-                final docs = snapshot.data!.docs.where((doc) {
-                  final data = doc.data();
-                  return data['status'] == 'pending' &&
-                      (filter == 'All items' ||
-                          AllocationChecklistService.type(data) == filter) &&
-                      '${data['name']} ${data['items']}'.toLowerCase().contains(
-                        search,
-                      );
-                }).toList();
-                if (docs.isEmpty)
-                  return const Center(child: Text('No pending allocations.'));
-                return ListView.builder(
-                  padding: const EdgeInsets.all(16),
-                  itemCount: docs.length,
-                  itemBuilder: (context, index) {
-                    final doc = docs[index], data = doc.data();
-                    final type = AllocationChecklistService.type(data);
-                    final items = type == 'Categories'
-                        ? AllocationChecklistService.rows(data['items'])
-                        : [data];
-                    return Card(
-                      margin: const EdgeInsets.only(bottom: 16),
-                      child: Padding(
-                        padding: const EdgeInsets.all(16),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                final all = snapshot.data!.docs;
+                final docs =
+                    all.where((doc) {
+                      final d = doc.data();
+                      final inTab = widget.admin
+                          ? d['kind'] == 'return'
+                          : tab == 2
+                          ? d['kind'] == 'return'
+                          : ChecklistStatus.incomingOpen(d) ||
+                                (d['kind'] != 'return' &&
+                                    ChecklistStatus.label(d) ==
+                                        ChecklistStatus.received);
+                      if (widget.admin || tab == 2) return inTab;
+                      return inTab &&
+                          (filter == 'All items' ||
+                              AllocationChecklistService.type(d) == filter) &&
+                          '${d['name']} ${d['items']} ${d['staffName']} ${d['branchName']} ${d['submittedByName']} ${ChecklistStatus.label(d)}'
+                              .toLowerCase()
+                              .contains(search);
+                    }).toList()..sort((a, b) {
+                      int time(Map<String, dynamic> d) {
+                        final value = d['createdAt'] ?? d['assignedAt'];
+                        return value is Timestamp
+                            ? value.millisecondsSinceEpoch
+                            : 0;
+                      }
+
+                      return time(b.data()).compareTo(time(a.data()));
+                    });
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      child: Row(
+                        children: [
+                          for (final entry in [
+                            if (widget.admin)
+                              'Returned Items'
+                            else ...[
+                              'Incoming Items',
+                              'Return Items',
+                              'Pending Confirmation',
+                            ],
+                          ].asMap().entries)
+                            Padding(
+                              padding: const EdgeInsets.only(right: 8),
+                              child: ChoiceChip(
+                                label: Text(entry.value),
+                                selected: tab == entry.key,
+                                onSelected: (_) =>
+                                    setState(() => tab = entry.key),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    if (tab == 0 && !widget.admin)
+                      SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                        child: Row(
                           children: [
-                            Text(
-                              '${data['name'] ?? 'Delivery'} • $type',
-                              style: const TextStyle(
-                                fontSize: 18,
-                                fontWeight: FontWeight.bold,
-                                color: AppColors.primary,
-                              ),
-                            ),
-                            Text('${data['staffName'] ?? ''}'),
-                            SingleChildScrollView(
-                              scrollDirection: Axis.horizontal,
-                              child: DataTable(
-                                columns: const [
-                                  DataColumn(label: Text('Item')),
-                                  DataColumn(label: Text('ID')),
-                                  DataColumn(label: Text('Quantity')),
-                                ],
-                                rows: items
-                                    .map(
-                                      (item) => DataRow(
-                                        cells: [
-                                          DataCell(
-                                            Text('${item['name'] ?? ''}'),
-                                          ),
-                                          DataCell(
-                                            Text(
-                                              '${item['publicId'] ?? item['id'] ?? '—'}',
-                                            ),
-                                          ),
-                                          DataCell(
-                                            Text(
-                                              type == 'Beverages'
-                                                  ? 'Catalog'
-                                                  : '${item['bundleCount'] ?? item['stock'] ?? item['startingStock'] ?? 0}',
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    )
-                                    .toList(),
-                              ),
-                            ),
-                            const SizedBox(height: 12),
-                            Wrap(
-                              alignment: WrapAlignment.end,
-                              spacing: 12,
-                              children: [
-                                OutlinedButton(
-                                  onPressed: busy.contains(doc.id)
-                                      ? null
-                                      : () => decide(doc.id, false),
-                                  child: const Text('Decline'),
+                            for (final type in [
+                              'All items',
+                              'Categories',
+                              'Bundle',
+                              'Beverages',
+                            ])
+                              Padding(
+                                padding: const EdgeInsets.only(right: 8),
+                                child: ChoiceChip(
+                                  label: Text(type),
+                                  selected: filter == type,
+                                  onSelected: (_) =>
+                                      setState(() => filter = type),
                                 ),
-                                FilledButton.icon(
-                                  onPressed: busy.contains(doc.id)
-                                      ? null
-                                      : () => decide(doc.id, true),
-                                  icon: const Icon(Icons.check),
-                                  label: Text(
-                                    busy.contains(doc.id)
-                                        ? 'Processing…'
-                                        : 'Accept',
-                                  ),
-                                ),
-                              ],
-                            ),
+                              ),
                           ],
                         ),
                       ),
-                    );
-                  },
+                    Expanded(
+                      child: tab == 1 && !widget.admin
+                          ? ChecklistReturnDialog(
+                              db: widget.db,
+                              scopeIds: widget.ids,
+                              searchText: search,
+                              onSubmitted: () => setState(() => tab = 2),
+                            )
+                          : widget.admin || tab == 2
+                          ? ReturnBatchList(
+                              admin: widget.admin,
+                              onDecision: widget.admin ? actReturns : null,
+                              docs: docs,
+                              search: search,
+                              itemBuilder: record,
+                            )
+                          : docs.isEmpty
+                          ? const Center(
+                              child: Text('No matching transactions.'),
+                            )
+                          : ListView.builder(
+                              padding: const EdgeInsets.all(12),
+                              itemCount: docs.length,
+                              itemBuilder: (_, index) => record(docs[index]),
+                            ),
+                    ),
+                  ],
                 );
               },
             ),

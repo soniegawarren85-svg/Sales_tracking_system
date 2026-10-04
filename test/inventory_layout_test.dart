@@ -121,6 +121,10 @@ void main() {
                   firestore: db,
                   onOpen: (_) {},
                   onVoid: (_) {},
+                  actions: TextButton(
+                    onPressed: () {},
+                    child: const Text('Add Category'),
+                  ),
                 ),
               ),
             ),
@@ -129,6 +133,12 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(find.text('Pistachio Dubai Chewy Cookie'), findsOneWidget);
+      if (width >= 600) {
+        expect(
+          tester.getTopRight(find.widgetWithText(TextButton, 'Add Category')).dx,
+          closeTo(width - 20, 1),
+        );
+      }
       expect(tester.takeException(), isNull);
       expect(
         find.byWidgetPredicate(

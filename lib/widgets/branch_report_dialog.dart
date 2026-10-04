@@ -1,3 +1,5 @@
+import 'horizontal_controls.dart';
+import 'item_sales_dialog.dart';
 import '../services/report_pdf_theme.dart';
 import '../services/number_format.dart';
 import 'branch_receipts_dialog.dart';
@@ -380,8 +382,19 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
           pw.TableHelper.fromTextArray(
             headers: ['Summary', 'Amount'],
             data: totals.entries
-                .map((e) => [e.key, summaryValue(e.key, e.value)])
+                .map(
+                  (e) => [
+                    e.key.replaceAll('discount', 'discounted'),
+                    summaryValue(e.key, e.value),
+                  ],
+                )
                 .toList(),
+          ),
+          pw.SizedBox(height: 14),
+          pw.Text('Receipt counts'),
+          pw.TableHelper.fromTextArray(
+            headers: ['All', 'Cash', 'GCash', 'Discounted transactions'],
+            data: [receiptCounts(filteredSales(data)).values.toList()],
           ),
           if (widget.branchId == null) ...[
             pw.SizedBox(height: 16),
@@ -588,20 +601,28 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
               padding: const EdgeInsets.symmetric(horizontal: 20),
               child: Align(
                 alignment: Alignment.centerLeft,
-                child: Wrap(
-                  spacing: 8,
-                  crossAxisAlignment: WrapCrossAlignment.center,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    ...['Day', 'Week', 'Month', 'Year'].map(
-                      (period) => ChoiceChip(
-                        label: Text(period),
-                        selected: _period == period,
-                        onSelected: (_) => setState(() => _period = period),
-                      ),
+                    HorizontalControls(
+                      children: ['Day', 'Week', 'Month', 'Year']
+                          .map(
+                            (period) => ChoiceChip(
+                              label: Text(period),
+                              selected: _period == period,
+                              onSelected: (_) =>
+                                  setState(() => _period = period),
+                            ),
+                          )
+                          .toList(),
                     ),
+                    const SizedBox(height: 6),
                     Text(
                       dates,
-                      style: const TextStyle(color: AppColors.textMuted),
+                      style: const TextStyle(
+                        color: AppColors.textMuted,
+                        fontSize: 12,
+                      ),
                     ),
                   ],
                 ),
@@ -681,6 +702,17 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
             .toList()
           ..sort((a, b) => amounts[b]!.compareTo(amounts[a]!));
     final total = amounts.values.fold<double>(0, (a, b) => a + b);
+    final saleItems = [
+      for (final entry in names.entries)
+        ...data
+            .items(entry.key, range.$1, range.$2)
+            .where((item) => reportValue(item['sold']) > 0)
+            .map((item) => {...item, 'branchName': entry.value}),
+    ];
+    final salesTotal = saleItems.fold<double>(
+      0,
+      (sum, item) => sum + reportValue(item['sales']),
+    );
     return section(
       '$_comparison by branch • ${formatNumber(total)} items',
       Column(
@@ -690,7 +722,58 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
             child: Center(
               child: SizedBox.square(
                 dimension: 210,
-                child: CustomPaint(painter: ReportPie(amounts.values.toList())),
+                child: GestureDetector(
+                  onTap: () => showDialog<void>(
+                    context: context,
+                    builder: (_) => ItemSalesDialog(
+                      items: saleItems,
+                      period: '$_period • $dates',
+                    ),
+                  ),
+                  child: Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      Positioned.fill(
+                        child: CustomPaint(
+                          painter: ReportPie(amounts.values.toList()),
+                        ),
+                      ),
+                      Container(
+                        width: 150,
+                        height: 150,
+                        padding: const EdgeInsets.all(12),
+                        decoration: const BoxDecoration(
+                          color: Colors.white,
+                          shape: BoxShape.circle,
+                        ),
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            const Text(
+                              'Total sales',
+                              style: TextStyle(fontSize: 12),
+                            ),
+                            FittedBox(
+                              child: Text(
+                                money(salesTotal),
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 22,
+                                  color: AppColors.primaryDeep,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 6),
+                            const Text(
+                              'Tap for items',
+                              style: TextStyle(fontSize: 11),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               ),
             ),
           ),
@@ -899,7 +982,11 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
                 ),
                 child: Row(
                   children: [
-                    Expanded(child: Text(entry.key)),
+                    Expanded(
+                      child: Text(
+                        entry.key.replaceAll('discount', 'discounted'),
+                      ),
+                    ),
                     Text(
                       summaryValue(entry.key, entry.value),
                       style: const TextStyle(
@@ -981,6 +1068,7 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
                     'Unit price',
                   'Starting allocated',
                   'Remaining allocated',
+                  'Sales',
                   'Sold',
                   'Refund',
                   'Reduce',
@@ -1024,13 +1112,16 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
                           ...[
                             'allocated',
                             'remaining',
+                            'sales',
                             'sold',
                             'refund',
                             'reduce',
                           ].map(
                             (key) => DataCell(
                               Text(
-                                row[key] == null
+                                key == 'sales'
+                                    ? money(reportValue(row['sales']))
+                                    : row[key] == null
                                     ? 'Not recorded'
                                     : formatNumber(reportValue(row[key])),
                               ),
@@ -1168,7 +1259,7 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
         Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Wrap(
+            HorizontalControls(
               spacing: 8,
               children: ['All', 'Categories', 'Bundle', 'Beverages']
                   .map(
@@ -1181,7 +1272,7 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
                   .toList(),
             ),
             const SizedBox(height: 8),
-            Wrap(
+            HorizontalControls(
               spacing: 8,
               children: ['All', 'Top', 'Low']
                   .map(

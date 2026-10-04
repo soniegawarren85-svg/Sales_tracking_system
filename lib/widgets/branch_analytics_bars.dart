@@ -38,7 +38,27 @@ class BranchAnalyticsBars extends StatelessWidget {
     return LayoutBuilder(
       builder: (context, constraints) {
         final plotHeight = (constraints.maxHeight - 55).clamp(50.0, 300.0);
-        return _buildPlot(context, ceiling, plotHeight, 28, intervals, step);
+        final width = (values.length * 48.0 + 56).clamp(
+          constraints.maxWidth,
+          double.infinity,
+        );
+        if (width <= constraints.maxWidth)
+          return _buildPlot(context, ceiling, plotHeight, 28, intervals, step);
+        return SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: SizedBox(
+            width: width,
+            height: constraints.maxHeight,
+            child: _buildPlot(
+              context,
+              ceiling,
+              plotHeight,
+              28,
+              intervals,
+              step,
+            ),
+          ),
+        );
       },
     );
   }
@@ -54,16 +74,13 @@ class BranchAnalyticsBars extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text(
-          'Amount (₱)',
-          style: TextStyle(fontSize: 9, color: Colors.black54),
-        ),
+        const Text('₱', style: TextStyle(fontSize: 9, color: Colors.black54)),
         Expanded(
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               SizedBox(
-                width: 56,
+                width: MediaQuery.sizeOf(context).width < 600 ? 42 : 56,
                 height: plotHeight,
                 child: Stack(
                   clipBehavior: Clip.none,

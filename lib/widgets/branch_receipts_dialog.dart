@@ -36,7 +36,7 @@ class _BranchReceiptsDialogState extends State<BranchReceiptsDialog> {
               .where(
                 (row) =>
                     (_payment == 'All' ||
-                        (_payment == 'Discount' &&
+                        (_payment == 'Discounted' &&
                             reportValue(row['discount']) > 0) ||
                         '${row['paymentMode'] ?? row['paymentMethod'] ?? (widget.reductions ? '' : 'Cash')}'
                                 .toLowerCase() ==
@@ -109,7 +109,7 @@ class _BranchReceiptsDialogState extends State<BranchReceiptsDialog> {
                               'All',
                               'GCash',
                               'Cash',
-                              if (!widget.reductions) 'Discount',
+                              if (!widget.reductions) 'Discounted',
                             ]
                             .map(
                               (mode) => ChoiceChip(

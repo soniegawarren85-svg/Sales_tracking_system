@@ -55,7 +55,7 @@ class _BranchStaffActivityDialogState extends State<BranchStaffActivityDialog> {
   @override
   Widget build(BuildContext context) => Dialog(
     backgroundColor: Colors.white,
-    insetPadding: const EdgeInsets.all(20),
+    insetPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 20),
     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
     child: SizedBox(
       width: 1200,
@@ -76,7 +76,7 @@ class _BranchStaffActivityDialogState extends State<BranchStaffActivityDialog> {
                         ? 'Activity Logs - ${widget.branchName}'
                         : 'My Activity Logs',
                     style: const TextStyle(
-                      fontSize: 21,
+                      fontSize: 17,
                       fontWeight: FontWeight.bold,
                       color: Colors.white,
                     ),

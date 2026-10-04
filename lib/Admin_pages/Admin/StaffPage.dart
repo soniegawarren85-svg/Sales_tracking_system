@@ -759,6 +759,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
     showDialog<void>(
       context: context,
       builder: (dialogContext) => Dialog(
+        insetPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 20),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
         child: SizedBox(
           width: 1000,
@@ -778,7 +779,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                         'Deactivated staff',
                         style: TextStyle(
                           color: Colors.white,
-                          fontSize: 20,
+                          fontSize: 17,
                           fontWeight: FontWeight.bold,
                         ),
                       ),

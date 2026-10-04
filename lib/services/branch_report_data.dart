@@ -419,6 +419,7 @@ class BranchReportData {
           'name': item['name'],
           'allocated': 0.0,
           'sold': 0.0,
+          'sales': 0.0,
           'refund': 0.0,
           'reduce': 0.0,
           'price': reportValue(item['price']),
@@ -541,7 +542,7 @@ class BranchReportData {
             ? 'Archived'
             : expired != null && expired.isBefore(end)
             ? 'Expired'
-            : 'Active';
+            : 'Available';
         // Use the saved assignment only when it belongs to this range. Historical
         // quantities otherwise come from immutable assignment/sales records.
         if (reportValue(item['allocated']) == 0 && at != null) {
@@ -560,6 +561,14 @@ class BranchReportData {
         final field = reportRefund(sale) ? 'refund' : 'sold';
         item[field] =
             reportValue(item[field]) + reportValue(raw['quantity']).abs();
+        if (field == 'sold') {
+          item['sales'] =
+              reportValue(item['sales']) +
+              reportValue(raw['quantity']).abs() *
+                  reportValue(
+                    raw['price'] ?? raw['unitPrice'] ?? item['price'],
+                  );
+        }
       }
     }
     for (final loss in losses(branch, start, end)) {
@@ -585,3 +594,27 @@ class BranchReportData {
       ..sort((a, b) => '${a['name']}'.compareTo('${b['name']}'));
   }
 }
+
+/// Receipt counts for the selected report scope, including refund receipts.
+Map<String, int> receiptCounts(List<Map<String, dynamic>> sales) => {
+  'All': sales.length,
+  'Cash': sales
+      .where(
+        (row) =>
+            '${row['paymentMode'] ?? row['paymentMethod'] ?? 'Cash'}'
+                .toLowerCase() ==
+            'cash',
+      )
+      .length,
+  'GCash': sales
+      .where(
+        (row) =>
+            '${row['paymentMode'] ?? row['paymentMethod'] ?? ''}'
+                .toLowerCase() ==
+            'gcash',
+      )
+      .length,
+  'Discounted': sales
+      .where((row) => !reportRefund(row) && reportValue(row['discount']) > 0)
+      .length,
+};

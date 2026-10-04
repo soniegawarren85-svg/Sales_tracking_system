@@ -10,7 +10,7 @@ Future<void> showAdminInventoryRecords(
 }) => showDialog<void>(
   context: context,
   builder: (context) => Dialog(
-    insetPadding: const EdgeInsets.all(20),
+    insetPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 20),
     clipBehavior: Clip.antiAlias,
     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
     child: SizedBox(
@@ -123,7 +123,12 @@ class _AdminVoidInventoryState extends State<AdminVoidInventory> {
           });
         } else {
           values[index] = restored;
-          transaction.update(ref, {field: values, 'isDeleted': false, 'deletedAt': FieldValue.delete(), 'voidReason': FieldValue.delete()});
+          transaction.update(ref, {
+            field: values,
+            'isDeleted': false,
+            'deletedAt': FieldValue.delete(),
+            'voidReason': FieldValue.delete(),
+          });
         }
       });
       if (mounted)

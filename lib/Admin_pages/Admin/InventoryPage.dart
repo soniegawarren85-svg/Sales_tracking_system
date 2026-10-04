@@ -1,3 +1,6 @@
+import 'package:sales_tracking/widgets/top_edge_refresh.dart';
+import '../../widgets/admin_category_manager.dart';
+import '../../widgets/allocation_checklist.dart';
 import '../../services/bundle_stock_service.dart';
 import '../../widgets/bundle_details_dialog.dart';
 import '../../widgets/void_reason_dialog.dart';
@@ -3191,6 +3194,7 @@ class _InventoryPageState extends State<InventoryPage>
                       ),
                     ),
                   ),
+                  const AllocationChecklistButton(scopeIds: [], isAdmin: true),
                 ],
               ),
             ),
@@ -3239,6 +3243,14 @@ class _InventoryPageState extends State<InventoryPage>
                     children: [
                       if (_catalogType != 'Beverages' || !_addonsTab)
                         TextButton.icon(
+                          style: MediaQuery.sizeOf(context).width < 600
+                              ? TextButton.styleFrom(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 8,
+                                  ),
+                                  visualDensity: VisualDensity.compact,
+                                )
+                              : null,
                           icon: const Icon(Icons.add),
                           label: Text(
                             MediaQuery.sizeOf(context).width < 600
@@ -3256,6 +3268,14 @@ class _InventoryPageState extends State<InventoryPage>
 
                       if (_catalogType == 'Beverages' && _addonsTab)
                         TextButton.icon(
+                          style: MediaQuery.sizeOf(context).width < 600
+                              ? TextButton.styleFrom(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 8,
+                                  ),
+                                  visualDensity: VisualDensity.compact,
+                                )
+                              : null,
                           onPressed: () => showAdminAddonEditor(context),
                           icon: const Icon(Icons.add),
                           label: Text(
@@ -3265,6 +3285,13 @@ class _InventoryPageState extends State<InventoryPage>
                           ),
                         ),
                       IconButton(
+                        style: MediaQuery.sizeOf(context).width < 600
+                            ? IconButton.styleFrom(
+                                padding: const EdgeInsets.all(6),
+                                minimumSize: const Size(40, 40),
+                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              )
+                            : null,
                         tooltip: 'Void records',
                         icon: const Icon(Icons.block, color: PinkTheme.primary),
                         onPressed: () => showAdminInventoryRecords(
@@ -3274,6 +3301,14 @@ class _InventoryPageState extends State<InventoryPage>
                       ),
                       if (_catalogType != 'Beverages' || _addonsTab)
                         IconButton(
+                          style: MediaQuery.sizeOf(context).width < 600
+                              ? IconButton.styleFrom(
+                                  padding: const EdgeInsets.all(6),
+                                  minimumSize: const Size(40, 40),
+                                  tapTargetSize:
+                                      MaterialTapTargetSize.shrinkWrap,
+                                )
+                              : null,
                           tooltip: 'Expired inventory',
                           icon: const Icon(
                             Icons.event_busy,
@@ -3284,6 +3319,20 @@ class _InventoryPageState extends State<InventoryPage>
                             type: _catalogType,
                             expired: true,
                           ),
+                        ),
+                      if (_catalogType == 'Categories')
+                        IconButton(
+                          style: MediaQuery.sizeOf(context).width < 600
+                              ? IconButton.styleFrom(
+                                  padding: const EdgeInsets.all(6),
+                                  minimumSize: const Size(40, 40),
+                                  tapTargetSize:
+                                      MaterialTapTargetSize.shrinkWrap,
+                                )
+                              : null,
+                          tooltip: 'Manage categories',
+                          icon: const Icon(Icons.edit_outlined),
+                          onPressed: () => showCategoryManager(context),
                         ),
                     ],
                   ),
@@ -3355,7 +3404,13 @@ class _InventoryPageState extends State<InventoryPage>
           'sourceCollection': 'coffee_addons',
           'name': data['name'],
           'items': [
-            {...data, 'id': doc.id, 'isAddon': true, 'untrackedStock': true},
+            {
+              ...data,
+              'price': data['priceDelta'] ?? data['price'] ?? 0,
+              'id': doc.id,
+              'isAddon': true,
+              'untrackedStock': true,
+            },
           ],
         });
       }
@@ -6291,7 +6346,7 @@ class _RemovedInventoryPageState extends State<RemovedInventoryPage>
                       ],
                     ),
                   )
-                : RefreshIndicator(
+                : TopEdgeRefresh(
                     onRefresh: _loadRemovedInventory,
                     color: PinkTheme.primary,
                     child: FadeTransition(

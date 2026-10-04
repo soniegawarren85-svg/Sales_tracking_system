@@ -399,7 +399,7 @@ class _SettingsPageState extends State<SettingsPage> {
                   ),
 
                   const SizedBox(height: 20),
-                  _LogoutButton(),
+                  if (MediaQuery.sizeOf(context).width < 600) _LogoutButton(),
                   const SizedBox(height: 30),
                 ]),
               ),

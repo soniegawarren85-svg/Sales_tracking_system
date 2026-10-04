@@ -1,3 +1,4 @@
+import 'package:sales_tracking/widgets/top_edge_refresh.dart';
 import 'package:sales_tracking/theme/app_colors.dart';
 import 'dart:ui';
 import 'package:flutter/material.dart';
@@ -346,7 +347,7 @@ class _SalesPageState extends State<SalesPage> with TickerProviderStateMixin {
 
     return FadeTransition(
       opacity: _fadeCtrl,
-      child: RefreshIndicator(
+      child: TopEdgeRefresh(
         color: _C.caramel,
         backgroundColor: _C.milk,
         onRefresh: () async {

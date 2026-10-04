@@ -3,6 +3,35 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:sales_tracking/widgets/branch_analytics_bars.dart';
 
 void main() {
+  testWidgets(
+    '24-hour chart scrolls horizontally on a phone without overflow',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(360, 800));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              height: 240,
+              child: BranchAnalyticsBars(
+                values: List.filled(24, 89),
+                labels: List.generate(24, (hour) => '$hour:00'),
+              ),
+            ),
+          ),
+        ),
+      );
+      final scroll = tester.state<ScrollableState>(find.byType(Scrollable));
+      expect(scroll.position.maxScrollExtent, greaterThan(0));
+      await tester.drag(
+        find.byType(BranchAnalyticsBars),
+        const Offset(-800, 0),
+      );
+      await tester.pumpAndSettle();
+      expect(scroll.position.pixels, greaterThan(0));
+      expect(tester.takeException(), isNull);
+    },
+  );
   Future<void> showChart(WidgetTester tester, double count) async {
     await tester.pumpWidget(
       MaterialApp(

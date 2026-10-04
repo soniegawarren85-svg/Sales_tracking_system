@@ -191,7 +191,11 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
   }
 
   Widget _buildAllItemsPage() {
-    return const AllCategPage(embedded: true);
+    // Keep the last row above the pending badge as well as the navigation bar.
+    return const Padding(
+      padding: EdgeInsets.only(bottom: 64),
+      child: AllCategPage(embedded: true),
+    );
   }
 
   Widget _buildProfilePage() {
@@ -214,7 +218,7 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
     return Scaffold(
       resizeToAvoidBottomInset: false,
       backgroundColor: Colors.white,
-      extendBody: true,
+      extendBody: _selectedIndex != 1,
       body: IndexedStack(
         index: _selectedIndex,
         children: [
@@ -248,7 +252,7 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
                           : Colors.white70,
                     ),
                     Icon(
-                      Icons.view_list_rounded,
+                      Icons.inventory_2_rounded,
                       size: _selectedIndex == 1 ? 32 : 26,
                       color: _selectedIndex == 1
                           ? Colors.white
@@ -360,6 +364,7 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
     return SafeArea(
       top: false,
       child: Align(
+        heightFactor: 1,
         alignment: Alignment.bottomCenter,
         child: Container(
           width: 380,
@@ -381,7 +386,7 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             children: [
               _landscapeNavItem(Icons.home_rounded, 0),
-              _landscapeNavItem(Icons.view_list_rounded, 1),
+              _landscapeNavItem(Icons.inventory_2_rounded, 1),
               _landscapeNavItem(Icons.person_outline_rounded, 2),
               _landscapeNavItem(Icons.point_of_sale_rounded, 3),
             ],

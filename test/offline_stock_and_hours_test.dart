@@ -71,38 +71,20 @@ void main() {
     final stock = <String, dynamic>{'items': []};
     expect(applySaleStock(stock, 'receipt-1', []), stock);
   });
-  test('extra hours belong only to the selected date', () {
+  test('all 24 hours remain visible on every selected date', () {
     final dates = [
       DateTime(2026, 9, 26, 9),
       DateTime(2026, 9, 26, 22),
       DateTime(2026, 9, 25, 7),
     ];
-    expect(analyticsHours(DateTime(2026, 9, 26), dates), [
-      9,
-      10,
-      11,
-      12,
-      13,
-      14,
-      15,
-      16,
-      17,
-      18,
-      19,
-      22,
-    ]);
-    expect(analyticsHours(DateTime(2026, 9, 27), dates), [
-      10,
-      11,
-      12,
-      13,
-      14,
-      15,
-      16,
-      17,
-      18,
-      19,
-    ]);
+    expect(
+      analyticsHours(DateTime(2026, 9, 26), dates),
+      List.generate(24, (hour) => hour),
+    );
+    expect(
+      analyticsHours(DateTime(2026, 9, 27), dates),
+      List.generate(24, (hour) => hour),
+    );
   });
   test(
     'staff display removes excess zero padding without changing receipt IDs',

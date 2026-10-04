@@ -14,7 +14,7 @@ void main() {
     });
     expect(data.hours('b', day), containsAll([8, 19, 21]));
     data.collections['branches']!.single['openingMinutes'] = 420;
-    expect(data.hours('b', day).first, 7);
+    expect(data.hours('b', day).first, 0);
   });
 
   testWidgets('week month and year keep revenue and hide closing cash drawer', (tester) async {

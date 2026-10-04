@@ -3,6 +3,37 @@ import 'package:sales_tracking/services/branch_report_data.dart';
 import 'package:sales_tracking/widgets/admin_sales_overview.dart';
 
 void main() {
+  test(
+    'item sales total uses recorded quantity and price, excluding refunds',
+    () {
+      final data = BranchReportData({
+        'completed_sales': [
+          {
+            'branchId': 'b',
+            'timestamp': '2026-10-04T10:00:00',
+            'status': 'completed',
+            'items': [
+              {'id': 'cookie', 'name': 'Cookie', 'quantity': 2, 'price': 89},
+            ],
+          },
+          {
+            'branchId': 'b',
+            'timestamp': '2026-10-04T11:00:00',
+            'type': 'refund',
+            'items': [
+              {'id': 'cookie', 'name': 'Cookie', 'quantity': 1, 'price': 89},
+            ],
+          },
+        ],
+      });
+      final item = data
+          .items('b', DateTime(2026, 10, 4), DateTime(2026, 10, 5))
+          .single;
+      expect(item['sold'], 2);
+      expect(item['sales'], 178);
+      expect(item['refund'], 1);
+    },
+  );
   test('saved assignment details survive removal of inventory documents', () {
     final data = BranchReportData({
       'staff_inventory_history': [

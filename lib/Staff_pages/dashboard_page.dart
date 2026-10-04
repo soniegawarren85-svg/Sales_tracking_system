@@ -1,3 +1,4 @@
+import 'package:sales_tracking/widgets/top_edge_refresh.dart';
 import 'package:sales_tracking/theme/app_colors.dart';
 import '../services/inventory_display_ids.dart';
 import '../services/staff_allocation_scope.dart';
@@ -1081,7 +1082,7 @@ class _DashboardPageState extends State<DashboardPage>
     final horizontalPadding = isTablet ? 24.0 : 16.0;
     final headerHeight = isTablet ? 260.0 : 300.0;
 
-    return RefreshIndicator(
+    return TopEdgeRefresh(
       displacement: 24,
       color: _C.primary,
       onRefresh: () async {

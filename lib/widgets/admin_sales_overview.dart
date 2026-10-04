@@ -168,8 +168,9 @@ class _AdminSalesOverviewState extends State<AdminSalesOverview> {
             children: values
                 .map(
                   (value) => SizedBox(
-                    width:
-                        (constraints.maxWidth - (columns - 1) * 12) / columns,
+                    width: columns == 2 && value == values.last
+                        ? constraints.maxWidth
+                        : (constraints.maxWidth - (columns - 1) * 12) / columns,
                     child: Container(
                       padding: const EdgeInsets.all(18),
                       decoration: BoxDecoration(

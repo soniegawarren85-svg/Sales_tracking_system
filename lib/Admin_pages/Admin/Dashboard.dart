@@ -1,3 +1,4 @@
+import 'package:sales_tracking/widgets/top_edge_refresh.dart';
 import '../../widgets/admin_message_preview.dart';
 import '../../widgets/admin_profile_label.dart';
 import 'dart:async';
@@ -46,7 +47,7 @@ class _AdminDashboardState extends State<AdminDashboard>
   static const String kShopLogoAsset = 'Assets/Image/ob.jpg';
   final _navItems = const [
     _NavItem(icon: Icons.dashboard_rounded, label: 'Dashboard'),
-    _NavItem(icon: Icons.paid_rounded, label: 'Allocation'),
+    _NavItem(icon: Icons.storefront_rounded, label: 'Branch Sales'),
     _NavItem(icon: Icons.inventory_2_rounded, label: 'Inventory'),
     _NavItem(icon: Icons.people_rounded, label: 'Staff'),
     _NavItem(icon: Icons.bar_chart_rounded, label: 'Reports'),
@@ -235,8 +236,9 @@ class _AdminDashboardState extends State<AdminDashboard>
   //  HOME PAGE  –  NestedScrollView + SliverAppBar (collapsing header)
   // ══════════════════════════════════════════════════════════════════════════
   Widget _buildHomePage() {
-    return RefreshIndicator(
-      notificationPredicate: (_) => true,
+    return TopEdgeRefresh(
+      notificationPredicate: (notification) =>
+          notification.depth == 0 && notification.metrics.axis == Axis.vertical,
       onRefresh: () async {
         try {
           await Future.wait(

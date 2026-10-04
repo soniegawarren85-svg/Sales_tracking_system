@@ -371,7 +371,8 @@ class _AllCategPageState extends State<AllCategPage>
     });
   }
 
-  int _bundleStockForData(Map<String, dynamic> data) => availableBundleStock(data);
+  int _bundleStockForData(Map<String, dynamic> data) =>
+      availableBundleStock(data);
 
   String _bundleExpirationDate(Map<String, dynamic> bundleData) {
     final dates = <String>[];
@@ -398,7 +399,8 @@ class _AllCategPageState extends State<AllCategPage>
     return dates.first;
   }
 
-  bool _hasExpiredBundleItem(Map<String, dynamic> data) => availableBundleStock(data) == 0;
+  bool _hasExpiredBundleItem(Map<String, dynamic> data) =>
+      availableBundleStock(data) == 0;
 
   String _bundleStatusLabel(String status) {
     if (status == 'inCategory') return 'In category';
@@ -411,9 +413,7 @@ class _AllCategPageState extends State<AllCategPage>
     try {
       final expiryDate = DateTime.parse(expirationDate);
       final today = DateTime.now();
-      return expiryDate.isBefore(
-        DateTime(today.year, today.month, today.day),
-      );
+      return expiryDate.isBefore(DateTime(today.year, today.month, today.day));
     } catch (e) {
       return false;
     }
@@ -1516,21 +1516,36 @@ class _AllCategPageState extends State<AllCategPage>
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Row(children: [
-                    Expanded(child: Text(
-                      '${entry['name']}${variant.isEmpty ? '' : ' ($variant)'}',
-                      style: const TextStyle(
-                        color: AppColors.primaryDark, fontWeight: FontWeight.w800),
-                    )),
-                    Text('-${entry['quantity']}', style: const TextStyle(
-                      color: AppColors.primaryDark, fontWeight: FontWeight.w900)),
-                  ]),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          '${entry['name']}${variant.isEmpty ? '' : ' ($variant)'}',
+                          style: const TextStyle(
+                            color: AppColors.primaryDark,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                      Text(
+                        '-${entry['quantity']}',
+                        style: const TextStyle(
+                          color: AppColors.primaryDark,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ],
+                  ),
                   const SizedBox(height: 6),
-                  Text('Price: ₱${(entry['price'] as double).toStringAsFixed(2)}'),
+                  Text(
+                    'Price: ₱${(entry['price'] as double).toStringAsFixed(2)}',
+                  ),
                   const SizedBox(height: 4),
                   const Text('Reason: Stock reduction'),
                   const SizedBox(height: 4),
-                  Text('${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}'),
+                  Text(
+                    '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}',
+                  ),
                 ],
               ),
             );
@@ -1944,9 +1959,14 @@ class _AllCategPageState extends State<AllCategPage>
       builder: (context) => StatefulBuilder(
         builder: (context, setDialogState) {
           return Dialog(
-            insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+            insetPadding: const EdgeInsets.symmetric(
+              horizontal: 24,
+              vertical: 24,
+            ),
             clipBehavior: Clip.antiAlias,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(28),
+            ),
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 640, maxHeight: 600),
               child: Column(
@@ -1987,7 +2007,8 @@ class _AllCategPageState extends State<AllCategPage>
                               () => historySearch = value.trim().toLowerCase(),
                             ),
                             decoration: InputDecoration(
-                              hintText: 'Search beverages, ID, price, reason, date',
+                              hintText:
+                                  'Search beverages, ID, price, reason, date',
                               prefixIcon: const Icon(Icons.search_rounded),
                               isDense: true,
                               filled: true,
@@ -2055,9 +2076,12 @@ class _AllCategPageState extends State<AllCategPage>
                                       'coffee_void',
                                 )
                                 .where((doc) {
-                                  final data = doc.data() as Map<String, dynamic>?;
-                                  final timestamp = data?['createdAt'] as Timestamp?;
-                                  if (historyDate != null && timestamp != null) {
+                                  final data =
+                                      doc.data() as Map<String, dynamic>?;
+                                  final timestamp =
+                                      data?['createdAt'] as Timestamp?;
+                                  if (historyDate != null &&
+                                      timestamp != null) {
                                     final date = timestamp.toDate().toLocal();
                                     final startOfDay = DateTime(
                                       historyDate!.year,
@@ -2066,14 +2090,18 @@ class _AllCategPageState extends State<AllCategPage>
                                     );
                                     final endOfDay = startOfDay
                                         .add(const Duration(days: 1))
-                                        .subtract(const Duration(microseconds: 1));
+                                        .subtract(
+                                          const Duration(microseconds: 1),
+                                        );
                                     if (date.isBefore(startOfDay) ||
                                         date.isAfter(endOfDay)) {
                                       return false;
                                     }
                                   }
                                   if (historySearch.isEmpty) return true;
-                                  final createdAtDate = timestamp?.toDate().toLocal();
+                                  final createdAtDate = timestamp
+                                      ?.toDate()
+                                      .toLocal();
                                   final formattedDate = createdAtDate == null
                                       ? ''
                                       : '${createdAtDate.year.toString().padLeft(4, '0')}-${createdAtDate.month.toString().padLeft(2, '0')}-${createdAtDate.day.toString().padLeft(2, '0')} ${createdAtDate.hour.toString().padLeft(2, '0')}:${createdAtDate.minute.toString().padLeft(2, '0')}:${createdAtDate.second.toString().padLeft(2, '0')}';
@@ -2106,15 +2134,19 @@ class _AllCategPageState extends State<AllCategPage>
                                 final aData = a.data() as Map<String, dynamic>?;
                                 final bData = b.data() as Map<String, dynamic>?;
                                 final aTime =
-                                    (aData?['createdAt'] as Timestamp?)?.toDate() ??
+                                    (aData?['createdAt'] as Timestamp?)
+                                        ?.toDate() ??
                                     DateTime.fromMillisecondsSinceEpoch(0);
                                 final bTime =
-                                    (bData?['createdAt'] as Timestamp?)?.toDate() ??
+                                    (bData?['createdAt'] as Timestamp?)
+                                        ?.toDate() ??
                                     DateTime.fromMillisecondsSinceEpoch(0);
                                 return bTime.compareTo(aTime);
                               });
                         if (snapshot.connectionState == ConnectionState.waiting)
-                          return const Center(child: CircularProgressIndicator());
+                          return const Center(
+                            child: CircularProgressIndicator(),
+                          );
                         if (docs.isEmpty)
                           return const Center(
                             child: Text(
@@ -2126,8 +2158,10 @@ class _AllCategPageState extends State<AllCategPage>
                           padding: const EdgeInsets.all(12),
                           itemCount: docs.length,
                           itemBuilder: (context, index) {
-                            final data = docs[index].data() as Map<String, dynamic>;
-                            final quantity = data['quantity']?.toString() ?? '0';
+                            final data =
+                                docs[index].data() as Map<String, dynamic>;
+                            final quantity =
+                                data['quantity']?.toString() ?? '0';
                             final variant = data['variant']?.toString() ?? '';
                             final itemName =
                                 data['itemName']?.toString() ?? coffeeName;
@@ -2194,16 +2228,21 @@ class _AllCategPageState extends State<AllCategPage>
                                             ),
                                             if (coffeeId.isNotEmpty)
                                               Container(
-                                                padding: const EdgeInsets.symmetric(
-                                                  horizontal: 8,
-                                                  vertical: 4,
-                                                ),
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                      horizontal: 8,
+                                                      vertical: 4,
+                                                    ),
                                                 decoration: BoxDecoration(
-                                                  color: const Color(0xFFE8F5E9),
+                                                  color: const Color(
+                                                    0xFFE8F5E9,
+                                                  ),
                                                   borderRadius:
                                                       BorderRadius.circular(8),
                                                   border: Border.all(
-                                                    color: const Color(0xFF81C784),
+                                                    color: const Color(
+                                                      0xFF81C784,
+                                                    ),
                                                   ),
                                                 ),
                                                 child: Text(
@@ -2220,14 +2259,18 @@ class _AllCategPageState extends State<AllCategPage>
                                       ),
                                       if (variant.isNotEmpty)
                                         Container(
-                                          margin: const EdgeInsets.only(right: 6),
+                                          margin: const EdgeInsets.only(
+                                            right: 6,
+                                          ),
                                           padding: const EdgeInsets.symmetric(
                                             horizontal: 8,
                                             vertical: 5,
                                           ),
                                           decoration: BoxDecoration(
                                             color: AppColors.blush,
-                                            borderRadius: BorderRadius.circular(9),
+                                            borderRadius: BorderRadius.circular(
+                                              9,
+                                            ),
                                             border: Border.all(
                                               color: AppColors.rose,
                                             ),
@@ -2248,7 +2291,9 @@ class _AllCategPageState extends State<AllCategPage>
                                         ),
                                         decoration: BoxDecoration(
                                           color: AppColors.primaryDark,
-                                          borderRadius: BorderRadius.circular(20),
+                                          borderRadius: BorderRadius.circular(
+                                            20,
+                                          ),
                                         ),
                                         child: Text(
                                           '-$quantity',
@@ -2308,7 +2353,9 @@ class _AllCategPageState extends State<AllCategPage>
     final bundlePrice = _parsePrice(bundle['price']);
     final bundleId = bundle['bundleId']?.toString() ?? '';
     final bundleInstances = _bundleInstancesFromData(bundle);
-    final availableBundleInstances = bundleInstances.where((instance) => bundleInstanceAvailable(instance, bundle)).toList();
+    final availableBundleInstances = bundleInstances
+        .where((instance) => bundleInstanceAvailable(instance, bundle))
+        .toList();
     var bundleSearch = '';
     var selectedBundleFilter = '';
 
@@ -2318,7 +2365,9 @@ class _AllCategPageState extends State<AllCategPage>
         return StatefulBuilder(
           builder: (context, setDialogState) {
             final normalizedBundleSearch = bundleSearch.trim().toLowerCase();
-            final filteredBundleInstances = availableBundleInstances.where((instance) {
+            final filteredBundleInstances = availableBundleInstances.where((
+              instance,
+            ) {
               final index = availableBundleInstances.indexOf(instance);
               final instanceId =
                   instance['id']?.toString() ??
@@ -2359,7 +2408,10 @@ class _AllCategPageState extends State<AllCategPage>
               elevation: 0,
               backgroundColor: Colors.transparent,
               child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 760, maxHeight: 620),
+                constraints: const BoxConstraints(
+                  maxWidth: 760,
+                  maxHeight: 620,
+                ),
                 child: Container(
                   width: double.infinity,
                   decoration: BoxDecoration(
@@ -2491,7 +2543,8 @@ class _AllCategPageState extends State<AllCategPage>
                                 separatorBuilder: (_, _) =>
                                     const SizedBox(height: 12),
                                 itemBuilder: (context, index) {
-                                  final instance = filteredBundleInstances[index];
+                                  final instance =
+                                      filteredBundleInstances[index];
                                   final items =
                                       instance['items'] as List<dynamic>? ?? [];
                                   final instanceId =
@@ -2523,27 +2576,32 @@ class _AllCategPageState extends State<AllCategPage>
                                                       Expanded(
                                                         child: Text(
                                                           instanceId,
-                                                          style: const TextStyle(
-                                                            color: Color(
-                                                              0xFF4A0020,
-                                                            ),
-                                                            fontSize: 15,
-                                                            fontWeight:
-                                                                FontWeight.w900,
-                                                          ),
+                                                          style:
+                                                              const TextStyle(
+                                                                color: Color(
+                                                                  0xFF4A0020,
+                                                                ),
+                                                                fontSize: 15,
+                                                                fontWeight:
+                                                                    FontWeight
+                                                                        .w900,
+                                                              ),
                                                         ),
                                                       ),
                                                       IconButton(
-                                                        tooltip: 'Copy bundle ID',
+                                                        tooltip:
+                                                            'Copy bundle ID',
                                                         visualDensity:
-                                                            VisualDensity.compact,
+                                                            VisualDensity
+                                                                .compact,
                                                         onPressed: () async {
                                                           await Clipboard.setData(
                                                             ClipboardData(
                                                               text: instanceId,
                                                             ),
                                                           );
-                                                          if (!context.mounted) {
+                                                          if (!context
+                                                              .mounted) {
                                                             return;
                                                           }
                                                           ScaffoldMessenger.of(
@@ -2567,7 +2625,8 @@ class _AllCategPageState extends State<AllCategPage>
                                                   Text(
                                                     'Bundle price: ₱${bundlePrice.toStringAsFixed(2)}',
                                                     style: const TextStyle(
-                                                      color: AppColors.primaryDark,
+                                                      color:
+                                                          AppColors.primaryDark,
                                                       fontSize: 12,
                                                       fontWeight:
                                                           FontWeight.w700,
@@ -2580,9 +2639,7 @@ class _AllCategPageState extends State<AllCategPage>
                                             _ItemTag(
                                               icon: Icons.check_circle_rounded,
                                               label: 'Available',
-                                              bgColor: const Color(
-                                                0xFFE8F5E9,
-                                              ),
+                                              bgColor: const Color(0xFFE8F5E9),
                                               textColor: const Color(
                                                 0xFF2E7D32,
                                               ),
@@ -2605,7 +2662,7 @@ class _AllCategPageState extends State<AllCategPage>
                                             }
                                             final itemName =
                                                 item['name']?.toString() ??
-                                                    'Item';
+                                                'Item';
                                             return Padding(
                                               padding: const EdgeInsets.only(
                                                 bottom: 8,
@@ -2645,7 +2702,6 @@ class _AllCategPageState extends State<AllCategPage>
       },
     );
   }
-
 
   Future<void> _showBundleReductionDialog(Map<String, dynamic> bundle) async {
     final bundleIdController = TextEditingController();
@@ -2770,7 +2826,10 @@ class _AllCategPageState extends State<AllCategPage>
                               if (enteredId.isEmpty ||
                                   matchingIndex < 0 ||
                                   status != 'available' ||
-                                  !bundleInstanceAvailable(instances[matchingIndex], bundle)) {
+                                  !bundleInstanceAvailable(
+                                    instances[matchingIndex],
+                                    bundle,
+                                  )) {
                                 setDialogState(() {
                                   validationMessage =
                                       'Invalid bundle ID number.';
@@ -3239,7 +3298,8 @@ class _AllCategPageState extends State<AllCategPage>
   Future<void> _showBundleReductionHistory(Map<String, dynamic> bundle) async {
     final sourceDocId = bundle['sourceDocId']?.toString() ?? '';
     final bundleName = bundle['name']?.toString() ?? 'Bundle';
-    final bundleItemNames = (bundle['items'] as List?)
+    final bundleItemNames =
+        (bundle['items'] as List?)
             ?.whereType<Map>()
             .map((item) => item['name']?.toString() ?? '')
             .where((name) => name.isNotEmpty)
@@ -3411,7 +3471,9 @@ class _AllCategPageState extends State<AllCategPage>
                                 }
                               }
                               if (historySearch.isEmpty) return true;
-                              final createdAtDate = timestamp?.toDate().toLocal();
+                              final createdAtDate = timestamp
+                                  ?.toDate()
+                                  .toLocal();
                               final formattedDate = createdAtDate == null
                                   ? ''
                                   : '${createdAtDate.year.toString().padLeft(4, '0')}-${createdAtDate.month.toString().padLeft(2, '0')}-${createdAtDate.day.toString().padLeft(2, '0')} ${createdAtDate.hour.toString().padLeft(2, '0')}:${createdAtDate.minute.toString().padLeft(2, '0')}:${createdAtDate.second.toString().padLeft(2, '0')}';
@@ -3475,9 +3537,7 @@ class _AllCategPageState extends State<AllCategPage>
                               decoration: BoxDecoration(
                                 color: AppColors.surfaceTint,
                                 borderRadius: BorderRadius.circular(14),
-                                border: Border.all(
-                                  color: AppColors.blush,
-                                ),
+                                border: Border.all(color: AppColors.blush),
                               ),
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -3655,9 +3715,7 @@ class _AllCategPageState extends State<AllCategPage>
               color: selected ? AppColors.primaryDark : Colors.white,
               borderRadius: BorderRadius.circular(18),
               border: Border.all(
-                color: selected
-                    ? AppColors.primaryDark
-                    : AppColors.blush,
+                color: selected ? AppColors.primaryDark : AppColors.blush,
                 width: 1.4,
               ),
               boxShadow: selected
@@ -3835,12 +3893,15 @@ class _AllCategPageState extends State<AllCategPage>
     return DataCell(
       SizedBox(
         width: width,
-        child: Tooltip(message: value, child: Text(
-          value,
-          maxLines: 2,
-          overflow: TextOverflow.ellipsis,
-          style: TextStyle(fontSize: 12, fontWeight: weight, color: color),
-        )),
+        child: Tooltip(
+          message: value,
+          child: Text(
+            value,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(fontSize: 12, fontWeight: weight, color: color),
+          ),
+        ),
       ),
     );
   }
@@ -3962,7 +4023,13 @@ class _AllCategPageState extends State<AllCategPage>
   }
 
   String _displayItemId(Map<String, dynamic> item, {String? fallback}) {
-    for (final key in ['publicId', 'id', 'itemId', 'variantId', 'sourceItemId']) {
+    for (final key in [
+      'publicId',
+      'id',
+      'itemId',
+      'variantId',
+      'sourceItemId',
+    ]) {
       final value = item[key]?.toString().trim() ?? '';
       if (value.isNotEmpty) return publicItemId(value);
     }
@@ -4072,7 +4139,8 @@ class _AllCategPageState extends State<AllCategPage>
     for (final rawAddon in (category['addonOptions'] as List?) ?? const []) {
       if (rawAddon is! Map) continue;
       final addon = Map<String, dynamic>.from(rawAddon);
-      if (addon['isDeleted'] == true || bundleExpired(addon, DateTime.now())) continue;
+      if (addon['isDeleted'] == true || bundleExpired(addon, DateTime.now()))
+        continue;
       final addonName = addon['name']?.toString().trim().toLowerCase() ?? '';
       if (addonName.isNotEmpty) {
         addonByName.putIfAbsent(addonName, () => addon);
@@ -4081,7 +4149,9 @@ class _AllCategPageState extends State<AllCategPage>
     final addonDocs = addonByName.values.toList();
 
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-      stream: FirebaseFirestore.instance.collection('completed_sales').snapshots(),
+      stream: FirebaseFirestore.instance
+          .collection('completed_sales')
+          .snapshots(),
       builder: (context, salesSnapshot) {
         var totalSoldFromReceipts = 0;
         for (final saleDoc in salesSnapshot.data?.docs ?? const []) {
@@ -4094,98 +4164,107 @@ class _AllCategPageState extends State<AllCategPage>
             final sold = Map<String, dynamic>.from(raw);
             if (sold['isCoffee'] != true) continue;
             final soldCoffeeId = sold['coffeeId']?.toString().trim() ?? '';
-            final soldName = sold['name']?.toString().trim().toLowerCase() ?? '';
+            final soldName =
+                sold['name']?.toString().trim().toLowerCase() ?? '';
             final matchesCoffee = coffeeId.isNotEmpty
-                ? (soldCoffeeId == coffeeId || soldCoffeeId == category['coffeeId']?.toString() || sold['publicId'] == category['publicId'] && category['publicId'] != null)
+                ? (soldCoffeeId == coffeeId ||
+                      soldCoffeeId == category['coffeeId']?.toString() ||
+                      sold['publicId'] == category['publicId'] &&
+                          category['publicId'] != null)
                 : soldName == coffeeName.trim().toLowerCase();
             if (matchesCoffee) {
-              totalSoldFromReceipts += sign * _parseInt(sold['quantity'], fallback: 1);
+              totalSoldFromReceipts +=
+                  sign * _parseInt(sold['quantity'], fallback: 1);
             }
           }
         }
         return _AnimatedCategorySection(
-      index: index,
-      child: _tableBlock(
-        title: 'Beverages',
-        subtitle: 'Available Beverages Items: 1',
-        onAddons: addonDocs.isEmpty
-            ? null
-            : () => _showCoffeeAddonsDialog(addonDocs, category),
-        onHistory: () => _showCoffeeVoidHistory(category),
-        compact: true,
-        columns: [
-          _tableColumn('ID'),
-          _tableColumn('Beverages Name'),
-          _tableColumn('Small'),
-          _tableColumn('Medium'),
-          _tableColumn('Large'),
-          _tableColumn('Total Sold'),
-          _tableColumn('Action'),
-        ],
-        rows: [
-          if (items.isNotEmpty)
-            (() {
-              Map<String, dynamic>? itemForSize(String size) {
-                final normalizedSize = size.toLowerCase();
-                for (final item in items) {
-                  final name =
-                      item['name']?.toString().trim().toLowerCase() ?? '';
-                  if (name.startsWith(normalizedSize)) return item;
-                }
-                return null;
-              }
+          index: index,
+          child: _tableBlock(
+            title: 'Beverages',
+            subtitle: 'Available Beverages Items: 1',
+            onAddons: addonDocs.isEmpty
+                ? null
+                : () => _showCoffeeAddonsDialog(addonDocs, category),
+            onHistory: () => _showCoffeeVoidHistory(category),
+            compact: true,
+            columns: [
+              _tableColumn('ID'),
+              _tableColumn('Beverages Name'),
+              _tableColumn('Small'),
+              _tableColumn('Medium'),
+              _tableColumn('Large'),
+              _tableColumn('Total Sold'),
+              _tableColumn('Action'),
+            ],
+            rows: [
+              if (items.isNotEmpty)
+                (() {
+                  Map<String, dynamic>? itemForSize(String size) {
+                    final normalizedSize = size.toLowerCase();
+                    for (final item in items) {
+                      final name =
+                          item['name']?.toString().trim().toLowerCase() ?? '';
+                      if (name.startsWith(normalizedSize)) return item;
+                    }
+                    return null;
+                  }
 
-              String priceForSize(String size) {
-                final item = itemForSize(size);
-                return item == null
-                    ? '--'
-                    : '₱${_parsePrice(item['price']).toStringAsFixed(2)}';
-              }
+                  String priceForSize(String size) {
+                    final item = itemForSize(size);
+                    return item == null
+                        ? '--'
+                        : '₱${_parsePrice(item['price']).toStringAsFixed(2)}';
+                  }
 
-              final totalSold = totalSoldFromReceipts < 0
-                  ? 0
-                  : totalSoldFromReceipts;
+                  final totalSold = totalSoldFromReceipts < 0
+                      ? 0
+                      : totalSoldFromReceipts;
 
-              return DataRow(
-                cells: [
-                  _tableCell(
-                    coffeeId.isNotEmpty ? coffeeId : '--',
-                    width: 105,
-                    color: AppColors.primaryDark,
-                  ),
-                  _tableCell(coffeeName, width: 145, weight: FontWeight.w900),
-                  _tableCell(
-                    priceForSize('small'),
-                    width: 88,
-                    color: const Color(0xFF2E7D32),
-                  ),
-                  _tableCell(
-                    priceForSize('medium'),
-                    width: 88,
-                    color: const Color(0xFF2E7D32),
-                  ),
-                  _tableCell(
-                    priceForSize('large'),
-                    width: 88,
-                    color: const Color(0xFF2E7D32),
-                  ),
-                  _tableCell(
-                    '$totalSold',
-                    width: 75,
-                    color: const Color(0xFF2E7D32),
-                  ),
-                  DataCell(
-                    _tableReduceButton(
-                      enabled: true,
-                      label: 'Void',
-                      onPressed: () => _showCoffeeVoidDialog(category),
-                    ),
-                  ),
-                ],
-              );
-            })(),
-        ],
-      ),
+                  return DataRow(
+                    cells: [
+                      _tableCell(
+                        coffeeId.isNotEmpty ? coffeeId : '--',
+                        width: 105,
+                        color: AppColors.primaryDark,
+                      ),
+                      _tableCell(
+                        coffeeName,
+                        width: 145,
+                        weight: FontWeight.w900,
+                      ),
+                      _tableCell(
+                        priceForSize('small'),
+                        width: 88,
+                        color: const Color(0xFF2E7D32),
+                      ),
+                      _tableCell(
+                        priceForSize('medium'),
+                        width: 88,
+                        color: const Color(0xFF2E7D32),
+                      ),
+                      _tableCell(
+                        priceForSize('large'),
+                        width: 88,
+                        color: const Color(0xFF2E7D32),
+                      ),
+                      _tableCell(
+                        '$totalSold',
+                        width: 75,
+                        color: const Color(0xFF2E7D32),
+                      ),
+                      DataCell(
+                        _tableReduceButton(
+                          enabled: true,
+                          label: 'Void',
+                          onPressed: () => _showCoffeeVoidDialog(category),
+                        ),
+                      ),
+                    ],
+                  );
+                })(),
+            ],
+          ),
         );
       },
     );
@@ -4697,9 +4776,7 @@ class _AllCategPageState extends State<AllCategPage>
                         fillColor: AppColors.surfaceTint,
                         border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(14),
-                          borderSide: const BorderSide(
-                            color: AppColors.blush,
-                          ),
+                          borderSide: const BorderSide(color: AppColors.blush),
                         ),
                       ),
                     ),
@@ -4875,9 +4952,7 @@ class _AllCategPageState extends State<AllCategPage>
             decoration: BoxDecoration(
               color: Colors.white,
               borderRadius: BorderRadius.circular(20),
-              border: Border.all(
-                color: AppColors.blush.withOpacity(0.8),
-              ),
+              border: Border.all(color: AppColors.blush.withOpacity(0.8)),
             ),
             child: Row(
               children: [
@@ -5034,26 +5109,91 @@ class _AllCategPageState extends State<AllCategPage>
             child: SizedBox(
               height: 54,
               child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              itemCount: categoryDocs.length + 1,
-              separatorBuilder: (_, __) => const SizedBox(width: 10),
-              itemBuilder: (context, index) {
-                if (index == 0) {
-                  final selected = _showAllCategoryItems;
+                scrollDirection: Axis.horizontal,
+                itemCount: categoryDocs.length + 1,
+                separatorBuilder: (_, __) => const SizedBox(width: 10),
+                itemBuilder: (context, index) {
+                  if (index == 0) {
+                    final selected = _showAllCategoryItems;
+                    return Material(
+                      color: Colors.transparent,
+                      child: InkWell(
+                        onTap: () => setState(() {
+                          _showAllCategoryItems = true;
+                          _selectedTableCategoryKey = '__all__';
+                        }),
+                        borderRadius: BorderRadius.circular(16),
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 180),
+                          constraints: const BoxConstraints(minWidth: 88),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 10,
+                          ),
+                          decoration: BoxDecoration(
+                            color: selected
+                                ? AppColors.primaryDark
+                                : Colors.white,
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(
+                              color: selected
+                                  ? AppColors.primaryDark
+                                  : AppColors.blush,
+                              width: 1.3,
+                            ),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                Icons.apps_rounded,
+                                size: 16,
+                                color: selected
+                                    ? Colors.white
+                                    : AppColors.primaryDark,
+                              ),
+                              const SizedBox(width: 8),
+                              Text(
+                                'All',
+                                style: TextStyle(
+                                  color: selected
+                                      ? Colors.white
+                                      : AppColors.primaryDeep,
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w900,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    );
+                  }
+                  final category = categoryDocs[index - 1];
+                  final categoryName =
+                      category['categoryName']?.toString() ?? 'Unknown';
+                  final categoryKey =
+                      category['categoryId']?.toString() ?? categoryName;
+                  final selected =
+                      !_showAllCategoryItems &&
+                      categoryKey ==
+                          (selectedCategory['categoryId']?.toString() ??
+                              selectedCategory['categoryName']?.toString() ??
+                              '');
                   return Material(
                     color: Colors.transparent,
                     child: InkWell(
                       onTap: () => setState(() {
-                        _showAllCategoryItems = true;
-                        _selectedTableCategoryKey = '__all__';
+                        _showAllCategoryItems = false;
+                        _selectedTableCategoryKey = categoryKey;
                       }),
                       borderRadius: BorderRadius.circular(16),
                       child: AnimatedContainer(
                         duration: const Duration(milliseconds: 180),
-                        constraints: const BoxConstraints(minWidth: 88),
+                        constraints: const BoxConstraints(minWidth: 128),
                         padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 10,
+                          horizontal: 18,
+                          vertical: 13,
                         ),
                         decoration: BoxDecoration(
                           color: selected
@@ -5066,26 +5206,39 @@ class _AllCategPageState extends State<AllCategPage>
                                 : AppColors.blush,
                             width: 1.3,
                           ),
+                          boxShadow: [
+                            BoxShadow(
+                              color: const Color(
+                                0xFF963B58,
+                              ).withOpacity(selected ? 0.16 : 0.06),
+                              blurRadius: selected ? 14 : 8,
+                              offset: const Offset(0, 4),
+                            ),
+                          ],
                         ),
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             Icon(
-                              Icons.apps_rounded,
+                              Icons.category_rounded,
                               size: 16,
                               color: selected
                                   ? Colors.white
                                   : AppColors.primaryDark,
                             ),
                             const SizedBox(width: 8),
-                            Text(
-                              'All',
-                              style: TextStyle(
-                                color: selected
-                                    ? Colors.white
-                                    : AppColors.primaryDeep,
-                                fontSize: 13,
-                                fontWeight: FontWeight.w900,
+                            Flexible(
+                              child: Text(
+                                categoryName,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: selected
+                                      ? Colors.white
+                                      : AppColors.primaryDeep,
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w900,
+                                ),
                               ),
                             ),
                           ],
@@ -5093,85 +5246,7 @@ class _AllCategPageState extends State<AllCategPage>
                       ),
                     ),
                   );
-                }
-                final category = categoryDocs[index - 1];
-                final categoryName =
-                    category['categoryName']?.toString() ?? 'Unknown';
-                final categoryKey =
-                    category['categoryId']?.toString() ?? categoryName;
-                final selected =
-                    !_showAllCategoryItems &&
-                    categoryKey ==
-                        (selectedCategory['categoryId']?.toString() ??
-                            selectedCategory['categoryName']?.toString() ??
-                            '');
-                return Material(
-                  color: Colors.transparent,
-                  child: InkWell(
-                    onTap: () => setState(() {
-                      _showAllCategoryItems = false;
-                      _selectedTableCategoryKey = categoryKey;
-                    }),
-                    borderRadius: BorderRadius.circular(16),
-                    child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 180),
-                      constraints: const BoxConstraints(minWidth: 128),
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 18,
-                        vertical: 13,
-                      ),
-                      decoration: BoxDecoration(
-                        color: selected
-                            ? AppColors.primaryDark
-                            : Colors.white,
-                        borderRadius: BorderRadius.circular(16),
-                        border: Border.all(
-                          color: selected
-                              ? AppColors.primaryDark
-                              : AppColors.blush,
-                          width: 1.3,
-                        ),
-                        boxShadow: [
-                          BoxShadow(
-                            color: const Color(
-                              0xFF963B58,
-                            ).withOpacity(selected ? 0.16 : 0.06),
-                            blurRadius: selected ? 14 : 8,
-                            offset: const Offset(0, 4),
-                          ),
-                        ],
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            Icons.category_rounded,
-                            size: 16,
-                            color: selected
-                                ? Colors.white
-                                : AppColors.primaryDark,
-                          ),
-                          const SizedBox(width: 8),
-                          Flexible(
-                            child: Text(
-                              categoryName,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                color: selected
-                                    ? Colors.white
-                                    : AppColors.primaryDeep,
-                                fontSize: 13,
-                                fontWeight: FontWeight.w900,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                );
-              },
+                },
               ),
             ),
           ),
@@ -5557,7 +5632,7 @@ class _AllCategPageState extends State<AllCategPage>
                         ),
                       ),
                     ),
-                    Positioned(right: 20, top: 16, child: AllocationChecklistButton(scopeIds: _staffInventoryIds)),
+
                     // Header content
                     Positioned(
                       bottom: 22,
@@ -5571,21 +5646,32 @@ class _AllCategPageState extends State<AllCategPage>
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               const SizedBox(height: 8),
-                              Text(
-                                _isFilteredCategory
-                                    ? widget.selectedIsBundle
-                                          ? (widget.selectedCategoryName ??
-                                                'Selected Bundle')
-                                          : _isCoffeeView
-                                          ? '${widget.selectedCategoryName ?? 'Selected'} Beverages'
-                                          : '${widget.selectedCategoryName ?? 'Selected'} Categories'
-                                    : 'Inventory',
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 28,
-                                  fontWeight: FontWeight.w900,
-                                  letterSpacing: 0.5,
-                                ),
+                              Row(
+                                crossAxisAlignment: CrossAxisAlignment.center,
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      _isFilteredCategory
+                                          ? widget.selectedIsBundle
+                                                ? (widget.selectedCategoryName ??
+                                                      'Selected Bundle')
+                                                : _isCoffeeView
+                                                ? '${widget.selectedCategoryName ?? 'Selected'} Beverages'
+                                                : '${widget.selectedCategoryName ?? 'Selected'} Categories'
+                                          : 'Inventory',
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 28,
+                                        fontWeight: FontWeight.w900,
+                                        letterSpacing: 0.5,
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  AllocationChecklistButton(
+                                    scopeIds: _staffInventoryIds,
+                                  ),
+                                ],
                               ),
                               const SizedBox(height: 4),
                               Text(
@@ -5770,17 +5856,18 @@ class _AllCategPageState extends State<AllCategPage>
                           .toList();
                   final rootKeys = rootItems.map(itemKey).toSet();
                   final alignedData = alignInventoryDisplayIds(data, rootData);
-                  final activeItems = ((alignedData['items'] as List<dynamic>?) ?? [])
-                      .whereType<Map>()
-                      .map((item) => Map<String, dynamic>.from(item))
-                      .where((item) {
-                        final expirationDate =
-                            item['expirationDate']?.toString() ?? '';
-                        return !_isExpiredItem(expirationDate) &&
-                            (rootKeys.isEmpty ||
-                                rootKeys.contains(itemKey(item)));
-                      })
-                      .toList();
+                  final activeItems =
+                      ((alignedData['items'] as List<dynamic>?) ?? [])
+                          .whereType<Map>()
+                          .map((item) => Map<String, dynamic>.from(item))
+                          .where((item) {
+                            final expirationDate =
+                                item['expirationDate']?.toString() ?? '';
+                            return !_isExpiredItem(expirationDate) &&
+                                (rootKeys.isEmpty ||
+                                    rootKeys.contains(itemKey(item)));
+                          })
+                          .toList();
                   if (activeItems.isEmpty) continue;
                   visibleDocs.add({
                     ...data,
@@ -5897,7 +5984,7 @@ class _AllCategPageState extends State<AllCategPage>
                           'id': data['categoryId'],
                           'name': data['categoryName'],
                           'publicId': data['publicId'],
-                    'coffeeId': data['coffeeId'],
+                          'coffeeId': data['coffeeId'],
                         });
                         final items =
                             (data['items'] as List?)
@@ -5984,9 +6071,7 @@ class _AllCategPageState extends State<AllCategPage>
                           fillColor: Colors.white,
                           border: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(16),
-                            borderSide: const BorderSide(
-                              color: AppColors.rose,
-                            ),
+                            borderSide: const BorderSide(color: AppColors.rose),
                           ),
                         ),
                       ),

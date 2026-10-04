@@ -108,7 +108,7 @@ void main() {
   });
 
   testWidgets(
-    'daily analytics use shop hours and refund legend opens item details',
+    'daily analytics use all 24 hours and refund legend opens item details',
     (tester) async {
       final data = fixture();
       final now = DateTime.now();
@@ -141,11 +141,15 @@ void main() {
       await tester.pumpAndSettle();
       final dynamic state = tester.state(find.byType(BranchReportDialog));
       final chart = state.bars(data);
-      expect(chart.$4.first, '8AM');
-      expect(chart.$4.last, '7PM');
-      expect(chart.$4.length, 12);
+      expect(chart.$4.first, '12AM');
+      expect(chart.$4.last, '11PM');
+      expect(chart.$4.length, 24);
       final legend = find.widgetWithText(ActionChip, 'Refund');
-      for (var attempt = 0; attempt < 12 && legend.evaluate().isEmpty; attempt++) {
+      for (
+        var attempt = 0;
+        attempt < 12 && legend.evaluate().isEmpty;
+        attempt++
+      ) {
         await tester.drag(find.byType(ListView).first, const Offset(0, -250));
         await tester.pumpAndSettle();
       }
@@ -162,7 +166,11 @@ void main() {
       expect(find.text('R-1'), findsOneWidget);
       await tester.tap(find.byTooltip('Close receipts'));
       await tester.pumpAndSettle();
-      for (var attempt = 0; attempt < 12 && find.text('Top 10 Refunds').evaluate().isEmpty; attempt++) {
+      for (
+        var attempt = 0;
+        attempt < 12 && find.text('Top 10 Refunds').evaluate().isEmpty;
+        attempt++
+      ) {
         await tester.drag(find.byType(ListView).first, const Offset(0, -250));
         await tester.pumpAndSettle();
       }

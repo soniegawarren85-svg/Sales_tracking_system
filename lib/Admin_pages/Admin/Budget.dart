@@ -1,3 +1,10 @@
+import '../../services/session_actor.dart';
+import '../../widgets/assign_inventory_tile.dart';
+import '../../widgets/horizontal_controls.dart';
+import '../../widgets/branch_allocation_history.dart';
+import '../../services/branch_report_data.dart'
+    show validReportSale, reportRefund;
+import 'package:firebase_auth/firebase_auth.dart';
 import '../../widgets/assigned_branch_staff.dart';
 import '../../widgets/branch_editor_dialog.dart';
 import '../../services/bundle_stock_service.dart';
@@ -78,127 +85,6 @@ class _AllocationTableRow {
   final int remaining;
   final double price;
   final String type;
-}
-
-class _AssignInventoryTile extends StatelessWidget {
-  final String title;
-  final String subtitle;
-  final IconData icon;
-  final TextEditingController controller;
-  final bool enabled;
-
-  const _AssignInventoryTile({
-    required this.title,
-    required this.subtitle,
-    required this.icon,
-    required this.controller,
-    required this.enabled,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: enabled ? AppColors.background : Colors.grey.shade100,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: kAccent.withOpacity(0.7)),
-      ),
-      child: Row(
-        children: [
-          Icon(icon, color: enabled ? kDeep : Colors.grey, size: 20),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: enabled ? kBannerTop : Colors.grey,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  subtitle,
-                  style: TextStyle(
-                    color: enabled ? Colors.grey.shade600 : Colors.grey,
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 10),
-          SizedBox(
-            width: 116,
-            child: TextField(
-              controller: controller,
-              enabled: enabled,
-              textAlign: TextAlign.center,
-              keyboardType: TextInputType.number,
-              textInputAction: TextInputAction.done,
-              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-              style: const TextStyle(
-                color: kBannerTop,
-                fontSize: 14,
-                fontWeight: FontWeight.w800,
-              ),
-              decoration: InputDecoration(
-                hintText: 'Qty',
-                filled: true,
-                fillColor: Colors.white,
-                prefixIcon: IconButton(
-                  icon: const Icon(Icons.remove_rounded, size: 16),
-                  color: enabled ? kDeep : Colors.grey,
-                  onPressed: !enabled
-                      ? null
-                      : () {
-                          final value = int.tryParse(controller.text) ?? 0;
-                          controller.text = value <= 1
-                              ? ''
-                              : (value - 1).toString();
-                        },
-                ),
-                prefixIconConstraints: const BoxConstraints(
-                  minWidth: 30,
-                  minHeight: 36,
-                ),
-                suffixIcon: IconButton(
-                  icon: const Icon(Icons.add_rounded, size: 16),
-                  color: enabled ? kDeep : Colors.grey,
-                  onPressed: !enabled
-                      ? null
-                      : () {
-                          final value = int.tryParse(controller.text) ?? 0;
-                          controller.text = (value + 1).toString();
-                        },
-                ),
-                suffixIconConstraints: const BoxConstraints(
-                  minWidth: 30,
-                  minHeight: 36,
-                ),
-                contentPadding: const EdgeInsets.symmetric(vertical: 12),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  borderSide: BorderSide(color: kAccent.withOpacity(0.8)),
-                ),
-                focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  borderSide: const BorderSide(color: kPrimary, width: 2),
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
 }
 
 class _AssignCoffeeTile extends StatelessWidget {
@@ -318,7 +204,8 @@ class _BudgetPageState extends State<BudgetPage>
   final _allocationSearchController = TextEditingController();
   final _currentAllocations = <String, double>{};
   final _inventorySources = <String, Map<String, dynamic>>{};
-  final _displaySubscriptions = <StreamSubscription<QuerySnapshot<Map<String, dynamic>>>>[];
+  final _displaySubscriptions =
+      <StreamSubscription<QuerySnapshot<Map<String, dynamic>>>>[];
   final _branchInventoryStreams =
       <String, Stream<QuerySnapshot<Map<String, dynamic>>>>{};
   final _firestore = FirebaseFirestore.instance;
@@ -346,14 +233,31 @@ class _BudgetPageState extends State<BudgetPage>
   @override
   void initState() {
     super.initState();
-    for (final collection in ['sales_inventory', 'coffee_products', 'coffee_addons']) {
-      _displaySubscriptions.add(_firestore.collection(collection).snapshots().listen((snapshot) {
-        if (!mounted) return;
-        setState(() {
-          for (final doc in snapshot.docs) { _inventorySources[doc.id] = doc.data(); }
-        });
-      }, onError: (Object error) { debugPrint('Unable to refresh inventory display IDs: $error'); }));
-    }    _branchesStream = _firestore
+    for (final collection in [
+      'sales_inventory',
+      'coffee_products',
+      'coffee_addons',
+    ]) {
+      _displaySubscriptions.add(
+        _firestore
+            .collection(collection)
+            .snapshots()
+            .listen(
+              (snapshot) {
+                if (!mounted) return;
+                setState(() {
+                  for (final doc in snapshot.docs) {
+                    _inventorySources[doc.id] = doc.data();
+                  }
+                });
+              },
+              onError: (Object error) {
+                debugPrint('Unable to refresh inventory display IDs: $error');
+              },
+            ),
+      );
+    }
+    _branchesStream = _firestore
         .collection('branches')
         .orderBy('name')
         .snapshots();
@@ -371,7 +275,9 @@ class _BudgetPageState extends State<BudgetPage>
 
   @override
   void dispose() {
-    for (final subscription in _displaySubscriptions) { subscription.cancel(); }
+    for (final subscription in _displaySubscriptions) {
+      subscription.cancel();
+    }
     for (var c in _budgetControllers.values) {
       c.dispose();
     }
@@ -442,8 +348,16 @@ class _BudgetPageState extends State<BudgetPage>
             : (sameDrawerDay ? currentBalance + budget : budget);
         transaction.set(cashDrawerRef, {
           'balance': nextBalance,
-          'openingCash': replaceDailyOpening ? budget : (cashDrawerSnapshot.data()?['dailyOpeningCash'] ?? cashDrawerSnapshot.data()?['openingCash'] ?? budget),
-          'dailyOpeningCash': replaceDailyOpening ? budget : (cashDrawerSnapshot.data()?['dailyOpeningCash'] ?? cashDrawerSnapshot.data()?['openingCash'] ?? budget),
+          'openingCash': replaceDailyOpening
+              ? budget
+              : (cashDrawerSnapshot.data()?['dailyOpeningCash'] ??
+                    cashDrawerSnapshot.data()?['openingCash'] ??
+                    budget),
+          'dailyOpeningCash': replaceDailyOpening
+              ? budget
+              : (cashDrawerSnapshot.data()?['dailyOpeningCash'] ??
+                    cashDrawerSnapshot.data()?['openingCash'] ??
+                    budget),
           'drawerDate': dateKey,
           'updatedAt': now,
           'staffId': targetId,
@@ -500,9 +414,7 @@ class _BudgetPageState extends State<BudgetPage>
     try {
       final expiryDate = DateTime.parse(expirationDate);
       final today = DateTime.now();
-      return expiryDate.isBefore(
-        DateTime(today.year, today.month, today.day),
-      );
+      return expiryDate.isBefore(DateTime(today.year, today.month, today.day));
     } catch (_) {
       return false;
     }
@@ -537,7 +449,10 @@ class _BudgetPageState extends State<BudgetPage>
 
   bool _isActiveAllocationDocument(Map<String, dynamic> data) {
     if (data['isDeleted'] == true ||
-        (data['isBundle'] != true && _isExpiredInventoryItem(data['expirationDate']?.toString() ?? ''))) {
+        (data['isBundle'] != true &&
+            _isExpiredInventoryItem(
+              data['expirationDate']?.toString() ?? '',
+            ))) {
       return false;
     }
     if (data['isBundle'] == true) {
@@ -575,14 +490,14 @@ class _BudgetPageState extends State<BudgetPage>
       if (assignedData['sourceInventoryId']?.toString() != sourceDocId) {
         continue;
       }
-      final assignedItems =
-          (assignedData['items'] as List<dynamic>? ?? []).whereType<Map>();
+      final assignedItems = (assignedData['items'] as List<dynamic>? ?? [])
+          .whereType<Map>();
       for (final rawAssignedItem in assignedItems) {
         final assignedItem = Map<String, dynamic>.from(rawAssignedItem);
         final sameId =
             itemId.isNotEmpty && assignedItem['id']?.toString() == itemId;
-        final sameName = itemName.isNotEmpty &&
-            assignedItem['name']?.toString() == itemName;
+        final sameName =
+            itemName.isNotEmpty && assignedItem['name']?.toString() == itemName;
         if (sameId || sameName) {
           assignedStock += _parseInt(
             assignedItem['stock'] ?? assignedItem['startingStock'],
@@ -711,8 +626,10 @@ class _BudgetPageState extends State<BudgetPage>
     return items.isEmpty ? safeName : '$safeName - ${items.join(', ')}';
   }
 
-  bool _hasExpiredAssignedBundleItem(Map<String, dynamic> data) => availableBundleStock(data) == 0;
-  int _availableAssignedBundleCount(Map<String, dynamic> data) => availableBundleStock(data);
+  bool _hasExpiredAssignedBundleItem(Map<String, dynamic> data) =>
+      availableBundleStock(data) == 0;
+  int _availableAssignedBundleCount(Map<String, dynamic> data) =>
+      availableBundleStock(data);
   Future<List<QueryDocumentSnapshot<Map<String, dynamic>>>>
   _activeAssignedInventoryDocs(
     List<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
@@ -1301,11 +1218,26 @@ class _BudgetPageState extends State<BudgetPage>
     String staffName, {
     bool isBranch = false,
     String? onlyType,
+    String? onlySourceId,
+    String? onlyItemId,
   }) async {
+    final inventoryLoad = Future.wait([
+      _firestore.collection('sales_inventory').get(),
+      _firestore
+          .collection('coffee_products')
+          .where('isDeleted', isEqualTo: false)
+          .get(),
+      _firestore
+          .collection('coffee_addons')
+          .where('isDeleted', isEqualTo: false)
+          .get(),
+      _firestore.collection('staff_inventory').get(),
+    ]);
     final qtyControllers = <String, TextEditingController>{};
     final selectedCoffeeIds = <String>{};
     final selectedAddonIds = <String>{};
-    var showCategories = onlyType == null || onlyType == 'Category' || onlyType == 'Categories';
+    var showCategories =
+        onlyType == null || onlyType == 'Category' || onlyType == 'Categories';
     var showCoffee = onlyType == 'Beverages';
     var showAddons = onlyType == 'Add-on';
 
@@ -1315,6 +1247,10 @@ class _BudgetPageState extends State<BudgetPage>
         return StatefulBuilder(
           builder: (context, setDialogState) {
             return Dialog(
+              insetPadding: const EdgeInsets.symmetric(
+                horizontal: 8,
+                vertical: 20,
+              ),
               backgroundColor: AppColors.background,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(24),
@@ -1365,18 +1301,7 @@ class _BudgetPageState extends State<BudgetPage>
                           maxHeight: MediaQuery.of(context).size.height * 0.68,
                         ),
                         child: FutureBuilder<List<QuerySnapshot<Map<String, dynamic>>>>(
-                          future: Future.wait([
-                            _firestore.collection('sales_inventory').get(),
-                            _firestore
-                                .collection('coffee_products')
-                                .where('isDeleted', isEqualTo: false)
-                                .get(),
-                            _firestore
-                                .collection('coffee_addons')
-                                .where('isDeleted', isEqualTo: false)
-                                .get(),
-                            _firestore.collection('staff_inventory').get(),
-                          ]),
+                          future: inventoryLoad,
                           builder: (context, snapshot) {
                             if (snapshot.connectionState ==
                                 ConnectionState.waiting) {
@@ -1395,15 +1320,17 @@ class _BudgetPageState extends State<BudgetPage>
                             final addonSnapshot = snapshot.data?[2];
                             final assignedInventorySnapshot = snapshot.data?[3];
                             final assignedDocs =
-                              assignedInventorySnapshot?.docs ??
-                              <QueryDocumentSnapshot<Map<String, dynamic>>>[];
+                                assignedInventorySnapshot?.docs ??
+                                <QueryDocumentSnapshot<Map<String, dynamic>>>[];
                             final activeDocs = (inventorySnapshot?.docs ?? [])
                                 .where((doc) {
                                   final data = doc.data();
                                   final isSalesRecord =
                                       data['status'] == 'completed' ||
                                       data['salesId'] != null;
-                                  return data['isDeleted'] != true &&
+                                  return (onlySourceId == null ||
+                                          doc.id == onlySourceId) &&
+                                      data['isDeleted'] != true &&
                                       data['deletedAt'] == null &&
                                       !isSalesRecord;
                                 })
@@ -1418,8 +1345,25 @@ class _BudgetPageState extends State<BudgetPage>
                               return data['isBundle'] == true &&
                                   availableBundleStock(data) > 0;
                             }).toList();
-                            final coffeeDocs = coffeeSnapshot?.docs ?? [];
-                            final addonDocs = (addonSnapshot?.docs ?? []).where((doc) => doc.data()['isDeleted'] != true && !bundleExpired(doc.data(), DateTime.now())).toList();
+                            final coffeeDocs = (coffeeSnapshot?.docs ?? [])
+                                .where(
+                                  (doc) =>
+                                      onlySourceId == null ||
+                                      doc.id == onlySourceId,
+                                )
+                                .toList();
+                            final addonDocs = (addonSnapshot?.docs ?? [])
+                                .where(
+                                  (doc) =>
+                                      (onlySourceId == null ||
+                                          doc.id == onlySourceId) &&
+                                      doc.data()['isDeleted'] != true &&
+                                      !bundleExpired(
+                                        doc.data(),
+                                        DateTime.now(),
+                                      ),
+                                )
+                                .toList();
                             final docs = showAddons
                                 ? addonDocs
                                 : showCoffee
@@ -1428,7 +1372,8 @@ class _BudgetPageState extends State<BudgetPage>
                                 ? categoryDocs
                                 : bundleDocs;
 
-                            if (onlyType == null && categoryDocs.isEmpty &&
+                            if (onlyType == null &&
+                                categoryDocs.isEmpty &&
                                 bundleDocs.isNotEmpty &&
                                 showCategories &&
                                 !showCoffee &&
@@ -1438,7 +1383,8 @@ class _BudgetPageState extends State<BudgetPage>
                               });
                             }
 
-                            if (onlyType == null && categoryDocs.isEmpty &&
+                            if (onlyType == null &&
+                                categoryDocs.isEmpty &&
                                 bundleDocs.isEmpty &&
                                 coffeeDocs.isEmpty &&
                                 addonDocs.isEmpty) {
@@ -1450,65 +1396,69 @@ class _BudgetPageState extends State<BudgetPage>
                             return Column(
                               children: [
                                 if (onlyType == null)
-                                Row(
-                                  children: [
-                                    Expanded(
-                                      child: _AssignModeButton(
-                                        selected: showCategories,
-                                        icon: Icons.category_rounded,
-                                        label:
-                                            'Categories (${categoryDocs.length})',
-                                        onTap: () => setDialogState(() {
-                                          showCategories = true;
-                                          showCoffee = false;
-                                          showAddons = false;
-                                        }),
+                                  Row(
+                                    children: [
+                                      Expanded(
+                                        child: _AssignModeButton(
+                                          selected: showCategories,
+                                          icon: Icons.category_rounded,
+                                          label:
+                                              'Categories (${categoryDocs.length})',
+                                          onTap: () => setDialogState(() {
+                                            showCategories = true;
+                                            showCoffee = false;
+                                            showAddons = false;
+                                          }),
+                                        ),
                                       ),
-                                    ),
-                                    const SizedBox(width: 10),
-                                    Expanded(
-                                      child: _AssignModeButton(
-                                        selected:
-                                            !showCategories &&
-                                            !showCoffee &&
-                                            !showAddons,
-                                        icon: Icons.inventory_2_rounded,
-                                        label: 'Bundle (${bundleDocs.length})',
-                                        onTap: () => setDialogState(() {
-                                          showCategories = false;
-                                          showCoffee = false;
-                                          showAddons = false;
-                                        }),
+                                      const SizedBox(width: 10),
+                                      Expanded(
+                                        child: _AssignModeButton(
+                                          selected:
+                                              !showCategories &&
+                                              !showCoffee &&
+                                              !showAddons,
+                                          icon: Icons.inventory_2_rounded,
+                                          label:
+                                              'Bundle (${bundleDocs.length})',
+                                          onTap: () => setDialogState(() {
+                                            showCategories = false;
+                                            showCoffee = false;
+                                            showAddons = false;
+                                          }),
+                                        ),
                                       ),
-                                    ),
-                                    const SizedBox(width: 10),
-                                    Expanded(
-                                      child: _AssignModeButton(
-                                        selected: showCoffee,
-                                        icon: Icons.coffee_rounded,
-                                        label: 'Beverages (${coffeeDocs.length})',
-                                        onTap: () => setDialogState(() {
-                                          showCategories = false;
-                                          showCoffee = true;
-                                          showAddons = false;
-                                        }),
+                                      const SizedBox(width: 10),
+                                      Expanded(
+                                        child: _AssignModeButton(
+                                          selected: showCoffee,
+                                          icon: Icons.coffee_rounded,
+                                          label:
+                                              'Beverages (${coffeeDocs.length})',
+                                          onTap: () => setDialogState(() {
+                                            showCategories = false;
+                                            showCoffee = true;
+                                            showAddons = false;
+                                          }),
+                                        ),
                                       ),
-                                    ),
-                                    const SizedBox(width: 10),
-                                    Expanded(
-                                      child: _AssignModeButton(
-                                        selected: showAddons,
-                                        icon: Icons.add_circle_outline_rounded,
-                                        label: 'Add-ons (${addonDocs.length})',
-                                        onTap: () => setDialogState(() {
-                                          showCategories = false;
-                                          showCoffee = false;
-                                          showAddons = true;
-                                        }),
+                                      const SizedBox(width: 10),
+                                      Expanded(
+                                        child: _AssignModeButton(
+                                          selected: showAddons,
+                                          icon:
+                                              Icons.add_circle_outline_rounded,
+                                          label:
+                                              'Add-ons (${addonDocs.length})',
+                                          onTap: () => setDialogState(() {
+                                            showCategories = false;
+                                            showCoffee = false;
+                                            showAddons = true;
+                                          }),
+                                        ),
                                       ),
-                                    ),
-                                  ],
-                                ),
+                                    ],
+                                  ),
                                 const SizedBox(height: 12),
                                 Expanded(
                                   child: docs.isEmpty
@@ -1606,7 +1556,7 @@ class _BudgetPageState extends State<BudgetPage>
                                                     () =>
                                                         TextEditingController(),
                                                   );
-                                              return _AssignInventoryTile(
+                                              return AssignInventoryTile(
                                                 title: name,
                                                 subtitle:
                                                     'Bundle stock: $stock - P${_parsePrice(data['price']).toStringAsFixed(2)}',
@@ -1617,7 +1567,15 @@ class _BudgetPageState extends State<BudgetPage>
                                             }
 
                                             final items =
-                                                _assignableCategoryItems(data);
+                                                _assignableCategoryItems(data)
+                                                    .where(
+                                                      (entry) =>
+                                                          onlyItemId == null ||
+                                                          entry.value['id']
+                                                                  ?.toString() ==
+                                                              onlyItemId,
+                                                    )
+                                                    .toList();
                                             return Container(
                                               padding: const EdgeInsets.all(12),
                                               decoration: BoxDecoration(
@@ -1667,7 +1625,7 @@ class _BudgetPageState extends State<BudgetPage>
                                                           const EdgeInsets.only(
                                                             bottom: 8,
                                                           ),
-                                                      child: _AssignInventoryTile(
+                                                      child: AssignInventoryTile(
                                                         title: itemName,
                                                         subtitle:
                                                             'Stock: $stock - P${_parsePrice(item['price']).toStringAsFixed(2)}',
@@ -1751,12 +1709,32 @@ class _BudgetPageState extends State<BudgetPage>
     Set<String> coffeeProductIds = const {},
     Set<String> addonIds = const {},
   }) async {
+    final allocator = await resolveSessionActor(_firestore, admin: true);
     final deliveryId = _firestore.collection('allocation_checklist').doc().id;
-    void stage(Transaction transaction, DocumentReference<Map<String, dynamic>> target, Map<String, dynamic> payload, SetOptions options) {
-      transaction.set(_firestore.collection('allocation_checklist').doc('${deliveryId}_${target.id}'), {
-        ...payload, 'targetDocId': target.id, 'status': 'pending', 'deliveryId': deliveryId,
-      });
+    void stage(
+      Transaction transaction,
+      DocumentReference<Map<String, dynamic>> target,
+      Map<String, dynamic> payload,
+      SetOptions options,
+    ) {
+      transaction.set(
+        _firestore
+            .collection('allocation_checklist')
+            .doc('${deliveryId}_${target.id}'),
+        {
+          ...payload,
+          'targetDocId': target.id,
+          'status': 'Awaiting Confirmation',
+          'deliveryId': deliveryId,
+          'kind': 'incoming',
+          'schemaVersion': 2,
+          'allocatedBy': allocator.id,
+          'allocatedByName': allocator.name,
+          'createdAt': FieldValue.serverTimestamp(),
+        },
+      );
     }
+
     final selected = quantities.entries
         .where((entry) => entry.value > 0)
         .toList();
@@ -1775,7 +1753,10 @@ class _BudgetPageState extends State<BudgetPage>
           .doc(addonId)
           .get();
       final addonData = addonSnapshot.data();
-      if (addonData == null || addonData['isDeleted'] == true || bundleExpired(addonData, DateTime.now())) continue;
+      if (addonData == null ||
+          addonData['isDeleted'] == true ||
+          bundleExpired(addonData, DateTime.now()))
+        continue;
       selectedAddonOptions.add({
         ...addonData,
         'id': addonId,
@@ -1814,7 +1795,10 @@ class _BudgetPageState extends State<BudgetPage>
             _firestore.collection('coffee_addons').doc(addonId),
           );
           final addonData = addonSnapshot.data();
-          if (addonData == null || addonData['isDeleted'] == true || bundleExpired(addonData, DateTime.now())) continue;
+          if (addonData == null ||
+              addonData['isDeleted'] == true ||
+              bundleExpired(addonData, DateTime.now()))
+            continue;
           options.add({
             ...addonData,
             'id': addonId,
@@ -1837,7 +1821,6 @@ class _BudgetPageState extends State<BudgetPage>
             .collection('sales_inventory')
             .doc(sourceDocId);
         sourceSnapshots[sourceDocId] = await transaction.get(sourceRef);
-
       }
 
       for (final coffeeId in coffeeProductIds) {
@@ -1899,14 +1882,16 @@ class _BudgetPageState extends State<BudgetPage>
         if (sourceData == null) continue;
 
         final isBundle = sourceData['isBundle'] == true;
-        final Map<String, dynamic>? staffData = null; // Pending delivery contains only the new quantities.
+        final Map<String, dynamic>? staffData =
+            null; // Pending delivery contains only the new quantities.
         final selectedForDoc = grouped[sourceDocId]!;
 
         if (isBundle) {
           final qty = selectedForDoc['bundle'] ?? 0;
           if (qty <= 0) continue;
           final currentStock = _parseInt(sourceData['bundleCount']);
-          if (qty > availableBundleStock(sourceData)) throw StateError('Not enough available bundle stock.');
+          if (qty > availableBundleStock(sourceData))
+            throw StateError('Not enough available bundle stock.');
           if (qty > currentStock) {
             throw Exception(
               'Not enough bundle stock for ${sourceData['name']}',
@@ -1930,8 +1915,7 @@ class _BudgetPageState extends State<BudgetPage>
           final assignedAt = Timestamp.now();
           final selectedInstances = sourceInstances
               .where(
-                (instance) =>
-                    bundleInstanceAvailable(instance, sourceData),
+                (instance) => bundleInstanceAvailable(instance, sourceData),
               )
               .take(qty)
               .map(
@@ -1948,7 +1932,8 @@ class _BudgetPageState extends State<BudgetPage>
               final number = currentStaffCount + i + 1;
               selectedInstances.add({
                 'number': number,
-                'id': '${sourceData['bundleId'] ?? sourceDocId}-$deliveryId-$number',
+                'id':
+                    '${sourceData['bundleId'] ?? sourceDocId}-$deliveryId-$number',
                 'status': 'available',
                 'assignedAt': assignedAt,
                 'items': items,
@@ -2003,7 +1988,7 @@ class _BudgetPageState extends State<BudgetPage>
             updatedSourceItems.add(rawItem);
             continue;
           }
-            var stock = rawItem.containsKey('stock')
+          var stock = rawItem.containsKey('stock')
               ? _parseInt(rawItem['stock'])
               : _parseInt(rawItem['startingStock']);
           if (qty > stock) {
@@ -2072,7 +2057,10 @@ class _BudgetPageState extends State<BudgetPage>
     });
 
     if (!mounted) return;
-    _showSnack('Allocation sent to $staffName checklist', Colors.green.shade600);
+    _showSnack(
+      'Allocation sent to $staffName checklist',
+      Colors.green.shade600,
+    );
   }
 
   Future<List<QueryDocumentSnapshot<Map<String, dynamic>>>> _loadReportDocs(
@@ -2214,33 +2202,95 @@ class _BudgetPageState extends State<BudgetPage>
     return docs;
   }
 
-  Widget _buildUnsubmittedBranchReport(String branchId, String branchName, DateTime day) {
-    return SizedBox(width: 720, height: 650, child: Column(children: [
-      Padding(padding: const EdgeInsets.all(20), child: Row(children: [
-        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const Text('Branch Staff Reports', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: kDeep)),
-          Text('$branchName · ${_reportDateLabel(day)}'),
-          const SizedBox(height: 8),
-          const Text('No saved closing report yet. Sales records for this date are shown below.'),
-        ])),
-        IconButton(onPressed: () => Navigator.pop(context), icon: const Icon(Icons.close)),
-      ])),
-      Expanded(child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-        stream: _firestore.collection('completed_sales').where('branchId', isEqualTo: branchId).snapshots(),
-        builder: (context, snapshot) {
-          if (snapshot.hasError) return const Center(child: Text('Unable to load sales records.'));
-          if (!snapshot.hasData) return const Center(child: CircularProgressIndicator(color: kPrimary));
-          final records = snapshot.data!.docs.where((doc) => DateUtils.isSameDay(_dateValue(doc.data()['timestamp']), day)).toList()
-            ..sort((a, b) => _dateValue(b.data()['timestamp']).compareTo(_dateValue(a.data()['timestamp'])));
-          if (records.isEmpty) return const Center(child: Text('No sales records for this date.'));
-          return ListView.separated(
-            padding: const EdgeInsets.all(16), itemCount: records.length,
-            separatorBuilder: (_, __) => const SizedBox(height: 12),
-            itemBuilder: (context, index) => _buildBranchReceiptCard(records[index].data(), records[index].id),
-          );
-        },
-      )),
-    ]));
+  Widget _buildUnsubmittedBranchReport(
+    String branchId,
+    String branchName,
+    DateTime day,
+  ) {
+    return SizedBox(
+      width: 720,
+      height: 650,
+      child: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(20),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Branch Staff Reports',
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.w800,
+                          color: kDeep,
+                        ),
+                      ),
+                      Text('$branchName · ${_reportDateLabel(day)}'),
+                      const SizedBox(height: 8),
+                      const Text(
+                        'No saved closing report yet. Sales records for this date are shown below.',
+                      ),
+                    ],
+                  ),
+                ),
+                IconButton(
+                  onPressed: () => Navigator.pop(context),
+                  icon: const Icon(Icons.close),
+                ),
+              ],
+            ),
+          ),
+          Expanded(
+            child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+              stream: _firestore
+                  .collection('completed_sales')
+                  .where('branchId', isEqualTo: branchId)
+                  .snapshots(),
+              builder: (context, snapshot) {
+                if (snapshot.hasError)
+                  return const Center(
+                    child: Text('Unable to load sales records.'),
+                  );
+                if (!snapshot.hasData)
+                  return const Center(
+                    child: CircularProgressIndicator(color: kPrimary),
+                  );
+                final records =
+                    snapshot.data!.docs
+                        .where(
+                          (doc) => DateUtils.isSameDay(
+                            _dateValue(doc.data()['timestamp']),
+                            day,
+                          ),
+                        )
+                        .toList()
+                      ..sort(
+                        (a, b) => _dateValue(
+                          b.data()['timestamp'],
+                        ).compareTo(_dateValue(a.data()['timestamp'])),
+                      );
+                if (records.isEmpty)
+                  return const Center(
+                    child: Text('No sales records for this date.'),
+                  );
+                return ListView.separated(
+                  padding: const EdgeInsets.all(16),
+                  itemCount: records.length,
+                  separatorBuilder: (_, __) => const SizedBox(height: 12),
+                  itemBuilder: (context, index) => _buildBranchReceiptCard(
+                    records[index].data(),
+                    records[index].id,
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   void _showBranchReportDetail({
@@ -2251,6 +2301,7 @@ class _BudgetPageState extends State<BudgetPage>
   }) {
     showBranchReport(context, branchId: branchId, branchName: branchName);
   }
+
   void _showReportDetail(String staffId, String staffName) {
     showDialog<void>(
       context: context,
@@ -2489,7 +2540,9 @@ class _BudgetPageState extends State<BudgetPage>
 
   DateTime _reportDayFromData(Map<String, dynamic> data) {
     final rawDate = data['reportDateKey'] ?? data['reportDate'];
-    final reportDate = rawDate is Timestamp ? rawDate.toDate().toIso8601String() : rawDate?.toString();
+    final reportDate = rawDate is Timestamp
+        ? rawDate.toDate().toIso8601String()
+        : rawDate?.toString();
     final parsedReportDate = reportDate == null
         ? null
         : DateTime.tryParse(reportDate);
@@ -2653,26 +2706,27 @@ class _BudgetPageState extends State<BudgetPage>
                   SingleChildScrollView(
                     scrollDirection: Axis.horizontal,
                     child: Row(
-                      children: ['All', 'Categories', 'Bundle', 'Beverages items']
-                          .map(
-                            (label) => Padding(
-                              padding: const EdgeInsets.only(right: 7),
-                              child: ChoiceChip(
-                                label: Text(label),
-                                selected: selectedFilter == label,
-                                selectedColor: kPrimary,
-                                labelStyle: TextStyle(
-                                  color: selectedFilter == label
-                                      ? Colors.white
-                                      : kDeep,
+                      children:
+                          ['All', 'Categories', 'Bundle', 'Beverages items']
+                              .map(
+                                (label) => Padding(
+                                  padding: const EdgeInsets.only(right: 7),
+                                  child: ChoiceChip(
+                                    label: Text(label),
+                                    selected: selectedFilter == label,
+                                    selectedColor: kPrimary,
+                                    labelStyle: TextStyle(
+                                      color: selectedFilter == label
+                                          ? Colors.white
+                                          : kDeep,
+                                    ),
+                                    onSelected: (_) => setDialogState(
+                                      () => selectedFilter = label,
+                                    ),
+                                  ),
                                 ),
-                                onSelected: (_) => setDialogState(
-                                  () => selectedFilter = label,
-                                ),
-                              ),
-                            ),
-                          )
-                          .toList(),
+                              )
+                              .toList(),
                     ),
                   ),
                   const SizedBox(height: 8),
@@ -2719,11 +2773,13 @@ class _BudgetPageState extends State<BudgetPage>
                                 (selectedFilter == 'Bundle' &&
                                     itemText.contains('bundle')) ||
                                 (selectedFilter == 'Beverages items' &&
-                                    ((itemText.contains('coffee') || itemText.contains('beverage')) ||
+                                    ((itemText.contains('coffee') ||
+                                            itemText.contains('beverage')) ||
                                         itemText.contains('smoothie'))) ||
                                 (selectedFilter == 'Categories' &&
                                     !itemText.contains('bundle') &&
-                                    !(itemText.contains('coffee') || itemText.contains('beverage')) &&
+                                    !(itemText.contains('coffee') ||
+                                        itemText.contains('beverage')) &&
                                     !itemText.contains('smoothie'));
                             if (!matchesSearch || !matchesFilter) {
                               return const SizedBox.shrink();
@@ -3154,7 +3210,10 @@ class _BudgetPageState extends State<BudgetPage>
                   SizedBox(
                     width: double.infinity,
                     child: OutlinedButton.icon(
-                      onPressed: () => _showBranchItemsDialog(branchId, branchName ?? 'Branch'),
+                      onPressed: () => _showBranchItemsDialog(
+                        branchId,
+                        branchName ?? 'Branch',
+                      ),
                       icon: const Icon(Icons.inventory_2_outlined),
                       label: const Text('View all items'),
                       style: OutlinedButton.styleFrom(
@@ -4156,9 +4215,12 @@ class _BudgetPageState extends State<BudgetPage>
       floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
       floatingActionButton: _selectedBranchId == null
           ? FloatingActionButton(
-              tooltip: 'Create branch', shape: const CircleBorder(),
-              backgroundColor: kPrimary, foregroundColor: Colors.white,
-              onPressed: _showCreateBranchDialog, child: const Icon(Icons.add),
+              tooltip: 'Create branch',
+              shape: const CircleBorder(),
+              backgroundColor: kPrimary,
+              foregroundColor: Colors.white,
+              onPressed: _showCreateBranchDialog,
+              child: const Icon(Icons.add),
             )
           : _buildBranchQuickActions(
               branchId: _selectedBranchId!,
@@ -4171,28 +4233,95 @@ class _BudgetPageState extends State<BudgetPage>
               ),
               enabled: _activeBranchStaffIds.isNotEmpty,
             ),
-      body: FadeTransition(opacity: _fadeAnim, child: SlideTransition(position: _slideAnim,
-        child: Column(children: [
-          SizedBox(height: 130, child: _selectedBranchId == null ? _buildHeader() : _buildSelectedBranchHeader()),
-          if (_selectedBranchId == null) _buildPinnedBudgetControls()
-          else Padding(padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12), child: _buildAllocationSearch()),
-          Expanded(child: ListView(padding: const EdgeInsets.only(bottom: 32), children: [
-            if (_selectedBranchId == null) ...[
-              Padding(padding: const EdgeInsets.all(16), child: AdminSalesOverview(branches: true, todayOnly: true, selectedDate: _analyticsDate)),
-              Padding(padding: const EdgeInsets.symmetric(horizontal: 16), child: Card(
-                color: Colors.white, child: Padding(padding: const EdgeInsets.all(18), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  const ListTile(contentPadding: EdgeInsets.zero,
-                    leading: CircleAvatar(backgroundColor: AppColors.blush, child: Icon(Icons.pie_chart_outline, color: kPrimary)),
-                    title: Text('Branch sales reports', style: TextStyle(fontWeight: FontWeight.w800)),
-                    subtitle: Text('Compare branches, review sales, and generate reports')),
-                  Align(alignment: Alignment.centerLeft, child: FilledButton.icon(onPressed: () => showBranchReport(context), icon: const Icon(Icons.assessment_outlined), label: const Text('View branches report'))),
-                ])))),
-              _buildBranchManagementSection(),
-            ] else _buildSelectedBranchContent(),
-          ])),
-        ]))),
+      body: FadeTransition(
+        opacity: _fadeAnim,
+        child: SlideTransition(
+          position: _slideAnim,
+          child: Column(
+            children: [
+              SizedBox(
+                height: 130,
+                child: _selectedBranchId == null
+                    ? _buildHeader()
+                    : _buildSelectedBranchHeader(),
+              ),
+              if (_selectedBranchId == null)
+                _buildPinnedBudgetControls()
+              else
+                Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 20,
+                    vertical: 12,
+                  ),
+                  child: _buildAllocationSearch(),
+                ),
+              Expanded(
+                child: ListView(
+                  padding: const EdgeInsets.only(bottom: 32),
+                  children: [
+                    if (_selectedBranchId == null) ...[
+                      Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: AdminSalesOverview(
+                          branches: true,
+                          todayOnly: true,
+                          selectedDate: _analyticsDate,
+                        ),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        child: Card(
+                          color: Colors.white,
+                          child: Padding(
+                            padding: const EdgeInsets.all(18),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const ListTile(
+                                  contentPadding: EdgeInsets.zero,
+                                  leading: CircleAvatar(
+                                    backgroundColor: AppColors.blush,
+                                    child: Icon(
+                                      Icons.pie_chart_outline,
+                                      color: kPrimary,
+                                    ),
+                                  ),
+                                  title: Text(
+                                    'Branch sales reports',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.w800,
+                                    ),
+                                  ),
+                                  subtitle: Text(
+                                    'Compare branches, review sales, and generate reports',
+                                  ),
+                                ),
+                                Align(
+                                  alignment: Alignment.centerLeft,
+                                  child: FilledButton.icon(
+                                    onPressed: () => showBranchReport(context),
+                                    icon: const Icon(Icons.assessment_outlined),
+                                    label: const Text('View branches report'),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                      _buildBranchManagementSection(),
+                    ] else
+                      _buildSelectedBranchContent(),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
+
   Widget _buildPinnedBudgetControls() {
     return Material(
       color: AppColors.background,
@@ -4203,10 +4332,12 @@ class _BudgetPageState extends State<BudgetPage>
           const SizedBox(height: 12),
           _buildBranchToolbar(),
           const SizedBox(height: 10),
-          Row(children: [
-            Expanded(child: _buildBranchSearchField()),
-            const SizedBox(width: 16),
-          ]),
+          Row(
+            children: [
+              Expanded(child: _buildBranchSearchField()),
+              const SizedBox(width: 16),
+            ],
+          ),
           const SizedBox(height: 12),
         ],
       ),
@@ -4276,7 +4407,8 @@ class _BudgetPageState extends State<BudgetPage>
                 builder: (context, voidedSnapshot) {
                   final count = voidedSnapshot.data?.docs.length ?? 0;
                   return IconButton(
-                    tooltip: 'Void branches ($count)', onPressed: _showVoidedBranchesDialog,
+                    tooltip: 'Void branches ($count)',
+                    onPressed: _showVoidedBranchesDialog,
                     icon: const Icon(Icons.block, color: kDeep),
                   );
                 },
@@ -4440,13 +4572,18 @@ class _BudgetPageState extends State<BudgetPage>
                       borderRadius: BorderRadius.circular(18),
                       child: InkWell(
                         borderRadius: BorderRadius.circular(18),
-                        onTap: () =>
-                            setState(() {
-                              _selectedBranchId = branchId;
-                              _activeBranchName = name;
-                              _activeBranchStaffIds = (data['staffIds'] as List<dynamic>? ?? []).map((id) => id.toString()).toList();
-                              _activeBranchStaffNames = (data['staffNames'] as List<dynamic>? ?? []).map((staff) => staff.toString()).toList();
-                            }),
+                        onTap: () => setState(() {
+                          _selectedBranchId = branchId;
+                          _activeBranchName = name;
+                          _activeBranchStaffIds =
+                              (data['staffIds'] as List<dynamic>? ?? [])
+                                  .map((id) => id.toString())
+                                  .toList();
+                          _activeBranchStaffNames =
+                              (data['staffNames'] as List<dynamic>? ?? [])
+                                  .map((staff) => staff.toString())
+                                  .toList();
+                        }),
                         child: Container(
                           padding: const EdgeInsets.all(14),
                           decoration: BoxDecoration(
@@ -4547,39 +4684,49 @@ class _BudgetPageState extends State<BudgetPage>
     return Stack(
       children: [
         Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: kAccent.withOpacity(0.6)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-
-          if (!hasAssignedStaff)
-            Padding(
-              padding: const EdgeInsets.only(top: 10),
-              child: Text(
-                'Assign staff first to allocate items or cash.',
-                style: TextStyle(
-                  color: Colors.orange.shade800,
-                  fontWeight: FontWeight.w600,
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: kAccent.withOpacity(0.6)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (!hasAssignedStaff)
+                Padding(
+                  padding: const EdgeInsets.only(top: 10),
+                  child: Text(
+                    'Assign staff first to allocate items or cash.',
+                    style: TextStyle(
+                      color: Colors.orange.shade800,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
                 ),
+              const SizedBox(height: 10),
+              _buildBranchSalesSummary(branchId),
+              const SizedBox(height: 8),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(child: _buildAllocationCategories()),
+                  IconButton(
+                    tooltip: 'Allocation history',
+                    onPressed: () =>
+                        showBranchAllocationHistory(context, branchId),
+                    icon: const Icon(Icons.history_rounded),
+                  ),
+                ],
               ),
-            ),
-          const SizedBox(height: 10),
-          _buildBranchSalesSummary(branchId),
-          const SizedBox(height: 8),
-          _buildAllocationCategories(),
-          const SizedBox(height: 8),
-          _buildBranchItemsTable(branchId),
-          const SizedBox(height: 12),
-          const SizedBox(height: 16),
-          _buildPeriodBranchAnalytics(branchId, branchName),
-          const SizedBox(height: 82),
-        ],
-      ),
+              const SizedBox(height: 8),
+              _buildBranchItemsTable(branchId),
+              const SizedBox(height: 12),
+              const SizedBox(height: 16),
+              _buildPeriodBranchAnalytics(branchId, branchName),
+              const SizedBox(height: 82),
+            ],
+          ),
         ),
       ],
     );
@@ -4606,40 +4753,77 @@ class _BudgetPageState extends State<BudgetPage>
     ),
   );
 
-  Widget _buildDatedCashDrawer(String branchId, DateTime day, double currentCash) {
+  Widget _buildDatedCashDrawer(
+    String branchId,
+    DateTime day,
+    double currentCash,
+  ) {
     Widget amount(String label, String value) => Column(
       crossAxisAlignment: CrossAxisAlignment.end,
       children: [
-        Text(label, style: const TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.w700)),
-        Text(value, style: const TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.w900)),
+        Text(
+          label,
+          style: const TextStyle(
+            color: Colors.white70,
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        Text(
+          value,
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 17,
+            fontWeight: FontWeight.w900,
+          ),
+        ),
       ],
     );
     if (DateUtils.isSameDay(day, DateTime.now())) {
-      return amount('Current Cash Drawer', '₱${currentCash.toStringAsFixed(2)}');
+      return amount(
+        'Current Cash Drawer',
+        '₱${currentCash.toStringAsFixed(2)}',
+      );
     }
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-      stream: _firestore.collection('daily_reports').where('branchId', isEqualTo: branchId).snapshots(),
+      stream: _firestore
+          .collection('daily_reports')
+          .where('branchId', isEqualTo: branchId)
+          .snapshots(),
       builder: (context, snapshot) {
         if (snapshot.hasError) return amount('Cash Drawer', 'Unable to load');
         if (!snapshot.hasData) return amount('Cash Drawer', 'Loading…');
-        final reports = snapshot.data!.docs.where((doc) {
-          final data = doc.data();
-          return DateUtils.isSameDay(_reportDayFromData(data), day) &&
-              (data['closingCash'] != null || data['cashDrawerTotal'] != null);
-        }).toList()
-          ..sort((a, b) => _dateValue(b.data()['createdAt']).compareTo(_dateValue(a.data()['createdAt'])));
+        final reports =
+            snapshot.data!.docs.where((doc) {
+              final data = doc.data();
+              return DateUtils.isSameDay(_reportDayFromData(data), day) &&
+                  (data['closingCash'] != null ||
+                      data['cashDrawerTotal'] != null);
+            }).toList()..sort(
+              (a, b) => _dateValue(
+                b.data()['createdAt'],
+              ).compareTo(_dateValue(a.data()['createdAt'])),
+            );
         // Each report is a snapshot of the shared branch drawer, not an
         // amount to add across staff. Use the latest closing snapshot.
-        if (reports.isEmpty) return HistoricalCashDrawer(branchId: branchId, day: day);
+        if (reports.isEmpty)
+          return HistoricalCashDrawer(branchId: branchId, day: day);
         final report = reports.first.data();
-        final closing = _parsePrice(report['closingCash'] ?? report['cashDrawerTotal']);
+        final closing = _parsePrice(
+          report['closingCash'] ?? report['cashDrawerTotal'],
+        );
         return amount('Cash Drawer', '₱${closing.toStringAsFixed(2)}');
       },
     );
   }
 
-  Widget _buildBranchSalesSummary(String branchId) => StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-    stream: _firestore.collection('completed_sales').where('branchId', isEqualTo: branchId).snapshots(),
+  Widget _buildBranchSalesSummary(
+    String branchId,
+  ) => StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+    stream: _firestore
+        .collection('completed_sales')
+        .where('branchId', isEqualTo: branchId)
+        .snapshots(),
     builder: (context, snapshot) {
       var revenue = 0.0;
       final now = DateTime.now();
@@ -4652,18 +4836,28 @@ class _BudgetPageState extends State<BudgetPage>
             : timestamp is DateTime
             ? timestamp
             : DateTime.tryParse(timestamp?.toString() ?? '');
-        if (soldAt == null || soldAt.year != selectedDay.year || soldAt.month != selectedDay.month || soldAt.day != selectedDay.day) continue;
+        if (soldAt == null ||
+            soldAt.year != selectedDay.year ||
+            soldAt.month != selectedDay.month ||
+            soldAt.day != selectedDay.day)
+          continue;
         revenue += _parsePrice(sale['total']);
       }
       return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-        stream: _firestore.collection('staff_cash_drawer').doc(branchId).snapshots(),
+        stream: _firestore
+            .collection('staff_cash_drawer')
+            .doc(branchId)
+            .snapshots(),
         builder: (context, drawerSnapshot) {
-          final drawer = drawerSnapshot.data?.data() ?? const <String, dynamic>{};
+          final drawer =
+              drawerSnapshot.data?.data() ?? const <String, dynamic>{};
           // `balance` can include an old value that was left in the drawer.
           // Show today's opening cash plus today's cash sales instead, so a
           // newly allocated ₱1200 still displays as ₱1200 before any sale.
           final openingCash = _parsePrice(
-            drawer['dailyOpeningCash'] ?? drawer['openingCash'] ?? drawer['balance'],
+            drawer['dailyOpeningCash'] ??
+                drawer['openingCash'] ??
+                drawer['balance'],
           );
           final cashSales = (snapshot.data?.docs ?? const [])
               .where((doc) {
@@ -4674,35 +4868,80 @@ class _BudgetPageState extends State<BudgetPage>
                     : timestamp is DateTime
                     ? timestamp
                     : DateTime.tryParse(timestamp?.toString() ?? '');
-                final payment = sale['paymentMethod']?.toString().toLowerCase() ??
-                    sale['paymentMode']?.toString().toLowerCase() ?? 'cash';
+                final payment =
+                    sale['paymentMethod']?.toString().toLowerCase() ??
+                    sale['paymentMode']?.toString().toLowerCase() ??
+                    'cash';
                 return soldAt != null &&
                     soldAt.year == now.year &&
                     soldAt.month == now.month &&
                     soldAt.day == now.day &&
                     payment == 'cash';
               })
-              .fold<double>(0, (sum, doc) => sum + _parsePrice(doc.data()['total']));
+              .fold<double>(
+                0,
+                (sum, doc) => sum + _parsePrice(doc.data()['total']),
+              );
           final cashDrawer = openingCash + cashSales;
           return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Container(
-        width: double.infinity,
-        padding: const EdgeInsets.all(18),
-        decoration: BoxDecoration(
-          gradient: const LinearGradient(colors: [kBannerTop, kPrimary]),
-          borderRadius: BorderRadius.circular(18),
-        ),
-        child: Row(children: [
-          const Icon(Icons.insights_rounded, color: Colors.white, size: 30),
-          const SizedBox(width: 12),
-          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text("${_reportDateLabel(selectedDay)} Total Revenue", style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.w700)),
-            Text('₱${revenue.toStringAsFixed(2)}', style: const TextStyle(color: Colors.white, fontSize: 25, fontWeight: FontWeight.w900)),
-          ])),
-          BranchDailySummary(key: ValueKey('$branchId-$selectedDay-$revenue-$cashDrawer'), branchId: branchId, day: selectedDay, compact: true),
-        ]),
+                width: double.infinity,
+                padding: const EdgeInsets.all(18),
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(
+                    colors: [kBannerTop, kPrimary],
+                  ),
+                  borderRadius: BorderRadius.circular(18),
+                ),
+                child: Flex(
+                  direction: MediaQuery.sizeOf(context).width < 600
+                      ? Axis.vertical
+                      : Axis.horizontal,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Icon(
+                      Icons.insights_rounded,
+                      color: Colors.white,
+                      size: 30,
+                    ),
+                    const SizedBox(width: 12),
+                    Flexible(
+                      flex: MediaQuery.sizeOf(context).width < 600 ? 0 : 1,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            "${_reportDateLabel(selectedDay)} Total Revenue",
+                            style: const TextStyle(
+                              color: Colors.white70,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          Text(
+                            '₱${revenue.toStringAsFixed(2)}',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 25,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    if (MediaQuery.sizeOf(context).width < 600)
+                      const SizedBox(height: 16),
+                    BranchDailySummary(
+                      key: ValueKey(
+                        '$branchId-$selectedDay-$revenue-$cashDrawer',
+                      ),
+                      branchId: branchId,
+                      day: selectedDay,
+                      compact: true,
+                    ),
+                  ],
+                ),
               ),
               const SizedBox(height: 10),
               OutlinedButton.icon(
@@ -4737,129 +4976,216 @@ class _BudgetPageState extends State<BudgetPage>
         .snapshots();
     showDialog<void>(
       context: context,
-      builder: (context) => StatefulBuilder(builder: (context, setDialogState) => Dialog(
-        backgroundColor: const Color(0xFFFFF8FB),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-        child: SizedBox(
-          width: 720,
-          height: 700,
-          child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-            stream: receiptsStream,
-            builder: (context, snapshot) {
-              final receipts = (snapshot.data?.docs ?? []).where((doc) {
-                final sale = doc.data();
-                final payment = _receiptPayment(sale);
-                final searchable = [doc.id, sale['salesId'], sale['staffName'], sale['staffFullName'], sale['total'], payment, sale['items']].join(' ').toLowerCase();
-                if (paymentFilter != 'All' && payment != paymentFilter.toLowerCase()) return false;
-                if (receiptQuery.isNotEmpty && !searchable.contains(receiptQuery)) return false;
-                final value = sale['timestamp'];
-                final date = value is Timestamp
-                    ? value.toDate()
-                    : value is DateTime
-                    ? value
-                    : DateTime.tryParse(value?.toString() ?? '');
-                return date != null &&
-                    date.year == now.year &&
-                    date.month == now.month &&
-                    date.day == now.day;
-              }).toList()
-                ..sort((a, b) {
-                  final aTime = _dateValue(a.data()['timestamp']);
-                  final bTime = _dateValue(b.data()['timestamp']);
-                  return bTime.compareTo(aTime);
-                });
-              return Column(
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(22, 20, 14, 14),
-                    child: Row(
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.all(10),
-                          decoration: BoxDecoration(
-                            color: kPrimary.withOpacity(.12),
-                            borderRadius: BorderRadius.circular(14),
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => Dialog(
+          insetPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 20),
+          backgroundColor: const Color(0xFFFFF8FB),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(24),
+          ),
+          child: SizedBox(
+            width: 720,
+            height: 700,
+            child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+              stream: receiptsStream,
+              builder: (context, snapshot) {
+                final receipts =
+                    (snapshot.data?.docs ?? []).where((doc) {
+                      final sale = doc.data();
+                      final payment = _receiptPayment(sale);
+                      final searchable = [
+                        doc.id,
+                        sale['salesId'],
+                        sale['staffName'],
+                        sale['staffFullName'],
+                        sale['total'],
+                        payment,
+                        sale['items'],
+                      ].join(' ').toLowerCase();
+                      if (paymentFilter == 'Discounted'
+                          ? _parsePrice(sale['discount']) <= 0
+                          : paymentFilter != 'All' &&
+                                payment != paymentFilter.toLowerCase())
+                        return false;
+                      if (receiptQuery.isNotEmpty &&
+                          !searchable.contains(receiptQuery))
+                        return false;
+                      final value = sale['timestamp'];
+                      final date = value is Timestamp
+                          ? value.toDate()
+                          : value is DateTime
+                          ? value
+                          : DateTime.tryParse(value?.toString() ?? '');
+                      return date != null &&
+                          date.year == now.year &&
+                          date.month == now.month &&
+                          date.day == now.day;
+                    }).toList()..sort((a, b) {
+                      final aTime = _dateValue(a.data()['timestamp']);
+                      final bTime = _dateValue(b.data()['timestamp']);
+                      return bTime.compareTo(aTime);
+                    });
+                return Column(
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(22, 20, 14, 14),
+                      child: Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              color: kPrimary.withOpacity(.12),
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                            child: const Icon(
+                              Icons.receipt_long_rounded,
+                              color: kDeep,
+                            ),
                           ),
-                          child: const Icon(Icons.receipt_long_rounded, color: kDeep),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  "${_reportDateLabel(now)} receipts",
+                                  style: const TextStyle(
+                                    color: kBannerTop,
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w900,
+                                  ),
+                                ),
+                                Text(
+                                  branchName,
+                                  style: const TextStyle(
+                                    color: Colors.grey,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          IconButton(
+                            onPressed: () => Navigator.pop(context),
+                            icon: const Icon(Icons.close_rounded),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          TextField(
+                            onChanged: (value) => setDialogState(
+                              () => receiptQuery = value.trim().toLowerCase(),
+                            ),
+                            textInputAction: TextInputAction.search,
+                            decoration: InputDecoration(
+                              hintText:
+                                  'Search receipt ID, staff, item, or total',
+                              prefixIcon: const Icon(
+                                Icons.search_rounded,
+                                color: kDeep,
+                              ),
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          HorizontalControls(
+                            spacing: 8,
+                            children: ['All', 'Cash', 'GCash', 'Discounted']
+                                .map(
+                                  (payment) => ChoiceChip(
+                                    label: Text(payment),
+                                    selected: paymentFilter == payment,
+                                    onSelected: (_) => setDialogState(
+                                      () => paymentFilter = payment,
+                                    ),
+                                  ),
+                                )
+                                .toList(),
+                          ),
+                          const SizedBox(height: 8),
+                        ],
+                      ),
+                    ),
+                    const Divider(height: 1),
+                    if (snapshot.connectionState == ConnectionState.waiting &&
+                        !snapshot.hasData)
+                      const Expanded(
+                        child: Center(
+                          child: CircularProgressIndicator(color: kPrimary),
                         ),
-                        const SizedBox(width: 12),
-                        Expanded(
+                      )
+                    else if (receipts.isEmpty)
+                      const Expanded(
+                        child: Center(
                           child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
                             children: [
-                              Text("${_reportDateLabel(now)} receipts", style: const TextStyle(color: kBannerTop, fontSize: 20, fontWeight: FontWeight.w900)),
-                              Text(branchName, style: const TextStyle(color: Colors.grey, fontWeight: FontWeight.w600)),
+                              Icon(
+                                Icons.receipt_long_outlined,
+                                size: 36,
+                                color: Color(0xFFFFB6CC),
+                              ),
+                              SizedBox(height: 12),
+                              Text(
+                                'No matching receipts',
+                                style: TextStyle(
+                                  color: kDeep,
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                              SizedBox(height: 4),
+                              Text(
+                                'Try another search, payment filter, or date.',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  color: Colors.grey,
+                                  fontSize: 12,
+                                ),
+                              ),
                             ],
                           ),
                         ),
-                        IconButton(onPressed: () => Navigator.pop(context), icon: const Icon(Icons.close_rounded)),
-                      ],
-                    ),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        TextField(
-                          onChanged: (value) => setDialogState(() => receiptQuery = value.trim().toLowerCase()),
-                          textInputAction: TextInputAction.search,
-                          decoration: InputDecoration(
-                            hintText: 'Search receipt ID, staff, item, or total',
-                            prefixIcon: const Icon(Icons.search_rounded, color: kDeep),
-                            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        Wrap(spacing: 8, children: ['All', 'Cash', 'GCash'].map((payment) => ChoiceChip(
-                          label: Text(payment),
-                          selected: paymentFilter == payment,
-                          onSelected: (_) => setDialogState(() => paymentFilter = payment),
-                        )).toList()),
-                        const SizedBox(height: 8),
-                      ],
-                    ),
-                  ),
-                  const Divider(height: 1),
-                  if (snapshot.connectionState == ConnectionState.waiting && !snapshot.hasData)
-                    const Expanded(child: Center(child: CircularProgressIndicator(color: kPrimary)))
-                  else if (receipts.isEmpty)
-                    const Expanded(
-                      child: Center(
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(Icons.receipt_long_outlined, size: 54, color: Color(0xFFFFB6CC)),
-                            SizedBox(height: 12),
-                            Text('No matching receipts', style: TextStyle(color: kDeep, fontSize: 17, fontWeight: FontWeight.w800)),
-                            SizedBox(height: 4),
-                            Text('Try another search, payment filter, or date.', style: TextStyle(color: Colors.grey)),
-                          ],
+                      )
+                    else
+                      Expanded(
+                        child: ListView.separated(
+                          padding: const EdgeInsets.all(16),
+                          itemCount: receipts.length,
+                          separatorBuilder: (_, __) =>
+                              const SizedBox(height: 12),
+                          itemBuilder: (context, index) =>
+                              _buildBranchReceiptCard(
+                                receipts[index].data(),
+                                receipts[index].id,
+                              ),
                         ),
                       ),
-                    )
-                  else
-                    Expanded(
-                      child: ListView.separated(
-                        padding: const EdgeInsets.all(16),
-                        itemCount: receipts.length,
-                        separatorBuilder: (_, __) => const SizedBox(height: 12),
-                        itemBuilder: (context, index) => _buildBranchReceiptCard(receipts[index].data(), receipts[index].id),
-                      ),
-                    ),
-                ],
-              );
-            },
+                  ],
+                );
+              },
+            ),
           ),
         ),
-      )),
+      ),
     );
   }
 
-  String _reportDateLabel(DateTime date) => '${date.month}/${date.day}/${date.year}';
+  String _reportDateLabel(DateTime date) =>
+      '${date.month}/${date.day}/${date.year}';
 
   String _receiptPayment(Map<String, dynamic> sale) =>
-      (sale['paymentMethod'] ?? sale['paymentMode'] ?? 'cash').toString().trim().toLowerCase();
+      (sale['paymentMethod'] ?? sale['paymentMode'] ?? 'cash')
+          .toString()
+          .trim()
+          .toLowerCase();
 
   DateTime _dateValue(dynamic value) => value is Timestamp
       ? value.toDate()
@@ -4876,15 +5202,22 @@ class _BudgetPageState extends State<BudgetPage>
   }
 
   Future<String> _receiptStaffName(Map<String, dynamic> sale) async {
-    final userId = sale['userId']?.toString().trim() ??
-        sale['staffId']?.toString().trim() ?? '';
-    final savedName = sale['staffName']?.toString().trim() ??
+    final userId =
+        sale['userId']?.toString().trim() ??
+        sale['staffId']?.toString().trim() ??
+        '';
+    final savedName =
+        sale['staffName']?.toString().trim() ??
         sale['cashierName']?.toString().trim() ??
-        sale['userName']?.toString().trim() ?? '';
+        sale['userName']?.toString().trim() ??
+        '';
     if (savedName.isNotEmpty) return savedName;
     if (userId.isEmpty) return 'Staff not recorded';
     try {
-      final staff = await _firestore.collection('staff_requests').doc(userId).get();
+      final staff = await _firestore
+          .collection('staff_requests')
+          .doc(userId)
+          .get();
       final data = staff.data();
       if (data == null) return 'Staff not recorded';
       final name = [
@@ -4892,21 +5225,25 @@ class _BudgetPageState extends State<BudgetPage>
         data['middleName']?.toString().trim() ?? '',
         data['lastName']?.toString().trim() ?? '',
       ].where((part) => part.isNotEmpty).join(' ');
-      return name.isEmpty ? (data['name']?.toString().trim() ?? 'Staff not recorded') : name;
+      return name.isEmpty
+          ? (data['name']?.toString().trim() ?? 'Staff not recorded')
+          : name;
     } catch (_) {
       return 'Staff not recorded';
     }
   }
 
-  Widget _buildBranchReceiptCard(Map<String, dynamic> sale, String documentId) =>
-      FutureBuilder<String>(
-        future: _receiptStaffName(sale),
-        builder: (context, snapshot) => _buildBranchReceiptCardContent(
-          sale,
-          documentId,
-          snapshot.data ?? 'Loading staff…',
-        ),
-      );
+  Widget _buildBranchReceiptCard(
+    Map<String, dynamic> sale,
+    String documentId,
+  ) => FutureBuilder<String>(
+    future: _receiptStaffName(sale),
+    builder: (context, snapshot) => _buildBranchReceiptCardContent(
+      sale,
+      documentId,
+      snapshot.data ?? 'Loading staff…',
+    ),
+  );
 
   Widget _buildBranchReceiptCardContent(
     Map<String, dynamic> sale,
@@ -4916,56 +5253,237 @@ class _BudgetPageState extends State<BudgetPage>
     final date = _dateValue(sale['timestamp']);
     final receiptId = sale['salesId']?.toString() ?? documentId;
     final activityStatus = _activityStatus(sale);
-    final staffId = (sale['staffPublicId'] ?? sale['staffId'] ?? sale['userId'] ?? '').toString();
+    final staffId =
+        (sale['staffPublicId'] ?? sale['staffId'] ?? sale['userId'] ?? '')
+            .toString();
     final cardTitle = activityStatus == 'Reduced' ? staff : receiptId;
-    final payment = sale['paymentMethod']?.toString() ?? sale['paymentMode']?.toString() ?? 'Cash';
+    final payment =
+        sale['paymentMethod']?.toString() ??
+        sale['paymentMode']?.toString() ??
+        'Cash';
     final total = _parsePrice(sale['total']);
     final paid = _parsePrice(sale['paidAmount']);
     final change = _parsePrice(sale['change']);
     final discount = _parsePrice(sale['discount']);
     final discountType = sale['discountType']?.toString() ?? '';
-    final items = (sale['items'] as List<dynamic>? ?? []).whereType<Map>().map((item) => Map<String, dynamic>.from(item)).toList();
+    final items = (sale['items'] as List<dynamic>? ?? [])
+        .whereType<Map>()
+        .map((item) => Map<String, dynamic>.from(item))
+        .toList();
     return Container(
       padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(18), border: Border.all(color: kAccent.withOpacity(.65))),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
-          const Icon(Icons.receipt_rounded, color: kPrimary), const SizedBox(width: 10),
-          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(cardTitle, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16)), Text('${date.hour % 12 == 0 ? 12 : date.hour % 12}:${date.minute.toString().padLeft(2, '0')} ${date.hour >= 12 ? 'PM' : 'AM'} · $staff', style: const TextStyle(color: Colors.grey, fontSize: 12))])),
-          Column(crossAxisAlignment: CrossAxisAlignment.end, children: [Text('₱${total.toStringAsFixed(2)}', style: const TextStyle(color: kDeep, fontWeight: FontWeight.w900, fontSize: 18)), Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3), decoration: BoxDecoration(color: const Color(0xFFE1F5EA), borderRadius: BorderRadius.circular(10)), child: Text(activityStatus, style: const TextStyle(color: Color(0xFF16834A), fontSize: 11, fontWeight: FontWeight.w800)))])
-        ]),
-        const Padding(padding: EdgeInsets.symmetric(vertical: 12), child: Divider(height: 1)),
-        ...items.map((item) { final quantity = _parseInt(item['quantity'], fallback: 1); final name = item['name']?.toString() ?? 'Item'; final variant = item['variant']?.toString() ?? item['coffeeSize']?.toString() ?? ''; final price = _parsePrice(item['price']) * quantity; return Padding(padding: const EdgeInsets.only(bottom: 6), child: Row(children: [Container(padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3), decoration: BoxDecoration(color: kPrimary.withOpacity(.10), borderRadius: BorderRadius.circular(8)), child: Text('${quantity}x', style: const TextStyle(color: kDeep, fontWeight: FontWeight.w800))), const SizedBox(width: 10), Expanded(child: Text(variant.isEmpty ? name : '$name · $variant', style: const TextStyle(fontWeight: FontWeight.w700))), Text('₱${price.toStringAsFixed(2)}', style: const TextStyle(fontWeight: FontWeight.w700))])); }),
-        Container(margin: const EdgeInsets.only(top: 6), padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: const Color(0xFFFFF6F9), borderRadius: BorderRadius.circular(12)), child: Column(children: [
-          _receiptDetail('Staff', staff),
-          if (activityStatus == 'Reduced') _receiptDetail('Staff ID', staffId.isEmpty ? 'Not recorded' : staffId),
-          if (sale['_filteredItems'] == true) const Align(alignment: Alignment.centerLeft, child: Text('Matching items shown; loss below is the full record total.', style: TextStyle(fontSize: 11, color: Colors.grey))),
-          if (activityStatus != 'Reduced') _receiptDetail('Payment', payment),
-          if (activityStatus != 'Completed') ...[
-            _receiptDetail('Date', _reportDateLabel(date)),
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 6),
-              child: Align(alignment: Alignment.centerLeft, child: Text('Reason: ${sale['reason'] ?? "Not recorded"}')),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: kAccent.withOpacity(.65)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.receipt_rounded, color: kPrimary),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      cardTitle,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w900,
+                        fontSize: 16,
+                      ),
+                    ),
+                    Text(
+                      '${date.hour % 12 == 0 ? 12 : date.hour % 12}:${date.minute.toString().padLeft(2, '0')} ${date.hour >= 12 ? 'PM' : 'AM'} · $staff',
+                      style: const TextStyle(color: Colors.grey, fontSize: 12),
+                    ),
+                  ],
+                ),
+              ),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text(
+                    '₱${total.toStringAsFixed(2)}',
+                    style: const TextStyle(
+                      color: kDeep,
+                      fontWeight: FontWeight.w900,
+                      fontSize: 18,
+                    ),
+                  ),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 3,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFE1F5EA),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Text(
+                      activityStatus,
+                      style: const TextStyle(
+                        color: Color(0xFF16834A),
+                        fontSize: 11,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 12),
+            child: Divider(height: 1),
+          ),
+          ...items.map((item) {
+            final quantity = _parseInt(item['quantity'], fallback: 1);
+            final name = item['name']?.toString() ?? 'Item';
+            final variant =
+                item['variant']?.toString() ??
+                item['coffeeSize']?.toString() ??
+                '';
+            final price = _parsePrice(item['price']) * quantity;
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 7,
+                      vertical: 3,
+                    ),
+                    decoration: BoxDecoration(
+                      color: kPrimary.withOpacity(.10),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      '${quantity}x',
+                      style: const TextStyle(
+                        color: kDeep,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      variant.isEmpty ? name : '$name · $variant',
+                      style: const TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                  Text(
+                    '₱${price.toStringAsFixed(2)}',
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                ],
+              ),
+            );
+          }),
+          Container(
+            margin: const EdgeInsets.only(top: 6),
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: const Color(0xFFFFF6F9),
+              borderRadius: BorderRadius.circular(12),
             ),
-            if ((sale['comment']?.toString().trim() ?? '').isNotEmpty)
-              Align(alignment: Alignment.centerLeft, child: Text('Comment: ${sale['comment']}')),
-          ],
-          if (discount > 0) _receiptDetail(discountType.isEmpty ? 'Discount' : 'Discount ($discountType)', '-₱${discount.toStringAsFixed(2)}'),
-          if (paid > 0) _receiptDetail('Customer paid', '₱${paid.toStringAsFixed(2)}'),
-          if (change > 0) _receiptDetail('Change', '₱${change.toStringAsFixed(2)}'),
-          _receiptDetail(activityStatus == 'Completed' ? 'Total' : 'Loss', '₱${total.abs().toStringAsFixed(2)}', isTotal: true),
-        ])),
-      ]),
+            child: Column(
+              children: [
+                _receiptDetail('Staff', staff),
+                if (activityStatus == 'Reduced')
+                  _receiptDetail(
+                    'Staff ID',
+                    staffId.isEmpty ? 'Not recorded' : staffId,
+                  ),
+                if (sale['_filteredItems'] == true)
+                  const Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      'Matching items shown; loss below is the full record total.',
+                      style: TextStyle(fontSize: 11, color: Colors.grey),
+                    ),
+                  ),
+                if (activityStatus != 'Reduced')
+                  _receiptDetail('Payment', payment),
+                if (activityStatus != 'Completed') ...[
+                  _receiptDetail('Date', _reportDateLabel(date)),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 6),
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        'Reason: ${sale['reason'] ?? "Not recorded"}',
+                      ),
+                    ),
+                  ),
+                  if ((sale['comment']?.toString().trim() ?? '').isNotEmpty)
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text('Comment: ${sale['comment']}'),
+                    ),
+                ],
+                if (discount > 0)
+                  _receiptDetail(
+                    discountType.isEmpty
+                        ? 'Discount'
+                        : 'Discount ($discountType)',
+                    '-₱${discount.toStringAsFixed(2)}',
+                  ),
+                if (paid > 0)
+                  _receiptDetail(
+                    'Customer paid',
+                    '₱${paid.toStringAsFixed(2)}',
+                  ),
+                if (change > 0)
+                  _receiptDetail('Change', '₱${change.toStringAsFixed(2)}'),
+                _receiptDetail(
+                  activityStatus == 'Completed' ? 'Total' : 'Loss',
+                  '₱${total.abs().toStringAsFixed(2)}',
+                  isTotal: true,
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 
-  Widget _receiptDetail(String label, String value, {bool isTotal = false}) => Padding(
-    padding: const EdgeInsets.symmetric(vertical: 2),
-    child: Row(children: [Expanded(child: Text(label, style: TextStyle(color: Colors.grey.shade700, fontWeight: isTotal ? FontWeight.w900 : FontWeight.w600))), Text(value, style: TextStyle(color: isTotal ? kPrimary : kBannerTop, fontWeight: FontWeight.w900))]),
-  );
+  Widget _receiptDetail(String label, String value, {bool isTotal = false}) =>
+      Padding(
+        padding: const EdgeInsets.symmetric(vertical: 2),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                label,
+                style: TextStyle(
+                  color: Colors.grey.shade700,
+                  fontWeight: isTotal ? FontWeight.w900 : FontWeight.w600,
+                ),
+              ),
+            ),
+            Text(
+              value,
+              style: TextStyle(
+                color: isTotal ? kPrimary : kBannerTop,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+          ],
+        ),
+      );
 
-  Widget _buildBranchAnalytics(String branchId) => StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-    stream: _firestore.collection('completed_sales').where('branchId', isEqualTo: branchId).snapshots(),
+  Widget _buildBranchAnalytics(
+    String branchId,
+  ) => StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+    stream: _firestore
+        .collection('completed_sales')
+        .where('branchId', isEqualTo: branchId)
+        .snapshots(),
     builder: (context, snapshot) {
       final sold = <String, int>{};
       for (final doc in snapshot.data?.docs ?? const []) {
@@ -4977,161 +5495,414 @@ class _BudgetPageState extends State<BudgetPage>
         }
       }
       final top = sold.entries.toList()
-        ..sort((a, b) => _sellingRank == 'Low Selling'
-            ? a.value.compareTo(b.value)
-            : b.value.compareTo(a.value));
+        ..sort(
+          (a, b) => _sellingRank == 'Low Selling'
+              ? a.value.compareTo(b.value)
+              : b.value.compareTo(a.value),
+        );
       return Container(
         padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(18), border: Border.all(color: kAccent)),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const Text('Sales Analytics', style: TextStyle(color: kBannerTop, fontSize: 17, fontWeight: FontWeight.w900)),
-          const SizedBox(height: 4),
-          const Text('Daily · Weekly · Monthly sales overview', style: TextStyle(color: Colors.grey, fontSize: 12)),
-          Wrap(spacing: 8, children: ['Day', 'Week', 'Month'].map((period) => ChoiceChip(label: Text(period), selected: _analyticsRange == period, selectedColor: kPrimary, labelStyle: TextStyle(color: _analyticsRange == period ? Colors.white : kDeep, fontWeight: FontWeight.w800), onSelected: (_) => setState(() => _analyticsRange = period))).toList()),
-          const SizedBox(height: 14),
-          Row(crossAxisAlignment: CrossAxisAlignment.end, children: List.generate(_analyticsRange == 'Day' ? 8 : _analyticsRange == 'Week' ? 7 : 6, (i) => Expanded(child: Padding(padding: const EdgeInsets.symmetric(horizontal: 3), child: Container(height: 18.0 + ((i * (_analyticsRange == 'Month' ? 23 : 17)) % 70), decoration: BoxDecoration(color: kPrimary.withOpacity(.25 + i * .08), borderRadius: BorderRadius.circular(5))))))),
-          const SizedBox(height: 16),
-          const Text('Best-selling items', style: TextStyle(color: kDeep, fontWeight: FontWeight.w900)),
-          const SizedBox(height: 8),
-          Wrap(spacing: 8, children: ['Top Selling', 'Low Selling'].map((rank) => ChoiceChip(label: Text(rank), selected: _sellingRank == rank, selectedColor: kPrimary, labelStyle: TextStyle(color: _sellingRank == rank ? Colors.white : kDeep, fontWeight: FontWeight.w800), onSelected: (_) => setState(() => _sellingRank = rank))).toList()),
-          const SizedBox(height: 8),
-          if (top.isEmpty) const Text('No completed sales yet.', style: TextStyle(color: Colors.grey)) else ...top.take(3).map((e) => Padding(padding: const EdgeInsets.symmetric(vertical: 3), child: Row(children: [const Icon(Icons.star_rounded, color: Color(0xFFFFB300), size: 18), const SizedBox(width: 8), Expanded(child: Text(e.key, style: const TextStyle(fontWeight: FontWeight.w700))), Text('${e.value} sold', style: const TextStyle(color: kDeep, fontWeight: FontWeight.w900))]))),
-        ]),
+        decoration: BoxDecoration(
+          color: AppColors.surface,
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: kAccent),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Sales Analytics',
+              style: TextStyle(
+                color: kBannerTop,
+                fontSize: 17,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+            const SizedBox(height: 4),
+            const Text(
+              'Daily · Weekly · Monthly sales overview',
+              style: TextStyle(color: Colors.grey, fontSize: 12),
+            ),
+            Wrap(
+              spacing: 8,
+              children: ['Day', 'Week', 'Month']
+                  .map(
+                    (period) => ChoiceChip(
+                      label: Text(period),
+                      selected: _analyticsRange == period,
+                      selectedColor: kPrimary,
+                      labelStyle: TextStyle(
+                        color: _analyticsRange == period ? Colors.white : kDeep,
+                        fontWeight: FontWeight.w800,
+                      ),
+                      onSelected: (_) =>
+                          setState(() => _analyticsRange = period),
+                    ),
+                  )
+                  .toList(),
+            ),
+            const SizedBox(height: 14),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: List.generate(
+                _analyticsRange == 'Day'
+                    ? 8
+                    : _analyticsRange == 'Week'
+                    ? 7
+                    : 6,
+                (i) => Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 3),
+                    child: Container(
+                      height:
+                          18.0 +
+                          ((i * (_analyticsRange == 'Month' ? 23 : 17)) % 70),
+                      decoration: BoxDecoration(
+                        color: kPrimary.withOpacity(.25 + i * .08),
+                        borderRadius: BorderRadius.circular(5),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              'Best-selling items',
+              style: TextStyle(color: kDeep, fontWeight: FontWeight.w900),
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              children: ['Top Selling', 'Low Selling']
+                  .map(
+                    (rank) => ChoiceChip(
+                      label: Text(rank),
+                      selected: _sellingRank == rank,
+                      selectedColor: kPrimary,
+                      labelStyle: TextStyle(
+                        color: _sellingRank == rank ? Colors.white : kDeep,
+                        fontWeight: FontWeight.w800,
+                      ),
+                      onSelected: (_) => setState(() => _sellingRank = rank),
+                    ),
+                  )
+                  .toList(),
+            ),
+            const SizedBox(height: 8),
+            if (top.isEmpty)
+              const Text(
+                'No completed sales yet.',
+                style: TextStyle(color: Colors.grey),
+              )
+            else
+              ...top
+                  .take(3)
+                  .map(
+                    (e) => Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 3),
+                      child: Row(
+                        children: [
+                          const Icon(
+                            Icons.star_rounded,
+                            color: Color(0xFFFFB300),
+                            size: 18,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              e.key,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                          Text(
+                            '${e.value} sold',
+                            style: const TextStyle(
+                              color: kDeep,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+          ],
+        ),
       );
     },
   );
 
-  Widget _buildBranchActivity(String branchId,
-      Widget Function(List<Map<String, dynamic>>) builder) {
+  Widget _buildBranchActivity(
+    String branchId,
+    Widget Function(List<Map<String, dynamic>>) builder,
+  ) {
     // Each activity view owns stable subscriptions; nested rebuilds must not
     // replace streams or reuse another widget's single-subscription stream.
-    final salesStream = _firestore.collection('completed_sales').where('branchId', isEqualTo: branchId).snapshots();
-    final inventoryStream = _firestore.collection('staff_inventory').where('staffId', isEqualTo: branchId).snapshots();
-    final adjustmentsStream = _firestore.collection('stock_adjustments').snapshots();
-    return
-      StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-        stream: salesStream,
-        builder: (context, sales) => StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-          stream: inventoryStream,
-          builder: (context, inventory) => StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-            stream: adjustmentsStream,
-            builder: (context, adjustments) {
-              if (sales.hasError || inventory.hasError || adjustments.hasError) {
-                return const Padding(padding: EdgeInsets.all(16), child: Text('Unable to load branch activity.'));
-              }
-              if (!sales.hasData || !inventory.hasData || !adjustments.hasData) {
-                return const Center(child: CircularProgressIndicator(color: kPrimary));
-              }
-              final sources = {for (final doc in inventory.data!.docs) doc.id: doc.data()};
-              final records = sales.data!.docs.map((doc) => <String, dynamic>{...doc.data(), '_id': doc.id}).toList();
-              for (final doc in adjustments.data!.docs) {
-                final data = doc.data();
-                final savedBranch = data['branchId']?.toString() ?? '';
-                final source = sources[data['categoryId']?.toString()];
-                if (savedBranch.isNotEmpty ? savedBranch != branchId : source == null) continue;
-                final quantity = _parseInt(data['quantity']);
-                if (quantity <= 0) continue;
-                final price = _parsePrice(data['unitPrice'] ?? data['bundlePrice'] ?? source?['price']);
-                final loss = data['lossAmount'] == null ? price * quantity : _parsePrice(data['lossAmount']).abs();
-                records.add({
-                  ...data,
-                  '_id': doc.id,
-                  'salesId': doc.id,
-                  'type': 'reduced',
-                  'status': 'Reduced',
-                  'timestamp': data['createdAt'],
-                  'total': loss,
-                  'items': [{
-                    'name': data['itemName'] ?? data['categoryName'] ?? 'Item',
-                    'variant': data['variant'] ?? '',
-                    'quantity': quantity,
-                    'price': price,
-                    'isBundle': source?['isBundle'] == true || data['type']?.toString().contains('bundle') == true,
-                    'isCoffee': source?['isCoffee'] == true || data['type']?.toString().contains('coffee') == true,
-                  }],
-                });
-              }
-              return builder(records);
-            },
+    final salesStream = _firestore
+        .collection('completed_sales')
+        .where('branchId', isEqualTo: branchId)
+        .snapshots();
+    final inventoryStream = _firestore
+        .collection('staff_inventory')
+        .where('staffId', isEqualTo: branchId)
+        .snapshots();
+    final adjustmentsStream = _firestore
+        .collection('stock_adjustments')
+        .snapshots();
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: salesStream,
+      builder: (context, sales) =>
+          StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+            stream: inventoryStream,
+            builder: (context, inventory) =>
+                StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                  stream: adjustmentsStream,
+                  builder: (context, adjustments) {
+                    if (sales.hasError ||
+                        inventory.hasError ||
+                        adjustments.hasError) {
+                      return const Padding(
+                        padding: EdgeInsets.all(16),
+                        child: Text('Unable to load branch activity.'),
+                      );
+                    }
+                    if (!sales.hasData ||
+                        !inventory.hasData ||
+                        !adjustments.hasData) {
+                      return const Center(
+                        child: CircularProgressIndicator(color: kPrimary),
+                      );
+                    }
+                    final sources = {
+                      for (final doc in inventory.data!.docs)
+                        doc.id: doc.data(),
+                    };
+                    final records = sales.data!.docs
+                        .map(
+                          (doc) => <String, dynamic>{
+                            ...doc.data(),
+                            '_id': doc.id,
+                          },
+                        )
+                        .toList();
+                    for (final doc in adjustments.data!.docs) {
+                      final data = doc.data();
+                      final savedBranch = data['branchId']?.toString() ?? '';
+                      final source = sources[data['categoryId']?.toString()];
+                      if (savedBranch.isNotEmpty
+                          ? savedBranch != branchId
+                          : source == null)
+                        continue;
+                      final quantity = _parseInt(data['quantity']);
+                      if (quantity <= 0) continue;
+                      final price = _parsePrice(
+                        data['unitPrice'] ??
+                            data['bundlePrice'] ??
+                            source?['price'],
+                      );
+                      final loss = data['lossAmount'] == null
+                          ? price * quantity
+                          : _parsePrice(data['lossAmount']).abs();
+                      records.add({
+                        ...data,
+                        '_id': doc.id,
+                        'salesId': doc.id,
+                        'type': 'reduced',
+                        'status': 'Reduced',
+                        'timestamp': data['createdAt'],
+                        'total': loss,
+                        'items': [
+                          {
+                            'name':
+                                data['itemName'] ??
+                                data['categoryName'] ??
+                                'Item',
+                            'variant': data['variant'] ?? '',
+                            'quantity': quantity,
+                            'price': price,
+                            'isBundle':
+                                source?['isBundle'] == true ||
+                                data['type']?.toString().contains('bundle') ==
+                                    true,
+                            'isCoffee':
+                                source?['isCoffee'] == true ||
+                                data['type']?.toString().contains('coffee') ==
+                                    true,
+                          },
+                        ],
+                      });
+                    }
+                    return builder(records);
+                  },
+                ),
           ),
-        ),
-      );
+    );
   }
 
   String _activityStatus(Map<String, dynamic> data) {
     final type = data['type']?.toString().toLowerCase();
     final status = data['status']?.toString().toLowerCase();
     if (type == 'refund' || status == 'refund') return 'Refund';
-    if (type == 'reduce' || type == 'reduced' || status == 'reduce' || status == 'reduced') return 'Reduced';
+    if (type == 'reduce' ||
+        type == 'reduced' ||
+        status == 'reduce' ||
+        status == 'reduced')
+      return 'Reduced';
     return 'Completed';
   }
 
-  Future<List<Map<String, dynamic>>> _loadLossRecordStaff(List<Map<String, dynamic>> records) async {
+  Future<List<Map<String, dynamic>>> _loadLossRecordStaff(
+    List<Map<String, dynamic>> records,
+  ) async {
     final staffLookups = <String, Future<Map<String, dynamic>>>{};
     Future<Map<String, dynamic>> lookup(String id) async {
       if (id.isEmpty) return {};
       try {
-        final doc = await _firestore.collection('staff_requests').doc(id).get()
+        final doc = await _firestore
+            .collection('staff_requests')
+            .doc(id)
+            .get()
             .timeout(const Duration(seconds: 10));
         if (doc.exists) return doc.data() ?? {};
-        final byPublicId = await _firestore.collection('staff_requests')
-            .where('staffId', isEqualTo: id).limit(1).get()
+        final byPublicId = await _firestore
+            .collection('staff_requests')
+            .where('staffId', isEqualTo: id)
+            .limit(1)
+            .get()
             .timeout(const Duration(seconds: 10));
         return byPublicId.docs.isEmpty ? {} : byPublicId.docs.first.data();
       } catch (_) {
         return {};
       }
     }
-    return Future.wait(records.map((record) async {
-      final id = (record['userId'] ?? record['staffId'] ?? '').toString();
-      final data = await staffLookups.putIfAbsent(id, () => lookup(id));
-      final fullName = [data['firstName'], data['middleName'], data['lastName']]
-          .map((part) => part?.toString().trim() ?? '').where((part) => part.isNotEmpty).join(' ');
-      final savedName = (record['staffName'] ?? record['cashierName'] ?? record['userName'] ?? '').toString().trim();
-      return <String, dynamic>{
-        ...record,
-        'staffName': savedName.isNotEmpty ? savedName
-            : fullName.isNotEmpty ? fullName : data['name'] ?? 'Staff not recorded',
-        'staffPublicId': record['staffPublicId'] ?? data['staffId'] ?? record['staffId'] ?? record['userId'] ?? '',
-      };
-    }));
+
+    return Future.wait(
+      records.map((record) async {
+        final id = (record['userId'] ?? record['staffId'] ?? '').toString();
+        final data = await staffLookups.putIfAbsent(id, () => lookup(id));
+        final fullName =
+            [data['firstName'], data['middleName'], data['lastName']]
+                .map((part) => part?.toString().trim() ?? '')
+                .where((part) => part.isNotEmpty)
+                .join(' ');
+        final savedName =
+            (record['staffName'] ??
+                    record['cashierName'] ??
+                    record['userName'] ??
+                    '')
+                .toString()
+                .trim();
+        return <String, dynamic>{
+          ...record,
+          'staffName': savedName.isNotEmpty
+              ? savedName
+              : fullName.isNotEmpty
+              ? fullName
+              : data['name'] ?? 'Staff not recorded',
+          'staffPublicId':
+              record['staffPublicId'] ??
+              data['staffId'] ??
+              record['staffId'] ??
+              record['userId'] ??
+              '',
+        };
+      }),
+    );
   }
 
-  void _showBranchLossItems(String branchId, String status, List<Map<String, dynamic>> records) {
+  void _showBranchLossItems(
+    String branchId,
+    String status,
+    List<Map<String, dynamic>> records,
+  ) {
     final day = DateTime.now();
     final range = _analyticsRange;
     final period = lossRecordPeriod(day, range);
-    final matching = records.where((record) {
-      final date = _dateValue(record['timestamp']);
-      return _activityStatus(record) == status && !date.isBefore(period.start) && date.isBefore(period.end);
-    }).map((record) => <String, dynamic>{...record, 'timestamp': _dateValue(record['timestamp'])}).toList();
+    final matching = records
+        .where((record) {
+          final date = _dateValue(record['timestamp']);
+          return _activityStatus(record) == status &&
+              !date.isBefore(period.start) &&
+              date.isBefore(period.end);
+        })
+        .map(
+          (record) => <String, dynamic>{
+            ...record,
+            'timestamp': _dateValue(record['timestamp']),
+          },
+        )
+        .toList();
     final staffRecords = _loadLossRecordStaff(matching);
-    showDialog<void>(context: context, builder: (context) => BranchLossRecordsDialog(
-      status: status, anchor: day, range: range, records: matching, staffRecords: staffRecords,
-      cardBuilder: (record) => _buildBranchReceiptCardContent(
-        record, record['_id']?.toString() ?? '', record['staffName']?.toString() ?? 'Loading staff…',
+    showDialog<void>(
+      context: context,
+      builder: (context) => BranchLossRecordsDialog(
+        status: status,
+        anchor: day,
+        range: range,
+        records: matching,
+        staffRecords: staffRecords,
+        cardBuilder: (record) => _buildBranchReceiptCardContent(
+          record,
+          record['_id']?.toString() ?? '',
+          record['staffName']?.toString() ?? 'Loading staff…',
+        ),
       ),
-    ));
+    );
   }
-  Widget _buildPeriodBranchAnalytics(String branchId, String branchName) => StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+
+  Widget _buildPeriodBranchAnalytics(
+    String branchId,
+    String branchName,
+  ) => StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
     stream: _firestore.collection('branches').doc(branchId).snapshots(),
-    builder: (context, branchSnapshot) => _buildBranchActivity(branchId,
-    (records) {
+    builder: (context, branchSnapshot) => _buildBranchActivity(branchId, (
+      records,
+    ) {
       final now = DateTime.now();
       final isRefundView = _analyticsStatus == 'Refund';
       final isReducedView = _analyticsStatus == 'Reduced';
-      final rankingTitle = isRefundView ? (_sellingRank == 'Low Selling' ? 'Low refund items' : 'High refund items') : isReducedView ? (_sellingRank == 'Low Selling' ? 'Low reduced items' : 'High reduced items') : 'Best-selling items';
-      final itemAction = isRefundView ? 'refunded' : isReducedView ? 'reduced' : 'sold';
-      String rankLabel(String rank) => rank == 'All' ? 'All'
-          : isRefundView ? (rank == 'Top Selling' ? 'High refund items' : 'Low refund items')
-          : isReducedView ? (rank == 'Top Selling' ? 'High reduced items' : 'Low reduced items')
+      final rankingTitle = isRefundView
+          ? (_sellingRank == 'Low Selling'
+                ? 'Low refund items'
+                : 'High refund items')
+          : isReducedView
+          ? (_sellingRank == 'Low Selling'
+                ? 'Low reduced items'
+                : 'High reduced items')
+          : 'Best-selling items';
+      final itemAction = isRefundView
+          ? 'refunded'
+          : isReducedView
+          ? 'reduced'
+          : 'sold';
+      String rankLabel(String rank) => rank == 'All'
+          ? 'All'
+          : isRefundView
+          ? (rank == 'Top Selling' ? 'High refund items' : 'Low refund items')
+          : isReducedView
+          ? (rank == 'Top Selling' ? 'High reduced items' : 'Low reduced items')
           : rank;
       final today = DateTime(now.year, now.month, now.day);
       final weekStart = today.subtract(Duration(days: today.weekday - 1));
-      final hours = analyticsHours(now, records.map((record) {
-        final raw = record['timestamp'];
-        return raw is Timestamp ? raw.toDate() : raw is DateTime ? raw : DateTime.tryParse('$raw');
-      }).whereType<DateTime>(), openingMinutes: (branchSnapshot.data?.data()?['openingMinutes'] as num?)?.toInt() ?? 600, closingMinutes: (branchSnapshot.data?.data()?['closingMinutes'] as num?)?.toInt() ?? 1140);
+      final hours = analyticsHours(
+        now,
+        records.map((record) {
+          final raw = record['timestamp'];
+          return raw is Timestamp
+              ? raw.toDate()
+              : raw is DateTime
+              ? raw
+              : DateTime.tryParse('$raw');
+        }).whereType<DateTime>(),
+        openingMinutes:
+            (branchSnapshot.data?.data()?['openingMinutes'] as num?)?.toInt() ??
+            600,
+        closingMinutes:
+            (branchSnapshot.data?.data()?['closingMinutes'] as num?)?.toInt() ??
+            1140,
+      );
       final count = _analyticsRange == 'Day'
           ? hours.length
           : _analyticsRange == 'Week'
@@ -5149,9 +5920,16 @@ class _BudgetPageState extends State<BudgetPage>
       var totalRefund = 0.0;
       var totalReduced = 0.0;
       bool matches(DateTime date) => _analyticsRange == 'Day'
-          ? date.year == now.year && date.month == now.month && date.day == now.day
+          ? date.year == now.year &&
+                date.month == now.month &&
+                date.day == now.day
           : _analyticsRange == 'Week'
-          ? !DateTime(date.year, date.month, date.day).isBefore(weekStart) && DateTime(date.year, date.month, date.day).isBefore(weekStart.add(const Duration(days: 7)))
+          ? !DateTime(date.year, date.month, date.day).isBefore(weekStart) &&
+                DateTime(
+                  date.year,
+                  date.month,
+                  date.day,
+                ).isBefore(weekStart.add(const Duration(days: 7)))
           : date.year == now.year;
       for (final data in records) {
         final status = _activityStatus(data);
@@ -5160,14 +5938,23 @@ class _BudgetPageState extends State<BudgetPage>
         final isCompleted = !isRefund && !isReduced;
         if ((_analyticsStatus == 'Refund' && !isRefund) ||
             (_analyticsStatus == 'Reduced' && !isReduced) ||
-            (_analyticsStatus == 'Completed' && !isCompleted)) continue;
+            (_analyticsStatus == 'Completed' && !isCompleted))
+          continue;
         final raw = data['timestamp'];
-        final date = raw is Timestamp ? raw.toDate() : raw is DateTime ? raw : DateTime.tryParse(raw?.toString() ?? '');
+        final date = raw is Timestamp
+            ? raw.toDate()
+            : raw is DateTime
+            ? raw
+            : DateTime.tryParse(raw?.toString() ?? '');
         if (date == null || !matches(date)) continue;
         final bucket = _analyticsRange == 'Day'
             ? hours.indexOf(date.hour)
             : _analyticsRange == 'Week'
-            ? DateTime(date.year, date.month, date.day).difference(weekStart).inDays
+            ? DateTime(
+                date.year,
+                date.month,
+                date.day,
+              ).difference(weekStart).inDays
             : date.month - 1;
         final value = _analyticsSaleValue(data);
         amounts[bucket] += value;
@@ -5186,8 +5973,10 @@ class _BudgetPageState extends State<BudgetPage>
           final item = Map<String, dynamic>.from(rawItem);
           // Sales data stores a parent category (e.g. Cookies) in `name`
           // and the actual sold product/flavor in `variant`.
-          final variant = item['variant']?.toString().trim() ??
-              item['coffeeSize']?.toString().trim() ?? '';
+          final variant =
+              item['variant']?.toString().trim() ??
+              item['coffeeSize']?.toString().trim() ??
+              '';
           final name = variant.isNotEmpty
               ? variant
               : item['name']?.toString().trim() ?? '';
@@ -5196,12 +5985,12 @@ class _BudgetPageState extends State<BudgetPage>
           // Quantities are used only for the best-selling item ranking.
           // The graph aggregates each receipt total once, above.
 
-
-
           if (_analyticsStatus == 'All' && !isCompleted) continue;
           final category = item['category']?.toString().toLowerCase() ?? '';
           final isBundle = item['isBundle'] == true;
-          final isCoffee = item['isCoffee'] == true || (category.contains('coffee') || category.contains('beverage'));
+          final isCoffee =
+              item['isCoffee'] == true ||
+              (category.contains('coffee') || category.contains('beverage'));
 
           allQuantities[name] = (allQuantities[name] ?? 0) + quantity;
           if (isBundle) {
@@ -5209,7 +5998,8 @@ class _BudgetPageState extends State<BudgetPage>
           } else if (isCoffee) {
             coffeeQuantities[name] = (coffeeQuantities[name] ?? 0) + quantity;
           } else {
-            categoryQuantities[name] = (categoryQuantities[name] ?? 0) + quantity;
+            categoryQuantities[name] =
+                (categoryQuantities[name] ?? 0) + quantity;
           }
         }
       }
@@ -5223,7 +6013,20 @@ class _BudgetPageState extends State<BudgetPage>
           final date = weekStart.add(Duration(days: i));
           return '${days[i]}\n${date.month}/${date.day}';
         }
-        const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        const months = [
+          'Jan',
+          'Feb',
+          'Mar',
+          'Apr',
+          'May',
+          'Jun',
+          'Jul',
+          'Aug',
+          'Sep',
+          'Oct',
+          'Nov',
+          'Dec',
+        ];
         return months[i];
       });
       final selectedQuantities = switch (_sellingType) {
@@ -5233,9 +6036,11 @@ class _BudgetPageState extends State<BudgetPage>
         _ => allQuantities,
       };
       final ranked = selectedQuantities.entries.toList()
-        ..sort((a, b) => _sellingRank == 'Low Selling'
-            ? a.value.compareTo(b.value)
-            : b.value.compareTo(a.value));
+        ..sort(
+          (a, b) => _sellingRank == 'Low Selling'
+              ? a.value.compareTo(b.value)
+              : b.value.compareTo(a.value),
+        );
       final rangeLabel = _analyticsRange == 'Day'
           ? '${now.month}/${now.day}/${now.year} hourly sales'
           : _analyticsRange == 'Week'
@@ -5250,128 +6055,387 @@ class _BudgetPageState extends State<BudgetPage>
           : const [kDeep, kPrimary];
       return Container(
         padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(18), border: Border.all(color: kAccent)),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const Text('Sales Analytics', style: TextStyle(color: kBannerTop, fontSize: 17, fontWeight: FontWeight.w900)),
-          const SizedBox(height: 4), Text(rangeLabel, style: const TextStyle(color: Colors.grey, fontSize: 12, fontWeight: FontWeight.w600)),
-          const SizedBox(height: 8),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: const Text('Today', style: TextStyle(color: kDeep, fontWeight: FontWeight.w700)),
+        decoration: BoxDecoration(
+          color: AppColors.surface,
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: kAccent),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Sales Analytics',
+              style: TextStyle(
+                color: kBannerTop,
+                fontSize: 17,
+                fontWeight: FontWeight.w900,
               ),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  ['Refund', const Color(0xFFF9A825)],
-                  ['Reduced', const Color(0xFF1976D2)],
-                  ['Completed', const Color(0xFFE53935)],
-                ].map((entry) {
-                  final label = entry[0] as String;
-                  final color = entry[1] as Color;
-                  final active = _analyticsStatus == label;
-                  return InkWell(
-                    borderRadius: BorderRadius.circular(16),
-                    onTap: () => setState(() => _analyticsStatus = active ? 'All' : label),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 6),
-                      child: Row(mainAxisSize: MainAxisSize.min, children: [
-                        Container(width: 12, height: 12, decoration: BoxDecoration(color: color, shape: BoxShape.circle, boxShadow: active ? [BoxShadow(color: color.withOpacity(.45), blurRadius: 7)] : [])),
-                        const SizedBox(width: 7),
-                        Text(label, style: TextStyle(color: active ? color : Colors.grey.shade700, fontSize: 12, fontWeight: active ? FontWeight.w900 : FontWeight.w700)),
-                      ]),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              rangeLabel,
+              style: const TextStyle(
+                color: Colors.grey,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: const Text(
+                    'Today',
+                    style: TextStyle(color: kDeep, fontWeight: FontWeight.w700),
+                  ),
+                ),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children:
+                      [
+                        ['Refund', const Color(0xFFF9A825)],
+                        ['Reduced', const Color(0xFF1976D2)],
+                        ['Completed', const Color(0xFFE53935)],
+                      ].map((entry) {
+                        final label = entry[0] as String;
+                        final color = entry[1] as Color;
+                        final active = _analyticsStatus == label;
+                        return InkWell(
+                          borderRadius: BorderRadius.circular(16),
+                          onTap: () => setState(
+                            () => _analyticsStatus = active ? 'All' : label,
+                          ),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                              vertical: 4,
+                              horizontal: 6,
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Container(
+                                  width: 12,
+                                  height: 12,
+                                  decoration: BoxDecoration(
+                                    color: color,
+                                    shape: BoxShape.circle,
+                                    boxShadow: active
+                                        ? [
+                                            BoxShadow(
+                                              color: color.withOpacity(.45),
+                                              blurRadius: 7,
+                                            ),
+                                          ]
+                                        : [],
+                                  ),
+                                ),
+                                const SizedBox(width: 7),
+                                Text(
+                                  label,
+                                  style: TextStyle(
+                                    color: active
+                                        ? color
+                                        : Colors.grey.shade700,
+                                    fontSize: 12,
+                                    fontWeight: active
+                                        ? FontWeight.w900
+                                        : FontWeight.w700,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      }).toList(),
+                ),
+              ],
+            ),
+            if (_analyticsStatus == 'All')
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Total Completed: ₱${totalCompleted.toStringAsFixed(2)}',
+                      style: const TextStyle(
+                        color: Color(0xFFE53935),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w800,
+                      ),
                     ),
-                  );
-                }).toList(),
+                    Text(
+                      'Total Reduced: ₱${totalReduced.toStringAsFixed(2)}',
+                      style: const TextStyle(
+                        color: Color(0xFF1976D2),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    Text(
+                      'Total Refund: ₱${totalRefund.toStringAsFixed(2)}',
+                      style: const TextStyle(
+                        color: Color(0xFFF9A825),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ],
+                ),
               ),
-            ],
-          ),
-          if (_analyticsStatus == 'All') Padding(padding: const EdgeInsets.only(top: 8), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('Total Completed: ₱${totalCompleted.toStringAsFixed(2)}', style: const TextStyle(color: Color(0xFFE53935), fontSize: 12, fontWeight: FontWeight.w800)), Text('Total Reduced: ₱${totalReduced.toStringAsFixed(2)}', style: const TextStyle(color: Color(0xFF1976D2), fontSize: 12, fontWeight: FontWeight.w800)), Text('Total Refund: ₱${totalRefund.toStringAsFixed(2)}', style: const TextStyle(color: Color(0xFFF9A825), fontSize: 12, fontWeight: FontWeight.w800))])),
-          if (_analyticsStatus == 'Refund' || _analyticsStatus == 'Reduced') Padding(padding: const EdgeInsets.only(top: 8), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('Total loss: ₱${totalLoss.toStringAsFixed(2)}', style: const TextStyle(color: Color(0xFFD32F2F), fontWeight: FontWeight.w900)), TextButton.icon(onPressed: () => _showBranchLossItems(branchId, _analyticsStatus, records), icon: const Icon(Icons.visibility_outlined, size: 16), label: Text(_analyticsStatus == 'Refund' ? 'View Refund items' : 'View Reduced items'), style: TextButton.styleFrom(foregroundColor: kDeep, textStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800)))])),
-          const SizedBox(height: 14), SizedBox(height: 240, child: BranchAnalyticsBars(values: amounts, labels: labels, colors: graphColors, refunds: _analyticsStatus == 'All' ? refundAmounts : null, reduced: _analyticsStatus == 'All' ? reducedAmounts : null, selectedStatus: _analyticsStatus)),
-          const SizedBox(height: 16), Text(rankingTitle, style: const TextStyle(color: kDeep, fontWeight: FontWeight.w900)), const SizedBox(height: 8),
-          Wrap(spacing: 8, runSpacing: 8, children: ['All', 'Categories', 'Bundle', 'Beverages Items'].map((type) => ChoiceChip(label: Text(type), selected: _sellingType == type, selectedColor: kPrimary, labelStyle: TextStyle(color: _sellingType == type ? Colors.white : kDeep, fontWeight: FontWeight.w800), onSelected: (_) => setState(() => _sellingType = type))).toList()),
-          const SizedBox(height: 8),
-          Wrap(spacing: 8, children: ['All', 'Top Selling', 'Low Selling'].map((rank) => ChoiceChip(label: Text(rankLabel(rank)), selected: _sellingRank == rank, selectedColor: kPrimary, labelStyle: TextStyle(color: _sellingRank == rank ? Colors.white : kDeep, fontWeight: FontWeight.w800), onSelected: (_) => setState(() => _sellingRank = rank))).toList()),
-          const SizedBox(height: 8),
-          if (ranked.isEmpty) Text('No $itemAction items in this period yet.', style: const TextStyle(color: Colors.grey)) else ...(_sellingRank == 'All' ? ranked : ranked.take(5)).map((e) => Padding(padding: const EdgeInsets.symmetric(vertical: 3), child: Row(children: [Icon(_sellingRank == 'Low Selling' ? Icons.trending_down_rounded : Icons.star_rounded, color: _sellingRank == 'Low Selling' ? Colors.orange : const Color(0xFFFFB300), size: 18), const SizedBox(width: 8), Expanded(child: Text(e.key, style: const TextStyle(fontWeight: FontWeight.w700))), Text('${e.value} $itemAction', style: const TextStyle(color: kDeep, fontWeight: FontWeight.w900))]))),
-        ]),
+            if (_analyticsStatus == 'Refund' || _analyticsStatus == 'Reduced')
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Total loss: ₱${totalLoss.toStringAsFixed(2)}',
+                      style: const TextStyle(
+                        color: Color(0xFFD32F2F),
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    TextButton.icon(
+                      onPressed: () => _showBranchLossItems(
+                        branchId,
+                        _analyticsStatus,
+                        records,
+                      ),
+                      icon: const Icon(Icons.visibility_outlined, size: 16),
+                      label: Text(
+                        _analyticsStatus == 'Refund'
+                            ? 'View Refund items'
+                            : 'View Reduced items',
+                      ),
+                      style: TextButton.styleFrom(
+                        foregroundColor: kDeep,
+                        textStyle: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            const SizedBox(height: 14),
+            SizedBox(
+              height: 240,
+              child: BranchAnalyticsBars(
+                values: amounts,
+                labels: labels,
+                colors: graphColors,
+                refunds: _analyticsStatus == 'All' ? refundAmounts : null,
+                reduced: _analyticsStatus == 'All' ? reducedAmounts : null,
+                selectedStatus: _analyticsStatus,
+              ),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              rankingTitle,
+              style: const TextStyle(color: kDeep, fontWeight: FontWeight.w900),
+            ),
+            const SizedBox(height: 8),
+            HorizontalControls(
+              spacing: 8,
+              children: ['All', 'Categories', 'Bundle', 'Beverages Items']
+                  .map(
+                    (type) => ChoiceChip(
+                      label: Text(type),
+                      selected: _sellingType == type,
+                      selectedColor: kPrimary,
+                      labelStyle: TextStyle(
+                        color: _sellingType == type ? Colors.white : kDeep,
+                        fontWeight: FontWeight.w800,
+                      ),
+                      onSelected: (_) => setState(() => _sellingType = type),
+                    ),
+                  )
+                  .toList(),
+            ),
+            const SizedBox(height: 8),
+            HorizontalControls(
+              spacing: 8,
+              children: ['All', 'Top Selling', 'Low Selling']
+                  .map(
+                    (rank) => ChoiceChip(
+                      label: Text(rankLabel(rank)),
+                      selected: _sellingRank == rank,
+                      selectedColor: kPrimary,
+                      labelStyle: TextStyle(
+                        color: _sellingRank == rank ? Colors.white : kDeep,
+                        fontWeight: FontWeight.w800,
+                      ),
+                      onSelected: (_) => setState(() => _sellingRank = rank),
+                    ),
+                  )
+                  .toList(),
+            ),
+            const SizedBox(height: 8),
+            if (ranked.isEmpty)
+              Text(
+                'No $itemAction items in this period yet.',
+                style: const TextStyle(color: Colors.grey),
+              )
+            else
+              ...(_sellingRank == 'All' ? ranked : ranked.take(5)).map(
+                (e) => Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 3),
+                  child: Row(
+                    children: [
+                      Icon(
+                        _sellingRank == 'Low Selling'
+                            ? Icons.trending_down_rounded
+                            : Icons.star_rounded,
+                        color: _sellingRank == 'Low Selling'
+                            ? Colors.orange
+                            : const Color(0xFFFFB300),
+                        size: 18,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          e.key,
+                          style: const TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                      ),
+                      Text(
+                        '${e.value} $itemAction',
+                        style: const TextStyle(
+                          color: kDeep,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+          ],
+        ),
       );
-    },
-  ));
+    }),
+  );
 
-  Widget _buildBranchQuickActions({required String branchId, required String branchName, required List<String> staffIds, required List<String> staffNames, required TextEditingController controller, required bool enabled}) => Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.end, children: [
+  Widget _buildBranchQuickActions({
+    required String branchId,
+    required String branchName,
+    required List<String> staffIds,
+    required List<String> staffNames,
+    required TextEditingController controller,
+    required bool enabled,
+  }) => Column(
+    mainAxisSize: MainAxisSize.min,
+    crossAxisAlignment: CrossAxisAlignment.end,
+    children: [
       if (_branchFabExpanded) ...[
         _animatedQuickAction(
-        FloatingActionButton.small(heroTag: 'items_$branchId', onPressed: enabled ? () => _showAssignInventoryDialog(branchId, branchName, isBranch: true) : null, child: const Icon(Icons.add_box_rounded)),
+          FloatingActionButton.small(
+            heroTag: 'items_$branchId',
+            onPressed: enabled
+                ? () => _showAssignInventoryDialog(
+                    branchId,
+                    branchName,
+                    isBranch: true,
+                  )
+                : null,
+            child: const Icon(Icons.add_box_rounded),
+          ),
           delay: 90,
         ),
         const SizedBox(height: 8),
         _animatedQuickAction(
-        FloatingActionButton.small(heroTag: 'cash_$branchId', onPressed: enabled ? () => _showBranchCashDrawerDialog(branchId, branchName, controller, staffIds) : null, child: const Icon(Icons.payments_rounded)),
+          FloatingActionButton.small(
+            heroTag: 'cash_$branchId',
+            onPressed: enabled
+                ? () => _showBranchCashDrawerDialog(
+                    branchId,
+                    branchName,
+                    controller,
+                    staffIds,
+                  )
+                : null,
+            child: const Icon(Icons.payments_rounded),
+          ),
           delay: 135,
         ),
         const SizedBox(height: 8),
       ],
-      FloatingActionButton(heroTag: 'quick_$branchId', backgroundColor: kPrimary, onPressed: () => setState(() => _branchFabExpanded = !_branchFabExpanded), child: Icon(_branchFabExpanded ? Icons.close_rounded : Icons.add_rounded)),
-    ]);
-
-
-  Widget _animatedQuickAction(Widget child, {required int delay}) => TweenAnimationBuilder<double>(
-    duration: Duration(milliseconds: 220 + delay),
-    curve: Curves.easeOutBack,
-    tween: Tween(begin: 0, end: 1),
-    builder: (context, value, _) => Opacity(opacity: value.clamp(0, 1), child: Transform.translate(offset: Offset(0, 18 * (1 - value)), child: Transform.scale(scale: value, child: child))),
+      FloatingActionButton(
+        heroTag: 'quick_$branchId',
+        backgroundColor: kPrimary,
+        onPressed: () =>
+            setState(() => _branchFabExpanded = !_branchFabExpanded),
+        child: Icon(
+          _branchFabExpanded ? Icons.close_rounded : Icons.add_rounded,
+        ),
+      ),
+    ],
   );
 
-  Widget _buildAllocationFilters() => Column(children: [
-    _buildAllocationSearch(),
-    const SizedBox(height: 10),
-    _buildAllocationCategories(),
-  ]);
-
-  Widget _buildAllocationCategories() => Wrap(
-        spacing: 8,
-        runSpacing: 8,
-        children: ['All', 'Categories', 'Bundle', 'Beverages']
-            .map(
-              (filter) => ChoiceChip(
-                label: Text(filter),
-                selected: _allocationFilter == filter,
-                selectedColor: kPrimary.withOpacity(0.18),
-                labelStyle: TextStyle(
-                  color: _allocationFilter == filter
-                      ? kBannerTop
-                      : Colors.grey.shade700,
-                  fontWeight: FontWeight.w800,
-                ),
-                onSelected: (_) => setState(() => _allocationFilter = filter),
-              ),
-            )
-            .toList(),
-      );
-
-  Widget _buildAllocationSearch() => TextField(
-        controller: _allocationSearchController,
-        onChanged: (value) =>
-            setState(() => _allocationSearchQuery = value.trim().toLowerCase()),
-        decoration: InputDecoration(
-          hintText:
-              'Search',
-          prefixIcon: const Icon(Icons.search_rounded, color: kDeep),
-          filled: true,
-          fillColor: AppColors.surface,
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(12),
-            borderSide: BorderSide(color: kAccent),
-          ),
-          enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(12),
-            borderSide: BorderSide(color: kAccent),
+  Widget _animatedQuickAction(Widget child, {required int delay}) =>
+      TweenAnimationBuilder<double>(
+        duration: Duration(milliseconds: 220 + delay),
+        curve: Curves.easeOutBack,
+        tween: Tween(begin: 0, end: 1),
+        builder: (context, value, _) => Opacity(
+          opacity: value.clamp(0, 1),
+          child: Transform.translate(
+            offset: Offset(0, 18 * (1 - value)),
+            child: Transform.scale(scale: value, child: child),
           ),
         ),
       );
+
+  Widget _buildAllocationFilters() => Column(
+    children: [
+      _buildAllocationSearch(),
+      const SizedBox(height: 10),
+      _buildAllocationCategories(),
+    ],
+  );
+
+  Widget _buildAllocationCategories() => HorizontalControls(
+    spacing: 8,
+
+    children: ['All', 'Categories', 'Bundle', 'Beverages']
+        .map(
+          (filter) => ChoiceChip(
+            label: Text(filter),
+            selected: _allocationFilter == filter,
+            selectedColor: kPrimary.withOpacity(0.18),
+            labelStyle: TextStyle(
+              color: _allocationFilter == filter
+                  ? kBannerTop
+                  : Colors.grey.shade700,
+              fontWeight: FontWeight.w800,
+            ),
+            onSelected: (_) => setState(() => _allocationFilter = filter),
+          ),
+        )
+        .toList(),
+  );
+
+  Widget _buildAllocationSearch() => TextField(
+    controller: _allocationSearchController,
+    onChanged: (value) =>
+        setState(() => _allocationSearchQuery = value.trim().toLowerCase()),
+    decoration: InputDecoration(
+      hintText: 'Search',
+      prefixIcon: const Icon(Icons.search_rounded, color: kDeep),
+      filled: true,
+      fillColor: AppColors.surface,
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: BorderSide(color: kAccent),
+      ),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: BorderSide(color: kAccent),
+      ),
+    ),
+  );
 
   void _showBranchCashDrawerDialog(
     String branchId,
@@ -5466,12 +6530,10 @@ class _BudgetPageState extends State<BudgetPage>
             .snapshots(),
       ),
       builder: (context, snapshot) {
-        final docs = (snapshot.data?.docs ?? [])
-            .where((doc) {
-              final data = doc.data();
-              return data['isDeleted'] != true;
-            })
-            .toList();
+        final docs = (snapshot.data?.docs ?? []).where((doc) {
+          final data = doc.data();
+          return data['isDeleted'] != true;
+        }).toList();
         // Cached snapshot data is already safe to display.  Waiting for a
         // server refresh must not leave the View all items dialog spinning.
         if (snapshot.connectionState == ConnectionState.waiting &&
@@ -5510,150 +6572,198 @@ class _BudgetPageState extends State<BudgetPage>
           builder: (context, salesSnapshot) {
             final selectedDay = DateTime.now();
             final soldByName = <String, int>{};
+            final salesByName = <String, double>{};
             for (final saleDoc in salesSnapshot.data?.docs ?? const []) {
               final sale = saleDoc.data();
+              if (!validReportSale(sale) ||
+                  reportRefund(sale) ||
+                  sale['type'] == 'reduce' ||
+                  sale['status'] == 'reduced')
+                continue;
               final soldAt = _dateValue(sale['timestamp']);
               if (soldAt.year != selectedDay.year ||
                   soldAt.month != selectedDay.month ||
-                  soldAt.day != selectedDay.day) continue;
-              for (final rawItem in sale['items'] as List<dynamic>? ?? const []) {
+                  soldAt.day != selectedDay.day)
+                continue;
+              for (final rawItem
+                  in sale['items'] as List<dynamic>? ?? const []) {
                 if (rawItem is! Map) continue;
                 final quantity = _parseInt(rawItem['quantity'], fallback: 1);
                 // A category sale can use `name: Cookies`, while its actual
                 // allocated product is stored as a variant/flavor.
-                final keys = [
-                  rawItem['name'],
-                  rawItem['variant'],
-                  rawItem['flavor'],
-                  rawItem['productName'],
-                  rawItem['itemName'],
-                  rawItem['coffeeSize'],
-                ].map((value) => value?.toString().trim() ?? '')
-                    .where((value) => value.isNotEmpty);
+                final keys =
+                    [
+                          rawItem['name'],
+                          rawItem['variant'],
+                          rawItem['flavor'],
+                          rawItem['productName'],
+                          rawItem['itemName'],
+                          rawItem['coffeeSize'],
+                        ]
+                        .map((value) => value?.toString().trim() ?? '')
+                        .where((value) => value.isNotEmpty)
+                        .toSet();
                 for (final key in keys) {
                   soldByName[key] = (soldByName[key] ?? 0) + quantity;
+                  final fallbackPrice =
+                      rows.where((row) => row.name == key).firstOrNull?.price ??
+                      0;
+                  salesByName[key] =
+                      (salesByName[key] ?? 0) +
+                      quantity *
+                          _parsePrice(
+                            rawItem['price'] ??
+                                rawItem['unitPrice'] ??
+                                fallbackPrice,
+                          );
                 }
               }
             }
-        return Container(
-          width: double.infinity,
-          padding: const EdgeInsets.all(8),
-          decoration: BoxDecoration(
-            color: AppColors.surface,
-            border: Border.all(color: kAccent.withOpacity(0.8)),
-            borderRadius: BorderRadius.circular(16),
-            boxShadow: [
-              BoxShadow(
-                color: kPrimary.withOpacity(0.06),
-                blurRadius: 14,
-                offset: const Offset(0, 5),
+            return Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: AppColors.surface,
+                border: Border.all(color: kAccent.withOpacity(0.8)),
+                borderRadius: BorderRadius.circular(16),
+                boxShadow: [
+                  BoxShadow(
+                    color: kPrimary.withOpacity(0.06),
+                    blurRadius: 14,
+                    offset: const Offset(0, 5),
+                  ),
+                ],
               ),
-            ],
-          ),
-          child: SizedBox(
-            height: MediaQuery.of(context).size.height * 0.48,
-            child: LayoutBuilder(
-              builder: (context, constraints) => SingleChildScrollView(
-                child: SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(minWidth: constraints.maxWidth),
-                    child: DataTable(
-                      headingRowColor: WidgetStatePropertyAll(
-                        kPrimary.withOpacity(0.12),
-                      ),
-                      headingTextStyle: const TextStyle(
-                        color: kBannerTop,
-                        fontWeight: FontWeight.w900,
-                      ),
-                      dataTextStyle: const TextStyle(
-                        color: Color(0xFF4A2634),
-                        fontWeight: FontWeight.w600,
-                      ),
-                      columnSpacing: 28,
-                      horizontalMargin: 18,
-                      columns: [
-                        DataColumn(label: Text('ID')),
-                        DataColumn(label: Text('Item name')),
-                        if (showAllocationDetails) ...[
-                          const DataColumn(label: Text('Allocated'), numeric: true),
-                          const DataColumn(label: Text('Remaining'), numeric: true),
-                        ] else
-                          const DataColumn(label: Text('Sold'), numeric: true),
-                        DataColumn(label: Text('Price'), numeric: true),
-                        DataColumn(label: Text('Type')),
-                        DataColumn(label: Text('Action')),
-                      ],
-                      rows: rows
-                          .map(
-                            (row) => DataRow(
-                              cells: [
-                                DataCell(
-                                  SizedBox(
-                                    width: 95,
-                                    child: Text(
-                                      row.id,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
+              child: SizedBox(
+                height: MediaQuery.of(context).size.height * 0.48,
+                child: LayoutBuilder(
+                  builder: (context, constraints) => SingleChildScrollView(
+                    child: SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: ConstrainedBox(
+                        constraints: BoxConstraints(
+                          minWidth: constraints.maxWidth,
+                        ),
+                        child: DataTable(
+                          headingRowColor: WidgetStatePropertyAll(
+                            kPrimary.withOpacity(0.12),
+                          ),
+                          headingTextStyle: const TextStyle(
+                            color: kBannerTop,
+                            fontWeight: FontWeight.w900,
+                          ),
+                          dataTextStyle: const TextStyle(
+                            color: Color(0xFF4A2634),
+                            fontWeight: FontWeight.w600,
+                          ),
+                          columnSpacing: 28,
+                          horizontalMargin: 18,
+                          columns: [
+                            DataColumn(label: Text('ID')),
+                            DataColumn(label: Text('Item name')),
+                            if (showAllocationDetails) ...[
+                              const DataColumn(
+                                label: Text('Allocated'),
+                                numeric: true,
+                              ),
+                              const DataColumn(
+                                label: Text('Remaining'),
+                                numeric: true,
+                              ),
+                            ] else
+                              const DataColumn(
+                                label: Text('Sold'),
+                                numeric: true,
+                              ),
+                            if (!showAllocationDetails)
+                              const DataColumn(
+                                label: Text('Sales'),
+                                numeric: true,
+                              ),
+                            DataColumn(label: Text('Price'), numeric: true),
+                            DataColumn(label: Text('Type')),
+                            DataColumn(label: Text('Action')),
+                          ],
+                          rows: rows
+                              .map(
+                                (row) => DataRow(
+                                  cells: [
+                                    DataCell(
+                                      SizedBox(
+                                        width: 95,
+                                        child: Text(
+                                          row.id,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ),
                                     ),
-                                  ),
-                                ),
-                                DataCell(
-                                  SizedBox(
-                                    width: 210,
-                                    child: Text(
-                                      row.name,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
+                                    DataCell(
+                                      SizedBox(
+                                        width: 210,
+                                        child: Text(
+                                          row.name,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ),
                                     ),
-                                  ),
-                                ),
-                                if (showAllocationDetails) ...[
-                                  DataCell(Text('${row.allocated}')),
-                                  DataCell(Text('${row.remaining}')),
-                                ] else
-                                  DataCell(
-                                    Text('${soldByName[row.name] ?? 0}'),
-                                  ),
-                                DataCell(
-                                  Text('P${row.price.toStringAsFixed(2)}'),
-                                ),
-                                DataCell(_allocationTypeChip(row.type)),
-                                DataCell(
-                                  Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      IconButton(
-                                        tooltip: 'Edit / add allocation',
-                                        onPressed: () =>
-                                            _showEditBranchAllocationDialog(
-                                              row,
-                                              branchId,
+                                    if (showAllocationDetails) ...[
+                                      DataCell(Text('${row.allocated}')),
+                                      DataCell(Text('${row.remaining}')),
+                                    ] else
+                                      DataCell(
+                                        Text('${soldByName[row.name] ?? 0}'),
+                                      ),
+                                    if (!showAllocationDetails)
+                                      DataCell(
+                                        Text(
+                                          '₱${(salesByName[row.name] ?? 0).toStringAsFixed(2)}',
+                                        ),
+                                      ),
+                                    DataCell(
+                                      Text('P${row.price.toStringAsFixed(2)}'),
+                                    ),
+                                    DataCell(_allocationTypeChip(row.type)),
+                                    DataCell(
+                                      Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          IconButton(
+                                            tooltip: 'Edit / add allocation',
+                                            onPressed: () =>
+                                                _showEditBranchAllocationDialog(
+                                                  row,
+                                                  branchId,
+                                                ),
+                                            icon: const Icon(
+                                              Icons.edit_rounded,
                                             ),
-                                        icon: const Icon(Icons.edit_rounded),
-                                        color: kDeep,
+                                            color: kDeep,
+                                          ),
+                                          IconButton(
+                                            tooltip: 'Void allocation',
+                                            onPressed: () =>
+                                                _removeBranchAllocation(row),
+                                            icon: const Icon(
+                                              Icons.cancel_outlined,
+                                            ),
+                                            color: Colors.deepOrange.shade500,
+                                          ),
+                                        ],
                                       ),
-                                      IconButton(
-                                        tooltip: 'Void allocation',
-                                        onPressed: () =>
-                                            _removeBranchAllocation(row),
-                                        icon: const Icon(Icons.cancel_outlined),
-                                        color: Colors.deepOrange.shade500,
-                                      ),
-                                    ],
-                                  ),
+                                    ),
+                                  ],
                                 ),
-                              ],
-                            ),
-                          )
-                          .toList(),
+                              )
+                              .toList(),
+                        ),
+                      ),
                     ),
                   ),
                 ),
               ),
-            ),
-          ),
-        );
+            );
           },
         );
       },
@@ -5664,7 +6774,10 @@ class _BudgetPageState extends State<BudgetPage>
     QueryDocumentSnapshot<Map<String, dynamic>> doc,
   ) {
     final raw = doc.data();
-    final data = alignInventoryDisplayIds(raw, _inventorySources['${raw['sourceInventoryId']}'] ?? {});
+    final data = alignInventoryDisplayIds(
+      raw,
+      _inventorySources['${raw['sourceInventoryId']}'] ?? {},
+    );
     final type = data['isBundle'] == true
         ? 'Bundle'
         : data['isCoffee'] == true
@@ -5700,7 +6813,8 @@ class _BudgetPageState extends State<BudgetPage>
         .map(Map<String, dynamic>.from)
         .where(
           (item) =>
-              _parseInt(item['stock']) > 0 &&
+              item['isDeleted'] != true &&
+              item['isVoided'] != true &&
               !_isExpiredInventoryItem(
                 item['expirationDate']?.toString() ?? '',
               ),
@@ -5812,14 +6926,14 @@ class _BudgetPageState extends State<BudgetPage>
     } else {
       await _firestore.runTransaction((transaction) async {
         final snapshot = await transaction.get(ref);
-        final items = (snapshot.data()?['items'] as List<dynamic>? ?? [])
-            .map((item) {
-              if (item is! Map) return item;
-              final updated = Map<String, dynamic>.from(item);
-              if (updated['id']?.toString() != row.itemId) return updated;
-              return {...updated, 'name': name, 'price': price};
-            })
-            .toList();
+        final items = (snapshot.data()?['items'] as List<dynamic>? ?? []).map((
+          item,
+        ) {
+          if (item is! Map) return item;
+          final updated = Map<String, dynamic>.from(item);
+          if (updated['id']?.toString() != row.itemId) return updated;
+          return {...updated, 'name': name, 'price': price};
+        }).toList();
         transaction.update(ref, {
           'items': items,
           'updatedAt': FieldValue.serverTimestamp(),
@@ -5834,6 +6948,10 @@ class _BudgetPageState extends State<BudgetPage>
         'Branch',
         isBranch: true,
         onlyType: row.type,
+        onlySourceId:
+            (await ref.get()).data()?['sourceInventoryId']?.toString() ??
+            row.documentId,
+        onlyItemId: row.itemId,
       );
     }
   }
@@ -5851,7 +6969,10 @@ class _BudgetPageState extends State<BudgetPage>
           ),
           ElevatedButton(
             onPressed: () => Navigator.pop(context, true),
-            style: ElevatedButton.styleFrom(backgroundColor: AppColors.primaryDark, foregroundColor: Colors.white),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primaryDark,
+              foregroundColor: Colors.white,
+            ),
             child: const Text('Void'),
           ),
         ],
@@ -6014,8 +7135,8 @@ class _BudgetPageState extends State<BudgetPage>
                     // Keep this in sync with the staff drawer: today's
                     // allocation/opening cash plus completed cash receipts.
                     final now = DateTime.now();
-                    var cashBalance =
-                        (_currentAllocations[branchId] ?? 0).toDouble();
+                    var cashBalance = (_currentAllocations[branchId] ?? 0)
+                        .toDouble();
                     for (final doc in snapshot.data?.docs ?? const []) {
                       final data = doc.data();
                       final timestamp = data['timestamp'];
@@ -6036,7 +7157,7 @@ class _BudgetPageState extends State<BudgetPage>
                       cashBalance += delta is num
                           ? delta.toDouble()
                           : ((data['paidAmount'] as num?)?.toDouble() ?? 0) -
-                              ((data['change'] as num?)?.toDouble() ?? 0);
+                                ((data['change'] as num?)?.toDouble() ?? 0);
                     }
                     return Container(
                       padding: const EdgeInsets.all(12),
@@ -6157,7 +7278,10 @@ class _BudgetPageState extends State<BudgetPage>
   }
 
   Future<void> _showCreateBranchDialog() async {
-    final values = await showDialog<Map<String, dynamic>>(context: context, builder: (_) => const BranchEditorDialog());
+    final values = await showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (_) => const BranchEditorDialog(),
+    );
     if (values == null) return;
     try {
       final branchRef = _firestore.collection('branches').doc();
@@ -6182,10 +7306,18 @@ class _BudgetPageState extends State<BudgetPage>
     String currentName,
   ) async {
     try {
-    final existing = await _firestore.collection('branches').doc(branchId).get();
-    if (!mounted) return;
-    final values = await showDialog<Map<String, dynamic>>(context: context, builder: (_) => BranchEditorDialog(initial: {...?existing.data(), 'name': currentName}));
-    if (values == null) return;
+      final existing = await _firestore
+          .collection('branches')
+          .doc(branchId)
+          .get();
+      if (!mounted) return;
+      final values = await showDialog<Map<String, dynamic>>(
+        context: context,
+        builder: (_) => BranchEditorDialog(
+          initial: {...?existing.data(), 'name': currentName},
+        ),
+      );
+      if (values == null) return;
       await _firestore.collection('branches').doc(branchId).update({
         ...values,
         'updatedAt': FieldValue.serverTimestamp(),
@@ -6752,6 +7884,90 @@ class _BudgetPageState extends State<BudgetPage>
         final data = snapshot.data?.data();
         final name = data?['name']?.toString() ?? 'Branch';
         final code = data?['branchCode']?.toString() ?? _branchCode(branchId);
+        if (MediaQuery.sizeOf(context).width < 600) {
+          return Container(
+            width: double.infinity,
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 18),
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(colors: [kBannerTop, kPrimary]),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    IconButton(
+                      tooltip: 'Back to branches',
+                      onPressed: () => setState(() => _selectedBranchId = null),
+                      icon: const Icon(Icons.arrow_back, color: Colors.white),
+                    ),
+                    const Spacer(),
+                    IconButton(
+                      tooltip: 'Staff',
+                      onPressed: () =>
+                          showAssignedBranchStaff(context, branchId),
+                      icon: const Icon(Icons.groups, color: Colors.white),
+                    ),
+                    IconButton(
+                      tooltip: 'Reports',
+                      onPressed: () => _showBranchReportDetail(
+                        branchId: branchId,
+                        branchName: name,
+                        staffIds: (data?['staffIds'] as List? ?? [])
+                            .map((id) => '$id')
+                            .toList(),
+                        staffNames: (data?['staffNames'] as List? ?? [])
+                            .map((value) => '$value')
+                            .toList(),
+                      ),
+                      icon: const Icon(Icons.assignment, color: Colors.white),
+                    ),
+                  ],
+                ),
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: .16),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: const Icon(
+                        Icons.store,
+                        color: Colors.white,
+                        size: 24,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '$name Branch',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 18,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            'Branch ID: $code',
+                            style: const TextStyle(
+                              color: Colors.white70,
+                              fontSize: 11,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          );
+        }
         return Container(
           decoration: const BoxDecoration(
             gradient: LinearGradient(
@@ -6820,12 +8036,19 @@ class _BudgetPageState extends State<BudgetPage>
                 ),
                 IconButton(
                   tooltip: 'Reports',
-                  icon: const Icon(Icons.assignment_rounded, color: Colors.white),
+                  icon: const Icon(
+                    Icons.assignment_rounded,
+                    color: Colors.white,
+                  ),
                   onPressed: () => _showBranchReportDetail(
                     branchId: branchId,
                     branchName: name,
-                    staffIds: (data?['staffIds'] as List<dynamic>? ?? []).map((id) => id.toString()).toList(),
-                    staffNames: (data?['staffNames'] as List<dynamic>? ?? []).map((name) => name.toString()).toList(),
+                    staffIds: (data?['staffIds'] as List<dynamic>? ?? [])
+                        .map((id) => id.toString())
+                        .toList(),
+                    staffNames: (data?['staffNames'] as List<dynamic>? ?? [])
+                        .map((name) => name.toString())
+                        .toList(),
                   ),
                 ),
               ],
@@ -6914,7 +8137,7 @@ class _BudgetPageState extends State<BudgetPage>
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       const Text(
-                        'Resource Allocation',
+                        'Branch Sales',
                         style: TextStyle(
                           fontSize: 20,
                           fontWeight: FontWeight.w800,

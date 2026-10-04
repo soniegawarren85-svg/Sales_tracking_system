@@ -390,9 +390,17 @@ class _AdminCatalogState extends State<AdminCatalog> {
                 ),
               ),
               const SizedBox(height: 12),
-              Row(
+              Flex(
+                direction: MediaQuery.sizeOf(context).width < 600
+                    ? Axis.vertical
+                    : Axis.horizontal,
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Expanded(
+                  Flexible(
+                    fit: MediaQuery.sizeOf(context).width < 600
+                        ? FlexFit.loose
+                        : FlexFit.tight,
+                    flex: MediaQuery.sizeOf(context).width < 600 ? 0 : 1,
                     child: SingleChildScrollView(
                       scrollDirection: Axis.horizontal,
                       child: widget.type == 'Categories'
@@ -462,7 +470,11 @@ class _AdminCatalogState extends State<AdminCatalog> {
                             ),
                     ),
                   ),
-                  if (widget.actions != null) widget.actions!,
+                  if (widget.actions != null)
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: widget.actions!,
+                    ),
                 ],
               ),
               const SizedBox(key: ValueKey('catalog-results'), height: 16),

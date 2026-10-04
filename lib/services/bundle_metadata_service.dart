@@ -1,3 +1,4 @@
+import 'checklist_status.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 Future<List<DocumentReference<Map<String, dynamic>>>> bundleMetadataTargets(
@@ -27,7 +28,7 @@ Future<List<DocumentReference<Map<String, dynamic>>>> readBundleMetadataTargets(
     final data = (await tx.get(ref)).data();
     if (data == null || data['isDeleted'] == true || data['isBundle'] != true)
       continue;
-    if (ref.parent.id == 'allocation_checklist' && data['status'] != 'pending')
+    if (ref.parent.id == 'allocation_checklist' && !ChecklistStatus.incomingOpen(data))
       continue;
     targets.add(ref);
   }

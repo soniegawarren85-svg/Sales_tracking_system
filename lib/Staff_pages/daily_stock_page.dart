@@ -1,3 +1,4 @@
+import '../widgets/staff_sales_item_grid.dart';
 import '../services/transaction_settings.dart';
 import '../widgets/bundle_beverage_dialog.dart';
 import 'package:sales_tracking/theme/app_colors.dart';
@@ -9979,165 +9980,154 @@ class _DailyStockPageState extends State<DailyStockPage>
         if (visibleVariants.isEmpty)
           _buildEmptyState('No matching items found.')
         else
-          LayoutBuilder(
-            builder: (context, constraints) {
-              return GridView.builder(
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
-                  maxCrossAxisExtent: constraints.maxWidth >= 700 ? 240 : 230,
-                  mainAxisExtent: _showBundleView ? 290 : 220,
-                  crossAxisSpacing: 12,
-                  mainAxisSpacing: 12,
-                ),
-                itemCount: visibleVariants.length,
-                itemBuilder: (context, listIdx) {
-                  final entry = visibleVariants[listIdx];
-                  final item = entry.value;
-                  final key = _cartKey(item);
-                  final price = _parsePrice(item['price']);
-                  final flavor = item['flavor']?.toString() ?? 'Item';
-                  final stock = _stockForItem(item, entry.key);
-                  final qty = _cart[key] ?? 0;
-                  final remainingStock = max(0, stock - qty);
-                  final isOutOfStock = remainingStock == 0;
-                  final imageUrl = item['imageUrl']?.toString() ?? '';
+          StaffSalesItemGrid(
+            bundles: isBundleGroup,
+            itemCount: visibleVariants.length,
+            itemBuilder: (context, listIdx, compact) {
+              final entry = visibleVariants[listIdx];
+              final item = entry.value;
+              final key = _cartKey(item);
+              final price = _parsePrice(item['price']);
+              final flavor = item['flavor']?.toString() ?? 'Item';
+              final stock = _stockForItem(item, entry.key);
+              final qty = _cart[key] ?? 0;
+              final remainingStock = max(0, stock - qty);
+              final isOutOfStock = remainingStock == 0;
+              final imageUrl = item['imageUrl']?.toString() ?? '';
 
-                  return _DelayedFadeSlide(
-                    key: ValueKey(key),
-                    delay: Duration(milliseconds: 80 + listIdx * 45),
-                    child: Material(
-                      color: Colors.transparent,
-                      child: InkWell(
-                        onTap: isOutOfStock
-                            ? null
-                            : () => _selectBundleOrItem(item, stock),
+              return _DelayedFadeSlide(
+                key: ValueKey(key),
+                delay: Duration(milliseconds: 80 + listIdx * 45),
+                child: Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    onTap: isOutOfStock
+                        ? null
+                        : () => _selectBundleOrItem(item, stock),
+                    borderRadius: BorderRadius.circular(20),
+                    child: Container(
+                      padding: EdgeInsets.all(compact ? 6 : 14),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
                         borderRadius: BorderRadius.circular(20),
-                        child: Container(
-                          padding: const EdgeInsets.all(14),
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            borderRadius: BorderRadius.circular(20),
-                            border: Border.all(
-                              color: qty > 0
-                                  ? _AppColors.primary
-                                  : _AppColors.border.withOpacity(0.75),
-                              width: qty > 0 ? 1.8 : 1,
-                            ),
-                            boxShadow: [
-                              BoxShadow(
-                                color: qty > 0
-                                    ? _AppColors.primary.withOpacity(0.14)
-                                    : _AppColors.primary.withOpacity(0.05),
-                                blurRadius: 16,
-                                offset: const Offset(0, 6),
-                              ),
-                            ],
+                        border: Border.all(
+                          color: qty > 0
+                              ? _AppColors.primary
+                              : _AppColors.border.withOpacity(0.75),
+                          width: qty > 0 ? 1.8 : 1,
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: qty > 0
+                                ? _AppColors.primary.withOpacity(0.14)
+                                : _AppColors.primary.withOpacity(0.05),
+                            blurRadius: 16,
+                            offset: const Offset(0, 6),
                           ),
-                          child: Stack(
+                        ],
+                      ),
+                      child: Stack(
+                        children: [
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  _orderImageBox(
-                                    imageUrl,
-                                    fallbackIcon: groupIcon,
-                                    size: 60,
-                                    width: double.infinity,
-                                    height: 88,
-                                  ),
-                                  const SizedBox(height: 10),
-                                  Text(
-                                    flavor,
-                                    maxLines: 2,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(
-                                      fontSize: 14,
-                                      fontWeight: FontWeight.w900,
-                                      color: isOutOfStock
-                                          ? Colors.grey.shade400
-                                          : _AppColors.textMid,
-                                    ),
-                                  ),
-                                  if (item['isBundle'] == true &&
-                                      (item['bundleContentNames']
-                                              ?.toString()
-                                              .isNotEmpty ??
-                                          false))
-                                    Padding(
-                                      padding: const EdgeInsets.only(top: 4),
-                                      child: ConstrainedBox(
-                                        constraints: const BoxConstraints(
-                                          maxHeight: 64,
-                                        ),
-                                        child: SingleChildScrollView(
-                                          child: Text(
-                                            item['bundleContentNames']
-                                                .toString(),
-                                            style: const TextStyle(
-                                              fontSize: 11,
-                                              color: _AppColors.textSoft,
-                                            ),
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                  const SizedBox(height: 6),
-                                  Wrap(
-                                    spacing: 6,
-                                    runSpacing: 6,
-                                    children: [
-                                      _MiniTag(
-                                        label:
-                                            '\u20B1${price.toStringAsFixed(0)}',
-                                        bgColor: const Color(0xFFE8F5E9),
-                                        textColor: const Color(0xFF2E7D32),
-                                      ),
-                                      _MiniTag(
-                                        label: isOutOfStock
-                                            ? 'Out'
-                                            : '$remainingStock left',
-                                        bgColor: isOutOfStock
-                                            ? const Color(0xFFFFEBEE)
-                                            : _AppColors.cardBg,
-                                        textColor: isOutOfStock
-                                            ? const Color(0xFFB71C1C)
-                                            : _AppColors.textSoft,
-                                      ),
-                                    ],
-                                  ),
-                                ],
+                              _orderImageBox(
+                                imageUrl,
+                                fallbackIcon: groupIcon,
+                                size: 60,
+                                width: double.infinity,
+                                height: compact ? 64 : 88,
                               ),
-                              if (qty > 0)
-                                Positioned(
-                                  top: 0,
-                                  right: 0,
-                                  child: Container(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 8,
-                                      vertical: 4,
+                              const SizedBox(height: 10),
+                              Text(
+                                flavor,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: compact ? 12 : 14,
+                                  fontWeight: FontWeight.w900,
+                                  color: isOutOfStock
+                                      ? Colors.grey.shade400
+                                      : _AppColors.textMid,
+                                ),
+                              ),
+                              if (item['isBundle'] == true &&
+                                  (item['bundleContentNames']
+                                          ?.toString()
+                                          .isNotEmpty ??
+                                      false))
+                                Padding(
+                                  padding: const EdgeInsets.only(top: 4),
+                                  child: ConstrainedBox(
+                                    constraints: const BoxConstraints(
+                                      maxHeight: 64,
                                     ),
-                                    decoration: BoxDecoration(
-                                      color: _AppColors.primary,
-                                      borderRadius: BorderRadius.circular(16),
-                                    ),
-                                    child: Text(
-                                      '${qty}x',
-                                      style: const TextStyle(
-                                        color: Colors.white,
-                                        fontSize: 11,
-                                        fontWeight: FontWeight.w900,
+                                    child: SingleChildScrollView(
+                                      child: Text(
+                                        item['bundleContentNames']
+                                            .toString(),
+                                        style: const TextStyle(
+                                          fontSize: 11,
+                                          color: _AppColors.textSoft,
+                                        ),
                                       ),
                                     ),
                                   ),
                                 ),
+                              const SizedBox(height: 6),
+                              Wrap(
+                                spacing: 6,
+                                runSpacing: 6,
+                                children: [
+                                  _MiniTag(
+                                    label:
+                                        '\u20B1${price.toStringAsFixed(0)}',
+                                    bgColor: const Color(0xFFE8F5E9),
+                                    textColor: const Color(0xFF2E7D32),
+                                  ),
+                                  _MiniTag(
+                                    label: isOutOfStock
+                                        ? 'Out'
+                                        : '$remainingStock left',
+                                    bgColor: isOutOfStock
+                                        ? const Color(0xFFFFEBEE)
+                                        : _AppColors.cardBg,
+                                    textColor: isOutOfStock
+                                        ? const Color(0xFFB71C1C)
+                                        : _AppColors.textSoft,
+                                  ),
+                                ],
+                              ),
                             ],
                           ),
-                        ),
+                          if (qty > 0)
+                            Positioned(
+                              top: 0,
+                              right: 0,
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 4,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: _AppColors.primary,
+                                  borderRadius: BorderRadius.circular(16),
+                                ),
+                                child: Text(
+                                  '${qty}x',
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w900,
+                                  ),
+                                ),
+                              ),
+                            ),
+                        ],
                       ),
                     ),
-                  );
-                },
+                  ),
+                ),
               );
             },
           ),

@@ -1,3 +1,4 @@
+import '../services/checklist_status.dart';
 import 'package:sales_tracking/theme/app_colors.dart';
 import '../services/short_id_service.dart';
 import '../services/bundle_stock_service.dart';
@@ -107,6 +108,7 @@ class _ItemEditorState extends State<_ItemEditor> {
   bool _loadingIngredients = false;
   bool _recipeChanged = false;
   String _ingredientTab = 'Categories';
+  String? _ingredientCategory;
   @override
   void initState() {
     super.initState();
@@ -140,6 +142,14 @@ class _ItemEditorState extends State<_ItemEditor> {
           .get();
       for (final doc in coffees.docs) {
         options.addAll(bundleBeverageSizes(doc.id, doc.data()));
+      }
+      final addons = await (widget.firestore ?? FirebaseFirestore.instance).collection('coffee_addons').get();
+      for (final doc in addons.docs) {
+        final data = doc.data();
+        if (!catalogItemActive(data, DateTime.now()) || data['isAvailable'] == false) continue;
+        options.add({...data, 'sourceInventoryId': doc.id, 'variantId': doc.id,
+          'sourceCollection': 'coffee_addons', 'isAddon': true, 'untrackedStock': true,
+          'price': data['priceDelta'] ?? data['price'] ?? 0});
       }
       if (!mounted) return;
       setState(() {
@@ -282,7 +292,7 @@ class _ItemEditorState extends State<_ItemEditor> {
           if (data == null ||
               data['isDeleted'] == true ||
               (target.parent.id == 'allocation_checklist' &&
-                  data['status'] != 'pending'))
+                  !ChecklistStatus.incomingOpen(data)))
             continue;
           allocations[target] = data;
         }
@@ -524,142 +534,53 @@ class _ItemEditorState extends State<_ItemEditor> {
                   if (_loadingIngredients) const LinearProgressIndicator(),
                   Wrap(
                     spacing: 8,
-                    children: [
-                      for (final type in ['Categories', 'Beverages'])
-                        ChoiceChip(
-                          label: Text(type),
-                          selected: _ingredientTab == type,
-                          onSelected: (_) =>
-                              setState(() => _ingredientTab = type),
+                    children: [for (final type in ['Categories', 'Beverages', 'Add-ons'])
+                      ChoiceChip(label: Text(type), selected: _ingredientTab == type,
+                        onSelected: (_) => setState(() => _ingredientTab = type))],
+                  ),
+                  if (_ingredientTab == 'Categories') Wrap(spacing: 8, children: [
+                    ChoiceChip(label: const Text('All categories'), selected: _ingredientCategory == null,
+                      onSelected: (_) => setState(() => _ingredientCategory = null)),
+                    for (final category in _ingredientOptions.where((o) => o['parentName'] != null).map((o) => '${o['parentName']}').toSet())
+                      ChoiceChip(label: Text(category), selected: _ingredientCategory == category,
+                        onSelected: (_) => setState(() => _ingredientCategory = category)),
+                  ]),
+                  ...{
+                    for (final option in [..._ingredientOptions, ..._ingredients]) _ingredientKey(option): option,
+                  }.values.where((item) {
+                    final type = item['sourceCollection'] == 'coffee_products' ? 'Beverages'
+                      : item['sourceCollection'] == 'coffee_addons' ? 'Add-ons' : 'Categories';
+                    return type == _ingredientTab && (type != 'Categories' || _ingredientCategory == null || item['parentName'] == _ingredientCategory);
+                  }).map((option) {
+                    final index = _ingredients.indexWhere((i) => _ingredientKey(i) == _ingredientKey(option));
+                    final selected = index >= 0;
+                    final item = selected ? _ingredients[index] : option;
+                    return Card(
+                      margin: const EdgeInsets.symmetric(vertical: 8),
+                      child: Padding(padding: const EdgeInsets.all(16), child: Column(children: [
+                        CheckboxListTile(
+                          contentPadding: EdgeInsets.zero,
+                          title: Text('${item['name']}'),
+                          subtitle: Text('₱${item['price'] ?? 0}\nExpires: ${item['expirationDate'] ?? 'Not recorded'}'),
+                          value: selected,
+                          onChanged: _saving ? null : (value) => setState(() {
+                            _recipeChanged = true;
+                            if (value == true) { _ingredients.add({...option, 'quantity': 1}); }
+                            else { _ingredients.removeAt(index); }
+                          }),
                         ),
-                    ],
-                  ),
-                  Wrap(
-                    spacing: 8,
-                    children: _ingredientOptions
-                        .where(
-                          (option) =>
-                              (option['sourceCollection'] ==
-                                      'coffee_products') ==
-                                  (_ingredientTab == 'Beverages') &&
-                              !_ingredients.any(
-                                (item) =>
-                                    _ingredientKey(item) ==
-                                    _ingredientKey(option),
-                              ),
-                        )
-                        .map(
-                          (option) => ActionChip(
-                            label: Text('Add ${option['name']}'),
-                            onPressed: _saving
-                                ? null
-                                : () => setState(() {
-                                    _recipeChanged = true;
-                                    _ingredients.add({
-                                      ...option,
-                                      'quantity': 1,
-                                    });
-                                  }),
-                          ),
-                        )
-                        .toList(),
-                  ),
-                  ..._ingredients.asMap().entries.map((row) {
-                    final item = row.value;
-                    if ((item['sourceCollection'] == 'coffee_products') !=
-                        (_ingredientTab == 'Beverages'))
-                      return const SizedBox.shrink();
-                    final exists = _ingredientOptions.any(
-                      (option) =>
-                          _ingredientKey(option) == _ingredientKey(item),
-                    );
-                    return Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 8),
-                      child: Column(
-                        children: [
-                          DropdownButtonFormField<String>(
-                            key: ValueKey(
-                              '${row.key}-${_ingredientKey(item)}-${_ingredientOptions.length}',
-                            ),
-                            initialValue: exists ? _ingredientKey(item) : null,
-                            isExpanded: true,
-                            decoration: InputDecoration(
-                              labelText: 'Item ${row.key + 1}',
-                              helperText: exists
-                                  ? 'Expires: ${item['expirationDate'] ?? 'Not recorded'}'
-                                  : 'Select the replacement for ${item['name']}',
-                              border: const OutlineInputBorder(),
-                            ),
-                            items: _ingredientOptions
-                                .where(
-                                  (option) =>
-                                      (option['sourceCollection'] ==
-                                          'coffee_products') ==
-                                      (_ingredientTab == 'Beverages'),
-                                )
-                                .where(
-                                  (option) =>
-                                      _ingredientKey(option) ==
-                                          _ingredientKey(item) ||
-                                      !_ingredients.any(
-                                        (selected) =>
-                                            _ingredientKey(selected) ==
-                                            _ingredientKey(option),
-                                      ),
-                                )
-                                .map(
-                                  (option) => DropdownMenuItem(
-                                    value: _ingredientKey(option),
-                                    child: Text(
-                                      '${option['name']} (${option['publicId'] ?? option['variantId'] ?? ''})',
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                  ),
-                                )
-                                .toList(),
-                            onChanged: _saving
-                                ? null
-                                : (key) {
-                                    _recipeChanged = true;
-                                    if (key != null)
-                                      setState(
-                                        () => _ingredients[row.key] = {
-                                          ..._ingredientOptions.firstWhere(
-                                            (option) =>
-                                                _ingredientKey(option) == key,
-                                          ),
-                                          'quantity': item['quantity'] ?? 1,
-                                        },
-                                      );
-                                  },
-                          ),
-                          const SizedBox(height: 12),
-                          TextFormField(
-                            key: ValueKey('quantity-${row.key}'),
-                            initialValue: '${item['quantity'] ?? 1}',
-                            enabled: !_saving,
-                            keyboardType: TextInputType.number,
-                            decoration: InputDecoration(
-                              labelText: item['coffeeSize'] == null
-                                  ? 'Quantity per bundle'
-                                  : 'Qty per ${item['coffeeSize']}',
-                              border: const OutlineInputBorder(),
-                              prefixIcon: const Icon(Icons.numbers),
-                            ),
-                            validator: (value) =>
-                                (int.tryParse(value ?? '') ?? 0) <= 0
-                                ? 'Enter a quantity greater than zero'
-                                : null,
-                            onChanged: (value) {
-                              _recipeChanged = true;
-                              final quantity = int.tryParse(value);
-                              if (quantity != null)
-                                _ingredients[row.key]['quantity'] = quantity;
-                            },
-                          ),
-                          const SizedBox(height: 12),
-                        ],
-                      ),
+                        if (selected) TextFormField(
+                          key: ValueKey('quantity-${_ingredientKey(item)}'),
+                          initialValue: '${item['quantity'] ?? 1}',
+                          enabled: !_saving,
+                          keyboardType: TextInputType.number,
+                          decoration: InputDecoration(
+                            labelText: item['coffeeSize'] == null ? 'Quantity per bundle' : 'Qty per ${item['coffeeSize']}',
+                            hintText: 'Enter quantity', border: const OutlineInputBorder()),
+                          validator: (value) => (int.tryParse(value ?? '') ?? 0) <= 0 ? 'Enter a quantity greater than zero' : null,
+                          onChanged: (value) { _recipeChanged = true; item['quantity'] = int.tryParse(value) ?? 0; },
+                        ),
+                      ])),
                     );
                   }),
                 ],
