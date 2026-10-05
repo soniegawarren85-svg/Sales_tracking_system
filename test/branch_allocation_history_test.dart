@@ -5,6 +5,79 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:sales_tracking/widgets/branch_allocation_history.dart';
 
 void main() {
+  testWidgets('legacy quantities show names, total and populated details', (
+    tester,
+  ) async {
+    final db = FakeFirebaseFirestore();
+    await db.doc('staff_requests/profile').set({
+      'adminId': 'ADM-0001',
+      'firstName': 'Ana',
+      'lastName': 'Cruz',
+    });
+    await db.doc('branches/branch').set({'branchCode': 'BR-001'});
+    await db.doc('sales_inventory/cookies').set({
+      'name': 'Cookies',
+      'items': [
+        {'id': 'choc', 'name': 'Chocolate cookie', 'stock': 99},
+        {'id': 'oat', 'name': 'Oat cookie', 'stock': 88},
+      ],
+    });
+    await db.doc('sales_inventory/bundle').set({
+      'name': 'Cookie box',
+      'isBundle': true,
+    });
+    await db.doc('staff_inventory_history/legacy').set({
+      'staffId': 'branch',
+      'staffName': 'Sm dagupan',
+      'type': 'assignment',
+      'assignedBy': 'ADM-0001',
+      'quantities': {'cookies::0': 5, 'cookies::oat': 3, 'bundle::bundle': 2},
+    });
+    await tester.pumpWidget(
+      MaterialApp(
+        home: AllocationHistoryDialog(branchId: 'branch', database: db),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Allocated by: Ana Cruz'), findsOneWidget);
+    expect(find.text('Admin ID: ADM-0001'), findsOneWidget);
+    expect(find.text('Branch: Sm dagupan'), findsOneWidget);
+    expect(find.text('Branch ID: BR-001'), findsOneWidget);
+    expect(find.text('Qty: 10 allocated units'), findsOneWidget);
+    expect(
+      tester.getTopLeft(find.text('Pending')).dx -
+          tester.getTopLeft(find.text('Complete')).dx,
+      lessThan(180),
+    );
+    final dialogBody = find.descendant(
+      of: find.byType(Dialog),
+      matching: find.byWidgetPredicate(
+        (widget) => widget is SizedBox && widget.width == 680,
+      ),
+    );
+    expect(tester.getSize(dialogBody).width, lessThanOrEqualTo(680));
+    await tester.tap(find.text('View'));
+    await tester.pumpAndSettle();
+    expect(find.text('Categories (2)'), findsOneWidget);
+    expect(find.text('Chocolate cookie'), findsOneWidget);
+    expect(find.text('Item ID: choc'), findsOneWidget);
+    expect(find.text('Qty: 5'), findsOneWidget);
+    expect(find.text('Oat cookie'), findsOneWidget);
+    await tester.tap(find.text('Bundle (1)'));
+    await tester.pumpAndSettle();
+    expect(find.text('Cookie box'), findsOneWidget);
+    expect(find.text('Qty: 2'), findsOneWidget);
+    await tester.tap(find.byTooltip('Close').last);
+    await tester.pumpAndSettle();
+    await db.doc('staff_inventory_history/new').set({
+      'staffId': 'branch',
+      'type': 'assignment',
+      'quantities': {'cookies::0': 7},
+    });
+    await tester.pumpAndSettle();
+    expect(find.text('Qty: 7 allocated units'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
   test(
     'delivery totals count bundle units once and preserve partial receipt',
     () {

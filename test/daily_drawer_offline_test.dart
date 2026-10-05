@@ -101,4 +101,41 @@ void main() {
       );
     },
   );
+  test(
+    'inventory replacement refunds do not change the staff cash drawer',
+    () async {
+      final db = FakeFirebaseFirestore();
+      final service = LocalDatabaseSyncService.forDatabase(
+        db,
+        storage: MemoryStorage(),
+      );
+      await db.collection('staff_cash_drawer').doc('branch').set({
+        'balance': 500,
+        'dailyOpeningCash': 500,
+        'drawerDate': CashDrawerService.dayKey(DateTime.now()),
+      });
+
+      await service.recordCompletedSale({
+        'salesId': 'replacement-refund',
+        'userId': 'staff',
+        'branchId': 'branch',
+        'type': 'refund',
+        'status': 'Refund',
+        'refundMethod': 'inventory',
+        'paymentMode': 'Inventory replacement',
+        'cashDrawerDelta': 0,
+        'total': 0,
+        'timestamp': DateTime.now(),
+      });
+
+      final drawer =
+          (await db.collection('staff_cash_drawer').doc('branch').get())
+              .data()!;
+      expect(drawer['balance'], 500);
+      expect(
+        await service.getCachedCollection('pending_cash_drawer_changes'),
+        isEmpty,
+      );
+    },
+  );
 }

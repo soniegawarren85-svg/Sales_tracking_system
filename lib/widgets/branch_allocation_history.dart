@@ -1,7 +1,10 @@
+import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import '../services/allocation_checklist_service.dart';
 import '../services/checklist_status.dart';
+import '../services/allocation_history_metadata.dart';
+import '../services/inventory_display_ids.dart';
 import '../theme/app_colors.dart';
 
 DateTime allocationDate(Map<String, dynamic> data) {
@@ -31,10 +34,12 @@ List<Map<String, dynamic>> allocationItems(Map<String, dynamic> record) {
         (item) => {
           ...item,
           '_type': AllocationChecklistService.type({...record, ...item}),
-          '_category': record['name'],
-          '_quantity': AllocationChecklistService.quantity(
-            item['quantity'] ?? item['startingStock'] ?? item['stock'],
-          ),
+          '_category': item['categoryName'] ?? record['name'],
+          '_quantity': AllocationChecklistService.type(item) == 'Beverages'
+              ? null
+              : AllocationChecklistService.quantity(
+                  item['quantity'] ?? item['startingStock'] ?? item['stock'],
+                ),
         },
       )
       .toList();
@@ -53,8 +58,22 @@ List<Map<String, dynamic>> groupAllocations(
     final complete = records.every(
       (r) => ChecklistStatus.label(r) == ChecklistStatus.received,
     );
+    final allocatorNames = records
+        .map((record) => '${record['allocatedByName'] ?? ''}'.trim())
+        .where(
+          (name) => name.isNotEmpty && name.toLowerCase() != 'not recorded',
+        )
+        .toSet();
+    final allocatorIds = records
+        .map((record) => '${record['allocatedByAdminId'] ?? ''}'.trim())
+        .where((id) => id.isNotEmpty && id.toLowerCase() != 'not recorded')
+        .toSet();
     return {
       ...records.first,
+      if (allocatorNames.isNotEmpty)
+        'allocatedByName': allocatorNames.join(', '),
+      if (allocatorIds.isNotEmpty)
+        'allocatedByAdminId': allocatorIds.join(', '),
       '_records': records,
       '_items': items,
       '_complete': complete,
@@ -71,48 +90,60 @@ List<Map<String, dynamic>> groupAllocations(
 Stream<List<Map<String, dynamic>>> branchAllocationHistory(
   FirebaseFirestore db,
   String branchId,
-) async* {
-  final names = <String, String>{};
-  await for (final deliveries
-      in db
-          .collection('allocation_checklist')
-          .where('staffId', isEqualTo: branchId)
-          .snapshots()) {
-    final records = deliveries.docs
+) {
+  final metadata = AllocationHistoryMetadata(db);
+  List<QueryDocumentSnapshot<Map<String, dynamic>>>? deliveries, legacy;
+  late StreamController<List<Map<String, dynamic>>> controller;
+  final subscriptions =
+      <StreamSubscription<QuerySnapshot<Map<String, dynamic>>>>[];
+  void emit() {
+    if (deliveries == null || legacy == null) return;
+    final records = deliveries!
         .where((doc) => doc.data()['kind'] != 'return')
         .map((doc) => {...doc.data(), '_id': doc.id})
         .toList();
     final ids = records.map((r) => r['_id']).toSet();
-    final legacy = await db
-        .collection('staff_inventory_history')
-        .where('staffId', isEqualTo: branchId)
-        .get();
-    for (final doc in legacy.docs) {
+    for (final doc in legacy!) {
       final data = doc.data();
       if (data['type'] != 'assignment' || ids.contains(data['allocationId'])) {
         continue;
       }
       records.add({...data, '_id': doc.id, 'status': ChecklistStatus.received});
     }
-    for (final record in records) {
-      final id = '${record['allocatedBy'] ?? record['assignedBy'] ?? ''}';
-      if (id.isEmpty || id.contains('/')) continue;
-      if (!names.containsKey(id)) {
-        try {
-          final profile = (await db.collection('staff_requests').doc(id).get())
-              .data();
-          names[id] = [profile?['firstName'], profile?['lastName']]
-              .map((v) => '${v ?? ''}'.trim())
-              .where((v) => v.isNotEmpty)
-              .join(' ');
-        } catch (_) {
-          names[id] = '';
-        }
-      }
-      if (names[id]!.isNotEmpty) record['allocatedByName'] = names[id];
-    }
-    yield records;
+    controller.add(records);
   }
+
+  controller = StreamController<List<Map<String, dynamic>>>(
+    onListen: () {
+      for (final collection in [
+        'allocation_checklist',
+        'staff_inventory_history',
+      ]) {
+        subscriptions.add(
+          db
+              .collection(collection)
+              .where('staffId', isEqualTo: branchId)
+              .snapshots()
+              .listen((snapshot) {
+                if (collection == 'allocation_checklist') {
+                  deliveries = snapshot.docs;
+                } else {
+                  legacy = snapshot.docs;
+                }
+                emit();
+              }, onError: controller.addError),
+        );
+      }
+    },
+    onCancel: () async {
+      for (final subscription in subscriptions) {
+        await subscription.cancel();
+      }
+    },
+  );
+  return controller.stream.asyncMap(
+    (records) => Future.wait(records.map(metadata.resolve)),
+  );
 }
 
 Future<void> showBranchAllocationHistory(
@@ -204,16 +235,14 @@ class _AllocationHistoryDialogState extends State<AllocationHistoryDialog> {
               Row(
                 children: [
                   for (final complete in [true, false]) ...[
-                    Expanded(
-                      child: ChoiceChip(
-                        label: Text(complete ? 'Complete' : 'Pending'),
-                        selected: _complete == complete,
-                        avatar: Icon(
-                          complete ? Icons.task_alt : Icons.schedule,
-                          size: 18,
-                        ),
-                        onSelected: (_) => setState(() => _complete = complete),
+                    ChoiceChip(
+                      label: Text(complete ? 'Complete' : 'Pending'),
+                      selected: _complete == complete,
+                      avatar: Icon(
+                        complete ? Icons.task_alt : Icons.schedule,
+                        size: 18,
                       ),
+                      onSelected: (_) => setState(() => _complete = complete),
                     ),
                     if (complete) const SizedBox(width: 12),
                   ],
@@ -304,9 +333,14 @@ class _AllocationHistoryDialogState extends State<AllocationHistoryDialog> {
             Text(_date(context, allocationDate(data), time: true)),
             const SizedBox(height: 16),
             Text('Allocated by: ${data['allocatedByName'] ?? 'Not recorded'}'),
+            if ('${data['allocatedByAdminId'] ?? ''}'.trim().isNotEmpty)
+              Text('Admin ID: ${data['allocatedByAdminId']}'),
             const SizedBox(height: 6),
             Text(
               'Branch: ${data['branchName'] ?? data['staffName'] ?? widget.branchId}',
+            ),
+            Text(
+              'Branch ID: ${data['branchCode'] ?? data['branchId'] ?? data['staffId'] ?? widget.branchId}',
             ),
             const SizedBox(height: 6),
             Text(_quantity(data)),
@@ -358,7 +392,7 @@ Widget _frame(BuildContext context, String title, Widget body) => Dialog(
   clipBehavior: Clip.antiAlias,
   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
   child: SizedBox(
-    width: 820,
+    width: 680,
     height: 700,
     child: Column(
       children: [
@@ -498,6 +532,8 @@ class _AllocationDetailsState extends State<_AllocationDetails> {
                               if (item['flavor'] != null ||
                                   item['variant'] != null)
                                 Text('${item['flavor'] ?? item['variant']}'),
+                              if (inventoryDisplayId(item) != '--')
+                                Text('Item ID: ${inventoryDisplayId(item)}'),
                               const SizedBox(height: 10),
                               Text(
                                 item['_quantity'] == null

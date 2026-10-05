@@ -359,7 +359,11 @@ class _DashboardPageState extends State<DashboardPage>
   }
 
   void _openRefundFlow() {
-    showStaffRefundDialog(context, _staffDocId ?? FirebaseAuth.instance.currentUser?.uid ?? '');
+    showStaffRefundDialog(
+      context,
+      _staffDocId ?? FirebaseAuth.instance.currentUser?.uid ?? '',
+      inventoryOwnerIds: _staffInventoryIds,
+    );
   }
 
   double _parseMoney(dynamic value) {

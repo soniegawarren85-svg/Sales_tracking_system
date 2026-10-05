@@ -156,8 +156,7 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
     String message;
     var success = false;
     try {
-      final user = FirebaseAuth.instance.currentUser;
-      if (user == null) throw StateError('Please sign in again.');
+      final actor = await resolveSessionActor(widget.db, admin: true);
       final changed = await AllocationChecklistService(widget.db)
           .decideReturns(
             docs.map((doc) => doc.id).toList(),
@@ -221,8 +220,7 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
         );
         if (!confirmed || !mounted) return;
       }
-      final user = FirebaseAuth.instance.currentUser;
-      if (user == null) throw StateError('Please sign in again.');
+      final actor = await resolveSessionActor(widget.db, admin: widget.admin);
       final name = actor.name;
       final service = AllocationChecklistService(widget.db);
       final changed = report
@@ -487,7 +485,10 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
                     all.where((doc) {
                       final d = doc.data();
                       final inTab = widget.admin
-                          ? d['kind'] == 'return'
+                          ? d['kind'] == 'return' &&
+                              (tab == 1
+                                  ? ChecklistStatus.label(d) == ChecklistStatus.completed
+                                  : ChecklistStatus.label(d) != ChecklistStatus.completed)
                           : tab == 2
                           ? d['kind'] == 'return'
                           : ChecklistStatus.incomingOpen(d) ||
@@ -520,8 +521,10 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
                       child: Row(
                         children: [
                           for (final entry in [
-                            if (widget.admin)
-                              'Returned Items'
+                            if (widget.admin) ...[
+                              'Returned Items',
+                              'Completed Return',
+                            ]
                             else ...[
                               'Incoming Items',
                               'Return Items',

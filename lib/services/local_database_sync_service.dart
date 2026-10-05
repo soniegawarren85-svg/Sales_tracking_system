@@ -491,10 +491,8 @@ class LocalDatabaseSyncService {
     final movementDate = _asDate(queue.firstWhere((change) => change['_localDocId'] == id)['createdAt']) ?? DateTime.now();
     final sameDay = CashDrawerService.dayKey(movementDate) == CashDrawerService.dayKey(DateTime.now());
     drawer['_localDocId'] = drawerId;
-    drawer['balance'] =
-        ((drawer['balance'] as num?)?.toDouble() ?? 0) + (sameDay ? cashDelta : 0);
-    drawer['gcashBalance'] =
-        ((drawer['gcashBalance'] as num?)?.toDouble() ?? 0) + (sameDay ? gcashDelta : 0);
+    drawer['balance'] = ((drawer['balance'] as num?)?.toDouble() ?? 0) + (sameDay ? cashDelta : 0);
+    drawer['gcashBalance'] = ((drawer['gcashBalance'] as num?)?.toDouble() ?? 0) + (sameDay ? gcashDelta : 0);
     drawer['staffId'] = drawerId;
     drawer['branchId'] = drawerId;
     drawer['handledByStaffId'] = staffId;
@@ -694,20 +692,23 @@ class LocalDatabaseSyncService {
   /// Re-sends receipts that were saved before the app closed while offline.
   /// Reusing the stable local ID makes this idempotent (no duplicate sale).
   Future<void> _ensureSaleDrawer(Map<String, dynamic> sale) async {
+    final inventoryReplacement = sale['refundMethod'] == 'inventory';
     final cash =
         (sale['paymentMode'] ?? 'Cash').toString().toLowerCase() == 'cash';
-    await recordCashDrawerChange(
-      drawerId: sale['branchId']?.toString() ?? '',
-      cashDelta: cash
-          ? (sale['cashDrawerDelta'] as num? ?? sale['total'] as num? ?? 0)
-                .toDouble()
-          : 0,
-      gcashDelta: cash ? 0 : (sale['total'] as num? ?? 0).toDouble(),
-      staffId: sale['userId']?.toString() ?? '',
-      receiptId: sale['salesId']?.toString() ?? '',
-      gcashTransactionId: sale['gcashTransactionId']?.toString() ?? '',
-      occurredAt: _asDate(sale['timestamp']),
-    );
+    if (!inventoryReplacement) {
+      await recordCashDrawerChange(
+        drawerId: sale['branchId']?.toString() ?? '',
+        cashDelta: cash
+            ? (sale['cashDrawerDelta'] as num? ?? sale['total'] as num? ?? 0)
+                  .toDouble()
+            : 0,
+        gcashDelta: cash ? 0 : (sale['total'] as num? ?? 0).toDouble(),
+        staffId: sale['userId']?.toString() ?? '',
+        receiptId: sale['salesId']?.toString() ?? '',
+        gcashTransactionId: sale['gcashTransactionId']?.toString() ?? '',
+        occurredAt: _asDate(sale['timestamp']),
+      );
+    }
     await _salesLock.run(() async {
       final latest = await getCachedCollection('completed_sales');
       for (final row in latest) {

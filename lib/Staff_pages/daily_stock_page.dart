@@ -5928,7 +5928,11 @@ class _DailyStockPageState extends State<DailyStockPage>
 
   Future<void> _showRefundDialog(List<Map<String, dynamic>> orderItems) async {
     if (!_staffCan('allowRefunds')) return;
-    await showStaffRefundDialog(context, _currentUserId ?? FirebaseAuth.instance.currentUser?.uid ?? '');
+    await showStaffRefundDialog(
+      context,
+      _currentUserId ?? FirebaseAuth.instance.currentUser?.uid ?? '',
+      inventoryOwnerIds: _staffInventoryIds,
+    );
     return;
     // Legacy inventory-picker flow retained below for reference.
     final userId = FirebaseAuth.instance.currentUser?.uid;
@@ -8657,7 +8661,7 @@ class _DailyStockPageState extends State<DailyStockPage>
 
   Widget _buildTabletSalesHeader() {
     return Container(
-      padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
+      padding: const EdgeInsets.fromLTRB(18, 10, 18, 10),
       decoration: BoxDecoration(
         gradient: const LinearGradient(
           colors: [_AppColors.primary, _AppColors.primaryLight],

@@ -2,8 +2,60 @@ import 'package:fake_cloud_firestore/fake_cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sales_tracking/widgets/allocation_checklist.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  testWidgets('admin accepts return and sees success after Proceed', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({
+      'lastRole': 'admin',
+      'lastUserId': 'emergency-admin',
+      'adminId': 'ADM-0001',
+    });
+    final db = FakeFirebaseFirestore();
+    await db.doc('staff_requests/account').set({
+      'adminId': 'ADM-0001',
+      'role': 'admin',
+      'firstName': 'Ana',
+      'lastName': 'Cruz',
+    });
+    await db.doc('allocation_checklist/returned').set({
+      'kind': 'return',
+      'status': 'Awaiting Admin Confirmation',
+      'name': 'Cookie',
+      'quantity': 2,
+      'staffId': 'branch',
+    });
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: AllocationChecklistButton(
+            scopeIds: const [],
+            isAdmin: true,
+            database: db,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Checklist (1)'));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('Accept'));
+    await tester.tap(find.text('Accept'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Proceed'));
+    await tester.pumpAndSettle();
+    expect(find.text('Return accepted'), findsOneWidget);
+    expect(find.textContaining('accepted successfully'), findsOneWidget);
+    final saved = (await db.doc('allocation_checklist/returned').get()).data()!;
+    expect(saved['status'], 'Return Completed');
+    expect(saved['confirmedByName'], 'Ana Cruz');
+    await tester.tap(find.text('Done'));
+    await tester.pumpAndSettle();
+    expect(find.text('Accept'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
   for (final width in [360.0, 768.0]) {
     testWidgets('admin checklist at $width watches returns across branches', (
       tester,

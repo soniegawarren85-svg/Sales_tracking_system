@@ -1656,6 +1656,7 @@ class _BudgetPageState extends State<BudgetPage>
                           await _assignInventoryToStaff(
                             staffId: staffId,
                             staffName: staffName,
+                            isBranch: isBranch,
                             quantities: qtyControllers.map(
                               (key, controller) =>
                                   MapEntry(key, _parseInt(controller.text)),
@@ -1705,11 +1706,17 @@ class _BudgetPageState extends State<BudgetPage>
   Future<void> _assignInventoryToStaff({
     required String staffId,
     required String staffName,
+    required bool isBranch,
     required Map<String, int> quantities,
     Set<String> coffeeProductIds = const {},
     Set<String> addonIds = const {},
   }) async {
     final allocator = await resolveSessionActor(_firestore, admin: true);
+    final branchCode = isBranch
+      ? ((await _firestore.collection('branches').doc(staffId).get()).data()?['branchCode']
+            ?.toString() ??
+          _branchCode(staffId))
+      : '';
     final deliveryId = _firestore.collection('allocation_checklist').doc().id;
     void stage(
       Transaction transaction,
@@ -1730,6 +1737,9 @@ class _BudgetPageState extends State<BudgetPage>
           'schemaVersion': 2,
           'allocatedBy': allocator.id,
           'allocatedByName': allocator.name,
+          'allocatedByAdminId': allocator.publicId,
+          if (isBranch) 'branchName': staffName,
+          if (isBranch) 'branchCode': branchCode,
           'createdAt': FieldValue.serverTimestamp(),
         },
       );
@@ -4909,36 +4919,58 @@ class _BudgetPageState extends State<BudgetPage>
                     const SizedBox(width: 12),
                     Flexible(
                       flex: MediaQuery.sizeOf(context).width < 600 ? 0 : 1,
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            "${_reportDateLabel(selectedDay)} Total Revenue",
-                            style: const TextStyle(
-                              color: Colors.white70,
-                              fontWeight: FontWeight.w700,
+                      fit: MediaQuery.sizeOf(context).width < 600
+                          ? FlexFit.loose
+                          : FlexFit.tight,
+                      child: Padding(
+                        padding: const EdgeInsets.only(right: 20),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              "${_reportDateLabel(selectedDay)} Total Revenue",
+                              style: const TextStyle(
+                                color: Colors.white70,
+                                fontWeight: FontWeight.w700,
+                              ),
                             ),
-                          ),
-                          Text(
-                            '₱${revenue.toStringAsFixed(2)}',
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 25,
-                              fontWeight: FontWeight.w900,
+                            Text(
+                              '₱${revenue.toStringAsFixed(2)}',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 25,
+                                fontWeight: FontWeight.w900,
+                              ),
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
                     ),
                     if (MediaQuery.sizeOf(context).width < 600)
                       const SizedBox(height: 16),
-                    BranchDailySummary(
-                      key: ValueKey(
-                        '$branchId-$selectedDay-$revenue-$cashDrawer',
+                    Container(
+                      width: MediaQuery.sizeOf(context).width < 600
+                          ? null
+                          : 170,
+                      padding: MediaQuery.sizeOf(context).width < 600
+                          ? EdgeInsets.zero
+                          : const EdgeInsets.only(left: 16),
+                      decoration: MediaQuery.sizeOf(context).width < 600
+                          ? null
+                          : const BoxDecoration(
+                              border: Border(
+                                left: BorderSide(color: Colors.white24),
+                              ),
+                            ),
+                      alignment: Alignment.centerRight,
+                      child: BranchDailySummary(
+                        key: ValueKey(
+                          '$branchId-$selectedDay-$revenue-$cashDrawer',
+                        ),
+                        branchId: branchId,
+                        day: selectedDay,
+                        compact: true,
                       ),
-                      branchId: branchId,
-                      day: selectedDay,
-                      compact: true,
                     ),
                   ],
                 ),
@@ -6945,7 +6977,7 @@ class _BudgetPageState extends State<BudgetPage>
     if (action == 'addStock') {
       await _showAssignInventoryDialog(
         branchId,
-        'Branch',
+        _activeBranchName,
         isBranch: true,
         onlyType: row.type,
         onlySourceId:

@@ -469,6 +469,10 @@ class AllocationChecklistService {
           'staffName': pending['staffName'],
           'type': 'assignment',
           'allocationId': id,
+          'deliveryId': pending['deliveryId'],
+          'allocatedBy': pending['allocatedBy'],
+          'allocatedByName': pending['allocatedByName'],
+          'allocatedByAdminId': pending['allocatedByAdminId'],
           'createdAt': FieldValue.serverTimestamp(),
           'items': bundle || beverage
               ? [
