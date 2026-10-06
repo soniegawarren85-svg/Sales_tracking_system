@@ -1,3 +1,4 @@
+import '../services/refund_value.dart';
 import '../services/inventory_display_ids.dart';
 import 'package:sales_tracking/theme/app_colors.dart';
 import '../services/public_item_id.dart';
@@ -142,7 +143,7 @@ class _AdminRecentSalesState extends State<AdminRecentSales> {
                         spacing: 16,
                         runSpacing: 16,
                         children: docs.skip(page * 5).take(5).map((doc) {
-                          final sale = doc.data();
+                          final sale = refundValueRecord(doc.data());
                           final items = saleItems(sale);
                           return SizedBox(
                             width: width,
@@ -271,9 +272,11 @@ class _AdminRecentSalesState extends State<AdminRecentSales> {
 }
 
 class ReceiptDetails extends StatelessWidget {
-  const ReceiptDetails({required this.id, required this.sale});
+  const ReceiptDetails({required this.id, required Map<String, dynamic> sale})
+    : _sale = sale;
   final String id;
-  final Map<String, dynamic> sale;
+  final Map<String, dynamic> _sale;
+  Map<String, dynamic> get sale => refundValueRecord(_sale);
   Widget _line(String label, dynamic value) => Padding(
     padding: const EdgeInsets.symmetric(vertical: 5),
     child: Row(
@@ -396,7 +399,12 @@ class ReceiptDetails extends StatelessWidget {
                 child: _line('Total', _money(sale['total'])),
               ),
             ),
-            _line('Payment method', sale['paymentMode']),
+            _line(
+              saleStatus(sale) == 'Refund' ? 'Refund method' : 'Payment method',
+              sale['refundMethod'] == 'inventory'
+                  ? 'Inventory replacement'
+                  : sale['paymentMode'],
+            ),
             if ('${sale['paymentMode']}'.trim().toLowerCase() == 'gcash')
               _line('GCash transaction ID', sale['gcashTransactionId']),
             _line('Amount paid', _money(sale['paidAmount'])),

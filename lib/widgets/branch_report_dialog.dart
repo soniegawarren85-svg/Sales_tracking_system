@@ -1,4 +1,5 @@
 import 'horizontal_controls.dart';
+import 'report_item_history.dart';
 import 'item_sales_dialog.dart';
 import '../services/report_pdf_theme.dart';
 import '../services/number_format.dart';
@@ -1066,14 +1067,17 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
                     'Large',
                   ] else
                     'Unit price',
-                  'Starting allocated',
-                  'Remaining allocated',
+                  if (_tableType != 'Beverages') ...[
+                    'Starting allocated',
+                    'Remaining allocated',
+                  ],
                   'Sales',
                   'Sold',
                   'Refund',
                   'Reduce',
-                  'Expiration date',
+                  if (_tableType != 'Beverages') 'Expiration date',
                   'Status',
+                  'Action',
                 ].map((label) => DataColumn(label: Text(label))).toList(),
                 rows: items
                     .where(
@@ -1110,8 +1114,10 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
                           else
                             DataCell(Text(money(reportValue(row['price'])))),
                           ...[
-                            'allocated',
-                            'remaining',
+                            if (_tableType != 'Beverages') ...[
+                              'allocated',
+                              'remaining',
+                            ],
                             'sales',
                             'sold',
                             'refund',
@@ -1127,14 +1133,25 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
                               ),
                             ),
                           ),
+                          if (_tableType != 'Beverages')
+                            DataCell(
+                              Text(
+                                '${row['expirationDate'] ?? '?'}'
+                                    .split('T')
+                                    .first,
+                              ),
+                            ),
+                          DataCell(Text('${row['status']}')),
                           DataCell(
-                            Text(
-                              '${row['expirationDate'] ?? '?'}'
-                                  .split('T')
-                                  .first,
+                            TextButton(
+                              onPressed: () => showDialog<void>(
+                                context: context,
+                                builder: (_) =>
+                                    ReportItemHistory(item: row, period: dates),
+                              ),
+                              child: const Text('View history'),
                             ),
                           ),
-                          DataCell(Text('${row['status']}')),
                         ],
                       ),
                     )

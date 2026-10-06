@@ -5,6 +5,43 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:sales_tracking/widgets/branch_allocation_history.dart';
 
 void main() {
+  testWidgets('history defaults to today and uses a single-day picker', (
+    tester,
+  ) async {
+    final db = FakeFirebaseFirestore();
+    await db.doc('allocation_checklist/old').set({
+      'staffId': 'branch',
+      'status': 'Received',
+      'createdAt': Timestamp.fromDate(
+        DateTime.now().subtract(const Duration(days: 1)),
+      ),
+      'items': [
+        {'name': 'Cookie', 'stock': 5},
+      ],
+    });
+    await tester.pumpWidget(
+      MaterialApp(
+        home: AllocationHistoryDialog(branchId: 'branch', database: db),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('No matching allocations.'), findsOneWidget);
+    expect(find.byType(InputChip), findsNothing);
+    await tester.tap(find.byTooltip('Filter by date'));
+    await tester.pumpAndSettle();
+    expect(find.byType(DatePickerDialog), findsOneWidget);
+    await tester.tap(find.byTooltip('Switch to input'));
+    await tester.pumpAndSettle();
+    final yesterday = DateTime.now().subtract(const Duration(days: 1));
+    await tester.enterText(
+      find.byType(TextField).last,
+      '${yesterday.month}/${yesterday.day}/${yesterday.year}',
+    );
+    await tester.tap(find.text('OK'));
+    await tester.pumpAndSettle();
+    expect(find.text('Qty: 5 allocated units'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
   testWidgets('legacy quantities show names, total and populated details', (
     tester,
   ) async {
@@ -30,6 +67,7 @@ void main() {
       'staffId': 'branch',
       'staffName': 'Sm dagupan',
       'type': 'assignment',
+      'createdAt': Timestamp.now(),
       'assignedBy': 'ADM-0001',
       'quantities': {'cookies::0': 5, 'cookies::oat': 3, 'bundle::bundle': 2},
     });
@@ -44,6 +82,14 @@ void main() {
     expect(find.text('Branch: Sm dagupan'), findsOneWidget);
     expect(find.text('Branch ID: BR-001'), findsOneWidget);
     expect(find.text('Qty: 10 allocated units'), findsOneWidget);
+    final receivedBadge = find.ancestor(
+      of: find.text('Received'),
+      matching: find.byType(Chip),
+    );
+    expect(
+      tester.getTopRight(receivedBadge).dx,
+      closeTo(tester.getTopRight(find.byType(Card).first).dx - 18, 4),
+    );
     expect(
       tester.getTopLeft(find.text('Pending')).dx -
           tester.getTopLeft(find.text('Complete')).dx,
@@ -56,7 +102,7 @@ void main() {
       ),
     );
     expect(tester.getSize(dialogBody).width, lessThanOrEqualTo(680));
-    await tester.tap(find.text('View'));
+    await tester.tap(find.text('View Items'));
     await tester.pumpAndSettle();
     expect(find.text('Categories (2)'), findsOneWidget);
     expect(find.text('Chocolate cookie'), findsOneWidget);
@@ -72,6 +118,7 @@ void main() {
     await db.doc('staff_inventory_history/new').set({
       'staffId': 'branch',
       'type': 'assignment',
+      'createdAt': Timestamp.now(),
       'quantities': {'cookies::0': 7},
     });
     await tester.pumpAndSettle();
@@ -94,6 +141,7 @@ void main() {
           '_id': 'b',
           'deliveryId': 'delivery',
           'status': 'pending',
+          'createdAt': Timestamp.now(),
           'isBundle': true,
           'bundleCount': 2,
           'items': [
@@ -116,6 +164,43 @@ void main() {
     },
   );
 
+  testWidgets('reported allocation shows issue badge and report details', (
+    tester,
+  ) async {
+    final db = FakeFirebaseFirestore();
+    await db.doc('allocation_checklist/reported').set({
+      'staffId': 'branch',
+      'status': 'Issue Reported',
+      'name': 'Cookies',
+      'issueReason': 'Five units arrived damaged',
+      'reportedBy': 'staff-1',
+      'reportedByName': 'Mia Staff',
+      'reportedAt': Timestamp.now(),
+      'createdAt': Timestamp.now(),
+    });
+    await tester.pumpWidget(
+      MaterialApp(
+        home: AllocationHistoryDialog(branchId: 'branch', database: db),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Pending').first);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Pending'), findsWidgets);
+    expect(find.text('Issue Reported'), findsOneWidget);
+    expect(find.text('View Items'), findsOneWidget);
+    expect(
+      tester.getCenter(find.text('View Items')).dx,
+      greaterThan(tester.getCenter(find.text('View issue report')).dx),
+    );
+    await tester.tap(find.text('View issue report'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Five units arrived damaged'), findsOneWidget);
+    expect(find.text('Reported by: Mia Staff'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets(
     'history filters records and opens searchable allocated details',
     (tester) async {
@@ -129,7 +214,7 @@ void main() {
         'staffName': 'Main',
         'allocatedBy': 'admin',
         'status': 'Received',
-        'createdAt': Timestamp.fromDate(DateTime(2026, 9, 25)),
+        'createdAt': Timestamp.now(),
         'items': [
           {'name': 'Cookie', 'stock': 5, 'price': 89},
         ],
@@ -137,11 +222,13 @@ void main() {
       await db.doc('staff_inventory_history/duplicate').set({
         'staffId': 'branch',
         'type': 'assignment',
+        'createdAt': Timestamp.now(),
         'allocationId': 'received',
       });
       await db.doc('allocation_checklist/pending').set({
         'staffId': 'branch',
         'staffName': 'Other',
+        'createdAt': Timestamp.now(),
         'status': 'pending',
         'items': [
           {'name': 'Cake', 'stock': 2},
@@ -155,8 +242,8 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('Allocated by: Ana Cruz'), findsOneWidget);
       expect(find.text('Qty: 5 allocated units'), findsOneWidget);
-      expect(find.text('View'), findsOneWidget);
-      await tester.tap(find.text('View'));
+      expect(find.text('View Items'), findsOneWidget);
+      await tester.tap(find.text('View Items'));
       await tester.pumpAndSettle();
       expect(find.text('Cookie'), findsOneWidget);
       await tester.enterText(find.byType(TextField).last, 'missing');

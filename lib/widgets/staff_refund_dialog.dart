@@ -1,8 +1,53 @@
+import '../services/refund_value.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../services/bundle_stock_service.dart';
 import '../services/local_database_sync_service.dart';
 import '../services/report_current_allocations.dart';
+import '../theme/app_colors.dart';
+
+String staffRefundItemLabel(Map item) {
+  final parts = <String>[];
+  for (final raw in [item['name'], item['variant'], item['coffeeSize']]) {
+    for (final part in '${raw ?? ''}'.split('/')) {
+      final value = part.trim();
+      if (value.isNotEmpty &&
+          !parts.any((p) => p.toLowerCase() == value.toLowerCase()))
+        parts.add(value);
+    }
+  }
+  return parts.join(' / ');
+}
+
+Map<String, dynamic> refundReceiptDisplayData(
+  Map<String, dynamic> receipt,
+  Iterable<Map<String, dynamic>> sales,
+) {
+  receipt = refundValueRecord(receipt);
+  if ('${receipt['type']}'.toLowerCase() != 'refund' &&
+      '${receipt['status']}'.toLowerCase() != 'refund')
+    return receipt;
+  final originalId = receipt['originalSalesId'];
+  if (originalId == null) return receipt;
+  for (final sale in sales) {
+    if (sale['salesId'] != originalId) continue;
+    return {
+      ...receipt,
+      'originalPaymentMode':
+          receipt['originalPaymentMode'] ??
+          sale['paymentMode'] ??
+          sale['paymentMethod'],
+      'originalPaidAmount': receipt['originalPaidAmount'] ?? sale['paidAmount'],
+      'originalChange': receipt['originalChange'] ?? sale['change'],
+      'originalDiscount': receipt['originalDiscount'] ?? sale['discount'],
+      'originalDiscountType':
+          receipt['originalDiscountType'] ?? sale['discountType'],
+      'gcashTransactionId':
+          receipt['gcashTransactionId'] ?? sale['gcashTransactionId'],
+    };
+  }
+  return receipt;
+}
 
 String staffRefundItemKey(Map item) {
   final source = item['sourceInventoryId']?.toString() ?? '';
@@ -186,8 +231,28 @@ Future<void> showStaffRefundDialog(
 }) => showDialog<void>(
   context: context,
   barrierDismissible: false,
-  builder: (_) =>
-      _StaffRefundDialog(uid: uid, inventoryOwnerIds: inventoryOwnerIds),
+  builder: (context) => Theme(
+    data: Theme.of(context).copyWith(
+      inputDecorationTheme: InputDecorationTheme(
+        filled: true,
+        fillColor: Colors.white,
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 16,
+          vertical: 16,
+        ),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: AppColors.border),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: AppColors.primary, width: 1.5),
+        ),
+      ),
+    ),
+    child: _StaffRefundDialog(uid: uid, inventoryOwnerIds: inventoryOwnerIds),
+  ),
 );
 
 class _StaffRefundDialog extends StatefulWidget {
@@ -209,6 +274,9 @@ class _StaffRefundDialogState extends State<_StaffRefundDialog> {
   List<Map<String, dynamic>> _records = [];
   String _source = 'Categories', _error = '';
   String? _selected, _refundMethod;
+  String? _selectedReason;
+  String get _refundReason =>
+      _selectedReason == 'Others' ? _reason.text.trim() : _selectedReason ?? '';
   Set<String> _activeInventoryKeys = {};
   Map<String, Map<String, dynamic>> _activeInventoryChoices = {};
   bool _loading = true, _saving = false;
@@ -220,11 +288,7 @@ class _StaffRefundDialogState extends State<_StaffRefundDialog> {
       ? 'Beverages'
       : 'Categories';
   String _key(Map item) => staffRefundItemKey(item);
-  String _label(Map item) => [
-    item['name'],
-    item['variant'],
-    item['coffeeSize'],
-  ].where((v) => v != null && '$v'.isNotEmpty).join(' / ');
+  String _label(Map item) => staffRefundItemLabel(item);
   bool _refund(Map row) =>
       '${row['type']}'.toLowerCase() == 'refund' ||
       '${row['status']}'.toLowerCase() == 'refund';
@@ -352,7 +416,7 @@ class _StaffRefundDialogState extends State<_StaffRefundDialog> {
       });
       return false;
     }
-    if (_reason.text.trim().isEmpty) {
+    if (_refundReason.isEmpty) {
       setState(() => _error = 'Enter a refund reason.');
       return false;
     }
@@ -610,7 +674,7 @@ class _StaffRefundDialogState extends State<_StaffRefundDialog> {
         final id =
             'R-${DateTime.now().microsecondsSinceEpoch}-${line['index']}';
         final cashRefund = _refundMethod == 'cash';
-        final refundValue = cashRefund ? amount : 0.0;
+        final refundValue = amount;
         await _service.recordCompletedSale({
           'salesId': id,
           'userId': widget.uid,
@@ -620,7 +684,7 @@ class _StaffRefundDialogState extends State<_StaffRefundDialog> {
           'type': 'refund',
           'status': 'Refund',
           'refundMethod': _refundMethod,
-          'reason': _reason.text.trim(),
+          'reason': _refundReason,
           'subtotal': -refundValue,
           'total': -refundValue,
           if (!cashRefund) 'replacementValue': amount,
@@ -629,6 +693,13 @@ class _StaffRefundDialogState extends State<_StaffRefundDialog> {
           'paidAmount': 0.0,
           'change': 0.0,
           'paymentMode': cashRefund ? 'Cash' : 'Inventory replacement',
+          'originalPaymentMode':
+              sale['paymentMode'] ?? sale['paymentMethod'] ?? 'Not recorded',
+          'originalPaidAmount': sale['paidAmount'],
+          'originalChange': sale['change'],
+          'originalDiscount': sale['discount'],
+          'originalDiscountType': sale['discountType'],
+          'gcashTransactionId': sale['gcashTransactionId'],
           'cashDrawerDelta': cashRefund ? -amount : 0.0,
           'timestamp': DateTime.now(),
           'items': [
@@ -715,8 +786,24 @@ class _StaffRefundDialogState extends State<_StaffRefundDialog> {
               : _selected != null && _key(line['item'] as Map) == _selected,
         )
         .toList();
+    final available = lines.fold<int>(
+      0,
+      (sum, line) => sum + (line['available'] as int),
+    );
+    final quantityError = !byReceipt && _selected != null
+        ? refundQuantityError(_qty.text, available)
+        : null;
     final showItemSelector = !byReceipt;
     return AlertDialog(
+      backgroundColor: const Color(0xFFFFF7FA),
+      surfaceTintColor: Colors.transparent,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(24),
+        side: const BorderSide(color: AppColors.border),
+      ),
+      titlePadding: const EdgeInsets.fromLTRB(24, 20, 16, 16),
+      contentPadding: const EdgeInsets.fromLTRB(24, 0, 24, 16),
+      actionsPadding: const EdgeInsets.fromLTRB(24, 8, 24, 20),
       title: Row(
         children: [
           Expanded(
@@ -738,6 +825,7 @@ class _StaffRefundDialogState extends State<_StaffRefundDialog> {
                       'Refund',
                       style: TextStyle(
                         color: Colors.white,
+                        fontSize: 20,
                         fontWeight: FontWeight.w800,
                       ),
                     ),
@@ -761,6 +849,20 @@ class _StaffRefundDialogState extends State<_StaffRefundDialog> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              const Text(
+                'Refund details',
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.primaryDeep,
+                ),
+              ),
+              const SizedBox(height: 4),
+              const Text(
+                'Select the purchase, refund method, and reason.',
+                style: TextStyle(fontSize: 12, color: AppColors.textMuted),
+              ),
+              const SizedBox(height: 16),
               TextField(
                 controller: _receipt,
                 enabled: !_saving,
@@ -845,11 +947,19 @@ class _StaffRefundDialogState extends State<_StaffRefundDialog> {
                           }),
                   ),
                 ],
+                const SizedBox(height: 12),
                 TextField(
                   controller: _qty,
                   enabled: !_saving,
                   keyboardType: TextInputType.number,
-                  decoration: const InputDecoration(labelText: 'Quantity'),
+                  onChanged: (_) => setState(() {}),
+                  decoration: InputDecoration(
+                    labelText: 'Quantity',
+                    errorText: quantityError,
+                    helperText: _selected == null
+                        ? null
+                        : '$available sold item(s) available for refund',
+                  ),
                 ),
               ],
               if (_error.isNotEmpty) ...[
@@ -902,17 +1012,50 @@ class _StaffRefundDialogState extends State<_StaffRefundDialog> {
                       }),
               ),
               const SizedBox(height: 12),
-              TextField(
-                controller: _reason,
-                enabled: !_saving,
-                minLines: 2,
-                maxLines: 4,
+              DropdownButtonFormField<String>(
+                value: _selectedReason,
+                isExpanded: true,
                 decoration: const InputDecoration(
                   labelText: 'Reason',
-                  alignLabelWithHint: true,
-                  prefixIcon: Icon(Icons.notes_rounded),
+                  prefixIcon: Icon(Icons.list_alt_rounded),
                 ),
+                items:
+                    const [
+                          'Damaged item',
+                          'Missing item',
+                          'Incorrect item',
+                          'Product quality issue',
+                          'Duplicate charge',
+                          'Others',
+                        ]
+                        .map(
+                          (reason) => DropdownMenuItem(
+                            value: reason,
+                            child: Text(reason),
+                          ),
+                        )
+                        .toList(),
+                onChanged: _saving
+                    ? null
+                    : (value) => setState(() {
+                        _selectedReason = value;
+                        _error = '';
+                      }),
               ),
+              if (_selectedReason == 'Others') ...[
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _reason,
+                  enabled: !_saving,
+                  minLines: 2,
+                  maxLines: 4,
+                  decoration: const InputDecoration(
+                    labelText: 'Other reason',
+                    alignLabelWithHint: true,
+                    prefixIcon: Icon(Icons.notes_rounded),
+                  ),
+                ),
+              ],
             ],
           ),
         ),
@@ -926,6 +1069,7 @@ class _StaffRefundDialogState extends State<_StaffRefundDialog> {
           onPressed:
               _saving ||
                   (!byReceipt && _selected == null) ||
+                  quantityError != null ||
                   _refundMethod == null
               ? null
               : () => _confirmRefund(lines, byReceipt),

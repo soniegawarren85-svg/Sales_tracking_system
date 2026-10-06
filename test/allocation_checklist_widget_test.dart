@@ -1,3 +1,4 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:fake_cloud_firestore/fake_cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -5,6 +6,95 @@ import 'package:sales_tracking/widgets/allocation_checklist.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  testWidgets('staff pending view includes older unaccepted allocations only', (
+    tester,
+  ) async {
+    final db = FakeFirebaseFirestore();
+    for (final status in ['pending', 'Received']) {
+      await db.collection('allocation_checklist').add({
+        'staffId': 'branch',
+        'status': status,
+        'name': '$status delivery',
+        'createdAt': Timestamp.fromDate(
+          DateTime.now().subtract(const Duration(days: 2)),
+        ),
+      });
+    }
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: AllocationChecklistButton(
+            scopeIds: const ['branch'],
+            database: db,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Checklist'));
+    await tester.pumpAndSettle();
+    expect(find.text('No matching transactions.'), findsOneWidget);
+    await tester.tap(find.text('View pending'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('pending delivery'), findsOneWidget);
+    expect(find.textContaining('Received delivery'), findsNothing);
+    expect(find.text('Confirm Received'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+  testWidgets('older returns stay in pending view and accept all spans dates', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({
+      'lastRole': 'admin',
+      'lastUserId': 'admin',
+    });
+    final db = FakeFirebaseFirestore();
+    await db.doc('staff_requests/admin').set({
+      'role': 'admin',
+      'firstName': 'Ana',
+    });
+    for (var day = 1; day <= 2; day++) {
+      await db.doc('allocation_checklist/old$day').set({
+        'kind': 'return',
+        'status': 'Awaiting Admin Confirmation',
+        'name': 'Cookie',
+        'quantity': 1,
+        'staffId': 'branch',
+        'createdAt': Timestamp.fromDate(
+          DateTime.now().subtract(Duration(days: day)),
+        ),
+      });
+    }
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: AllocationChecklistButton(
+            scopeIds: const [],
+            isAdmin: true,
+            database: db,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Checklist (2)'));
+    await tester.pumpAndSettle();
+    expect(find.text('Accept'), findsNothing);
+    await tester.tap(find.text('View pending'));
+    await tester.pumpAndSettle();
+    expect(find.text('Accept all (2)'), findsOneWidget);
+    await tester.tap(find.text('Accept all (2)'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Proceed'));
+    await tester.pumpAndSettle();
+    for (var day = 1; day <= 2; day++) {
+      expect(
+        (await db.doc('allocation_checklist/old$day').get()).data()!['status'],
+        'Return Completed',
+      );
+    }
+    expect(tester.takeException(), isNull);
+  });
   testWidgets('admin accepts return and sees success after Proceed', (
     tester,
   ) async {
@@ -22,6 +112,7 @@ void main() {
     });
     await db.doc('allocation_checklist/returned').set({
       'kind': 'return',
+      'createdAt': Timestamp.fromDate(DateUtils.dateOnly(DateTime.now())),
       'status': 'Awaiting Admin Confirmation',
       'name': 'Cookie',
       'quantity': 2,
@@ -63,6 +154,7 @@ void main() {
       final db = FakeFirebaseFirestore();
       await db.doc('allocation_checklist/return').set({
         'kind': 'return',
+        'createdAt': Timestamp.fromDate(DateUtils.dateOnly(DateTime.now())),
         'status': 'Awaiting Admin Confirmation',
         'name': 'Damaged cookie',
         'quantity': 2,
@@ -96,7 +188,7 @@ void main() {
       expect(find.text('Review returned items'), findsOneWidget);
       expect(find.text('Waiting Admin Confirmation'), findsNothing);
       expect(find.text('Accept'), findsOneWidget);
-      expect(find.text('Decline'), findsOneWidget);
+      expect(find.text('Report Issue'), findsOneWidget);
       expect(
         tester.getCenter(find.text('View')).dy,
         closeTo(tester.getCenter(find.text('branch')).dy, 1),
@@ -106,12 +198,12 @@ void main() {
         greaterThan(tester.getCenter(find.text('branch')).dx),
       );
       await tester.ensureVisible(
-        find.widgetWithText(OutlinedButton, 'Decline'),
+        find.widgetWithText(OutlinedButton, 'Report Issue'),
       );
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Decline'));
+      await tester.tap(find.text('Report Issue'));
       await tester.pump(const Duration(milliseconds: 400));
-      await tester.tap(find.text('Decline return'));
+      await tester.tap(find.text('Submit report'));
       await tester.pump(const Duration(milliseconds: 400));
       expect(find.text('A reason is required'), findsOneWidget);
       await tester.tap(find.text('Cancel'));
@@ -129,7 +221,7 @@ void main() {
         findsNothing,
       );
       expect(
-        find.descendant(of: details, matching: find.text('Decline')),
+        find.descendant(of: details, matching: find.text('Report Issue')),
         findsNothing,
       );
       await db.doc('allocation_checklist/return').update({
@@ -141,7 +233,7 @@ void main() {
       expect(tester.takeException(), isNull);
       await tester.tap(find.byTooltip('Close returned items'));
       await tester.pumpAndSettle();
-      expect(find.text('Done · Return accepted'), findsOneWidget);
+      expect(find.text('Accept'), findsNothing);
       await tester.tap(find.byTooltip('Close checklist'));
       await tester.pumpAndSettle();
       expect(find.text('Checklist (0)'), findsOneWidget);
@@ -170,7 +262,10 @@ void main() {
         {'staffId': 'other', 'status': 'pending', 'name': 'Other branch'},
         {'staffId': 'branch', 'status': 'accepted', 'name': 'Old delivery'},
       ]) {
-        await db.collection('allocation_checklist').add(row);
+        await db.collection('allocation_checklist').add({
+          ...row,
+          'createdAt': Timestamp.fromDate(DateUtils.dateOnly(DateTime.now())),
+        });
       }
       await tester.binding.setSurfaceSize(const Size(420, 780));
       addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -202,6 +297,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.textContaining('Latte'), findsNothing);
       await tester.ensureVisible(find.text('Confirm Received'));
+      await tester.pumpAndSettle();
       await tester.tap(find.text('Confirm Received'));
       await tester.pumpAndSettle();
       expect(find.text('Receive allocated items?'), findsOneWidget);
@@ -209,6 +305,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('Confirm Received'), findsOneWidget);
       await tester.ensureVisible(find.text('Report Issue'));
+      await tester.pumpAndSettle();
       await tester.tap(find.text('Report Issue'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Submit report'));

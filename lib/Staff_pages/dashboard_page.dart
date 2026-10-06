@@ -1084,7 +1084,7 @@ class _DashboardPageState extends State<DashboardPage>
     final contentMaxWidth = isTablet ? 980.0 : double.infinity;
     final inventoryMaxWidth = isTablet ? 980.0 : double.infinity;
     final horizontalPadding = isTablet ? 24.0 : 16.0;
-    final headerHeight = isTablet ? 260.0 : 300.0;
+    final headerHeight = isTablet ? 260.0 : 364.0;
 
     return TopEdgeRefresh(
       displacement: 24,
@@ -1890,7 +1890,7 @@ class _DashboardPageState extends State<DashboardPage>
             return Column(
               children: [
                 ...visibleReceipts.map(
-                  (data) => _ReceiptCard(data: data, compact: false),
+                  (data) => _ReceiptCard(data: refundReceiptDisplayData(data, [...localSales, ...firestoreSales]), compact: false),
                 ),
                 if (pageCount > 1)
                   _PagerControls(
@@ -2191,17 +2191,35 @@ class _ReceiptCard extends StatelessWidget {
     final timestamp = data['timestamp'] is Timestamp
         ? (data['timestamp'] as Timestamp).toDate()
         : DateTime.now();
-    final paymentMode = data['paymentMode']?.toString() ?? 'Cash';
+    final paymentMode =
+        (data['originalPaymentMode'] ?? data['paymentMode'])?.toString() ??
+        'Cash';
     final gcashId = data['gcashTransactionId']?.toString().trim() ?? '';
     final type = data['type']?.toString().toLowerCase() ?? '';
     final status = data['status']?.toString().toLowerCase() ?? '';
     final isRefund = type == 'refund' || status == 'refund';
     final total = _money(data['total']);
-    final paid = _money(data['paidAmount']);
-    final change = _money(data['change']);
+    final paid = _money(
+      isRefund
+          ? data['originalPaidAmount'] ?? data['paidAmount']
+          : data['paidAmount'],
+    );
+    final change = _money(
+      isRefund ? data['originalChange'] ?? data['change'] : data['change'],
+    );
     final subtotal = _money(data['subtotal']);
-    final discount = _money(data['discount']);
-    final discountType = data['discountType']?.toString().trim() ?? '';
+    final discount = _money(
+      isRefund
+          ? data['originalDiscount'] ?? data['discount']
+          : data['discount'],
+    );
+    final discountType =
+        (isRefund
+                ? data['originalDiscountType'] ?? data['discountType']
+                : data['discountType'])
+            ?.toString()
+            .trim() ??
+        '';
     final hasDiscount = discount > 0.01;
     final items = (data['items'] as List<dynamic>? ?? [])
         .whereType<Map>()
@@ -2254,30 +2272,31 @@ class _ReceiptCard extends StatelessWidget {
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
-                  IconButton(
-                    tooltip: 'Copy receipt number',
-                    visualDensity: VisualDensity.compact,
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(
-                      minWidth: 32,
-                      minHeight: 32,
+                  if (!isRefund)
+                    IconButton(
+                      tooltip: 'Copy receipt number',
+                      visualDensity: VisualDensity.compact,
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(
+                        minWidth: 32,
+                        minHeight: 32,
+                      ),
+                      onPressed: () async {
+                        await Clipboard.setData(ClipboardData(text: salesId));
+                        if (!context.mounted) return;
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('Receipt number copied'),
+                            duration: Duration(seconds: 1),
+                          ),
+                        );
+                      },
+                      icon: const Icon(
+                        Icons.copy_rounded,
+                        color: Colors.white,
+                        size: 17,
+                      ),
                     ),
-                    onPressed: () async {
-                      await Clipboard.setData(ClipboardData(text: salesId));
-                      if (!context.mounted) return;
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('Receipt number copied'),
-                          duration: Duration(seconds: 1),
-                        ),
-                      );
-                    },
-                    icon: const Icon(
-                      Icons.copy_rounded,
-                      color: Colors.white,
-                      size: 17,
-                    ),
-                  ),
                   if (isRefund) ...[
                     const SizedBox(width: 8),
                     Container(
@@ -2356,12 +2375,28 @@ class _ReceiptCard extends StatelessWidget {
                   }),
                   const Divider(height: 18),
                   _ReceiptLine(
-                    'Mode of Payment',
+                    isRefund ? 'Original payment method' : 'Payment method',
                     paymentMode == 'GCash' && gcashId.isNotEmpty
                         ? 'GCash - $gcashId'
                         : paymentMode,
                   ),
-                  if (subtotal > 0)
+                  if (isRefund)
+                    _ReceiptLine(
+                      'Refund method',
+                      data['refundMethod'] == 'inventory'
+                          ? 'Replace from inventory'
+                          : data['refundMethod'] == 'cash'
+                          ? 'Cash refund'
+                          : 'Not recorded',
+                    ),
+                  if (!compact || isRefund)
+                    _ReceiptLine(
+                      'Customer Paid',
+                      '₱${paid.toStringAsFixed(2)}',
+                    ),
+                  if (!compact || isRefund)
+                    _ReceiptLine('Change', '₱${change.toStringAsFixed(2)}'),
+                  if (subtotal != 0)
                     _ReceiptLine('Subtotal', '₱${subtotal.toStringAsFixed(2)}'),
                   if (hasDiscount)
                     _ReceiptLine(
@@ -2370,13 +2405,6 @@ class _ReceiptCard extends StatelessWidget {
                           : 'Discount',
                       '-₱${discount.toStringAsFixed(2)}',
                     ),
-                  if (!compact)
-                    _ReceiptLine(
-                      'Customer Paid',
-                      '₱${paid.toStringAsFixed(2)}',
-                    ),
-                  if (!compact)
-                    _ReceiptLine('Change', '₱${change.toStringAsFixed(2)}'),
                   if (isRefund &&
                       (data['reason']?.toString().trim().isNotEmpty ?? false))
                     _ReceiptLine('Refund reason', data['reason'].toString()),
@@ -4474,7 +4502,7 @@ class _HistorySheetState extends State<_HistorySheet> {
                             receipt['paymentMode']?.toString() ?? 'Cash';
                         if (mode == 'GCash') {
                           gcashTotal += total;
-                        } else {
+                        } else if (mode.toLowerCase() == 'cash') {
                           cashTotal += total;
                         }
                       }
@@ -4599,7 +4627,7 @@ class _HistorySheetState extends State<_HistorySheet> {
                                     children: filteredReceipts
                                         .map(
                                           (data) => _ReceiptCard(
-                                            data: data,
+                                            data: refundReceiptDisplayData(data, grouped.values.expand((rows) => rows)),
                                             compact: false,
                                           ),
                                         )

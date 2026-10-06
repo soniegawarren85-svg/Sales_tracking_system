@@ -178,16 +178,16 @@ class _AllocationHistoryDialogState extends State<AllocationHistoryDialog> {
   );
   String _query = '';
   bool _complete = true;
-  DateTimeRange? _range;
+  DateTime _day = DateUtils.dateOnly(DateTime.now());
 
   Future<void> _pickDates() async {
-    final picked = await showDateRangePicker(
+    final picked = await showDatePicker(
       context: context,
       firstDate: DateTime(2000),
       lastDate: DateTime.now().add(const Duration(days: 365)),
-      initialDateRange: _range,
+      initialDate: _day,
     );
-    if (picked != null && mounted) setState(() => _range = picked);
+    if (picked != null && mounted) setState(() => _day = picked);
   }
 
   @override
@@ -221,16 +221,6 @@ class _AllocationHistoryDialogState extends State<AllocationHistoryDialog> {
                   ),
                 ],
               ),
-              if (_range != null)
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: InputChip(
-                    label: Text(
-                      '${_date(context, _range!.start)} – ${_date(context, _range!.end)}',
-                    ),
-                    onDeleted: () => setState(() => _range = null),
-                  ),
-                ),
               const SizedBox(height: 12),
               Row(
                 children: [
@@ -265,10 +255,7 @@ class _AllocationHistoryDialogState extends State<AllocationHistoryDialog> {
               }
               final records = groupAllocations(snapshot.data!).where((record) {
                 final at = allocationDate(record);
-                final withinDate =
-                    _range == null ||
-                    (!at.isBefore(_range!.start) &&
-                        at.isBefore(_range!.end.add(const Duration(days: 1))));
+                final withinDate = DateUtils.isSameDay(at.toLocal(), _day);
                 final search =
                     '${record['allocatedByName']} ${record['branchName']} ${record['staffName']} ${record['_items']}'
                         .toLowerCase();
@@ -297,6 +284,9 @@ class _AllocationHistoryDialogState extends State<AllocationHistoryDialog> {
     final received = records
         .where((r) => ChecklistStatus.label(r) == ChecklistStatus.received)
         .length;
+    final issueReports = records
+        .where((r) => ChecklistStatus.label(r) == ChecklistStatus.issue)
+        .toList();
     return Card(
       color: Colors.white,
       elevation: 0,
@@ -318,15 +308,31 @@ class _AllocationHistoryDialogState extends State<AllocationHistoryDialog> {
                     style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
                   ),
                 ),
-                Chip(
-                  avatar: Icon(
-                    complete ? Icons.check_circle_outline : Icons.schedule,
-                    size: 18,
-                    color: complete
-                        ? Colors.green.shade700
-                        : Colors.orange.shade800,
+                Expanded(
+                  child: Wrap(
+                    alignment: WrapAlignment.end,
+                    spacing: 6,
+                    runSpacing: 4,
+                    children: [
+                      if (issueReports.isNotEmpty)
+                        const Chip(
+                          avatar: Icon(Icons.report_outlined, size: 18),
+                          label: Text('Issue Reported'),
+                        ),
+                      Chip(
+                        avatar: Icon(
+                          complete
+                              ? Icons.check_circle_outline
+                              : Icons.schedule,
+                          size: 18,
+                          color: complete
+                              ? Colors.green.shade700
+                              : Colors.orange.shade800,
+                        ),
+                        label: Text(complete ? 'Received' : 'Pending'),
+                      ),
+                    ],
                   ),
-                  label: Text(complete ? 'Received' : 'Pending'),
                 ),
               ],
             ),
@@ -357,16 +363,45 @@ class _AllocationHistoryDialogState extends State<AllocationHistoryDialog> {
                   '${record['name'] ?? 'Allocation'}: ${ChecklistStatus.label(record)}',
                 ),
             const Divider(height: 28),
-            Align(
-              alignment: Alignment.centerRight,
-              child: FilledButton.icon(
-                onPressed: () => showDialog<void>(
-                  context: context,
-                  builder: (_) => _AllocationDetails(data: data),
-                ),
-                icon: const Icon(Icons.visibility_outlined),
-                label: const Text('View'),
-              ),
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final reportButton = TextButton.icon(
+                  onPressed: () => _showIssueReports(context, issueReports),
+                  icon: const Icon(Icons.visibility_outlined),
+                  label: const Text('View issue report'),
+                );
+                final itemsButton = FilledButton.icon(
+                  onPressed: () => showDialog<void>(
+                    context: context,
+                    builder: (_) => _AllocationDetails(data: data),
+                  ),
+                  icon: const Icon(Icons.visibility_outlined),
+                  label: const Text('View Items'),
+                );
+                if (constraints.maxWidth < 420) {
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      if (issueReports.isNotEmpty)
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: reportButton,
+                        ),
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: itemsButton,
+                      ),
+                    ],
+                  );
+                }
+                return Row(
+                  children: [
+                    if (issueReports.isNotEmpty) reportButton,
+                    const Spacer(),
+                    itemsButton,
+                  ],
+                );
+              },
             ),
           ],
         ),
@@ -374,6 +409,56 @@ class _AllocationHistoryDialogState extends State<AllocationHistoryDialog> {
     );
   }
 }
+
+Future<void> _showIssueReports(
+  BuildContext context,
+  List<Map<String, dynamic>> reports,
+) => showDialog<void>(
+  context: context,
+  builder: (context) => AlertDialog(
+    title: const Text('Issue report details'),
+    content: SizedBox(
+      width: 420,
+      child: SingleChildScrollView(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (var index = 0; index < reports.length; index++) ...[
+              if (index > 0) const Divider(height: 24),
+              Text(
+                '${reports[index]['name'] ?? 'Allocation'}',
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'Reason: ${reports[index]['issueReason'] ?? 'Not recorded'}',
+              ),
+              Text(
+                'Reported by: ${reports[index]['reportedByName'] ?? reports[index]['reportedBy'] ?? 'Not recorded'}',
+              ),
+              if (_reportedDate(reports[index]['reportedAt']) case final date?)
+                Text('Reported: ${_date(context, date, time: true)}'),
+            ],
+          ],
+        ),
+      ),
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.pop(context),
+        child: const Text('Close'),
+      ),
+    ],
+  ),
+);
+
+DateTime? _reportedDate(dynamic value) => switch (value) {
+  Timestamp timestamp => timestamp.toDate(),
+  DateTime date => date,
+  final String date => DateTime.tryParse(date),
+  _ => null,
+};
 
 String _quantity(Map<String, dynamic> data) {
   final count = data['_quantity'];

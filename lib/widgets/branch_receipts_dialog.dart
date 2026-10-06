@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../services/refund_value.dart';
 
 import '../services/branch_report_data.dart';
 import '../theme/app_colors.dart';
@@ -33,6 +34,7 @@ class _BranchReceiptsDialogState extends State<BranchReceiptsDialog> {
     builder: (context, snapshot) {
       final rows =
           (snapshot.data ?? widget.sales)
+              .map(refundValueRecord)
               .where(
                 (row) =>
                     (_payment == 'All' ||

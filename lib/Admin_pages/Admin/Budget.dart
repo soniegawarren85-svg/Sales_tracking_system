@@ -5776,7 +5776,7 @@ class _BudgetPageState extends State<BudgetPage>
   String _activityStatus(Map<String, dynamic> data) {
     final type = data['type']?.toString().toLowerCase();
     final status = data['status']?.toString().toLowerCase();
-    if (type == 'refund' || status == 'refund') return 'Refund';
+    if (reportRefund(data)) return 'Refund';
     if (type == 'reduce' ||
         type == 'reduced' ||
         status == 'reduce' ||

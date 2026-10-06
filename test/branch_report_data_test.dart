@@ -3,6 +3,25 @@ import 'package:sales_tracking/services/branch_report_data.dart';
 import 'package:sales_tracking/widgets/admin_sales_overview.dart';
 
 void main() {
+  test('branch analytics recognizes legacy refund records', () {
+    expect(
+      reportRefund({'total': -99}),
+      isTrue,
+    );
+    expect(
+      reportRefund({'status': 'refunded', 'total': 99}),
+      isTrue,
+    );
+    expect(
+      reportRefund({'salesId': 'R-20261006-1000-123', 'total': 99}),
+      isTrue,
+    );
+    expect(
+      reportRefund({'status': 'completed', 'total': 99}),
+      isFalse,
+    );
+  });
+
   test(
     'item sales total uses recorded quantity and price, excluding refunds',
     () {

@@ -73,10 +73,12 @@ class _ChecklistDialog extends StatefulWidget {
   final List<String> ids;
   final FirebaseFirestore db;
   final bool admin;
+  final bool pendingOnly;
   const _ChecklistDialog({
     required this.ids,
     required this.db,
     required this.admin,
+    this.pendingOnly = false,
   });
   @override
   State<_ChecklistDialog> createState() => _ChecklistDialogState();
@@ -85,6 +87,8 @@ class _ChecklistDialog extends StatefulWidget {
 class _ChecklistDialogState extends State<_ChecklistDialog> {
   String search = '', filter = 'All items';
   int tab = 0;
+  DateTime selectedDay = DateUtils.dateOnly(DateTime.now());
+  bool acceptingAll = false;
   final busy = <String>{};
   late final stream = checklistQuery(
     widget.db,
@@ -99,20 +103,43 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
     return parsed == null ? 'Not recorded' : parsed.toLocal().toString();
   }
 
-  Future<String?> askReason(bool admin, {bool decline = false}) async {
+  Future<void> pickDay() async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: selectedDay,
+      firstDate: DateTime(2000),
+      lastDate: DateTime.now().add(const Duration(days: 365)),
+    );
+    if (picked != null && mounted) setState(() => selectedDay = picked);
+  }
+
+  Future<void> acceptAll(
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
+  ) async {
+    if (acceptingAll || docs.isEmpty) return;
+    final confirmed = await confirmChecklistReceipt(
+      context,
+      title: 'Accept all pending returns?',
+      message:
+          'Confirm receipt of all ${docs.length} pending return records across all dates.',
+    );
+    if (!confirmed || !mounted) return;
+    setState(() => acceptingAll = true);
+    try {
+      await actReturns(docs, true);
+    } finally {
+      if (mounted) setState(() => acceptingAll = false);
+    }
+  }
+
+  Future<String?> askReason(bool admin) async {
     var reason = '';
     final form = GlobalKey<FormState>();
     return showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
         constraints: const BoxConstraints(maxWidth: 420),
-        title: Text(
-          decline
-              ? 'Decline returned items'
-              : admin
-              ? 'Report Discrepancy'
-              : 'Report Issue',
-        ),
+        title: Text('Report Issue'),
         content: Form(
           key: form,
           child: TextFormField(
@@ -121,9 +148,7 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
             onChanged: (value) => reason = value,
             decoration: InputDecoration(
               labelText: 'Reason',
-              hintText: decline
-                  ? 'Explain to the staff why this return was declined'
-                  : 'Missing, extra, incorrect, or damaged items',
+              hintText: 'Missing, extra, incorrect, or damaged items',
             ),
             validator: (value) => value == null || value.trim().isEmpty
                 ? 'A reason is required'
@@ -140,7 +165,7 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
               if (form.currentState!.validate())
                 Navigator.pop(context, reason.trim());
             },
-            child: Text(decline ? 'Decline return' : 'Submit report'),
+            child: const Text('Submit report'),
           ),
         ],
       ),
@@ -151,27 +176,42 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
     List<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
     bool accept,
   ) async {
-    final reason = accept ? '' : await askReason(true, decline: true);
+    final reason = accept ? '' : await askReason(true);
     if (reason == null || !mounted) return;
     String message;
     var success = false;
     try {
       final actor = await resolveSessionActor(widget.db, admin: true);
-      final changed = await AllocationChecklistService(widget.db)
-          .decideReturns(
-            docs.map((doc) => doc.id).toList(),
-            accept: accept,
+      final service = AllocationChecklistService(widget.db);
+      var changed = 0;
+      if (accept) {
+        for (var start = 0; start < docs.length; start += 200) {
+          changed += await service.decideReturns(
+            docs.skip(start).take(200).map((doc) => doc.id).toList(),
+            accept: true,
+            actorId: actor.id,
+            actorName: actor.name,
+          );
+        }
+      } else {
+        for (final doc in docs) {
+          if (await service.report(
+            doc.id,
+            admin: true,
             actorId: actor.id,
             actorName: actor.name,
             reason: reason,
-          )
-          .timeout(const Duration(seconds: 20));
+            scopeIds: widget.ids,
+          ))
+            changed++;
+        }
+      }
       success = changed > 0;
       message = changed == 0
           ? 'These returns have already been processed.'
           : accept
           ? '$changed returned item records accepted successfully.'
-          : '$changed returned item records declined. The staff can view your reason.';
+          : 'Issue reported for $changed return records. They remain pending for acceptance.';
     } catch (error) {
       message =
           'Unable to confirm this decision: $error. Check the current status before trying again.';
@@ -189,7 +229,7 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
           success
               ? accept
                     ? 'Return accepted'
-                    : 'Return declined'
+                    : 'Issue reported'
               : 'Return status',
         ),
         content: Text(message),
@@ -439,9 +479,9 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
               children: [
                 const Icon(Icons.checklist_rounded, color: Colors.white),
                 const SizedBox(width: 12),
-                const Expanded(
+                Expanded(
                   child: Text(
-                    'Checklist',
+                    widget.pendingOnly ? 'Pending items' : 'Checklist',
                     style: TextStyle(
                       color: Colors.white,
                       fontSize: 22,
@@ -449,6 +489,25 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
                     ),
                   ),
                 ),
+                if (!widget.pendingOnly)
+                  TextButton.icon(
+                    style: TextButton.styleFrom(
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(horizontal: 6),
+                      textStyle: const TextStyle(fontSize: 12),
+                    ),
+                    onPressed: () => showDialog<void>(
+                      context: context,
+                      builder: (_) => _ChecklistDialog(
+                        ids: widget.ids,
+                        db: widget.db,
+                        admin: widget.admin,
+                        pendingOnly: true,
+                      ),
+                    ),
+                    icon: const Icon(Icons.visibility_outlined, size: 18),
+                    label: const Text('View pending'),
+                  ),
                 IconButton(
                   tooltip: 'Close checklist',
                   onPressed: () => Navigator.pop(context),
@@ -462,9 +521,16 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
             child: TextField(
               onChanged: (value) =>
                   setState(() => search = value.trim().toLowerCase()),
-              decoration: const InputDecoration(
-                prefixIcon: Icon(Icons.search),
-                hintText: 'Search items, branch, staff, or status',
+              decoration: InputDecoration(
+                prefixIcon: const Icon(Icons.search),
+                hintText: 'Search',
+                suffixIcon: widget.pendingOnly
+                    ? null
+                    : IconButton(
+                        tooltip: 'Filter by date',
+                        onPressed: pickDay,
+                        icon: const Icon(Icons.calendar_today_outlined),
+                      ),
               ),
             ),
           ),
@@ -481,14 +547,39 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
                 if (!snapshot.hasData)
                   return const Center(child: CircularProgressIndicator());
                 final all = snapshot.data!.docs;
+                final pending = all
+                    .where(
+                      (doc) => ChecklistStatus.pending(
+                        doc.data(),
+                        admin: widget.admin,
+                      ),
+                    )
+                    .toList();
                 final docs =
                     all.where((doc) {
                       final d = doc.data();
+                      if (widget.pendingOnly) {
+                        return ChecklistStatus.pending(
+                              d,
+                              admin: widget.admin,
+                            ) &&
+                            '${d['name']} ${d['items']} ${d['branchName']} ${d['staffName']}'
+                                .toLowerCase()
+                                .contains(search);
+                      }
+                      final rawDate = d['createdAt'] ?? d['assignedAt'];
+                      final at = rawDate is Timestamp
+                          ? rawDate.toDate()
+                          : DateTime.tryParse('$rawDate');
+                      if (!DateUtils.isSameDay(at?.toLocal(), selectedDay))
+                        return false;
                       final inTab = widget.admin
                           ? d['kind'] == 'return' &&
-                              (tab == 1
-                                  ? ChecklistStatus.label(d) == ChecklistStatus.completed
-                                  : ChecklistStatus.label(d) != ChecklistStatus.completed)
+                                (tab == 1
+                                    ? ChecklistStatus.label(d) ==
+                                          ChecklistStatus.completed
+                                    : ChecklistStatus.label(d) !=
+                                          ChecklistStatus.completed)
                           : tab == 2
                           ? d['kind'] == 'return'
                           : ChecklistStatus.incomingOpen(d) ||
@@ -515,36 +606,60 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
                 return Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    SingleChildScrollView(
-                      scrollDirection: Axis.horizontal,
-                      padding: const EdgeInsets.symmetric(horizontal: 12),
-                      child: Row(
-                        children: [
-                          for (final entry in [
-                            if (widget.admin) ...[
-                              'Returned Items',
-                              'Completed Return',
-                            ]
-                            else ...[
-                              'Incoming Items',
-                              'Return Items',
-                              'Pending Confirmation',
-                            ],
-                          ].asMap().entries)
-                            Padding(
-                              padding: const EdgeInsets.only(right: 8),
-                              child: ChoiceChip(
-                                label: Text(entry.value),
-                                selected: tab == entry.key,
-                                onSelected: (_) =>
-                                    setState(() => tab = entry.key),
-                              ),
-                            ),
-                        ],
+                    if (widget.pendingOnly && widget.admin)
+                      Padding(
+                        padding: const EdgeInsets.all(12),
+                        child: FilledButton.icon(
+                          onPressed: acceptingAll || pending.isEmpty
+                              ? null
+                              : () => acceptAll(pending),
+                          icon: const Icon(Icons.done_all),
+                          label: Text(
+                            acceptingAll
+                                ? 'Accepting...'
+                                : 'Accept all (${pending.length})',
+                          ),
+                        ),
                       ),
-                    ),
+                    if (!widget.pendingOnly)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                        child: Text(
+                          MaterialLocalizations.of(
+                            context,
+                          ).formatMediumDate(selectedDay),
+                        ),
+                      ),
+                    if (!widget.pendingOnly)
+                      SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                        child: Row(
+                          children: [
+                            for (final entry in [
+                              if (widget.admin) ...[
+                                'Returned Items',
+                                'Completed Return',
+                              ] else ...[
+                                'Incoming Items',
+                                'Return Items',
+                                'Pending Confirmation',
+                              ],
+                            ].asMap().entries)
+                              Padding(
+                                padding: const EdgeInsets.only(right: 8),
+                                child: ChoiceChip(
+                                  label: Text(entry.value),
+                                  selected: tab == entry.key,
+                                  onSelected: (_) =>
+                                      setState(() => tab = entry.key),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
                     const SizedBox(height: 8),
-                    if (tab == 0 && !widget.admin)
+                    if (!widget.pendingOnly && tab == 0 && !widget.admin)
                       SingleChildScrollView(
                         scrollDirection: Axis.horizontal,
                         padding: const EdgeInsets.symmetric(horizontal: 12),

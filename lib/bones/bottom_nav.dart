@@ -233,9 +233,8 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
           ),
         ],
       ),
-      bottomNavigationBar: Stack(
-        clipBehavior: Clip.none,
-        alignment: Alignment.bottomCenter,
+      bottomNavigationBar: Column(
+        mainAxisSize: MainAxisSize.min,
         children: [
           _buildPendingOrdersBadge(isTabletLandscape),
           isTabletLandscape
@@ -301,8 +300,8 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
       builder: (context, snapshot) {
         final count = snapshot.data?.docs.length ?? 0;
         if (count <= 0) return const SizedBox.shrink();
-        return Positioned(
-          bottom: compactNav ? 76 : 88,
+        return Padding(
+          padding: const EdgeInsets.only(top: 8, bottom: 8),
           child: Material(
             color: Colors.transparent,
             child: InkWell(

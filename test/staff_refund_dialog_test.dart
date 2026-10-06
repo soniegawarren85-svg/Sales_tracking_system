@@ -2,6 +2,54 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:sales_tracking/widgets/staff_refund_dialog.dart';
 
 void main() {
+  test(
+    'legacy refund receipt recovers payment details without changing drawer values',
+    () {
+      final data = refundReceiptDisplayData(
+        {
+          'type': 'refund',
+          'originalSalesId': 'sale',
+          'paymentMode': 'Cash',
+          'refundMethod': 'cash',
+          'total': -90,
+          'paidAmount': 0,
+        },
+        [
+          {
+            'salesId': 'sale',
+            'paymentMode': 'GCash',
+            'paidAmount': 100,
+            'change': 10,
+            'discount': 10,
+            'discountType': 'Promo',
+          },
+        ],
+      );
+      expect(data['originalPaymentMode'], 'GCash');
+      expect(data['originalPaidAmount'], 100);
+      expect(data['originalDiscount'], 10);
+      expect(data['paymentMode'], 'Cash');
+      expect(data['total'], -90);
+      expect(data['paidAmount'], 0);
+    },
+  );
+  test('beverage labels show a repeated size only once', () {
+    expect(
+      staffRefundItemLabel({
+        'name': 'Dubai Chewy Smoothie',
+        'variant': 'Small',
+        'coffeeSize': 'Small',
+      }),
+      'Dubai Chewy Smoothie / Small',
+    );
+    expect(
+      staffRefundItemLabel({
+        'name': 'Dubai Chewy Smoothie / Small',
+        'coffeeSize': 'small',
+      }),
+      'Dubai Chewy Smoothie / Small',
+    );
+  });
   test('refund choices only include currently allocated active items', () {
     final activeKeys = activeStaffRefundItemKeys([
       {

@@ -4819,30 +4819,36 @@ class _DailyStockPageState extends State<DailyStockPage>
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          Row(
-                            children: [
-                              Container(
-                                padding: const EdgeInsets.all(6),
-                                decoration: BoxDecoration(
-                                  color: _AppColors.primary.withOpacity(0.12),
-                                  borderRadius: BorderRadius.circular(8),
+                          Expanded(
+                            child: Row(
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.all(6),
+                                  decoration: BoxDecoration(
+                                    color: _AppColors.primary.withOpacity(0.12),
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: const Icon(
+                                    Icons.access_time_rounded,
+                                    size: 14,
+                                    color: _AppColors.primary,
+                                  ),
                                 ),
-                                child: const Icon(
-                                  Icons.access_time_rounded,
-                                  size: 14,
-                                  color: _AppColors.primary,
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    'Order at $timeStr',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w700,
+                                      color: _AppColors.primary,
+                                    ),
+                                  ),
                                 ),
-                              ),
-                              const SizedBox(width: 8),
-                              Text(
-                                'Order at $timeStr',
-                                style: const TextStyle(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w700,
-                                  color: _AppColors.primary,
-                                ),
-                              ),
-                            ],
+                              ],
+                            ),
                           ),
                           ElevatedButton(
                             style: ElevatedButton.styleFrom(
@@ -4894,11 +4900,15 @@ class _DailyStockPageState extends State<DailyStockPage>
                                   shape: BoxShape.circle,
                                 ),
                               ),
-                              Text(
-                                '${item['name']} ${item['variant']} x${item['quantity']}',
-                                style: const TextStyle(
-                                  fontSize: 13,
-                                  color: _AppColors.textSoft,
+                              Expanded(
+                                child: Text(
+                                  '${item['name']} ${item['variant']} x${item['quantity']}',
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    fontSize: 13,
+                                    color: _AppColors.textSoft,
+                                  ),
                                 ),
                               ),
                             ],

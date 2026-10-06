@@ -1,3 +1,4 @@
+import 'refund_value.dart';
 import 'cash_drawer_service.dart';
 import 'local_write_lock.dart';
 import 'dart:async';
@@ -572,6 +573,7 @@ class LocalDatabaseSyncService {
   }
 
   Future<void> recordCompletedSale(Map<String, dynamic> payload) async {
+    payload = refundValueRecord(payload);
     final now = DateTime.now();
     final salesId = payload['salesId']?.toString().trim();
     final docId = salesId?.isNotEmpty == true

@@ -124,7 +124,8 @@ void main() {
         'refundMethod': 'inventory',
         'paymentMode': 'Inventory replacement',
         'cashDrawerDelta': 0,
-        'total': 0,
+        'total': -89,
+        'replacementValue': 89,
         'timestamp': DateTime.now(),
       });
 
@@ -132,6 +133,7 @@ void main() {
           (await db.collection('staff_cash_drawer').doc('branch').get())
               .data()!;
       expect(drawer['balance'], 500);
+      expect((await service.getCachedCollection('completed_sales')).single['total'], -89);
       expect(
         await service.getCachedCollection('pending_cash_drawer_changes'),
         isEmpty,

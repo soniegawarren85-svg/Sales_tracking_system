@@ -654,8 +654,8 @@ class _ReturnDecisionButtonsState extends State<ReturnDecisionButtons> {
       ),
       OutlinedButton.icon(
         onPressed: saving ? null : () => decide(false),
-        icon: const Icon(Icons.close, size: 18),
-        label: const Text('Decline'),
+        icon: const Icon(Icons.report_problem_outlined, size: 18),
+        label: const Text('Report Issue'),
       ),
       if (saving && !confirming)
         const Row(

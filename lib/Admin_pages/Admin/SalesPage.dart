@@ -1,3 +1,4 @@
+import '../../services/refund_value.dart';
 import 'package:sales_tracking/widgets/top_edge_refresh.dart';
 import 'package:sales_tracking/theme/app_colors.dart';
 import 'dart:ui';
@@ -694,8 +695,9 @@ class _ReceiptStaffDetails {
 }
 
 class _AdminReceiptCard extends StatelessWidget {
-  final Map<String, dynamic> data;
-  const _AdminReceiptCard({required this.data});
+  final Map<String, dynamic> _data;
+  Map<String, dynamic> get data => refundValueRecord(_data);
+  const _AdminReceiptCard({required Map<String, dynamic> data}) : _data = data;
 
   double _money(dynamic value) => value is num
       ? value.toDouble()
@@ -953,7 +955,7 @@ class _AdminReceiptCard extends StatelessWidget {
                   }),
                   const Divider(height: 18),
                   _adminReceiptLine(
-                    'Mode of Payment',
+                    isRefund ? 'Refund method' : 'Payment method',
                     paymentMode == 'GCash' && gcashId.isNotEmpty
                         ? 'GCash - $gcashId'
                         : paymentMode,
