@@ -90,11 +90,7 @@ void main() {
       tester.getTopRight(receivedBadge).dx,
       closeTo(tester.getTopRight(find.byType(Card).first).dx - 18, 4),
     );
-    expect(
-      tester.getTopLeft(find.text('Pending')).dx -
-          tester.getTopLeft(find.text('Complete')).dx,
-      lessThan(180),
-    );
+    expect(find.text('Pending'), findsNothing);
     final dialogBody = find.descendant(
       of: find.byType(Dialog),
       matching: find.byWidgetPredicate(
@@ -180,11 +176,13 @@ void main() {
     });
     await tester.pumpWidget(
       MaterialApp(
-        home: AllocationHistoryDialog(branchId: 'branch', database: db),
+        home: AllocationHistoryDialog(
+          branchId: 'branch',
+          database: db,
+          pendingOnly: true,
+        ),
       ),
     );
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Pending').first);
     await tester.pumpAndSettle();
 
     expect(find.text('Pending'), findsWidgets);
@@ -251,7 +249,16 @@ void main() {
       expect(find.text('Cookie'), findsNothing);
       await tester.tap(find.byTooltip('Close').last);
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Pending'));
+      await tester.pumpWidget(
+        MaterialApp(
+          home: AllocationHistoryDialog(
+            key: const ValueKey('pending'),
+            branchId: 'branch',
+            database: db,
+            pendingOnly: true,
+          ),
+        ),
+      );
       await tester.pumpAndSettle();
       expect(find.text('Branch: Other'), findsOneWidget);
       expect(find.text('Branch: Main'), findsNothing);

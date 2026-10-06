@@ -16,6 +16,18 @@ const staffPermissions = {
 };
 DocumentReference<Map<String, dynamic>> get transactionSettings =>
     FirebaseFirestore.instance.collection('admin_settings').doc('transactions');
+
+Map<String, dynamic> settingsForBranch(
+  Map<String, dynamic> settings,
+  String branchId,
+) {
+  final branchSettings = settings['branchSettings'];
+  if (branchId.isEmpty || branchSettings is! Map) return settings;
+  final scopedSettings = branchSettings[branchId];
+  if (scopedSettings is! Map) return settings;
+  return {...settings, ...Map<String, dynamic>.from(scopedSettings)};
+}
+
 List<Map<String, dynamic>> settingRows(Map<String, dynamic> data, String key) =>
     (data[key] as List? ??
             (key == 'discounts' ? defaultDiscounts : defaultPayments))

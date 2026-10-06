@@ -459,7 +459,7 @@ class _ProfilePageState extends State<ProfilePage>
         child: SlideTransition(
           position: _slideAnim,
           child: CustomScrollView(
-            physics: const BouncingScrollPhysics(),
+            physics: const ClampingScrollPhysics(),
             slivers: [
               SliverToBoxAdapter(child: _buildHeader()),
               SliverToBoxAdapter(
@@ -562,63 +562,90 @@ class _ProfilePageState extends State<ProfilePage>
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: [
-                        _buildAvatar(photoUrl),
-                        const SizedBox(width: 16),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            mainAxisAlignment: MainAxisAlignment.end,
+                    LayoutBuilder(
+                      builder: (context, constraints) {
+                        final isCompact = constraints.maxWidth < 500;
+                        final identity = Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisAlignment: MainAxisAlignment.end,
+                          children: [
+                            Text(
+                              '$firstName $lastName',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: isCompact ? 18 : 20,
+                                fontWeight: FontWeight.w800,
+                                color: Colors.white,
+                                letterSpacing: 0.3,
+                              ),
+                            ),
+                            const SizedBox(height: 3),
+                            Text(
+                              email,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.white.withOpacity(0.60),
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Row(
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 10,
+                                    vertical: 4,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: _accent.withOpacity(0.18),
+                                    borderRadius: BorderRadius.circular(20),
+                                    border: Border.all(
+                                      color: _accent.withOpacity(0.60),
+                                      width: 1,
+                                    ),
+                                  ),
+                                  child: const Text(
+                                    'Staff Member',
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      color: _accentLight,
+                                      fontWeight: FontWeight.w600,
+                                      letterSpacing: 0.3,
+                                    ),
+                                  ),
+                                ),
+                                if (isCompact) ...[
+                                  const Spacer(),
+                                  _buildEditButton(compact: true),
+                                ],
+                              ],
+                            ),
+                          ],
+                        );
+
+                        if (isCompact) {
+                          return Row(
+                            crossAxisAlignment: CrossAxisAlignment.center,
                             children: [
-                              Text(
-                                '$firstName $lastName',
-                                style: const TextStyle(
-                                  fontSize: 20,
-                                  fontWeight: FontWeight.w800,
-                                  color: Colors.white,
-                                  letterSpacing: 0.3,
-                                ),
-                              ),
-                              const SizedBox(height: 3),
-                              Text(
-                                email,
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  color: Colors.white.withOpacity(0.60),
-                                ),
-                              ),
-                              const SizedBox(height: 8),
-                              Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 10,
-                                  vertical: 4,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: _accent.withOpacity(0.18),
-                                  borderRadius: BorderRadius.circular(20),
-                                  border: Border.all(
-                                    color: _accent.withOpacity(0.60),
-                                    width: 1,
-                                  ),
-                                ),
-                                child: const Text(
-                                  'Staff Member',
-                                  style: TextStyle(
-                                    fontSize: 11,
-                                    color: _accentLight,
-                                    fontWeight: FontWeight.w600,
-                                    letterSpacing: 0.3,
-                                  ),
-                                ),
-                              ),
+                              _buildAvatar(photoUrl),
+                              const SizedBox(width: 14),
+                              Expanded(child: identity),
                             ],
-                          ),
-                        ),
-                        const SizedBox(width: 10),
-                        _buildEditButton(),
-                      ],
+                          );
+                        }
+                        return Row(
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          children: [
+                            _buildAvatar(photoUrl),
+                            const SizedBox(width: 16),
+                            Expanded(child: identity),
+                            const SizedBox(width: 10),
+                            _buildEditButton(),
+                          ],
+                        );
+                      },
                     ),
                     const SizedBox(height: 20),
                     Container(
@@ -909,11 +936,14 @@ class _ProfilePageState extends State<ProfilePage>
     return const Icon(Icons.person, size: 40, color: Colors.white54);
   }
 
-  Widget _buildEditButton() {
+  Widget _buildEditButton({bool compact = false}) {
     return GestureDetector(
       onTap: _showEditProfileSheet,
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+        padding: EdgeInsets.symmetric(
+          horizontal: compact ? 10 : 14,
+          vertical: 9,
+        ),
         decoration: BoxDecoration(
           gradient: const LinearGradient(
             colors: [_accentLight, _accent],
@@ -929,20 +959,22 @@ class _ProfilePageState extends State<ProfilePage>
             ),
           ],
         ),
-        child: const Row(
+        child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.edit_rounded, size: 13, color: Colors.white),
-            SizedBox(width: 6),
-            Text(
-              'Edit Profile',
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w700,
-                color: Colors.white,
-                letterSpacing: 0.3,
+            const Icon(Icons.edit_rounded, size: 13, color: Colors.white),
+            if (!compact) ...[
+              const SizedBox(width: 6),
+              const Text(
+                'Edit Profile',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: Colors.white,
+                  letterSpacing: 0.3,
+                ),
               ),
-            ),
+            ],
           ],
         ),
       ),
@@ -1019,65 +1051,86 @@ class _ProfilePageState extends State<ProfilePage>
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Row(
-                      children: [
-                        Container(
-                          width: 4,
-                          height: 30,
-                          decoration: BoxDecoration(
-                            color: _pinkMid,
-                            borderRadius: BorderRadius.circular(4),
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Container(
-                          width: 42,
-                          height: 42,
-                          decoration: BoxDecoration(
-                            color: AppColors.blush,
-                            borderRadius: BorderRadius.circular(14),
-                          ),
-                          child: const Icon(
-                            Icons.person_outline_rounded,
-                            color: _pinkDark,
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        const Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                'Personal Information',
-                                style: TextStyle(
-                                  fontSize: 17,
-                                  fontWeight: FontWeight.w900,
-                                  color: Color(0xFF2B1720),
+                    LayoutBuilder(
+                      builder: (context, constraints) {
+                        final compact = constraints.maxWidth < 500;
+                        final openActivityLogs = _staffDocId == null
+                            ? null
+                            : () => showDialog<void>(
+                                context: context,
+                                builder: (_) => BranchStaffActivityDialog(
+                                  branchId: '',
+                                  branchName: '',
+                                  userId: _staffDocId,
                                 ),
+                              );
+                        return Row(
+                          children: [
+                            Container(
+                              width: 4,
+                              height: 30,
+                              decoration: BoxDecoration(
+                                color: _pinkMid,
+                                borderRadius: BorderRadius.circular(4),
                               ),
-                              SizedBox(height: 2),
-                              Text(
-                                'View and manage your personal details',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w600,
-                                  color: _textSoft,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        TextButton.icon(
-                          onPressed: _staffDocId == null ? null : () => showDialog<void>(
-                            context: context,
-                            builder: (_) => BranchStaffActivityDialog(
-                              branchId: '', branchName: '', userId: _staffDocId,
                             ),
-                          ),
-                          icon: const Icon(Icons.history),
-                          label: const Text('Activity Logs'),
-                        ),
-                      ],
+                            const SizedBox(width: 12),
+                            Container(
+                              width: 42,
+                              height: 42,
+                              decoration: BoxDecoration(
+                                color: AppColors.blush,
+                                borderRadius: BorderRadius.circular(14),
+                              ),
+                              child: const Icon(
+                                Icons.person_outline_rounded,
+                                color: _pinkDark,
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            const Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Personal Information',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      fontSize: 17,
+                                      fontWeight: FontWeight.w900,
+                                      color: Color(0xFF2B1720),
+                                    ),
+                                  ),
+                                  SizedBox(height: 2),
+                                  Text(
+                                    'View and manage your personal details',
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w600,
+                                      color: _textSoft,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            if (compact)
+                              IconButton(
+                                tooltip: 'Activity Logs',
+                                onPressed: openActivityLogs,
+                                icon: const Icon(Icons.history),
+                              )
+                            else
+                              TextButton.icon(
+                                onPressed: openActivityLogs,
+                                icon: const Icon(Icons.history),
+                                label: const Text('Activity Logs'),
+                              ),
+                          ],
+                        );
+                      },
                     ),
                     const SizedBox(height: 18),
                     LayoutBuilder(

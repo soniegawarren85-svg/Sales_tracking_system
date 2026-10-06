@@ -133,6 +133,35 @@ void main() {
       await sub.cancel();
     },
   );
+  test(
+    'received timestamp records staff acceptance, not allocation date',
+    () async {
+      final allocationDate = DateTime(2020, 1, 2, 9);
+      await db.doc('allocation_checklist/delivery').update({
+        'createdAt': Timestamp.fromDate(allocationDate),
+      });
+      final acceptedAfter = DateTime.now();
+
+      await service.decide(
+        'delivery',
+        accept: true,
+        staffId: 'staff',
+        actorName: 'Staff A',
+        scopeIds: ['branch'],
+      );
+
+      final received = (await db.doc('allocation_checklist/delivery').get())
+          .data()!;
+      final receivedAt = (received['confirmedAt'] as Timestamp).toDate();
+      expect(received['createdAt'], Timestamp.fromDate(allocationDate));
+      expect(receivedAt.isBefore(acceptedAfter), isFalse);
+      expect(
+        receivedAt.isAfter(DateTime.now().add(const Duration(seconds: 1))),
+        isFalse,
+      );
+      expect(received['decidedAt'], isA<Timestamp>());
+    },
+  );
 
   test(
     'reject over-return, wrong scope and repeated reports after completion',

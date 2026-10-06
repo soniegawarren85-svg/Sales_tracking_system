@@ -426,18 +426,26 @@ class AllocationChecklistService {
           );
           final count = quantity(item['stock'] ?? item['startingStock']);
           if (index < 0) {
-            items.add({...item, 'stock': count, if (accept) 'startingStock': count, if (accept) 'assignedStartingStock': count});
+            items.add({
+              ...item,
+              'stock': count,
+              if (accept) 'startingStock': count,
+              if (accept) 'assignedStartingStock': count,
+            });
           } else {
             final old = items[index];
             items[index] = {
               ...old,
               'stock': quantity(old['stock'] ?? old['startingStock']) + count,
               if (accept)
-                'startingStock': quantity(old['startingStock'] ?? old['stock']) + count,
+                'startingStock':
+                    quantity(old['startingStock'] ?? old['stock']) + count,
               if (accept)
                 'assignedStartingStock':
                     quantity(
-                      old['assignedStartingStock'] ?? old['startingStock'] ?? old['stock'],
+                      old['assignedStartingStock'] ??
+                          old['startingStock'] ??
+                          old['stock'],
                     ) +
                     count,
             };

@@ -1,7 +1,7 @@
 import 'package:sales_tracking/theme/app_colors.dart';
 import 'package:flutter/material.dart';
 
-class BranchAnalyticsBars extends StatelessWidget {
+class BranchAnalyticsBars extends StatefulWidget {
   final List<double> values;
   final List<String> labels;
   final List<Color> colors;
@@ -10,6 +10,7 @@ class BranchAnalyticsBars extends StatelessWidget {
   final String selectedStatus;
 
   const BranchAnalyticsBars({
+    super.key,
     required this.values,
     required this.labels,
     this.colors = const [AppColors.primaryDark, AppColors.primary],
@@ -17,6 +18,26 @@ class BranchAnalyticsBars extends StatelessWidget {
     this.reduced,
     this.selectedStatus = 'All',
   });
+
+  @override
+  State<BranchAnalyticsBars> createState() => _BranchAnalyticsBarsState();
+}
+
+class _BranchAnalyticsBarsState extends State<BranchAnalyticsBars> {
+  final _scroll = ScrollController();
+  String? _focus;
+  List<double> get values => widget.values;
+  List<String> get labels => widget.labels;
+  List<Color> get colors => widget.colors;
+  List<double>? get refunds => widget.refunds;
+  List<double>? get reduced => widget.reduced;
+  String get selectedStatus => widget.selectedStatus;
+
+  @override
+  void dispose() {
+    _scroll.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -44,7 +65,23 @@ class BranchAnalyticsBars extends StatelessWidget {
         );
         if (width <= constraints.maxWidth)
           return _buildPlot(context, ceiling, plotHeight, 28, intervals, step);
+        final first = values.indexWhere((value) => value != 0);
+        final focus =
+            '${labels.join(',')}|$selectedStatus|$first|${constraints.maxWidth}';
+        if (_focus != focus) {
+          _focus = focus;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted || !_scroll.hasClients) return;
+            _scroll.jumpTo(
+              (values.length == 24 && first > 0 ? first * 48.0 : 0.0).clamp(
+                0.0,
+                _scroll.position.maxScrollExtent,
+              ),
+            );
+          });
+        }
         return SingleChildScrollView(
+          controller: _scroll,
           scrollDirection: Axis.horizontal,
           child: SizedBox(
             width: width,

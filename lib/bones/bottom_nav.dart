@@ -29,15 +29,25 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
   String? _salesInitialView;
   String? _salesInitialGroup;
   bool _openPendingOnSalesLaunch = false;
+  String? _sessionUserId;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _loginSubscription;
 
   Future<void> _watchLogins() async {
     final prefs = await SharedPreferences.getInstance();
     if (!mounted) return;
-    final uid =
-        FirebaseAuth.instance.currentUser?.uid ?? prefs.getString('lastUserId');
+    final authUid = FirebaseAuth.instance.currentUser?.uid.trim() ?? '';
+    final savedStaffId = prefs.getString('lastStaffDocId')?.trim() ?? '';
+    final savedUserId = prefs.getString('lastUserId')?.trim() ?? '';
+    final uid = authUid.isNotEmpty
+        ? authUid
+        : savedStaffId.isNotEmpty
+        ? savedStaffId
+        : savedUserId;
+    if (uid.isNotEmpty && mounted) {
+      setState(() => _sessionUserId = uid);
+    }
     final ownId = prefs.getString('staffLoginSessionId');
-    if (uid == null || ownId == null) return;
+    if (uid.isEmpty || ownId == null) return;
     final seen = <String>{};
     DateTime? ownLogin;
     _loginSubscription = FirebaseFirestore.instance
@@ -218,7 +228,7 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
     return Scaffold(
       resizeToAvoidBottomInset: false,
       backgroundColor: Colors.white,
-      extendBody: _selectedIndex != 1,
+      extendBody: true,
       body: IndexedStack(
         index: _selectedIndex,
         children: [
@@ -236,7 +246,7 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
       bottomNavigationBar: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          _buildPendingOrdersBadge(isTabletLandscape),
+          _buildPendingOrdersBadge(),
           isTabletLandscape
               ? _buildLandscapeNav()
               : CurvedNavigationBar(
@@ -289,8 +299,8 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
     );
   }
 
-  Widget _buildPendingOrdersBadge(bool compactNav) {
-    final uid = FirebaseAuth.instance.currentUser?.uid;
+  Widget _buildPendingOrdersBadge() {
+    final uid = FirebaseAuth.instance.currentUser?.uid ?? _sessionUserId;
     if (uid == null || uid.isEmpty) return const SizedBox.shrink();
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
       stream: FirebaseFirestore.instance
@@ -299,60 +309,22 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
           .snapshots(),
       builder: (context, snapshot) {
         final count = snapshot.data?.docs.length ?? 0;
-        if (count <= 0) return const SizedBox.shrink();
         return Padding(
-          padding: const EdgeInsets.only(top: 8, bottom: 8),
-          child: Material(
-            color: Colors.transparent,
-            child: InkWell(
-              onTap: () {
-                setState(() {
-                  _salesInitialView = null;
-                  _salesInitialGroup = null;
-                  _openPendingOnSalesLaunch = true;
-                  _salesLaunchToken++;
-                  _selectedIndex = 3;
-                });
-              },
-              borderRadius: BorderRadius.circular(18),
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 14,
-                  vertical: 9,
-                ),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(18),
-                  border: Border.all(color: AppColors.blush),
-                  boxShadow: [
-                    BoxShadow(
-                      color: AppColors.primary.withOpacity(0.18),
-                      blurRadius: 18,
-                      offset: const Offset(0, 7),
-                    ),
-                  ],
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Icon(
-                      Icons.bookmark_rounded,
-                      color: AppColors.primary,
-                      size: 18,
-                    ),
-                    const SizedBox(width: 7),
-                    Text(
-                      '$count pending',
-                      style: const TextStyle(
-                        color: AppColors.primaryDark,
-                        fontSize: 13,
-                        fontWeight: FontWeight.w900,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          child: FilledButton.icon(
+            style: FilledButton.styleFrom(
+              backgroundColor: Colors.white,
+              foregroundColor: AppColors.primary,
             ),
+            icon: const Icon(Icons.bookmark_rounded),
+            label: Text('$count pending'),
+            onPressed: () => setState(() {
+              _salesInitialView = null;
+              _salesInitialGroup = null;
+              _openPendingOnSalesLaunch = true;
+              _salesLaunchToken++;
+              _selectedIndex = 3;
+            }),
           ),
         );
       },

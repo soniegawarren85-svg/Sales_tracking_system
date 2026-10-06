@@ -35,15 +35,31 @@ Widget _photo(String url) {
   );
 }
 
-class AdminAddonsTable extends StatelessWidget {
+class AdminAddonsTable extends StatefulWidget {
   const AdminAddonsTable({super.key, this.query = '', this.firestore});
   final FirebaseFirestore? firestore;
   final String query;
+
+  @override
+  State<AdminAddonsTable> createState() => _AdminAddonsTableState();
+}
+
+class _AdminAddonsTableState extends State<AdminAddonsTable> {
+  @override
+  void initState() {
+    super.initState();
+    if (widget.firestore == null) {
+      ShortIdService.ensureAddonPublicIds().catchError((Object error) {
+        debugPrint('Add-on public ID update failed: $error');
+      });
+    }
+  }
+
   @override
   Widget build(
     BuildContext context,
   ) => StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-    stream: (firestore ?? FirebaseFirestore.instance)
+    stream: (widget.firestore ?? FirebaseFirestore.instance)
         .collection('coffee_addons')
         .snapshots(),
     builder: (context, snapshot) {
@@ -55,7 +71,7 @@ class AdminAddonsTable extends StatelessWidget {
             (doc) =>
                 doc.data()['isDeleted'] != true &&
                 '${doc.data()['name']}'.toLowerCase().contains(
-                  query.toLowerCase(),
+                  widget.query.toLowerCase(),
                 ),
           )
           .toList();
@@ -75,13 +91,17 @@ class AdminAddonsTable extends StatelessWidget {
                 flex: const {0: 1.3, 1: 2.5, 2: 1.2, 3: 1.7, 4: 1.3},
                 rows: rows.map((doc) {
                   final data = doc.data();
+                  final publicId =
+                      data['publicId']?.toString().trim().isNotEmpty == true
+                      ? data['publicId'].toString().trim()
+                      : 'Assigning ID…';
                   final expiry = DateTime.tryParse('${data['expirationDate']}');
                   final expired =
                       expiry != null &&
                       expiry.isBefore(DateUtils.dateOnly(DateTime.now()));
                   return <Widget>[
                     Text(
-                      '${data['publicId'] ?? doc.id}',
+                      publicId,
                       style: const TextStyle(
                         fontSize: 12,
                         color: AppColors.textMuted,
@@ -216,7 +236,7 @@ class _AddonEditorState extends State<_AddonEditor> {
           widget.record?.reference ??
           FirebaseFirestore.instance.collection('coffee_addons').doc();
       await ref.set({
-        if (data['publicId'] == null)
+        if ((data['publicId']?.toString().trim() ?? '').isEmpty)
           'publicId': await ShortIdService.next('AD'),
         'name': name.text.trim(),
         'priceDelta': num.parse(price.text),

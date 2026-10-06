@@ -158,14 +158,72 @@ Future<void> showBranchAllocationHistory(
   ),
 );
 
+class AllocationHistoryActions extends StatelessWidget {
+  const AllocationHistoryActions({
+    super.key,
+    required this.branchId,
+    this.database,
+  });
+  final String branchId;
+  final FirebaseFirestore? database;
+  @override
+  Widget build(BuildContext context) {
+    final db = database ?? FirebaseFirestore.instance;
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: db
+          .collection('allocation_checklist')
+          .where('staffId', isEqualTo: branchId)
+          .snapshots(),
+      builder: (context, snapshot) {
+        final issue =
+            snapshot.data?.docs.any(
+              (doc) =>
+                  doc.data()['kind'] != 'return' &&
+                  ChecklistStatus.label(doc.data()) == ChecklistStatus.issue,
+            ) ??
+            false;
+        return Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            IconButton(
+              tooltip: 'Pending allocations',
+              onPressed: () => showDialog<void>(
+                context: context,
+                builder: (_) => AllocationHistoryDialog(
+                  branchId: branchId,
+                  database: db,
+                  pendingOnly: true,
+                ),
+              ),
+              icon: Badge(
+                isLabelVisible: issue,
+                backgroundColor: Colors.red,
+                child: const Icon(Icons.pending_actions),
+              ),
+            ),
+            IconButton(
+              tooltip: 'Allocation history',
+              onPressed: () =>
+                  showBranchAllocationHistory(context, branchId, database: db),
+              icon: const Icon(Icons.history_rounded),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
 class AllocationHistoryDialog extends StatefulWidget {
   const AllocationHistoryDialog({
     super.key,
     required this.branchId,
     required this.database,
+    this.pendingOnly = false,
   });
   final String branchId;
   final FirebaseFirestore database;
+  final bool pendingOnly;
   @override
   State<AllocationHistoryDialog> createState() =>
       _AllocationHistoryDialogState();
@@ -177,7 +235,7 @@ class _AllocationHistoryDialogState extends State<AllocationHistoryDialog> {
     widget.branchId,
   );
   String _query = '';
-  bool _complete = true;
+  bool _issuesOnly = false;
   DateTime _day = DateUtils.dateOnly(DateTime.now());
 
   Future<void> _pickDates() async {
@@ -193,7 +251,7 @@ class _AllocationHistoryDialogState extends State<AllocationHistoryDialog> {
   @override
   Widget build(BuildContext context) => _frame(
     context,
-    'Allocation history',
+    widget.pendingOnly ? 'Pending allocations' : 'Allocation history',
     Column(
       children: [
         Padding(
@@ -214,28 +272,12 @@ class _AllocationHistoryDialogState extends State<AllocationHistoryDialog> {
                     ),
                   ),
                   const SizedBox(width: 8),
-                  IconButton.filledTonal(
-                    tooltip: 'Filter by date',
-                    onPressed: _pickDates,
-                    icon: const Icon(Icons.date_range_outlined),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  for (final complete in [true, false]) ...[
-                    ChoiceChip(
-                      label: Text(complete ? 'Complete' : 'Pending'),
-                      selected: _complete == complete,
-                      avatar: Icon(
-                        complete ? Icons.task_alt : Icons.schedule,
-                        size: 18,
-                      ),
-                      onSelected: (_) => setState(() => _complete = complete),
+                  if (!widget.pendingOnly)
+                    IconButton.filledTonal(
+                      tooltip: 'Filter by date',
+                      onPressed: _pickDates,
+                      icon: const Icon(Icons.date_range_outlined),
                     ),
-                    if (complete) const SizedBox(width: 12),
-                  ],
                 ],
               ),
             ],
@@ -253,23 +295,57 @@ class _AllocationHistoryDialogState extends State<AllocationHistoryDialog> {
               if (!snapshot.hasData) {
                 return const Center(child: CircularProgressIndicator());
               }
-              final records = groupAllocations(snapshot.data!).where((record) {
+              final hasIssues = snapshot.data!.any(
+                (record) =>
+                    ChecklistStatus.label(record) == ChecklistStatus.issue,
+              );
+              final scoped = snapshot.data!
+                  .where(
+                    (record) => widget.pendingOnly
+                        ? ChecklistStatus.incomingOpen(record) &&
+                              (!_issuesOnly ||
+                                  ChecklistStatus.label(record) ==
+                                      ChecklistStatus.issue)
+                        : ChecklistStatus.label(record) ==
+                              ChecklistStatus.received,
+                  )
+                  .toList();
+              final records = groupAllocations(scoped).where((record) {
                 final at = allocationDate(record);
                 final withinDate = DateUtils.isSameDay(at.toLocal(), _day);
                 final search =
                     '${record['allocatedByName']} ${record['branchName']} ${record['staffName']} ${record['_items']}'
                         .toLowerCase();
-                return record['_complete'] == _complete &&
-                    withinDate &&
+                return (widget.pendingOnly || withinDate) &&
                     search.contains(_query);
               }).toList();
-              if (records.isEmpty) {
-                return const Center(child: Text('No matching allocations.'));
-              }
-              return ListView.builder(
-                padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-                itemCount: records.length,
-                itemBuilder: (context, index) => _card(records[index]),
+              return Column(
+                children: [
+                  if (widget.pendingOnly && hasIssues)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                      child: FilterChip(
+                        selected: _issuesOnly,
+                        onSelected: (value) =>
+                            setState(() => _issuesOnly = value),
+                        avatar: const Badge(
+                          backgroundColor: Colors.red,
+                          child: Icon(Icons.report_outlined),
+                        ),
+                        label: const Text('Issue reported'),
+                      ),
+                    ),
+                  Expanded(
+                    child: records.isEmpty
+                        ? const Center(child: Text('No matching allocations.'))
+                        : ListView.builder(
+                            padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                            itemCount: records.length,
+                            itemBuilder: (context, index) =>
+                                _card(records[index]),
+                          ),
+                  ),
+                ],
               );
             },
           ),

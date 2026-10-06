@@ -4,11 +4,11 @@ import 'package:sales_tracking/widgets/staff_sales_item_grid.dart';
 
 void main() {
   for (final width in [280.0, 360.0, 600.0, 820.0]) {
-    testWidgets('three category items share the first row at width $width', (
-      tester,
-    ) async {
-      await tester.binding.setSurfaceSize(Size(width, 800));
-      addTearDown(() => tester.binding.setSurfaceSize(null));
+    testWidgets('category grid is responsive at width $width', (tester) async {
+      tester.view.physicalSize = Size(width, 800);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
       var tapped = -1;
       await tester.pumpWidget(
         MaterialApp(
@@ -44,11 +44,18 @@ void main() {
       );
       await tester.pumpAndSettle();
       final first = tester.getTopLeft(find.byKey(const ValueKey(0)));
+      final second = tester.getTopLeft(find.byKey(const ValueKey(1)));
       final third = tester.getTopLeft(find.byKey(const ValueKey(2)));
       final fourth = tester.getTopLeft(find.byKey(const ValueKey(3)));
-      expect(first.dy, third.dy);
-      expect(third.dx, greaterThan(first.dx));
-      expect(fourth.dy, greaterThan(first.dy));
+      if (width < 600) {
+        expect(first.dy, second.dy);
+        expect(second.dx, greaterThan(first.dx));
+        expect(third.dy, greaterThan(first.dy));
+      } else {
+        expect(first.dy, third.dy);
+        expect(third.dx, greaterThan(first.dx));
+        expect(fourth.dy, greaterThan(first.dy));
+      }
       await tester.tap(find.byKey(const ValueKey(2)));
       expect(tapped, 2);
       expect(tester.takeException(), isNull);

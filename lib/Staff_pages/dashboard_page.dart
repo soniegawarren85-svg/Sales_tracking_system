@@ -1154,20 +1154,16 @@ class _DashboardPageState extends State<DashboardPage>
                 8,
               ),
               child: Align(
-                alignment: isTablet ? Alignment.centerLeft : Alignment.center,
+                alignment: Alignment.centerLeft,
                 child: ConstrainedBox(
                   constraints: BoxConstraints(maxWidth: contentMaxWidth),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      if (isTablet)
-                        Row(children: [const _SectionLabel(title: 'Dashboard')])
-                      else ...[
-                        const Align(
-                          alignment: Alignment.center,
-                          child: _SectionLabel(title: 'Dashboard'),
-                        ),
-                      ],
+                      const Align(
+                        alignment: Alignment.centerLeft,
+                        child: _SectionLabel(title: 'Dashboard'),
+                      ),
                       const SizedBox(height: 12),
                       Align(
                         alignment: isTablet
@@ -1226,22 +1222,15 @@ class _DashboardPageState extends State<DashboardPage>
                 10,
               ),
               child: Align(
-                alignment: isTablet ? Alignment.centerLeft : Alignment.center,
+                alignment: Alignment.centerLeft,
                 child: ConstrainedBox(
                   constraints: BoxConstraints(maxWidth: contentMaxWidth),
-                  child: Column(
-                    crossAxisAlignment: isTablet
-                        ? CrossAxisAlignment.start
-                        : CrossAxisAlignment.center,
+                  child: Row(
                     children: [
-                      const _SectionLabel(title: 'Performance'),
-                      const SizedBox(height: 10),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        alignment: WrapAlignment.center,
-                        children: [_HistoryButton(onTap: _showHistory)],
+                      const Expanded(
+                        child: _SectionLabel(title: 'Performance'),
                       ),
+                      _HistoryButton(onTap: _showHistory),
                     ],
                   ),
                 ),

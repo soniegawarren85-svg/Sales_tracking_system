@@ -21,6 +21,24 @@ class ShortIdService {
     tx.set(ref, {'count': number});
     return shortCode(prefix, number);
   });
+
+  static Future<void> ensureAddonPublicIds() async {
+    final snapshot = await _db
+        .collection('coffee_addons')
+        .get(const GetOptions(source: Source.server));
+    for (final doc in snapshot.docs) {
+      final publicId = doc.data()['publicId']?.toString().trim() ?? '';
+      if (publicId.isNotEmpty) continue;
+      final code = await next('AD');
+      await _db.runTransaction((tx) async {
+        final current = await tx.get(doc.reference);
+        final currentId = current.data()?['publicId']?.toString().trim() ?? '';
+        if (currentId.isNotEmpty) return;
+        tx.update(doc.reference, {'publicId': code});
+      });
+    }
+  }
+
   // Add display codes while preserving document IDs and item stock references.
   static Future<void> refresh() async {
     if (_running) return;

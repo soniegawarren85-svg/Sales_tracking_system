@@ -1,3 +1,4 @@
+import '../../services/refund_value.dart';
 import '../../services/session_actor.dart';
 import '../../widgets/assign_inventory_tile.dart';
 import '../../widgets/horizontal_controls.dart';
@@ -200,6 +201,7 @@ class _AssignModeButton extends StatelessWidget {
 class _BudgetPageState extends State<BudgetPage>
     with SingleTickerProviderStateMixin {
   final _budgetControllers = <String, TextEditingController>{};
+  final _assignmentQtyControllers = <String, TextEditingController>{};
   final _branchSearchController = TextEditingController();
   final _allocationSearchController = TextEditingController();
   final _currentAllocations = <String, double>{};
@@ -280,6 +282,9 @@ class _BudgetPageState extends State<BudgetPage>
     }
     for (var c in _budgetControllers.values) {
       c.dispose();
+    }
+    for (final controller in _assignmentQtyControllers.values) {
+      controller.dispose();
     }
     _branchSearchController.dispose();
     _allocationSearchController.dispose();
@@ -1233,9 +1238,13 @@ class _BudgetPageState extends State<BudgetPage>
           .get(),
       _firestore.collection('staff_inventory').get(),
     ]);
-    final qtyControllers = <String, TextEditingController>{};
+    for (final controller in _assignmentQtyControllers.values) {
+      controller.clear();
+    }
     final selectedCoffeeIds = <String>{};
     final selectedAddonIds = <String>{};
+    var isAssigning = false;
+    var assignmentSucceeded = false;
     var showCategories =
         onlyType == null || onlyType == 'Category' || onlyType == 'Categories';
     var showCoffee = onlyType == 'Beverages';
@@ -1246,449 +1255,501 @@ class _BudgetPageState extends State<BudgetPage>
       builder: (dialogContext) {
         return StatefulBuilder(
           builder: (context, setDialogState) {
-            return Dialog(
-              insetPadding: const EdgeInsets.symmetric(
-                horizontal: 8,
-                vertical: 20,
-              ),
-              backgroundColor: AppColors.background,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(24),
-              ),
-              child: Container(
-                width: double.maxFinite,
-                constraints: BoxConstraints(
-                  maxWidth: 760,
-                  maxHeight: MediaQuery.of(context).size.height * 0.86,
+            return PopScope(
+              canPop: !isAssigning,
+              child: Dialog(
+                insetPadding: const EdgeInsets.symmetric(
+                  horizontal: 8,
+                  vertical: 20,
                 ),
-                padding: const EdgeInsets.all(18),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Row(
-                      children: [
-                        const Expanded(
-                          child: Text(
-                            'Assign Inventory',
-                            style: TextStyle(
-                              color: kBannerTop,
-                              fontSize: 20,
-                              fontWeight: FontWeight.w900,
+                backgroundColor: AppColors.background,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(24),
+                ),
+                child: Container(
+                  width: double.maxFinite,
+                  constraints: BoxConstraints(
+                    maxWidth: 760,
+                    maxHeight: MediaQuery.of(context).size.height * 0.86,
+                  ),
+                  padding: const EdgeInsets.all(18),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Row(
+                        children: [
+                          const Expanded(
+                            child: Text(
+                              'Assign Inventory',
+                              style: TextStyle(
+                                color: kBannerTop,
+                                fontSize: 20,
+                                fontWeight: FontWeight.w900,
+                              ),
                             ),
                           ),
-                        ),
-                        IconButton(
-                          onPressed: () => Navigator.pop(dialogContext),
-                          icon: const Icon(Icons.close_rounded),
-                          color: kDeep,
-                        ),
-                      ],
-                    ),
-                    Text(
-                      staffName,
-                      style: const TextStyle(
-                        color: kPrimary,
-                        fontWeight: FontWeight.w700,
+                          IconButton(
+                            onPressed: isAssigning
+                                ? null
+                                : () => Navigator.pop(dialogContext),
+                            icon: const Icon(Icons.close_rounded),
+                            color: kDeep,
+                          ),
+                        ],
                       ),
-                    ),
-                    const SizedBox(height: 10),
-                    _buildAssignedInventoryPreview(staffId),
-                    const SizedBox(height: 14),
-                    Flexible(
-                      child: ConstrainedBox(
-                        constraints: BoxConstraints(
-                          maxHeight: MediaQuery.of(context).size.height * 0.68,
+                      Text(
+                        staffName,
+                        style: const TextStyle(
+                          color: kPrimary,
+                          fontWeight: FontWeight.w700,
                         ),
-                        child: FutureBuilder<List<QuerySnapshot<Map<String, dynamic>>>>(
-                          future: inventoryLoad,
-                          builder: (context, snapshot) {
-                            if (snapshot.connectionState ==
-                                ConnectionState.waiting) {
-                              // Keep the dialog usable while inventory loads;
-                              // do not show the large blocking loader.
-                              return const SizedBox.shrink();
-                            }
-                            if (snapshot.hasError) {
-                              return const Center(
-                                child: Text('Error loading inventory'),
-                              );
-                            }
+                      ),
+                      const SizedBox(height: 10),
+                      _buildAssignedInventoryPreview(staffId),
+                      const SizedBox(height: 14),
+                      Flexible(
+                        child: ConstrainedBox(
+                          constraints: BoxConstraints(
+                            maxHeight:
+                                MediaQuery.of(context).size.height * 0.68,
+                          ),
+                          child: FutureBuilder<List<QuerySnapshot<Map<String, dynamic>>>>(
+                            future: inventoryLoad,
+                            builder: (context, snapshot) {
+                              if (snapshot.connectionState ==
+                                  ConnectionState.waiting) {
+                                // Keep the dialog usable while inventory loads;
+                                // do not show the large blocking loader.
+                                return const SizedBox.shrink();
+                              }
+                              if (snapshot.hasError) {
+                                return const Center(
+                                  child: Text('Error loading inventory'),
+                                );
+                              }
 
-                            final inventorySnapshot = snapshot.data?[0];
-                            final coffeeSnapshot = snapshot.data?[1];
-                            final addonSnapshot = snapshot.data?[2];
-                            final assignedInventorySnapshot = snapshot.data?[3];
-                            final assignedDocs =
-                                assignedInventorySnapshot?.docs ??
-                                <QueryDocumentSnapshot<Map<String, dynamic>>>[];
-                            final activeDocs = (inventorySnapshot?.docs ?? [])
-                                .where((doc) {
-                                  final data = doc.data();
-                                  final isSalesRecord =
-                                      data['status'] == 'completed' ||
-                                      data['salesId'] != null;
-                                  return (onlySourceId == null ||
-                                          doc.id == onlySourceId) &&
-                                      data['isDeleted'] != true &&
-                                      data['deletedAt'] == null &&
-                                      !isSalesRecord;
-                                })
-                                .toList();
-                            final categoryDocs = activeDocs.where((doc) {
-                              final data = doc.data();
-                              return data['isBundle'] != true &&
-                                  _assignableCategoryItems(data).isNotEmpty;
-                            }).toList();
-                            final bundleDocs = activeDocs.where((doc) {
-                              final data = doc.data();
-                              return data['isBundle'] == true &&
-                                  availableBundleStock(data) > 0;
-                            }).toList();
-                            final coffeeDocs = (coffeeSnapshot?.docs ?? [])
-                                .where(
-                                  (doc) =>
-                                      onlySourceId == null ||
-                                      doc.id == onlySourceId,
-                                )
-                                .toList();
-                            final addonDocs = (addonSnapshot?.docs ?? [])
-                                .where(
-                                  (doc) =>
-                                      (onlySourceId == null ||
-                                          doc.id == onlySourceId) &&
-                                      doc.data()['isDeleted'] != true &&
-                                      !bundleExpired(
-                                        doc.data(),
-                                        DateTime.now(),
-                                      ),
-                                )
-                                .toList();
-                            final docs = showAddons
-                                ? addonDocs
-                                : showCoffee
-                                ? coffeeDocs
-                                : showCategories
-                                ? categoryDocs
-                                : bundleDocs;
+                              final inventorySnapshot = snapshot.data?[0];
+                              final coffeeSnapshot = snapshot.data?[1];
+                              final addonSnapshot = snapshot.data?[2];
+                              final assignedInventorySnapshot =
+                                  snapshot.data?[3];
+                              final assignedDocs =
+                                  assignedInventorySnapshot?.docs ??
+                                  <
+                                    QueryDocumentSnapshot<Map<String, dynamic>>
+                                  >[];
+                              final activeDocs = (inventorySnapshot?.docs ?? [])
+                                  .where((doc) {
+                                    final data = doc.data();
+                                    final isSalesRecord =
+                                        data['status'] == 'completed' ||
+                                        data['salesId'] != null;
+                                    return (onlySourceId == null ||
+                                            doc.id == onlySourceId) &&
+                                        data['isDeleted'] != true &&
+                                        data['deletedAt'] == null &&
+                                        !isSalesRecord;
+                                  })
+                                  .toList();
+                              final categoryDocs = activeDocs.where((doc) {
+                                final data = doc.data();
+                                return data['isBundle'] != true &&
+                                    _assignableCategoryItems(data).isNotEmpty;
+                              }).toList();
+                              final bundleDocs = activeDocs.where((doc) {
+                                final data = doc.data();
+                                return data['isBundle'] == true &&
+                                    availableBundleStock(data) > 0;
+                              }).toList();
+                              final coffeeDocs = (coffeeSnapshot?.docs ?? [])
+                                  .where(
+                                    (doc) =>
+                                        onlySourceId == null ||
+                                        doc.id == onlySourceId,
+                                  )
+                                  .toList();
+                              final addonDocs = (addonSnapshot?.docs ?? [])
+                                  .where(
+                                    (doc) =>
+                                        (onlySourceId == null ||
+                                            doc.id == onlySourceId) &&
+                                        doc.data()['isDeleted'] != true &&
+                                        !bundleExpired(
+                                          doc.data(),
+                                          DateTime.now(),
+                                        ),
+                                  )
+                                  .toList();
+                              final docs = showAddons
+                                  ? addonDocs
+                                  : showCoffee
+                                  ? coffeeDocs
+                                  : showCategories
+                                  ? categoryDocs
+                                  : bundleDocs;
 
-                            if (onlyType == null &&
-                                categoryDocs.isEmpty &&
-                                bundleDocs.isNotEmpty &&
-                                showCategories &&
-                                !showCoffee &&
-                                !showAddons) {
-                              WidgetsBinding.instance.addPostFrameCallback((_) {
-                                setDialogState(() => showCategories = false);
-                              });
-                            }
+                              if (onlyType == null &&
+                                  categoryDocs.isEmpty &&
+                                  bundleDocs.isNotEmpty &&
+                                  showCategories &&
+                                  !showCoffee &&
+                                  !showAddons) {
+                                WidgetsBinding.instance.addPostFrameCallback((
+                                  _,
+                                ) {
+                                  if (context.mounted) {
+                                    setDialogState(
+                                      () => showCategories = false,
+                                    );
+                                  }
+                                });
+                              }
 
-                            if (onlyType == null &&
-                                categoryDocs.isEmpty &&
-                                bundleDocs.isEmpty &&
-                                coffeeDocs.isEmpty &&
-                                addonDocs.isEmpty) {
-                              return const Center(
-                                child: Text('No inventory available.'),
-                              );
-                            }
+                              if (onlyType == null &&
+                                  categoryDocs.isEmpty &&
+                                  bundleDocs.isEmpty &&
+                                  coffeeDocs.isEmpty &&
+                                  addonDocs.isEmpty) {
+                                return const Center(
+                                  child: Text('No inventory available.'),
+                                );
+                              }
 
-                            return Column(
-                              children: [
-                                if (onlyType == null)
-                                  Row(
-                                    children: [
-                                      Expanded(
-                                        child: _AssignModeButton(
-                                          selected: showCategories,
-                                          icon: Icons.category_rounded,
-                                          label:
-                                              'Categories (${categoryDocs.length})',
-                                          onTap: () => setDialogState(() {
-                                            showCategories = true;
-                                            showCoffee = false;
-                                            showAddons = false;
-                                          }),
-                                        ),
-                                      ),
-                                      const SizedBox(width: 10),
-                                      Expanded(
-                                        child: _AssignModeButton(
-                                          selected:
-                                              !showCategories &&
-                                              !showCoffee &&
-                                              !showAddons,
-                                          icon: Icons.inventory_2_rounded,
-                                          label:
-                                              'Bundle (${bundleDocs.length})',
-                                          onTap: () => setDialogState(() {
-                                            showCategories = false;
-                                            showCoffee = false;
-                                            showAddons = false;
-                                          }),
-                                        ),
-                                      ),
-                                      const SizedBox(width: 10),
-                                      Expanded(
-                                        child: _AssignModeButton(
-                                          selected: showCoffee,
-                                          icon: Icons.coffee_rounded,
-                                          label:
-                                              'Beverages (${coffeeDocs.length})',
-                                          onTap: () => setDialogState(() {
-                                            showCategories = false;
-                                            showCoffee = true;
-                                            showAddons = false;
-                                          }),
-                                        ),
-                                      ),
-                                      const SizedBox(width: 10),
-                                      Expanded(
-                                        child: _AssignModeButton(
-                                          selected: showAddons,
-                                          icon:
-                                              Icons.add_circle_outline_rounded,
-                                          label:
-                                              'Add-ons (${addonDocs.length})',
-                                          onTap: () => setDialogState(() {
-                                            showCategories = false;
-                                            showCoffee = false;
-                                            showAddons = true;
-                                          }),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                const SizedBox(height: 12),
-                                Expanded(
-                                  child: docs.isEmpty
-                                      ? Center(
-                                          child: Text(
-                                            showCategories
-                                                ? 'No active categories available.'
-                                                : showAddons
-                                                ? 'No add-ons available.'
-                                                : showCoffee
-                                                ? 'No beverage products available.'
-                                                : 'No active bundles available.',
+                              return Column(
+                                children: [
+                                  if (onlyType == null)
+                                    Row(
+                                      children: [
+                                        Expanded(
+                                          child: _AssignModeButton(
+                                            selected: showCategories,
+                                            icon: Icons.category_rounded,
+                                            label:
+                                                'Categories (${categoryDocs.length})',
+                                            onTap: () => setDialogState(() {
+                                              showCategories = true;
+                                              showCoffee = false;
+                                              showAddons = false;
+                                            }),
                                           ),
-                                        )
-                                      : ListView.separated(
-                                          itemCount: docs.length,
-                                          separatorBuilder: (_, _) =>
-                                              const SizedBox(height: 10),
-                                          itemBuilder: (context, index) {
-                                            final doc = docs[index];
-                                            final data = doc.data();
-                                            if (showAddons) {
-                                              final addonId = doc.id;
-                                              return _AssignCoffeeTile(
-                                                icon: Icons
-                                                    .add_circle_outline_rounded,
-                                                title:
-                                                    data['name']?.toString() ??
-                                                    'Add-on',
-                                                subtitle:
-                                                    '+ P${_parsePrice(data['priceDelta']).toStringAsFixed(2)}',
-                                                selected: selectedAddonIds
-                                                    .contains(addonId),
-                                                onChanged: (checked) {
-                                                  setDialogState(() {
-                                                    if (checked == true) {
-                                                      selectedAddonIds.add(
-                                                        addonId,
-                                                      );
-                                                    } else {
-                                                      selectedAddonIds.remove(
-                                                        addonId,
-                                                      );
-                                                    }
-                                                  });
-                                                },
-                                              );
-                                            }
-                                            if (showCoffee) {
-                                              final productId = doc.id;
-                                              final sizes =
-                                                  (data['sizes']
-                                                              as List<
-                                                                dynamic
-                                                              >? ??
-                                                          [])
-                                                      .length;
-                                              return _AssignCoffeeTile(
-                                                title:
-                                                    data['name']?.toString() ??
-                                                    'Beverages',
-                                                subtitle:
-                                                    '${data['category'] ?? 'Beverages'} - P${_parsePrice(data['basePrice']).toStringAsFixed(2)} - $sizes sizes',
-                                                selected: selectedCoffeeIds
-                                                    .contains(productId),
-                                                onChanged: (checked) {
-                                                  setDialogState(() {
-                                                    if (checked == true) {
-                                                      selectedCoffeeIds.add(
-                                                        productId,
-                                                      );
-                                                    } else {
-                                                      selectedCoffeeIds.remove(
-                                                        productId,
-                                                      );
-                                                    }
-                                                  });
-                                                },
-                                              );
-                                            }
-                                            final isBundle =
-                                                data['isBundle'] == true;
-                                            final name =
-                                                data['name']?.toString() ??
-                                                'Inventory';
-
-                                            if (isBundle) {
-                                              final stock = _parseInt(
-                                                data['bundleCount'],
-                                              );
-                                              final key = '${doc.id}::bundle';
-                                              final controller = qtyControllers
-                                                  .putIfAbsent(
-                                                    key,
-                                                    () =>
-                                                        TextEditingController(),
-                                                  );
-                                              return AssignInventoryTile(
-                                                title: name,
-                                                subtitle:
-                                                    'Bundle stock: $stock - P${_parsePrice(data['price']).toStringAsFixed(2)}',
-                                                icon: Icons.inventory_2_rounded,
-                                                controller: controller,
-                                                enabled: stock > 0,
-                                              );
-                                            }
-
-                                            final items =
-                                                _assignableCategoryItems(data)
-                                                    .where(
-                                                      (entry) =>
-                                                          onlyItemId == null ||
-                                                          entry.value['id']
-                                                                  ?.toString() ==
-                                                              onlyItemId,
-                                                    )
-                                                    .toList();
-                                            return Container(
-                                              padding: const EdgeInsets.all(12),
-                                              decoration: BoxDecoration(
-                                                color: Colors.white,
-                                                borderRadius:
-                                                    BorderRadius.circular(16),
-                                                border: Border.all(
-                                                  color: kAccent,
-                                                ),
-                                              ),
-                                              child: Column(
-                                                crossAxisAlignment:
-                                                    CrossAxisAlignment.start,
-                                                children: [
-                                                  Text(
-                                                    name,
-                                                    style: const TextStyle(
-                                                      color: kBannerTop,
-                                                      fontSize: 15,
-                                                      fontWeight:
-                                                          FontWeight.w900,
-                                                    ),
-                                                  ),
-                                                  const SizedBox(height: 10),
-                                                  ...items.map((entry) {
-                                                    final item = entry.value;
-                                                    final stock =
-                                                        _displayAssignableStock(
-                                                          item,
-                                                          doc.id,
-                                                          assignedDocs,
+                                        ),
+                                        const SizedBox(width: 10),
+                                        Expanded(
+                                          child: _AssignModeButton(
+                                            selected:
+                                                !showCategories &&
+                                                !showCoffee &&
+                                                !showAddons,
+                                            icon: Icons.inventory_2_rounded,
+                                            label:
+                                                'Bundle (${bundleDocs.length})',
+                                            onTap: () => setDialogState(() {
+                                              showCategories = false;
+                                              showCoffee = false;
+                                              showAddons = false;
+                                            }),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 10),
+                                        Expanded(
+                                          child: _AssignModeButton(
+                                            selected: showCoffee,
+                                            icon: Icons.coffee_rounded,
+                                            label:
+                                                'Beverages (${coffeeDocs.length})',
+                                            onTap: () => setDialogState(() {
+                                              showCategories = false;
+                                              showCoffee = true;
+                                              showAddons = false;
+                                            }),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 10),
+                                        Expanded(
+                                          child: _AssignModeButton(
+                                            selected: showAddons,
+                                            icon: Icons
+                                                .add_circle_outline_rounded,
+                                            label:
+                                                'Add-ons (${addonDocs.length})',
+                                            onTap: () => setDialogState(() {
+                                              showCategories = false;
+                                              showCoffee = false;
+                                              showAddons = true;
+                                            }),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  const SizedBox(height: 12),
+                                  Expanded(
+                                    child: docs.isEmpty
+                                        ? Center(
+                                            child: Text(
+                                              showCategories
+                                                  ? 'No active categories available.'
+                                                  : showAddons
+                                                  ? 'No add-ons available.'
+                                                  : showCoffee
+                                                  ? 'No beverage products available.'
+                                                  : 'No active bundles available.',
+                                            ),
+                                          )
+                                        : ListView.separated(
+                                            itemCount: docs.length,
+                                            separatorBuilder: (_, _) =>
+                                                const SizedBox(height: 10),
+                                            itemBuilder: (context, index) {
+                                              final doc = docs[index];
+                                              final data = doc.data();
+                                              if (showAddons) {
+                                                final addonId = doc.id;
+                                                return _AssignCoffeeTile(
+                                                  icon: Icons
+                                                      .add_circle_outline_rounded,
+                                                  title:
+                                                      data['name']
+                                                          ?.toString() ??
+                                                      'Add-on',
+                                                  subtitle:
+                                                      '+ P${_parsePrice(data['priceDelta']).toStringAsFixed(2)}',
+                                                  selected: selectedAddonIds
+                                                      .contains(addonId),
+                                                  onChanged: (checked) {
+                                                    setDialogState(() {
+                                                      if (checked == true) {
+                                                        selectedAddonIds.add(
+                                                          addonId,
                                                         );
-                                                    final itemName =
-                                                        item['name']
-                                                            ?.toString() ??
-                                                        'Item';
-                                                    final key =
-                                                        '${doc.id}::${entry.key}';
-                                                    final controller =
-                                                        qtyControllers.putIfAbsent(
+                                                      } else {
+                                                        selectedAddonIds.remove(
+                                                          addonId,
+                                                        );
+                                                      }
+                                                    });
+                                                  },
+                                                );
+                                              }
+                                              if (showCoffee) {
+                                                final productId = doc.id;
+                                                final sizes =
+                                                    (data['sizes']
+                                                                as List<
+                                                                  dynamic
+                                                                >? ??
+                                                            [])
+                                                        .length;
+                                                return _AssignCoffeeTile(
+                                                  title:
+                                                      data['name']
+                                                          ?.toString() ??
+                                                      'Beverages',
+                                                  subtitle:
+                                                      '${data['category'] ?? 'Beverages'} - P${_parsePrice(data['basePrice']).toStringAsFixed(2)} - $sizes sizes',
+                                                  selected: selectedCoffeeIds
+                                                      .contains(productId),
+                                                  onChanged: (checked) {
+                                                    setDialogState(() {
+                                                      if (checked == true) {
+                                                        selectedCoffeeIds.add(
+                                                          productId,
+                                                        );
+                                                      } else {
+                                                        selectedCoffeeIds
+                                                            .remove(productId);
+                                                      }
+                                                    });
+                                                  },
+                                                );
+                                              }
+                                              final isBundle =
+                                                  data['isBundle'] == true;
+                                              final name =
+                                                  data['name']?.toString() ??
+                                                  'Inventory';
+
+                                              if (isBundle) {
+                                                final stock = _parseInt(
+                                                  data['bundleCount'],
+                                                );
+                                                final key = '${doc.id}::bundle';
+                                                final controller =
+                                                    _assignmentQtyControllers
+                                                        .putIfAbsent(
                                                           key,
                                                           () =>
                                                               TextEditingController(),
                                                         );
-                                                    return Padding(
-                                                      padding:
-                                                          const EdgeInsets.only(
-                                                            bottom: 8,
-                                                          ),
-                                                      child: AssignInventoryTile(
-                                                        title: itemName,
-                                                        subtitle:
-                                                            'Stock: $stock - P${_parsePrice(item['price']).toStringAsFixed(2)}',
-                                                        icon: Icons
-                                                            .category_rounded,
-                                                        controller: controller,
-                                                        enabled: stock > 0,
+                                                return AssignInventoryTile(
+                                                  title: name,
+                                                  subtitle:
+                                                      'Bundle stock: $stock - P${_parsePrice(data['price']).toStringAsFixed(2)}',
+                                                  icon:
+                                                      Icons.inventory_2_rounded,
+                                                  controller: controller,
+                                                  enabled: stock > 0,
+                                                );
+                                              }
+
+                                              final items =
+                                                  _assignableCategoryItems(data)
+                                                      .where(
+                                                        (entry) =>
+                                                            onlyItemId ==
+                                                                null ||
+                                                            entry.value['id']
+                                                                    ?.toString() ==
+                                                                onlyItemId,
+                                                      )
+                                                      .toList();
+                                              return Container(
+                                                padding: const EdgeInsets.all(
+                                                  12,
+                                                ),
+                                                decoration: BoxDecoration(
+                                                  color: Colors.white,
+                                                  borderRadius:
+                                                      BorderRadius.circular(16),
+                                                  border: Border.all(
+                                                    color: kAccent,
+                                                  ),
+                                                ),
+                                                child: Column(
+                                                  crossAxisAlignment:
+                                                      CrossAxisAlignment.start,
+                                                  children: [
+                                                    Text(
+                                                      name,
+                                                      style: const TextStyle(
+                                                        color: kBannerTop,
+                                                        fontSize: 15,
+                                                        fontWeight:
+                                                            FontWeight.w900,
                                                       ),
-                                                    );
-                                                  }),
-                                                ],
+                                                    ),
+                                                    const SizedBox(height: 10),
+                                                    ...items.map((entry) {
+                                                      final item = entry.value;
+                                                      final stock =
+                                                          _displayAssignableStock(
+                                                            item,
+                                                            doc.id,
+                                                            assignedDocs,
+                                                          );
+                                                      final itemName =
+                                                          item['name']
+                                                              ?.toString() ??
+                                                          'Item';
+                                                      final key =
+                                                          '${doc.id}::${entry.key}';
+                                                      final controller =
+                                                          _assignmentQtyControllers
+                                                              .putIfAbsent(
+                                                                key,
+                                                                () =>
+                                                                    TextEditingController(),
+                                                              );
+                                                      return Padding(
+                                                        padding:
+                                                            const EdgeInsets.only(
+                                                              bottom: 8,
+                                                            ),
+                                                        child: AssignInventoryTile(
+                                                          title: itemName,
+                                                          subtitle:
+                                                              'Stock: $stock - P${_parsePrice(item['price']).toStringAsFixed(2)}',
+                                                          icon: Icons
+                                                              .category_rounded,
+                                                          controller:
+                                                              controller,
+                                                          enabled: stock > 0,
+                                                        ),
+                                                      );
+                                                    }),
+                                                  ],
+                                                ),
+                                              );
+                                            },
+                                          ),
+                                  ),
+                                ],
+                              );
+                            },
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      ElevatedButton.icon(
+                        onPressed: isAssigning
+                            ? null
+                            : () async {
+                                setDialogState(() => isAssigning = true);
+                                try {
+                                  FocusManager.instance.primaryFocus?.unfocus();
+                                  final didAssign =
+                                      await _assignInventoryToStaff(
+                                        staffId: staffId,
+                                        staffName: staffName,
+                                        isBranch: isBranch,
+                                        quantities: _assignmentQtyControllers
+                                            .map(
+                                              (key, controller) => MapEntry(
+                                                key,
+                                                _parseInt(controller.text),
                                               ),
-                                            );
-                                          },
-                                        ),
+                                            ),
+                                        coffeeProductIds: selectedCoffeeIds,
+                                        addonIds: selectedAddonIds,
+                                      );
+                                  if (!didAssign) {
+                                    if (dialogContext.mounted) {
+                                      setDialogState(() => isAssigning = false);
+                                    }
+                                  } else if (dialogContext.mounted) {
+                                    assignmentSucceeded = true;
+                                    Navigator.pop(dialogContext);
+                                  }
+                                } catch (e) {
+                                  if (dialogContext.mounted) {
+                                    setDialogState(() => isAssigning = false);
+                                  }
+                                  if (mounted) {
+                                    _showSnack(
+                                      'Failed to assign inventory: $e',
+                                      Colors.red.shade600,
+                                    );
+                                  }
+                                }
+                              },
+                        icon: isAssigning
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Colors.white,
                                 ),
-                              ],
-                            );
-                          },
+                              )
+                            : const Icon(Icons.send_rounded),
+                        label: Text(
+                          isAssigning
+                              ? 'Assigning...'
+                              : isBranch
+                              ? 'Assign to Branch'
+                              : 'Assign to Staff',
+                        ),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: kPrimary,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(16),
+                          ),
                         ),
                       ),
-                    ),
-                    const SizedBox(height: 14),
-                    ElevatedButton.icon(
-                      onPressed: () async {
-                        try {
-                          FocusManager.instance.primaryFocus?.unfocus();
-                          await _assignInventoryToStaff(
-                            staffId: staffId,
-                            staffName: staffName,
-                            isBranch: isBranch,
-                            quantities: qtyControllers.map(
-                              (key, controller) =>
-                                  MapEntry(key, _parseInt(controller.text)),
-                            ),
-                            coffeeProductIds: selectedCoffeeIds,
-                            addonIds: selectedAddonIds,
-                          );
-                          if (dialogContext.mounted) {
-                            Navigator.pop(dialogContext);
-                          }
-                        } catch (e) {
-                          if (!mounted) return;
-                          _showSnack(
-                            'Failed to assign inventory: $e',
-                            Colors.red.shade600,
-                          );
-                        }
-                      },
-                      icon: const Icon(Icons.send_rounded),
-                      label: Text(
-                        isBranch ? 'Assign to Branch' : 'Assign to Staff',
-                      ),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: kPrimary,
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(16),
-                        ),
-                      ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
             );
@@ -1698,12 +1759,15 @@ class _BudgetPageState extends State<BudgetPage>
     );
 
     FocusManager.instance.primaryFocus?.unfocus();
-    for (final controller in qtyControllers.values) {
-      controller.dispose();
+    if (assignmentSucceeded && mounted) {
+      _showSnack(
+        'Inventory successfully assigned to $staffName',
+        Colors.green.shade600,
+      );
     }
   }
 
-  Future<void> _assignInventoryToStaff({
+  Future<bool> _assignInventoryToStaff({
     required String staffId,
     required String staffName,
     required bool isBranch,
@@ -1713,10 +1777,11 @@ class _BudgetPageState extends State<BudgetPage>
   }) async {
     final allocator = await resolveSessionActor(_firestore, admin: true);
     final branchCode = isBranch
-      ? ((await _firestore.collection('branches').doc(staffId).get()).data()?['branchCode']
-            ?.toString() ??
-          _branchCode(staffId))
-      : '';
+        ? ((await _firestore.collection('branches').doc(staffId).get())
+                  .data()?['branchCode']
+                  ?.toString() ??
+              _branchCode(staffId))
+        : '';
     final deliveryId = _firestore.collection('allocation_checklist').doc().id;
     void stage(
       Transaction transaction,
@@ -1753,7 +1818,7 @@ class _BudgetPageState extends State<BudgetPage>
         'Select beverages, add-ons, or enter at least one quantity',
         Colors.orange.shade700,
       );
-      return;
+      return false;
     }
 
     final selectedAddonOptions = <Map<String, dynamic>>[];
@@ -2066,11 +2131,7 @@ class _BudgetPageState extends State<BudgetPage>
       }
     });
 
-    if (!mounted) return;
-    _showSnack(
-      'Allocation sent to $staffName checklist',
-      Colors.green.shade600,
-    );
+    return true;
   }
 
   Future<List<QueryDocumentSnapshot<Map<String, dynamic>>>> _loadReportDocs(
@@ -4721,12 +4782,7 @@ class _BudgetPageState extends State<BudgetPage>
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Expanded(child: _buildAllocationCategories()),
-                  IconButton(
-                    tooltip: 'Allocation history',
-                    onPressed: () =>
-                        showBranchAllocationHistory(context, branchId),
-                    icon: const Icon(Icons.history_rounded),
-                  ),
+                  AllocationHistoryActions(branchId: branchId),
                 ],
               ),
               const SizedBox(height: 8),
@@ -5226,6 +5282,7 @@ class _BudgetPageState extends State<BudgetPage>
       : DateTime.tryParse(value?.toString() ?? '') ?? DateTime(1970);
 
   double _analyticsSaleValue(Map<String, dynamic> data) {
+    data = refundValueRecord(data);
     final total = _parsePrice(data['total']);
     if (total != 0) return total.abs();
     final drawerDelta = _parsePrice(data['cashDrawerDelta']);
@@ -5714,7 +5771,7 @@ class _BudgetPageState extends State<BudgetPage>
                     final records = sales.data!.docs
                         .map(
                           (doc) => <String, dynamic>{
-                            ...doc.data(),
+                            ...refundValueRecord(doc.data()),
                             '_id': doc.id,
                           },
                         )
@@ -6256,6 +6313,7 @@ class _BudgetPageState extends State<BudgetPage>
             SizedBox(
               height: 240,
               child: BranchAnalyticsBars(
+                key: ValueKey('$branchId|$_analyticsRange|$today'),
                 values: amounts,
                 labels: labels,
                 colors: graphColors,

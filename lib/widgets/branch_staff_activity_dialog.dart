@@ -44,7 +44,7 @@ class BranchStaffActivityDialog extends StatefulWidget {
 
 class _BranchStaffActivityDialogState extends State<BranchStaffActivityDialog> {
   String _search = '';
-  DateTime? _date;
+  DateTime? _date = DateUtils.dateOnly(DateTime.now());
   late final sessions = (widget.firestore ?? FirebaseFirestore.instance)
       .collection('staff_login_sessions')
       .where(
@@ -118,11 +118,10 @@ class _BranchStaffActivityDialogState extends State<BranchStaffActivityDialog> {
                     final date = await showDatePicker(
                       context: context,
                       initialDate: _date ?? DateTime.now(),
-                      cancelText: 'All dates',
                       firstDate: DateTime(2020),
                       lastDate: DateTime.now(),
                     );
-                    if (mounted) setState(() => _date = date);
+                    if (date != null && mounted) setState(() => _date = date);
                   },
                 ),
               ],

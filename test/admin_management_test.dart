@@ -123,6 +123,9 @@ void main() {
     tester,
   ) async {
     final db = FakeFirebaseFirestore();
+    await db.collection('branches').doc('branch-dagupan').set({
+      'name': 'Dagupan',
+    });
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
@@ -157,31 +160,39 @@ void main() {
     await tester.tap(find.text('Confirm'));
     await tester.pumpAndSettle();
     final saved = (await db.doc('admin_settings/transactions').get()).data()!;
-    expect((saved['discounts'] as List).first['isVoided'], false);
+    final branchSettings =
+        (saved['branchSettings'] as Map)['branch-dagupan'] as Map;
+    expect(
+      ((branchSettings['discounts'] as List).first as Map)['isVoided'],
+      false,
+    );
     await tester.tap(find.byType(Switch).first);
     await tester.pumpAndSettle();
     expect(
-      find.text('Turn off all discounts in the staff cashier?'),
+      find.text('Turn off all discounts in the Dagupan staff cashier?'),
       findsOneWidget,
     );
     await tester.tap(find.text('Confirm'));
     await tester.pumpAndSettle();
     expect(
-      (await db.doc('admin_settings/transactions').get())
-          .data()!['discountsEnabled'],
+      (((await db.doc('admin_settings/transactions').get())
+                  .data()!['branchSettings']
+              as Map)['branch-dagupan']
+          as Map)['discountsEnabled'],
       false,
     );
   });
   testWidgets('Payment defaults contain locked Cash and GCash only', (
     tester,
   ) async {
+    final db = FakeFirebaseFirestore();
+    await db.collection('branches').doc('branch-dagupan').set({
+      'name': 'Dagupan',
+    });
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
-          body: TransactionSettingsDialog(
-            kind: 'payments',
-            firestore: FakeFirebaseFirestore(),
-          ),
+          body: TransactionSettingsDialog(kind: 'payments', firestore: db),
         ),
       ),
     );

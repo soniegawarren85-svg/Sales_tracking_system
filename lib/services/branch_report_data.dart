@@ -450,7 +450,8 @@ class BranchReportData {
         for (final saved in savedItems) {
           if (reportValue(saved['quantity']) <= 0) continue;
           final item = ensure(saved, saved['sourceInventoryId']?.toString());
-          if (reportInRange(row['createdAt'], start, end)) item['relevant'] = true;
+          if (reportInRange(row['createdAt'], start, end))
+            item['relevant'] = true;
           item['allocated'] =
               reportValue(item['allocated']) + reportValue(saved['quantity']);
           (item['history'] as List).add({
@@ -490,7 +491,8 @@ class BranchReportData {
         );
         item['allocated'] =
             reportValue(item['allocated']) + reportValue(entry.value);
-        if (reportInRange(row['createdAt'], start, end)) item['relevant'] = true;
+        if (reportInRange(row['createdAt'], start, end))
+          item['relevant'] = true;
         (item['history'] as List).add({
           'time': cashRecordDate(row['createdAt']),
           'activity': 'Allocation',
@@ -510,9 +512,15 @@ class BranchReportData {
           ? [row]
           : (row['items'] as List?)?.whereType<Map>().toList() ?? [row];
       for (final variant in variants) {
-        if (row['isCoffee'] != true && row['isBundle'] != true && row['isAddon'] != true &&
+        if (row['isCoffee'] != true &&
+            row['isBundle'] != true &&
+            row['isAddon'] != true &&
             reportValue(variant['stock'] ?? variant['startingStock']) <= 0 &&
-            reportValue(variant['assignedStartingStock'] ?? variant['startingStock']) <= 0) continue;
+            reportValue(
+                  variant['assignedStartingStock'] ?? variant['startingStock'],
+                ) <=
+                0)
+          continue;
         final expired = cashRecordDate(variant['expirationDate']);
         final removed = cashRecordDate(
           variant['deletedAt'] ?? variant['removedAt'] ?? row['deletedAt'],
@@ -545,7 +553,9 @@ class BranchReportData {
         final item = ensure(variant, '${row['sourceInventoryId'] ?? ''}');
         item['relevant'] = true;
         if (row['isAddon'] == true) item['type'] = 'Add-ons';
-        if (!end.isBefore(DateUtils.dateOnly(DateTime.now()).add(const Duration(days: 1)))) {
+        if (!end.isBefore(
+          DateUtils.dateOnly(DateTime.now()).add(const Duration(days: 1)),
+        )) {
           final stock =
               variant['stock'] ??
               variant['bundleCount'] ??
@@ -691,7 +701,9 @@ class BranchReportData {
       item['history'] = visible;
       if (reportValue(item['allocated']) == 0) {
         visible.removeWhere((event) => event['time'] == null);
-        for (final event in visible) { event['balance'] = null; }
+        for (final event in visible) {
+          event['balance'] = null;
+        }
       }
     }
     return result.values.where((item) => item['relevant'] == true).toList()

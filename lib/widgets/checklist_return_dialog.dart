@@ -15,11 +15,13 @@ class ChecklistReturnDialog extends StatefulWidget {
     required this.db,
     required this.scopeIds,
     this.searchText = '',
+    this.selectedDay,
     this.onSubmitted,
   });
   final FirebaseFirestore db;
   final List<String> scopeIds;
   final String searchText;
+  final DateTime? selectedDay;
   final VoidCallback? onSubmitted;
   @override
   State<ChecklistReturnDialog> createState() => _ChecklistReturnDialogState();
@@ -455,6 +457,15 @@ class _ChecklistReturnDialogState extends State<ChecklistReturnDialog> {
     final visible = options
         .where(
           (o) =>
+              (widget.selectedDay == null ||
+                  DateUtils.isSameDay(
+                    o['date'] is Timestamp
+                        ? (o['date'] as Timestamp).toDate()
+                        : o['date'] is DateTime
+                        ? o['date'] as DateTime
+                        : DateTime.tryParse('${o['date']}'),
+                    widget.selectedDay,
+                  )) &&
               (source == 'All' || o['collection'] == source) &&
               '${o['label']} ${o['reason']}'.toLowerCase().contains(
                 widget.searchText.toLowerCase(),

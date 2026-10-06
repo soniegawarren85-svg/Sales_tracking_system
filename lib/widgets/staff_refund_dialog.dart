@@ -794,16 +794,37 @@ class _StaffRefundDialogState extends State<_StaffRefundDialog> {
         ? refundQuantityError(_qty.text, available)
         : null;
     final showItemSelector = !byReceipt;
+    final screenSize = MediaQuery.sizeOf(context);
+    final isCompact = screenSize.width < 600;
     return AlertDialog(
       backgroundColor: const Color(0xFFFFF7FA),
       surfaceTintColor: Colors.transparent,
+      insetPadding: EdgeInsets.symmetric(
+        horizontal: isCompact ? 12 : 40,
+        vertical: 16,
+      ),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(24),
         side: const BorderSide(color: AppColors.border),
       ),
-      titlePadding: const EdgeInsets.fromLTRB(24, 20, 16, 16),
-      contentPadding: const EdgeInsets.fromLTRB(24, 0, 24, 16),
-      actionsPadding: const EdgeInsets.fromLTRB(24, 8, 24, 20),
+      titlePadding: EdgeInsets.fromLTRB(
+        isCompact ? 16 : 24,
+        isCompact ? 14 : 20,
+        isCompact ? 8 : 16,
+        isCompact ? 12 : 16,
+      ),
+      contentPadding: EdgeInsets.fromLTRB(
+        isCompact ? 16 : 24,
+        0,
+        isCompact ? 16 : 24,
+        isCompact ? 8 : 16,
+      ),
+      actionsPadding: EdgeInsets.fromLTRB(
+        isCompact ? 12 : 24,
+        4,
+        isCompact ? 12 : 24,
+        isCompact ? 12 : 20,
+      ),
       title: Row(
         children: [
           Expanded(
@@ -842,8 +863,11 @@ class _StaffRefundDialogState extends State<_StaffRefundDialog> {
           ),
         ],
       ),
-      content: SizedBox(
-        width: 600,
+      content: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxWidth: 600,
+          maxHeight: screenSize.height * 0.62,
+        ),
         child: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -904,6 +928,7 @@ class _StaffRefundDialogState extends State<_StaffRefundDialog> {
               if (!byReceipt) ...[
                 DropdownButtonFormField<String>(
                   value: _source,
+                  isExpanded: true,
                   decoration: const InputDecoration(labelText: 'Source'),
                   items: ['Categories', 'Bundle', 'Beverages']
                       .map((v) => DropdownMenuItem(value: v, child: Text(v)))
@@ -993,6 +1018,7 @@ class _StaffRefundDialogState extends State<_StaffRefundDialog> {
               const SizedBox(height: 12),
               DropdownButtonFormField<String>(
                 value: _refundMethod,
+                isExpanded: true,
                 decoration: const InputDecoration(
                   labelText: 'Refund method',
                   prefixIcon: Icon(Icons.swap_horiz_rounded),

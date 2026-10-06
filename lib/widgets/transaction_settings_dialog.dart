@@ -57,16 +57,21 @@ class _TransactionSettingsDialogState extends State<TransactionSettingsDialog> {
   }
 
   bool voided = false, busy = false;
+  String? selectedBranchId;
   late final reference = (widget.firestore ?? FirebaseFirestore.instance)
       .collection('admin_settings')
       .doc('transactions');
   void notify(String text) =>
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
-  Future<void> save(Map<String, dynamic> patch, String message) async {
+  Future<void> save(
+    String branchId,
+    Map<String, dynamic> patch,
+    String message,
+  ) async {
     setState(() => busy = true);
     try {
       await reference.set({
-        ...patch,
+        'branchSettings': {branchId: patch},
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
       if (mounted) notify(message);
@@ -77,9 +82,12 @@ class _TransactionSettingsDialogState extends State<TransactionSettingsDialog> {
     }
   }
 
-  Future<Map<String, dynamic>?> edit(Map<String, dynamic>? row) async {
+  Future<Map<String, dynamic>?> edit(
+    Map<String, dynamic>? row, {
+    required String branchId,
+  }) async {
     final existing = settingRows(
-      (await reference.get()).data() ?? {},
+      settingsForBranch((await reference.get()).data() ?? {}, branchId),
       widget.kind,
     );
     if (!mounted) return null;
@@ -149,6 +157,7 @@ class _TransactionSettingsDialogState extends State<TransactionSettingsDialog> {
                               } catch (e) {
                                 error = '$e';
                               }
+
                               if (context.mounted)
                                 update(() => uploading = false);
                             },
@@ -258,6 +267,34 @@ class _TransactionSettingsDialogState extends State<TransactionSettingsDialog> {
     return result;
   }
 
+  Widget _branchDropdown(
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> branches,
+    String branchId,
+  ) => DropdownButtonFormField<String>(
+    value: branchId,
+    decoration: const InputDecoration(
+      labelText: 'Branch',
+      border: OutlineInputBorder(),
+    ),
+    items: branches
+        .map(
+          (branch) => DropdownMenuItem(
+            value: branch.id,
+            child: Text(branch.data()['name']?.toString() ?? branch.id),
+          ),
+        )
+        .toList(),
+    onChanged: busy
+        ? null
+        : (value) {
+            if (value == null) return;
+            setState(() {
+              selectedBranchId = value;
+              voided = false;
+            });
+          },
+  );
+
   @override
   Widget build(BuildContext context) => AlertDialog(
     backgroundColor: AppColors.surface,
@@ -270,157 +307,210 @@ class _TransactionSettingsDialogState extends State<TransactionSettingsDialog> {
       widget.kind == 'discounts'
           ? 'Discount Control'
           : widget.kind == 'permissions'
-          ? 'Staff Permissions'
+          ? 'Security and Approval'
           : 'Payment Settings',
     ),
     content: SizedBox(
       width: 620,
-      child: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-        stream: reference.snapshots(),
-        builder: (context, snapshot) {
-          if (snapshot.hasError)
-            return Text('Unable to load settings: ${snapshot.error}');
-          if (!snapshot.hasData)
+      child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+        stream: (widget.firestore ?? FirebaseFirestore.instance)
+            .collection('branches')
+            .orderBy('name')
+            .snapshots(),
+        builder: (context, branchSnapshot) {
+          if (branchSnapshot.hasError) {
+            return Text('Unable to load branches: ${branchSnapshot.error}');
+          }
+          if (!branchSnapshot.hasData) {
             return const Center(child: CircularProgressIndicator());
-          final data = snapshot.data!.data() ?? {};
-          if (widget.kind == 'permissions')
-            return Column(
-              mainAxisSize: MainAxisSize.min,
-              children: staffPermissions.entries
-                  .map(
-                    (entry) => SwitchListTile(
-                      title: Text(entry.value),
-                      value: data[entry.key] != false,
-                      onChanged: busy
-                          ? null
-                          : (value) => save({
-                              entry.key: value,
-                            }, 'Permission updated successfully.'),
-                    ),
-                  )
-                  .toList(),
-            );
-          final rows = settingRows(data, widget.kind);
-          return SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (widget.kind == 'discounts')
-                  SwitchListTile(
-                    title: const Text('Enable discounts'),
-                    value: data['discountsEnabled'] != false,
-                    onChanged: busy
-                        ? null
-                        : (value) async {
-                            if (!value &&
-                                !await confirmSetting(
-                                  context,
-                                  'Turn off all discounts in the staff cashier?',
-                                ))
-                              return;
-                            await save({
-                              'discountsEnabled': value,
-                            }, 'Discount control updated successfully.');
-                          },
-                  ),
-                Row(
+          }
+          final branches = branchSnapshot.data!.docs;
+          if (branches.isEmpty) {
+            return const Text('Create a branch before configuring settings.');
+          }
+          final branchId =
+              branches.any((branch) => branch.id == selectedBranchId)
+              ? selectedBranchId!
+              : branches.first.id;
+          final branchName =
+              branches
+                  .firstWhere((branch) => branch.id == branchId)
+                  .data()['name']
+                  ?.toString() ??
+              branchId;
+          return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+            stream: reference.snapshots(),
+            builder: (context, snapshot) {
+              if (snapshot.hasError)
+                return Text('Unable to load settings: ${snapshot.error}');
+              if (!snapshot.hasData)
+                return const Center(child: CircularProgressIndicator());
+              final data = settingsForBranch(
+                snapshot.data!.data() ?? {},
+                branchId,
+              );
+              if (widget.kind == 'permissions')
+                return Column(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    Expanded(
-                      child: Text(voided ? 'Voided records' : 'Active records'),
-                    ),
-                    IconButton(
-                      tooltip: voided ? 'Active records' : 'Voided records',
-                      icon: Icon(
-                        voided ? Icons.arrow_back : Icons.inventory_2_outlined,
+                    _branchDropdown(branches, branchId),
+                    const SizedBox(height: 8),
+                    ...staffPermissions.entries.map(
+                      (entry) => SwitchListTile(
+                        title: Text(entry.value),
+                        value: data[entry.key] != false,
+                        onChanged: busy
+                            ? null
+                            : (value) => save(
+                                branchId,
+                                {entry.key: value},
+                                '$branchName permission updated successfully.',
+                              ),
                       ),
-                      onPressed: () => setState(() => voided = !voided),
                     ),
                   ],
-                ),
-                ...rows
-                    .asMap()
-                    .entries
-                    .where(
-                      (entry) => (entry.value['isVoided'] == true) == voided,
-                    )
-                    .map((entry) {
-                      final row = entry.value;
-                      final cash =
-                          widget.kind != 'discounts' &&
-                          (row['id'] == 'cash' || row['name'] == 'Cash');
-                      return ListTile(
-                        title: Text('${row['name']}'),
-                        subtitle: widget.kind == 'discounts'
-                            ? Text('${row['percent']}%')
-                            : null,
-                        trailing: cash
+                );
+              final rows = settingRows(data, widget.kind);
+              return SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _branchDropdown(branches, branchId),
+                    const SizedBox(height: 8),
+                    if (widget.kind == 'discounts')
+                      SwitchListTile(
+                        title: const Text('Enable discounts'),
+                        value: data['discountsEnabled'] != false,
+                        onChanged: busy
                             ? null
-                            : Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  if (!voided)
-                                    IconButton(
-                                      tooltip: 'Edit',
-                                      icon: const Icon(Icons.edit_outlined),
-                                      onPressed: busy
-                                          ? null
-                                          : () async {
-                                              final updated = await edit(row);
-                                              if (updated != null) {
-                                                rows[entry.key] = updated;
-                                                await save({
-                                                  widget.kind: rows,
-                                                }, 'Saved successfully.');
-                                              }
-                                            },
-                                    ),
-                                  IconButton(
-                                    tooltip: voided ? 'Restore' : 'Void',
-                                    icon: Icon(
-                                      voided ? Icons.restore : Icons.block,
-                                    ),
-                                    onPressed: busy
-                                        ? null
-                                        : () async {
-                                            if (!await confirmSetting(
-                                              context,
-                                              '${voided ? 'Restore' : 'Void'} ${row['name']}?',
-                                            ))
-                                              return;
-                                            rows[entry.key] = {
-                                              ...row,
-                                              'isVoided': !voided,
-                                            };
-                                            await save(
-                                              {widget.kind: rows},
-                                              voided
-                                                  ? 'Restored successfully.'
-                                                  : 'Voided successfully.',
-                                            );
-                                          },
+                            : (value) async {
+                                if (!value &&
+                                    !await confirmSetting(
+                                      context,
+                                      'Turn off all discounts in the $branchName staff cashier?',
+                                    ))
+                                  return;
+                                await save(
+                                  branchId,
+                                  {'discountsEnabled': value},
+                                  '$branchName discount control updated successfully.',
+                                );
+                              },
+                      ),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            voided ? 'Voided records' : 'Active records',
+                          ),
+                        ),
+                        IconButton(
+                          tooltip: voided ? 'Active records' : 'Voided records',
+                          icon: Icon(
+                            voided
+                                ? Icons.arrow_back
+                                : Icons.inventory_2_outlined,
+                          ),
+                          onPressed: () => setState(() => voided = !voided),
+                        ),
+                      ],
+                    ),
+                    ...rows
+                        .asMap()
+                        .entries
+                        .where(
+                          (entry) =>
+                              (entry.value['isVoided'] == true) == voided,
+                        )
+                        .map((entry) {
+                          final row = entry.value;
+                          final cash =
+                              widget.kind != 'discounts' &&
+                              (row['id'] == 'cash' || row['name'] == 'Cash');
+                          return ListTile(
+                            title: Text('${row['name']}'),
+                            subtitle: widget.kind == 'discounts'
+                                ? Text('${row['percent']}%')
+                                : null,
+                            trailing: cash
+                                ? null
+                                : Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      if (!voided)
+                                        IconButton(
+                                          tooltip: 'Edit',
+                                          icon: const Icon(Icons.edit_outlined),
+                                          onPressed: busy
+                                              ? null
+                                              : () async {
+                                                  final updated = await edit(
+                                                    row,
+                                                    branchId: branchId,
+                                                  );
+                                                  if (updated != null) {
+                                                    rows[entry.key] = updated;
+                                                    await save(
+                                                      branchId,
+                                                      {widget.kind: rows},
+                                                      'Saved for $branchName.',
+                                                    );
+                                                  }
+                                                },
+                                        ),
+                                      IconButton(
+                                        tooltip: voided ? 'Restore' : 'Void',
+                                        icon: Icon(
+                                          voided ? Icons.restore : Icons.block,
+                                        ),
+                                        onPressed: busy
+                                            ? null
+                                            : () async {
+                                                if (!await confirmSetting(
+                                                  context,
+                                                  '${voided ? 'Restore' : 'Void'} ${row['name']}?',
+                                                ))
+                                                  return;
+                                                rows[entry.key] = {
+                                                  ...row,
+                                                  'isVoided': !voided,
+                                                };
+                                                await save(
+                                                  branchId,
+                                                  {widget.kind: rows},
+                                                  voided
+                                                      ? 'Restored for $branchName.'
+                                                      : 'Voided for $branchName.',
+                                                );
+                                              },
+                                      ),
+                                    ],
                                   ),
-                                ],
-                              ),
-                      );
-                    }),
-                if (!voided)
-                  OutlinedButton.icon(
-                    icon: const Icon(Icons.add),
-                    label: const Text('Add'),
-                    onPressed: busy
-                        ? null
-                        : () async {
-                            final row = await edit(null);
-                            if (row != null) {
-                              rows.add(row);
-                              await save({
-                                widget.kind: rows,
-                              }, 'Added successfully.');
-                            }
-                          },
-                  ),
-              ],
-            ),
+                          );
+                        }),
+                    if (!voided)
+                      OutlinedButton.icon(
+                        icon: const Icon(Icons.add),
+                        label: const Text('Add'),
+                        onPressed: busy
+                            ? null
+                            : () async {
+                                final row = await edit(
+                                  null,
+                                  branchId: branchId,
+                                );
+                                if (row != null) {
+                                  rows.add(row);
+                                  await save(branchId, {
+                                    widget.kind: rows,
+                                  }, 'Added for $branchName.');
+                                }
+                              },
+                      ),
+                  ],
+                ),
+              );
+            },
           );
         },
       ),

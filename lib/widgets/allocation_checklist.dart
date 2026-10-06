@@ -26,34 +26,62 @@ class AllocationChecklistButton extends StatelessWidget {
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
       stream: checklistQuery(db, ids, isAdmin).snapshots(),
       builder: (context, snapshot) {
-        final pending =
-            snapshot.data?.docs
-                .where(
-                  (doc) => ChecklistStatus.pending(doc.data(), admin: isAdmin),
-                )
-                .length ??
-            0;
-        return FilledButton.icon(
-          style: FilledButton.styleFrom(
-            backgroundColor: Colors.white,
-            foregroundColor: AppColors.primary,
-            textStyle: const TextStyle(fontWeight: FontWeight.w800),
-            shape: const StadiumBorder(),
-          ),
-          icon: Icon(
-            snapshot.hasError ? Icons.error_outline : Icons.checklist_rounded,
-          ),
-          label: Text(
-            !isAdmin
-                ? 'Checklist'
-                : snapshot.hasError
-                ? 'Checklist (!)'
-                : 'Checklist ($pending)',
-          ),
-          onPressed: () => showDialog<void>(
+        final records =
+            snapshot.data?.docs.map((doc) => doc.data()).toList() ?? [];
+        final incoming = records.any(ChecklistStatus.incomingOpen);
+        final returned = records.any(ChecklistStatus.returnOpen);
+        final compact = MediaQuery.sizeOf(context).width < 600;
+        Widget button({required bool returns}) {
+          final label = returns ? 'Returns' : 'Checklist';
+          final icon = Badge(
+            isLabelVisible: returns ? returned : incoming,
+            backgroundColor: Colors.red,
+            child: Icon(
+              returns
+                  ? Icons.assignment_return_outlined
+                  : Icons.checklist_rounded,
+            ),
+          );
+          void open() => showDialog<void>(
             context: context,
-            builder: (_) => _ChecklistDialog(ids: ids, db: db, admin: isAdmin),
-          ),
+            builder: (_) => _ChecklistDialog(
+              ids: ids,
+              db: db,
+              admin: isAdmin,
+              returnsOnly: returns,
+            ),
+          );
+          if (compact)
+            return IconButton.filledTonal(
+              tooltip: label,
+              onPressed: open,
+              icon: icon,
+            );
+          return Tooltip(
+            message: label,
+            child: FilledButton.icon(
+              style: FilledButton.styleFrom(
+                backgroundColor: Colors.white,
+                foregroundColor: AppColors.primary,
+                textStyle: const TextStyle(fontWeight: FontWeight.w800),
+                shape: const StadiumBorder(),
+              ),
+              icon: icon,
+              label: Text(label),
+              onPressed: open,
+            ),
+          );
+        }
+
+        if (isAdmin) return button(returns: true);
+        return Flex(
+          direction: compact ? Axis.horizontal : Axis.vertical,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            button(returns: false),
+            SizedBox(width: compact ? 8 : 0, height: compact ? 0 : 8),
+            button(returns: true),
+          ],
         );
       },
     );
@@ -74,11 +102,13 @@ class _ChecklistDialog extends StatefulWidget {
   final FirebaseFirestore db;
   final bool admin;
   final bool pendingOnly;
+  final bool returnsOnly;
   const _ChecklistDialog({
     required this.ids,
     required this.db,
     required this.admin,
     this.pendingOnly = false,
+    this.returnsOnly = false,
   });
   @override
   State<_ChecklistDialog> createState() => _ChecklistDialogState();
@@ -101,6 +131,19 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
         ? value.toDate()
         : DateTime.tryParse('$value');
     return parsed == null ? 'Not recorded' : parsed.toLocal().toString();
+  }
+
+  dynamic _checklistDate(Map<String, dynamic> data) {
+    final isReceived =
+        data['kind'] != 'return' &&
+        ChecklistStatus.label(data) == ChecklistStatus.received;
+    if (isReceived) {
+      return data['confirmedAt'] ??
+          data['decidedAt'] ??
+          data['createdAt'] ??
+          data['assignedAt'];
+    }
+    return data['createdAt'] ?? data['assignedAt'];
   }
 
   Future<void> pickDay() async {
@@ -369,7 +412,9 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
             Text(
               'Branch: ${data['branchName'] ?? data['staffName'] ?? data['staffId'] ?? 'Not recorded'}',
             ),
-            Text('Date: ${date(data['createdAt'] ?? data['assignedAt'])}'),
+            Text(
+              '${ChecklistStatus.label(data) == ChecklistStatus.received ? 'Received' : 'Assigned'}: ${date(_checklistDate(data))}',
+            ),
             Text(
               returned
                   ? 'Staff: ${data['submittedByName'] ?? data['staffName'] ?? data['submittedBy'] ?? 'Not recorded'}'
@@ -481,7 +526,13 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
                 const SizedBox(width: 12),
                 Expanded(
                   child: Text(
-                    widget.pendingOnly ? 'Pending items' : 'Checklist',
+                    widget.pendingOnly
+                        ? widget.returnsOnly
+                              ? 'Pending returns'
+                              : 'Pending items'
+                        : widget.returnsOnly
+                        ? 'Returns'
+                        : 'Checklist',
                     style: TextStyle(
                       color: Colors.white,
                       fontSize: 22,
@@ -489,7 +540,25 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
                     ),
                   ),
                 ),
-                if (!widget.pendingOnly)
+                if (widget.admin && widget.returnsOnly && !widget.pendingOnly)
+                  IconButton(
+                    tooltip: 'View pending returns',
+                    onPressed: () => showDialog<void>(
+                      context: context,
+                      builder: (_) => _ChecklistDialog(
+                        ids: widget.ids,
+                        db: widget.db,
+                        admin: true,
+                        pendingOnly: true,
+                        returnsOnly: true,
+                      ),
+                    ),
+                    icon: const Icon(
+                      Icons.visibility_outlined,
+                      color: Colors.white,
+                    ),
+                  ),
+                if (!widget.pendingOnly && !widget.returnsOnly)
                   TextButton.icon(
                     style: TextButton.styleFrom(
                       foregroundColor: Colors.white,
@@ -549,44 +618,52 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
                 final all = snapshot.data!.docs;
                 final pending = all
                     .where(
-                      (doc) => ChecklistStatus.pending(
-                        doc.data(),
-                        admin: widget.admin,
-                      ),
+                      (doc) => widget.returnsOnly
+                          ? ChecklistStatus.returnOpen(doc.data())
+                          : ChecklistStatus.pending(
+                              doc.data(),
+                              admin: widget.admin,
+                            ),
                     )
                     .toList();
                 final docs =
                     all.where((doc) {
                       final d = doc.data();
                       if (widget.pendingOnly) {
-                        return ChecklistStatus.pending(
-                              d,
-                              admin: widget.admin,
-                            ) &&
+                        final isPending = widget.returnsOnly
+                            ? ChecklistStatus.returnOpen(d)
+                            : ChecklistStatus.pending(d, admin: widget.admin);
+                        return isPending &&
+                            (!widget.returnsOnly || d['kind'] == 'return') &&
                             '${d['name']} ${d['items']} ${d['branchName']} ${d['staffName']}'
                                 .toLowerCase()
                                 .contains(search);
                       }
-                      final rawDate = d['createdAt'] ?? d['assignedAt'];
+                      final rawDate = _checklistDate(d);
                       final at = rawDate is Timestamp
                           ? rawDate.toDate()
                           : DateTime.tryParse('$rawDate');
                       if (!DateUtils.isSameDay(at?.toLocal(), selectedDay))
                         return false;
-                      final inTab = widget.admin
+                      final inTab = widget.returnsOnly
                           ? d['kind'] == 'return' &&
+                                (widget.admin
+                                    ? (tab == 1
+                                          ? ChecklistStatus.label(d) ==
+                                                ChecklistStatus.completed
+                                          : ChecklistStatus.label(d) !=
+                                                ChecklistStatus.completed)
+                                    : (tab == 2
+                                          ? ChecklistStatus.label(d) ==
+                                                ChecklistStatus.completed
+                                          : ChecklistStatus.label(d) !=
+                                                ChecklistStatus.completed))
+                          : d['kind'] != 'return' &&
                                 (tab == 1
                                     ? ChecklistStatus.label(d) ==
-                                          ChecklistStatus.completed
-                                    : ChecklistStatus.label(d) !=
-                                          ChecklistStatus.completed)
-                          : tab == 2
-                          ? d['kind'] == 'return'
-                          : ChecklistStatus.incomingOpen(d) ||
-                                (d['kind'] != 'return' &&
-                                    ChecklistStatus.label(d) ==
-                                        ChecklistStatus.received);
-                      if (widget.admin || tab == 2) return inTab;
+                                          ChecklistStatus.received
+                                    : ChecklistStatus.incomingOpen(d));
+                      if (widget.returnsOnly) return inTab;
                       return inTab &&
                           (filter == 'All items' ||
                               AllocationChecklistService.type(d) == filter) &&
@@ -595,7 +672,7 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
                               .contains(search);
                     }).toList()..sort((a, b) {
                       int time(Map<String, dynamic> d) {
-                        final value = d['createdAt'] ?? d['assignedAt'];
+                        final value = _checklistDate(d);
                         return value is Timestamp
                             ? value.millisecondsSinceEpoch
                             : 0;
@@ -606,7 +683,9 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
                 return Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    if (widget.pendingOnly && widget.admin)
+                    if (widget.admin &&
+                        tab == 0 &&
+                        (!widget.returnsOnly || widget.pendingOnly))
                       Padding(
                         padding: const EdgeInsets.all(12),
                         child: FilledButton.icon(
@@ -640,10 +719,13 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
                               if (widget.admin) ...[
                                 'Returned Items',
                                 'Completed Return',
-                              ] else ...[
-                                'Incoming Items',
+                              ] else if (widget.returnsOnly) ...[
                                 'Return Items',
                                 'Pending Confirmation',
+                                'Completed Return',
+                              ] else ...[
+                                'Incoming Items',
+                                'Complete',
                               ],
                             ].asMap().entries)
                               Padding(
@@ -659,7 +741,9 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
                         ),
                       ),
                     const SizedBox(height: 8),
-                    if (!widget.pendingOnly && tab == 0 && !widget.admin)
+                    if (!widget.pendingOnly &&
+                        !widget.returnsOnly &&
+                        !widget.admin)
                       SingleChildScrollView(
                         scrollDirection: Axis.horizontal,
                         padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -684,14 +768,15 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
                         ),
                       ),
                     Expanded(
-                      child: tab == 1 && !widget.admin
+                      child: widget.returnsOnly && tab == 0 && !widget.admin
                           ? ChecklistReturnDialog(
                               db: widget.db,
                               scopeIds: widget.ids,
                               searchText: search,
-                              onSubmitted: () => setState(() => tab = 2),
+                              selectedDay: selectedDay,
+                              onSubmitted: () => setState(() => tab = 1),
                             )
-                          : widget.admin || tab == 2
+                          : widget.returnsOnly
                           ? ReturnBatchList(
                               admin: widget.admin,
                               onDecision: widget.admin ? actReturns : null,

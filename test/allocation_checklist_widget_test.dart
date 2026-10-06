@@ -41,6 +41,42 @@ void main() {
     expect(find.text('Confirm Received'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
+  testWidgets('staff completed checklist dates by actual receive timestamp', (
+    tester,
+  ) async {
+    final db = FakeFirebaseFirestore();
+    final now = DateTime.now();
+    await db.doc('allocation_checklist/received-yesterday').set({
+      'kind': 'incoming',
+      'staffId': 'branch',
+      'status': 'Received',
+      'name': 'Yesterday allocation',
+      'createdAt': Timestamp.fromDate(now.subtract(const Duration(days: 1))),
+      'assignedAt': Timestamp.fromDate(
+        now.subtract(const Duration(days: 1)),
+      ),
+      'confirmedAt': Timestamp.fromDate(now),
+    });
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: AllocationChecklistButton(
+            scopeIds: const ['branch'],
+            database: db,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Checklist'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Complete'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Yesterday allocation'), findsOneWidget);
+    expect(find.textContaining('Received:'), findsOneWidget);
+    expect(find.textContaining('Assigned:'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
   testWidgets('older returns stay in pending view and accept all spans dates', (
     tester,
   ) async {
@@ -77,11 +113,15 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Checklist (2)'));
+    await tester.tap(find.text('Returns'));
     await tester.pumpAndSettle();
     expect(find.text('Accept'), findsNothing);
-    await tester.tap(find.text('View pending'));
+    expect(find.text('View pending'), findsNothing);
+    expect(find.byTooltip('View pending returns'), findsOneWidget);
+    expect(find.text('Accept all (2)'), findsNothing);
+    await tester.tap(find.byTooltip('View pending returns'));
     await tester.pumpAndSettle();
+    expect(find.text('Pending returns'), findsOneWidget);
     expect(find.text('Accept all (2)'), findsOneWidget);
     await tester.tap(find.text('Accept all (2)'));
     await tester.pumpAndSettle();
@@ -130,9 +170,10 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Checklist (1)'));
+    await tester.tap(find.byTooltip('Returns'));
     await tester.pumpAndSettle();
     await tester.ensureVisible(find.text('Accept'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Accept'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Proceed'));
@@ -165,8 +206,10 @@ void main() {
         'name': 'Delivery',
         'staffId': 'branch',
       });
-      await tester.binding.setSurfaceSize(Size(width, 800));
-      addTearDown(() => tester.binding.setSurfaceSize(null));
+      tester.view.physicalSize = Size(width, 800);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
       await tester.pumpWidget(
         MaterialApp(
           home: Scaffold(
@@ -179,7 +222,7 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Checklist (1)'));
+      await tester.tap(find.byTooltip('Returns'));
       await tester.pumpAndSettle();
       expect(find.text('Confirm Received'), findsNothing);
       expect(find.text('Returned Items'), findsOneWidget);
@@ -236,7 +279,7 @@ void main() {
       expect(find.text('Accept'), findsNothing);
       await tester.tap(find.byTooltip('Close checklist'));
       await tester.pumpAndSettle();
-      expect(find.text('Checklist (0)'), findsOneWidget);
+      expect(find.byTooltip('Returns'), findsOneWidget);
     });
   }
 
@@ -281,7 +324,7 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(find.text('Checklist'), findsOneWidget);
-      expect(find.text('Checklist (2)'), findsNothing);
+      expect(find.text('Returns'), findsOneWidget);
       await tester.tap(find.text('Checklist'));
       await tester.pumpAndSettle();
       expect(find.textContaining('Chocolate'), findsOneWidget);

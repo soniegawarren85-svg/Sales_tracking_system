@@ -14,7 +14,7 @@ void main() {
         'staffId': 'STF-001',
         'staffName': id,
         'branchId': 'branch',
-        'loginAt': '2026-09-28T08:00:00',
+        'loginAt': DateTime.now().toIso8601String(),
         'logoutAt': null,
         'ipAddress': '192.168.1.1',
       });
