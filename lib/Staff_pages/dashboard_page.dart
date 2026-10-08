@@ -2,6 +2,7 @@ import 'package:sales_tracking/widgets/top_edge_refresh.dart';
 import 'package:sales_tracking/theme/app_colors.dart';
 import '../services/inventory_display_ids.dart';
 import '../services/staff_allocation_scope.dart';
+import '../services/staff_sales_history_scope.dart';
 import '../services/public_item_id.dart';
 import '../widgets/staff_refund_dialog.dart';
 import '../services/staff_login_session.dart';
@@ -116,7 +117,8 @@ List<String> _inventoryImageUrls(Map<String, dynamic> data) {
   return urls;
 }
 
-String _buildCategoryDisplayId(Map<String, dynamic> data) => inventoryDisplayId(data);
+String _buildCategoryDisplayId(Map<String, dynamic> data) =>
+    inventoryDisplayId(data);
 
 class _C {
   static const primary = AppColors.primary;
@@ -184,15 +186,20 @@ class _DashboardPageState extends State<DashboardPage>
   QuerySnapshot<Map<String, dynamic>>? _lastCachedAllocationSnapshot;
   QuerySnapshot<Map<String, dynamic>>? _lastCachedRootSnapshot;
   StreamSubscription<StaffAllocationScope>? _allocationScopeSubscription;
-  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _drawerCacheSubscription;
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>?
+  _drawerCacheSubscription;
 
   static const int _itemsPerPage = 5;
 
   @override
   void initState() {
     super.initState();
-    _localReceiptsStream = LocalDatabaseSyncService().watchLocalCompletedSales();
-    _drawerDayTimer = Timer.periodic(const Duration(seconds: 15), (_) => LocalDatabaseSyncService().rolloverCashDrawers());
+    _localReceiptsStream = LocalDatabaseSyncService()
+        .watchLocalCompletedSales();
+    _drawerDayTimer = Timer.periodic(
+      const Duration(seconds: 15),
+      (_) => LocalDatabaseSyncService().rolloverCashDrawers(),
+    );
     StaffLoginSession.flush();
     _rootInventoryStream = FirebaseFirestore.instance
         .collection('sales_inventory')
@@ -202,7 +209,9 @@ class _DashboardPageState extends State<DashboardPage>
     _localCacheSubscription = LocalDatabaseSyncService().collectionUpdates
         .where(
           (collection) =>
-              collection == 'staff_inventory' || collection == 'sales_inventory' || collection == 'staff_cash_drawer' ||
+              collection == 'staff_inventory' ||
+              collection == 'sales_inventory' ||
+              collection == 'staff_cash_drawer' ||
               collection == 'completed_sales',
         )
         .listen((_) => _loadLocalDashboardCache());
@@ -289,27 +298,46 @@ class _DashboardPageState extends State<DashboardPage>
 
   Future<void> _loadStaffInventoryIds(String uid) async {
     await _allocationScopeSubscription?.cancel();
-    _allocationScopeSubscription = watchStaffAllocationScope(uid).listen((scope) {
-      if (!mounted) return;
-      final changed = _staffInventoryIds.join('|') != scope.targets.join('|');
-      setState(() {
-        _staffInventoryIds = scope.targets;
-        _isResolvingStaffIdentity = false;
-        if (changed) _staffInventoryStreamCache = null;
-      });
-      if (changed) {
-        _drawerCacheSubscription?.cancel();
-        _drawerCacheSubscription = FirebaseFirestore.instance.collection('staff_cash_drawer')
-            .where(FieldPath.documentId, whereIn: scope.targets.take(10).toList())
-            .snapshots().listen((snapshot) {
-          unawaited(LocalDatabaseSyncService().mergeCashDrawerSnapshot(snapshot.docs.map((doc) => {...doc.data(), '_localDocId': doc.id})));
-        }, onError: (Object error) { debugPrint('Cash drawer listener: $error'); });
-        unawaited(_loadLocalDashboardCache());
-      }
-    }, onError: (Object error) {
-      debugPrint('Staff allocation lookup: $error');
-      if (mounted) setState(() => _isResolvingStaffIdentity = false);
-    });
+    _allocationScopeSubscription = watchStaffAllocationScope(uid).listen(
+      (scope) {
+        if (!mounted) return;
+        final changed = _staffInventoryIds.join('|') != scope.targets.join('|');
+        setState(() {
+          _staffInventoryIds = scope.targets;
+          _isResolvingStaffIdentity = false;
+          if (changed) _staffInventoryStreamCache = null;
+        });
+        if (changed) {
+          _drawerCacheSubscription?.cancel();
+          _drawerCacheSubscription = FirebaseFirestore.instance
+              .collection('staff_cash_drawer')
+              .where(
+                FieldPath.documentId,
+                whereIn: scope.targets.take(10).toList(),
+              )
+              .snapshots()
+              .listen(
+                (snapshot) {
+                  unawaited(
+                    LocalDatabaseSyncService().mergeCashDrawerSnapshot(
+                      snapshot.docs.map(
+                        (doc) => {...doc.data(), '_localDocId': doc.id},
+                      ),
+                    ),
+                  );
+                },
+                onError: (Object error) {
+                  debugPrint('Cash drawer listener: $error');
+                },
+              );
+          unawaited(_loadLocalDashboardCache());
+        }
+      },
+      onError: (Object error) {
+        debugPrint('Staff allocation lookup: $error');
+        if (mounted) setState(() => _isResolvingStaffIdentity = false);
+      },
+    );
   }
 
   Stream<QuerySnapshot<Map<String, dynamic>>> _staffInventoryStream() {
@@ -326,31 +354,37 @@ class _DashboardPageState extends State<DashboardPage>
           .snapshots(includeMetadataChanges: true);
     }
     return _staffInventoryStreamCache = ids.length == 1
-        ? query.where('staffId', isEqualTo: ids.first).snapshots(includeMetadataChanges: true)
-        : query.where('staffId', whereIn: ids).snapshots(includeMetadataChanges: true);
+        ? query
+              .where('staffId', isEqualTo: ids.first)
+              .snapshots(includeMetadataChanges: true)
+        : query
+              .where('staffId', whereIn: ids)
+              .snapshots(includeMetadataChanges: true);
   }
 
   Stream<QuerySnapshot<Map<String, dynamic>>> _receiptStream() {
     if (_receiptStreamCache != null) return _receiptStreamCache!;
     final query = FirebaseFirestore.instance.collection('completed_sales');
-    // Read the same staff receipts used by Performance.  Previously the
-    // History sheet listened to the unfiltered collection, which can be
-    // denied/empty under Firestore rules even though Performance has data.
-    final staffId = _staffDocId?.trim() ?? '';
-    // During startup the profile/staff ID can still be resolving.  In that
-    // short state Performance can already display sales, so History must not
-    // turn its stream into an intentionally empty query.
-    return _receiptStreamCache = staffId.isEmpty
-        ? query.snapshots()
-        : query.where('userId', isEqualTo: staffId).snapshots();
+    final resolvedStaffId = _staffDocId?.trim() ?? '';
+    final staffId = resolvedStaffId.isNotEmpty
+        ? resolvedStaffId
+        : FirebaseAuth.instance.currentUser?.uid ?? '';
+    return _receiptStreamCache = query
+        .where('userId', isEqualTo: staffId)
+        .snapshots();
   }
 
   void _showHistory() {
+    final resolvedStaffId = _staffDocId?.trim() ?? '';
+    final staffId = resolvedStaffId.isNotEmpty
+        ? resolvedStaffId
+        : FirebaseAuth.instance.currentUser?.uid ?? '';
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (_) => _HistorySheet(
+        staffId: staffId,
         receiptStream: _receiptStream(),
         localReceiptStream: LocalDatabaseSyncService()
             .watchLocalCompletedSales(),
@@ -1113,165 +1147,171 @@ class _DashboardPageState extends State<DashboardPage>
             );
         }
       },
-      child: Stack(children: [CustomScrollView(
-        controller: widget.scrollController,
-        physics: const AlwaysScrollableScrollPhysics(
-          parent: ClampingScrollPhysics(),
-        ),
-        slivers: [
-          // ── Header ────────────────────────────────────────────────────────
-          SliverAppBar(
-            expandedHeight: headerHeight,
-            collapsedHeight: 60,
-            pinned: true,
-            elevation: 0,
-            backgroundColor: _C.primary,
-            foregroundColor: Colors.white,
-            centerTitle: false,
-            flexibleSpace: FlexibleSpaceBar(
-              collapseMode: CollapseMode.parallax,
-              background: _Header(
-                onMessage: widget.onMessage,
-                onNotification: widget.onNotification,
-                // A cash-drawer document is keyed by the assigned branch ID.
-                // Do not add every cached drawer here: that made a staff member's
-                // dashboard total include other staff/branch cash drawers.
-                drawerIds: _staffInventoryIds,
-                cachedDrawerDocs: _cachedCashDrawerDocs,
-                staffDocId: _staffDocId,
-              ),
+      child: Stack(
+        children: [
+          CustomScrollView(
+            controller: widget.scrollController,
+            physics: const AlwaysScrollableScrollPhysics(
+              parent: ClampingScrollPhysics(),
             ),
-          ),
-
-          // ── "Dashboard" label ─────────────────────────────────────────────
-          SliverToBoxAdapter(
-            child: Container(
-              color: _C.surface,
-              padding: EdgeInsets.fromLTRB(
-                isTablet ? 24 : 20,
-                isTablet ? 10 : 14,
-                isTablet ? 24 : 20,
-                8,
-              ),
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: ConstrainedBox(
-                  constraints: BoxConstraints(maxWidth: contentMaxWidth),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      const Align(
-                        alignment: Alignment.centerLeft,
-                        child: _SectionLabel(title: 'Dashboard'),
-                      ),
-                      const SizedBox(height: 12),
-                      Align(
-                        alignment: isTablet
-                            ? Alignment.centerLeft
-                            : Alignment.center,
-                        child: _InventoryViewSelector(
-                          selected: _inventoryView,
-                          onSelected: (value) => setState(() {
-                            _inventoryView = value;
-                            _inventoryPageByView[value] = 0;
-                          }),
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      Align(
-                        alignment: Alignment.centerLeft,
-                        child: ConstrainedBox(
-                          constraints: const BoxConstraints(maxWidth: 620),
-                          child: _buildDashboardSearchField(),
-                        ),
-                      ),
-                    ],
+            slivers: [
+              // ── Header ────────────────────────────────────────────────────────
+              SliverAppBar(
+                expandedHeight: headerHeight,
+                collapsedHeight: 60,
+                pinned: true,
+                elevation: 0,
+                backgroundColor: _C.primary,
+                foregroundColor: Colors.white,
+                centerTitle: false,
+                flexibleSpace: FlexibleSpaceBar(
+                  collapseMode: CollapseMode.parallax,
+                  background: _Header(
+                    onMessage: widget.onMessage,
+                    onNotification: widget.onNotification,
+                    // A cash-drawer document is keyed by the assigned branch ID.
+                    // Do not add every cached drawer here: that made a staff member's
+                    // dashboard total include other staff/branch cash drawers.
+                    drawerIds: _staffInventoryIds,
+                    cachedDrawerDocs: _cachedCashDrawerDocs,
+                    staffDocId: _staffDocId,
                   ),
                 ),
               ),
-            ),
-          ),
 
-          // ── Inventory list ────────────────────────────────────────────────
-          SliverPadding(
-            padding: EdgeInsets.fromLTRB(
-              horizontalPadding,
-              0,
-              horizontalPadding,
-              0,
-            ),
-            sliver: SliverToBoxAdapter(
-              child: Align(
-                alignment: Alignment.topCenter,
-                child: ConstrainedBox(
-                  constraints: BoxConstraints(maxWidth: inventoryMaxWidth),
-                  child: _buildAdminInventoryList(),
-                ),
-              ),
-            ),
-          ),
-
-          // ── "Performance" label + History ─────────────────────────────────
-          SliverToBoxAdapter(
-            child: Container(
-              color: _C.surface,
-              padding: EdgeInsets.fromLTRB(
-                isTablet ? 24 : 20,
-                isTablet ? 10 : 12,
-                isTablet ? 24 : 20,
-                10,
-              ),
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: ConstrainedBox(
-                  constraints: BoxConstraints(maxWidth: contentMaxWidth),
-                  child: Row(
-                    children: [
-                      const Expanded(
-                        child: _SectionLabel(title: 'Performance'),
+              // ── "Dashboard" label ─────────────────────────────────────────────
+              SliverToBoxAdapter(
+                child: Container(
+                  color: _C.surface,
+                  padding: EdgeInsets.fromLTRB(
+                    isTablet ? 24 : 20,
+                    isTablet ? 10 : 14,
+                    isTablet ? 24 : 20,
+                    8,
+                  ),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(maxWidth: contentMaxWidth),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          const Align(
+                            alignment: Alignment.centerLeft,
+                            child: _SectionLabel(title: 'Dashboard'),
+                          ),
+                          const SizedBox(height: 12),
+                          Align(
+                            alignment: isTablet
+                                ? Alignment.centerLeft
+                                : Alignment.center,
+                            child: _InventoryViewSelector(
+                              selected: _inventoryView,
+                              onSelected: (value) => setState(() {
+                                _inventoryView = value;
+                                _inventoryPageByView[value] = 0;
+                              }),
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: ConstrainedBox(
+                              constraints: const BoxConstraints(maxWidth: 620),
+                              child: _buildDashboardSearchField(),
+                            ),
+                          ),
+                        ],
                       ),
-                      _HistoryButton(onTap: _showHistory),
-                    ],
+                    ),
                   ),
                 ),
               ),
-            ),
-          ),
 
-          // ── Performance cards ─────────────────────────────────────────────
-          SliverSafeArea(
-            top: false,
-            bottom: false,
-            sliver: SliverPadding(
-              padding: EdgeInsets.fromLTRB(
-                horizontalPadding,
-                0,
-                horizontalPadding,
-                0,
-              ),
-              sliver: SliverToBoxAdapter(
-                child: Align(
-                  alignment: Alignment.topCenter,
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(maxWidth: contentMaxWidth),
-                    child: _buildPerformanceData(),
+              // ── Inventory list ────────────────────────────────────────────────
+              SliverPadding(
+                padding: EdgeInsets.fromLTRB(
+                  horizontalPadding,
+                  0,
+                  horizontalPadding,
+                  0,
+                ),
+                sliver: SliverToBoxAdapter(
+                  child: Align(
+                    alignment: Alignment.topCenter,
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(maxWidth: inventoryMaxWidth),
+                      child: _buildAdminInventoryList(),
+                    ),
                   ),
                 ),
               ),
-            ),
-          ),
 
-          // The staff navigation floats over the body. Reserve space after the
-          // receipt cards so the last card and the pager remain scrollable into
-          // view when there are several receipts.
-          const SliverToBoxAdapter(child: SizedBox(height: 180)),
+              // ── "Performance" label + History ─────────────────────────────────
+              SliverToBoxAdapter(
+                child: Container(
+                  color: _C.surface,
+                  padding: EdgeInsets.fromLTRB(
+                    isTablet ? 24 : 20,
+                    isTablet ? 10 : 12,
+                    isTablet ? 24 : 20,
+                    10,
+                  ),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(maxWidth: contentMaxWidth),
+                      child: Row(
+                        children: [
+                          const Expanded(
+                            child: _SectionLabel(title: 'Performance'),
+                          ),
+                          _HistoryButton(onTap: _showHistory),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+
+              // ── Performance cards ─────────────────────────────────────────────
+              SliverSafeArea(
+                top: false,
+                bottom: false,
+                sliver: SliverPadding(
+                  padding: EdgeInsets.fromLTRB(
+                    horizontalPadding,
+                    0,
+                    horizontalPadding,
+                    0,
+                  ),
+                  sliver: SliverToBoxAdapter(
+                    child: Align(
+                      alignment: Alignment.topCenter,
+                      child: ConstrainedBox(
+                        constraints: BoxConstraints(maxWidth: contentMaxWidth),
+                        child: _buildPerformanceData(),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+
+              // The staff navigation floats over the body. Reserve space after the
+              // receipt cards so the last card and the pager remain scrollable into
+              // view when there are several receipts.
+              const SliverToBoxAdapter(child: SizedBox(height: 180)),
+            ],
+          ),
+          if (_isResolvingStaffIdentity)
+            const Positioned(
+              top: 24,
+              left: 0,
+              right: 0,
+              child: Center(child: RefreshProgressIndicator()),
+            ),
         ],
       ),
-      if (_isResolvingStaffIdentity) const Positioned(
-        top: 24, left: 0, right: 0,
-        child: Center(child: RefreshProgressIndicator()),
-      ),
-      ]),
     );
   }
 
@@ -1287,7 +1327,8 @@ class _DashboardPageState extends State<DashboardPage>
         if (snapshot.hasError && _cachedStaffInventoryDocs.isEmpty) {
           return _ErrorCard(message: 'Error loading inventory');
         }
-        if (snapshot.hasData && !identical(snapshot.data, _lastCachedAllocationSnapshot) &&
+        if (snapshot.hasData &&
+            !identical(snapshot.data, _lastCachedAllocationSnapshot) &&
             (!snapshot.data!.metadata.isFromCache ||
                 snapshot.data!.docs.isNotEmpty)) {
           _lastCachedAllocationSnapshot = snapshot.data;
@@ -1311,7 +1352,8 @@ class _DashboardPageState extends State<DashboardPage>
             .map(_CachedDoc.fromFirestore)
             .toList();
         final docs =
-            (_cachedStaffInventoryDocs.isNotEmpty || liveDocs == null ||
+            (_cachedStaffInventoryDocs.isNotEmpty ||
+                liveDocs == null ||
                 (liveDocs.isEmpty && _cachedStaffInventoryDocs.isNotEmpty))
             ? _cachedStaffInventoryDocs
             : liveDocs!;
@@ -1326,7 +1368,8 @@ class _DashboardPageState extends State<DashboardPage>
         return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
           stream: _rootInventoryStream,
           builder: (context, rootSnapshot) {
-            if (rootSnapshot.hasData && !identical(rootSnapshot.data, _lastCachedRootSnapshot) &&
+            if (rootSnapshot.hasData &&
+                !identical(rootSnapshot.data, _lastCachedRootSnapshot) &&
                 (!rootSnapshot.data!.metadata.isFromCache ||
                     rootSnapshot.data!.docs.isNotEmpty)) {
               _lastCachedRootSnapshot = rootSnapshot.data;
@@ -1829,8 +1872,7 @@ class _DashboardPageState extends State<DashboardPage>
             bool isVisibleReceipt(Map<String, dynamic> data) {
               final timestamp = data['timestamp'];
               if (timestamp is! Timestamp) return false;
-              final userId = data['userId']?.toString() ?? '';
-              if (staffId.isNotEmpty && userId != staffId) return false;
+              if (!saleBelongsToStaff(data, staffId)) return false;
               final dt = timestamp.toDate();
               return !dt.isBefore(today) && dt.isBefore(tomorrow);
             }
@@ -1879,7 +1921,13 @@ class _DashboardPageState extends State<DashboardPage>
             return Column(
               children: [
                 ...visibleReceipts.map(
-                  (data) => _ReceiptCard(data: refundReceiptDisplayData(data, [...localSales, ...firestoreSales]), compact: false),
+                  (data) => _ReceiptCard(
+                    data: refundReceiptDisplayData(data, [
+                      ...localSales,
+                      ...firestoreSales,
+                    ]),
+                    compact: false,
+                  ),
                 ),
                 if (pageCount > 1)
                   _PagerControls(
@@ -2941,15 +2989,15 @@ class _Header extends StatelessWidget {
                             doc.id: doc.data(),
                         };
                         final cashDrawerBalance =
-                            (cashDrawerSnapshot.data?.docs.isNotEmpty == true ? cashDrawerSnapshot.data!.docs : null)?.fold<double>(0.0, (
-                              sum,
-                              doc,
-                            ) {
-                              final data = cachedById[doc.id] ?? doc.data();
-                              return sum +
-                                  ((data['balance'] as num?)?.toDouble() ??
-                                      0.0);
-                            }) ??
+                            (cashDrawerSnapshot.data?.docs.isNotEmpty == true
+                                    ? cashDrawerSnapshot.data!.docs
+                                    : null)
+                                ?.fold<double>(0.0, (sum, doc) {
+                                  final data = cachedById[doc.id] ?? doc.data();
+                                  return sum +
+                                      ((data['balance'] as num?)?.toDouble() ??
+                                          0.0);
+                                }) ??
                             relevantCachedDrawers.fold<double>(
                               0.0,
                               (sum, doc) =>
@@ -4263,7 +4311,9 @@ class _ItemStatusBadge extends StatelessWidget {
 class _HistorySheet extends StatefulWidget {
   final Stream<QuerySnapshot<Map<String, dynamic>>> receiptStream;
   final Stream<List<Map<String, dynamic>>> localReceiptStream;
+  final String staffId;
   const _HistorySheet({
+    required this.staffId,
     required this.receiptStream,
     required this.localReceiptStream,
   });
@@ -4406,17 +4456,19 @@ class _HistorySheetState extends State<_HistorySheet> {
                 stream: widget.localReceiptStream,
                 builder: (context, localSnapshot) {
                   return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                    // Use a fresh listener when the sheet opens.  A cached
-                    // listener created before the staff profile resolved can
-                    // otherwise stay empty while the Performance listener is
-                    // already receiving the same completed sale.
-                    stream: FirebaseFirestore.instance
-                        .collection('completed_sales')
-                        .snapshots(),
+                    stream: widget.receiptStream,
                     builder: (context, snapshot) {
-                      final localReceipts = localSnapshot.data ?? const [];
+                      final localReceipts = (localSnapshot.data ?? const [])
+                          .where(
+                            (receipt) =>
+                                saleBelongsToStaff(receipt, widget.staffId),
+                          );
                       final cloudReceipts = (snapshot.data?.docs ?? [])
                           .map((doc) => doc.data())
+                          .where(
+                            (receipt) =>
+                                saleBelongsToStaff(receipt, widget.staffId),
+                          )
                           .toList();
                       final bySalesId = <String, Map<String, dynamic>>{};
                       for (final receipt in [
@@ -4616,7 +4668,12 @@ class _HistorySheetState extends State<_HistorySheet> {
                                     children: filteredReceipts
                                         .map(
                                           (data) => _ReceiptCard(
-                                            data: refundReceiptDisplayData(data, grouped.values.expand((rows) => rows)),
+                                            data: refundReceiptDisplayData(
+                                              data,
+                                              grouped.values.expand(
+                                                (rows) => rows,
+                                              ),
+                                            ),
                                             compact: false,
                                           ),
                                         )
