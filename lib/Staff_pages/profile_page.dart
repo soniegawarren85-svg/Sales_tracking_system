@@ -273,12 +273,44 @@ class _ProfilePageState extends State<ProfilePage>
   // ─── EDIT PROFILE — Half-Screen Bottom Sheet ──────────────────────────────
   Future<void> _showEditProfileSheet() async {
     final currentUser = FirebaseAuth.instance.currentUser;
-    if (currentUser == null) return;
+    final prefs = await SharedPreferences.getInstance();
+    final uid =
+        currentUser?.uid ??
+        _staffDocId ??
+        prefs.getString('lastStaffDocId') ??
+        prefs.getString('lastUserId');
+    if (!mounted) return;
+    if (uid == null || uid.isEmpty) {
+      _showStyledSnackBar(
+        'Unable to identify your staff account. Please sign in again.',
+        isError: true,
+      );
+      return;
+    }
 
     final docRef = FirebaseFirestore.instance
         .collection('staff_requests')
-        .doc(currentUser.uid);
-    final snapshot = await docRef.get();
+        .doc(uid);
+    late final DocumentSnapshot<Map<String, dynamic>> snapshot;
+    try {
+      snapshot = await docRef.get();
+    } catch (error) {
+      if (!mounted) return;
+      debugPrint('Unable to load staff profile for editing: $error');
+      _showStyledSnackBar(
+        'Unable to load your profile. Check your connection and try again.',
+        isError: true,
+      );
+      return;
+    }
+    if (!mounted) return;
+    if (!snapshot.exists) {
+      _showStyledSnackBar(
+        'Your staff profile could not be found. Please sign in again.',
+        isError: true,
+      );
+      return;
+    }
     final staffData = snapshot.data() ?? {};
 
     final firstNameController = TextEditingController(
@@ -300,26 +332,35 @@ class _ProfilePageState extends State<ProfilePage>
       text: staffData['age']?.toString() ?? '',
     );
 
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      useSafeArea: true,
-      builder: (sheetContext) {
-        return _EditProfileSheet(
-          docRef: docRef,
-          firstNameController: firstNameController,
-          lastNameController: lastNameController,
-          emailController: emailController,
-          phoneController: phoneController,
-          addressController: addressController,
-          ageController: ageController,
-          onSaved: () {
-            _showStyledSnackBar('Profile updated successfully.');
-          },
-        );
-      },
-    );
+    try {
+      await showModalBottomSheet<void>(
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: Colors.transparent,
+        useSafeArea: true,
+        builder: (sheetContext) {
+          return _EditProfileSheet(
+            docRef: docRef,
+            firstNameController: firstNameController,
+            lastNameController: lastNameController,
+            emailController: emailController,
+            phoneController: phoneController,
+            addressController: addressController,
+            ageController: ageController,
+            onSaved: () {
+              _showStyledSnackBar('Profile updated successfully.');
+            },
+          );
+        },
+      );
+    } finally {
+      firstNameController.dispose();
+      lastNameController.dispose();
+      emailController.dispose();
+      phoneController.dispose();
+      addressController.dispose();
+      ageController.dispose();
+    }
   }
 
   Future<void> _showChangePasswordSheet() async {
@@ -937,9 +978,15 @@ class _ProfilePageState extends State<ProfilePage>
   }
 
   Widget _buildEditButton({bool compact = false}) {
-    return GestureDetector(
-      onTap: _showEditProfileSheet,
-      child: Container(
+    return Semantics(
+      button: true,
+      label: 'Edit Profile',
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: _showEditProfileSheet,
+          borderRadius: BorderRadius.circular(10),
+          child: Container(
         padding: EdgeInsets.symmetric(
           horizontal: compact ? 10 : 14,
           vertical: 9,
@@ -976,6 +1023,8 @@ class _ProfilePageState extends State<ProfilePage>
               ),
             ],
           ],
+        ),
+      ),
         ),
       ),
     );

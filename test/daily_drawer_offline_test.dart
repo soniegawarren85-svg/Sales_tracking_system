@@ -133,11 +133,67 @@ void main() {
           (await db.collection('staff_cash_drawer').doc('branch').get())
               .data()!;
       expect(drawer['balance'], 500);
-      expect((await service.getCachedCollection('completed_sales')).single['total'], -89);
+      expect(
+        (await service.getCachedCollection('completed_sales')).single['total'],
+        -89,
+      );
       expect(
         await service.getCachedCollection('pending_cash_drawer_changes'),
         isEmpty,
       );
     },
   );
+  test(
+    'receipt print retries update status without duplicating the sale',
+    () async {
+      final db = FakeFirebaseFirestore();
+      final service = LocalDatabaseSyncService.forDatabase(
+        db,
+        storage: MemoryStorage(),
+      );
+      await service.cacheCollectionDocs('completed_sales', [
+        {
+          '_localDocId': 'sale-1',
+          'salesId': 'sale-1',
+          'status': 'completed',
+          'total': 120,
+        },
+      ]);
+      await db.collection('completed_sales').doc('sale-1').set({
+        'salesId': 'sale-1',
+        'status': 'completed',
+        'total': 120,
+      });
+
+      await service.updateReceiptPrintStatus(
+        salesId: 'sale-1',
+        status: 'failed',
+        error: 'Printer disconnected',
+      );
+      await service.updateReceiptPrintStatus(salesId: 'sale-1', status: 'sent');
+
+      final cachedSales = await service.getCachedCollection('completed_sales');
+      final cloudSale =
+          (await db.collection('completed_sales').doc('sale-1').get()).data()!;
+      expect(cachedSales, hasLength(1));
+      expect(cachedSales.single['total'], 120);
+      expect(cachedSales.single['status'], 'completed');
+      expect(cachedSales.single['receiptPrintStatus'], 'sent');
+      expect(cloudSale['total'], 120);
+      expect(cloudSale['status'], 'completed');
+      expect(cloudSale['receiptPrintStatus'], 'sent');
+    },
+  );
+  test('sale sync gate accepts only a sale uploaded to Firebase', () async {
+    final service = LocalDatabaseSyncService.forDatabase(
+      FakeFirebaseFirestore(),
+      storage: MemoryStorage(),
+    );
+    await service.cacheCollectionDocs('completed_sales', [
+      {'_localDocId': 'uploaded-sale', 'salesId': 'uploaded-sale'},
+    ]);
+
+    expect(await service.ensureSaleSynced('uploaded-sale'), isTrue);
+    expect(await service.ensureSaleSynced('missing-sale'), isFalse);
+  });
 }

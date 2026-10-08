@@ -625,6 +625,57 @@ class LocalDatabaseSyncService {
     unawaited(_uploadCompletedSale(docId, cloudPayload));
   }
 
+  Future<void> updateReceiptPrintStatus({
+    required String salesId,
+    required String status,
+    String? error,
+  }) async {
+    final updatedAt = DateTime.now();
+    final localFields = <String, dynamic>{
+      'receiptPrintStatus': status,
+      'receiptPrintError': error,
+      'receiptPrintUpdatedAt': updatedAt,
+    };
+    await _salesLock.run(() async {
+      final cached = await getCachedCollection('completed_sales');
+      final sale = cached.firstWhere(
+        (item) => item['_localDocId'] == salesId || item['salesId'] == salesId,
+        orElse: () => <String, dynamic>{},
+      );
+      if (sale.isEmpty) return;
+      sale.addAll(localFields);
+      await cacheCollectionDocs('completed_sales', cached);
+    });
+    try {
+      await _firestore.collection('completed_sales').doc(salesId).set({
+        'receiptPrintStatus': status,
+        'receiptPrintError': error,
+        'receiptPrintUpdatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    } catch (error) {
+      debugPrint('Receipt print status remains local for $salesId: $error');
+    }
+  }
+
+  Future<bool> ensureSaleSynced(
+    String salesId, {
+    Duration timeout = const Duration(seconds: 12),
+  }) async {
+    final stopwatch = Stopwatch()..start();
+    while (stopwatch.elapsed < timeout) {
+      final cached = await getCachedCollection('completed_sales');
+      final sale = cached.firstWhere(
+        (item) => item['_localDocId'] == salesId || item['salesId'] == salesId,
+        orElse: () => <String, dynamic>{},
+      );
+      if (sale.isEmpty) return false;
+      if (sale['localOnly'] != true) return true;
+      await syncPendingSales();
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+    }
+    return false;
+  }
+
   final Set<String> _uploadingSales = {};
   Future<void> _uploadCompletedSale(
     String docId,
@@ -667,6 +718,13 @@ class LocalDatabaseSyncService {
           }
           tx.set(ref, {
             ...payload,
+            for (final key in const [
+              'receiptPrintStatus',
+              'receiptPrintError',
+              'receiptPrintUpdatedAt',
+            ])
+              if (receipt.data()?.containsKey(key) == true)
+                key: receipt.data()![key],
             'stockApplied': true,
             'stockSyncRequired': false,
           }, SetOptions(merge: true));

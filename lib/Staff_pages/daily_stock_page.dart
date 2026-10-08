@@ -20,7 +20,9 @@ import '../models/inventory.dart';
 import '../services/inventory_service.dart';
 import '../services/branch_report_schedule.dart';
 import '../services/local_database_sync_service.dart';
+import '../services/thermal_printer_service.dart';
 import '../widgets/top_notification.dart';
+import '../widgets/thermal_printer_settings_sheet.dart';
 
 // ─── Theme Constants ─────────────────────────────────────────────────────────
 class _AppColors {
@@ -269,6 +271,7 @@ class _DailyStockPageState extends State<DailyStockPage>
     _budgetRequestController = TextEditingController();
     _orderSearchController = TextEditingController();
     _currentUserId = FirebaseAuth.instance.currentUser?.uid;
+    unawaited(ThermalPrinterService.instance.initialize());
     _staffInventoryIds = const [];
     _applyInitialSalesTarget();
     _rootSalesInventoryStream = FirebaseFirestore.instance
@@ -4318,6 +4321,9 @@ class _DailyStockPageState extends State<DailyStockPage>
         'userId': _currentUserId,
         'stockSyncRequired': true,
         if (drawerId.isNotEmpty) 'branchId': drawerId,
+        if (_activeBranchName.trim().isNotEmpty)
+          'branchName': _activeBranchName.trim(),
+        'staffName': _staffDisplayName,
         'salesId': salesId,
         'subtotal': subtotal,
         'discount': discountAmount,
@@ -4362,6 +4368,8 @@ class _DailyStockPageState extends State<DailyStockPage>
         }).toList(),
         'timestamp': DateTime.now(),
         'status': 'completed',
+        'receiptPrintStatus': 'pending',
+        'receiptPrintError': null,
       };
 
       await _showOrderProcessingDialog();
@@ -4397,8 +4405,27 @@ class _DailyStockPageState extends State<DailyStockPage>
       if (!mounted) return;
       showTopNotification(
         context,
-        'Order successful!',
+        'Order Processed Successfully',
         backgroundColor: const Color(0xFF2E7D32),
+      );
+      final receipt = <String, dynamic>{
+        'salesId': salesId,
+        'timestamp': completedSalePayload['timestamp'],
+        'branchName': _activeBranchName,
+        'staffName': _staffDisplayName,
+        'items': receiptItems,
+        'subtotal': subtotal,
+        'discount': discountAmount,
+        'discountType': discountType,
+        'total': orderTotal,
+        'paymentMode': paymentMode,
+        'gcashTransactionId': gcashTransactionId,
+        'paidAmount': paidAmount,
+        'change': change,
+      };
+      final receiptPrinted = await _printSavedReceipt(
+        receipt,
+        waitForSaleSync: true,
       );
       await _showOrderSuccessDialog(
         salesId: salesId,
@@ -4409,6 +4436,8 @@ class _DailyStockPageState extends State<DailyStockPage>
         total: orderTotal,
         paidAmount: paidAmount,
         change: change,
+        receiptPrinted: receiptPrinted,
+        onRetryPrint: () => _printSavedReceipt(receipt, waitForSaleSync: true),
       );
     } catch (e) {
       if (processingDialogVisible && mounted) {
@@ -4417,6 +4446,81 @@ class _DailyStockPageState extends State<DailyStockPage>
       if (mounted) {
         _showStyledSnackBar('Error finalizing order: $e', isError: true);
       }
+    }
+  }
+
+  Future<bool> _printSavedReceipt(
+    Map<String, dynamic> receipt, {
+    bool waitForSaleSync = false,
+  }) async {
+    final salesId = receipt['salesId']?.toString() ?? '';
+    if (salesId.isEmpty) return false;
+
+    if (waitForSaleSync) {
+      var saleSynced = false;
+      try {
+        saleSynced = await LocalDatabaseSyncService().ensureSaleSynced(salesId);
+      } catch (error) {
+        debugPrint('Unable to confirm Firebase sale sync for $salesId: $error');
+      }
+      if (!saleSynced) {
+        if (mounted) {
+          showTopNotification(
+            context,
+            'Sale sync is pending; receipt was not sent',
+            backgroundColor: const Color(0xFFE65100),
+          );
+        }
+        return false;
+      }
+    }
+
+    await _saveReceiptPrintStatus(salesId, 'printing');
+    if (mounted) {
+      showTopNotification(
+        context,
+        'Printing Receipt...',
+        backgroundColor: const Color(0xFF1565C0),
+      );
+    }
+
+    try {
+      await ThermalPrinterService.instance.printReceipt(receipt);
+      await _saveReceiptPrintStatus(salesId, 'sent');
+      if (mounted) {
+        showTopNotification(
+          context,
+          'Receipt Sent to Printer',
+          backgroundColor: const Color(0xFF2E7D32),
+        );
+      }
+      return true;
+    } catch (error) {
+      await _saveReceiptPrintStatus(salesId, 'failed', error: error.toString());
+      if (mounted) {
+        showTopNotification(
+          context,
+          'Order Saved, but Receipt Printing Failed',
+          backgroundColor: const Color(0xFFE65100),
+        );
+      }
+      return false;
+    }
+  }
+
+  Future<void> _saveReceiptPrintStatus(
+    String salesId,
+    String status, {
+    String? error,
+  }) async {
+    try {
+      await LocalDatabaseSyncService().updateReceiptPrintStatus(
+        salesId: salesId,
+        status: status,
+        error: error,
+      );
+    } catch (error) {
+      debugPrint('Unable to persist receipt print status for $salesId: $error');
     }
   }
 
@@ -4487,6 +4591,8 @@ class _DailyStockPageState extends State<DailyStockPage>
     required double total,
     required double paidAmount,
     required double change,
+    required bool receiptPrinted,
+    required Future<bool> Function() onRetryPrint,
   }) async {
     if (!mounted) return;
     await showDialog<void>(
@@ -4660,6 +4766,10 @@ class _DailyStockPageState extends State<DailyStockPage>
                       ],
                     ),
                   ),
+                ),
+                _ReceiptPrintActions(
+                  initialSuccess: receiptPrinted,
+                  onRetry: onRetryPrint,
                 ),
                 Padding(
                   padding: const EdgeInsets.fromLTRB(22, 14, 22, 22),
@@ -5623,6 +5733,20 @@ class _DailyStockPageState extends State<DailyStockPage>
                           ),
                         ],
                       ),
+                      if (!isRefund) ...[
+                        const SizedBox(height: 10),
+                        SizedBox(
+                          width: double.infinity,
+                          child: OutlinedButton.icon(
+                            onPressed: () => _printSavedReceipt({
+                              ...data,
+                              'salesId': salesId,
+                            }),
+                            icon: const Icon(Icons.print_rounded, size: 18),
+                            label: const Text('Reprint Receipt'),
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                 );
@@ -9388,6 +9512,8 @@ class _DailyStockPageState extends State<DailyStockPage>
   Widget _buildCashierToolsPanel(List<Map<String, dynamic>> orderItems) {
     return Column(
       children: [
+        _buildPrinterSettingsCard(),
+        const SizedBox(height: 14),
         _buildBudgetCard(),
         const SizedBox(height: 14),
         _buildOrderControlExpansionTile(orderItems),
@@ -9396,6 +9522,73 @@ class _DailyStockPageState extends State<DailyStockPage>
         const SizedBox(height: 14),
         _buildAdvancedOptionsExpansionTile(),
       ],
+    );
+  }
+
+  Widget _buildPrinterSettingsCard() {
+    return Material(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(16),
+      child: InkWell(
+        onTap: () => showThermalPrinterSettings(context),
+        borderRadius: BorderRadius.circular(16),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: _AppColors.border),
+          ),
+          child: Row(
+            children: [
+              const Icon(Icons.bluetooth_rounded, color: _AppColors.primary),
+              const SizedBox(width: 10),
+              const Expanded(
+                child: Text(
+                  'Connect Printer',
+                  style: TextStyle(
+                    color: _AppColors.textMid,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+              _buildPrinterStatusLabel(),
+              const SizedBox(width: 6),
+              const Icon(
+                Icons.chevron_right_rounded,
+                color: _AppColors.primary,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPrinterStatusLabel() {
+    return ValueListenableBuilder<ThermalPrinterStatus>(
+      valueListenable: ThermalPrinterService.instance.status,
+      builder: (context, status, _) {
+        final color = status.isConnected
+            ? Colors.green.shade700
+            : status.isConnecting
+            ? Colors.orange.shade800
+            : Colors.red.shade700;
+        return Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.circle, size: 8, color: color),
+            const SizedBox(width: 5),
+            Text(
+              status.label,
+              style: TextStyle(
+                color: color,
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 
@@ -11856,6 +12049,47 @@ class _DailyStockPageState extends State<DailyStockPage>
             ),
           ),
 
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 14, 20, 0),
+            child: Wrap(
+              alignment: WrapAlignment.spaceBetween,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              spacing: 8,
+              runSpacing: 2,
+              children: [
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(
+                      Icons.bluetooth_rounded,
+                      color: _AppColors.primary,
+                      size: 18,
+                    ),
+                    const SizedBox(width: 7),
+                    const Text(
+                      'Receipt printer',
+                      style: TextStyle(
+                        color: _AppColors.textSoft,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _buildPrinterStatusLabel(),
+                    TextButton(
+                      onPressed: () => showThermalPrinterSettings(context),
+                      child: const Text('Settings'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+
           // ── Quick actions hint
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 14, 20, 0),
@@ -12485,6 +12719,89 @@ class _MiniTag extends StatelessWidget {
           fontSize: 11,
           fontWeight: FontWeight.w600,
         ),
+      ),
+    );
+  }
+}
+
+class _ReceiptPrintActions extends StatefulWidget {
+  final bool initialSuccess;
+  final Future<bool> Function() onRetry;
+
+  const _ReceiptPrintActions({
+    required this.initialSuccess,
+    required this.onRetry,
+  });
+
+  @override
+  State<_ReceiptPrintActions> createState() => _ReceiptPrintActionsState();
+}
+
+class _ReceiptPrintActionsState extends State<_ReceiptPrintActions> {
+  late bool _printed = widget.initialSuccess;
+  bool _printing = false;
+
+  Future<void> _retry() async {
+    setState(() => _printing = true);
+    try {
+      _printed = await widget.onRetry();
+    } finally {
+      if (mounted) setState(() => _printing = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final message = _printing
+        ? 'Printing Receipt...'
+        : _printed
+        ? 'Receipt Sent to Printer'
+        : 'Order Saved, but Receipt Printing Failed';
+    final color = _printing
+        ? const Color(0xFF1565C0)
+        : _printed
+        ? const Color(0xFF2E7D32)
+        : const Color(0xFFE65100);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 4, 20, 10),
+      child: Column(
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              if (_printing)
+                const SizedBox(
+                  width: 15,
+                  height: 15,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              else
+                Icon(
+                  _printed ? Icons.print_rounded : Icons.warning_rounded,
+                  size: 17,
+                  color: color,
+                ),
+              const SizedBox(width: 8),
+              Flexible(
+                child: Text(
+                  message,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: color,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          if (!_printed && !_printing)
+            TextButton.icon(
+              onPressed: _retry,
+              icon: const Icon(Icons.refresh_rounded, size: 17),
+              label: const Text('Retry Print'),
+            ),
+        ],
       ),
     );
   }
