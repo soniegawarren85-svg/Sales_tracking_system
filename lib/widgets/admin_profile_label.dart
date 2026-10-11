@@ -45,7 +45,7 @@ class AdminProfileLabel extends StatelessWidget {
         } catch (_) {}
         if (greeting)
           return Text(
-            'Good day, ${firstName.isEmpty ? label.split(' ').first : firstName}!',
+            'Welcome, ${firstName.isEmpty ? label.split(' ').first : firstName}!',
             style: const TextStyle(
               color: Colors.white,
               fontSize: 22,

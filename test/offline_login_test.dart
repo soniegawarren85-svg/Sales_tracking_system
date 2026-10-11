@@ -13,6 +13,14 @@ void main() {
 
   test('synced staff can authenticate without a prior online login', () {
     expect(offlineUsernameMatches(staff, 'stf-0001'), isTrue);
+    expect(
+      offlineAccountMatchesLogin({
+        ...staff,
+        'email': 'person@example.com',
+      }, 'PERSON@example.com'),
+      isTrue,
+    );
+    expect(offlineAccountMatchesLogin(staff, 'STF-002'), isFalse);
     expect(offlineAccountAllowed(staff), isTrue);
     expect(offlineStoredPasswordMatches(staff, 'Secret123'), isTrue);
     expect(offlineStoredPasswordMatches(staff, 'secret123'), isFalse);

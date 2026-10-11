@@ -1,3 +1,7 @@
+import 'package:flutter/foundation.dart';
+import 'package:file_picker/file_picker.dart';
+import '../services/branch_report_csv.dart';
+import '../services/save_bytes.dart';
 import '../services/report_current_allocations.dart';
 import 'report_sales_timeline.dart';
 import 'historical_cash_drawer.dart';
@@ -257,13 +261,29 @@ class _DailySalesReportState extends State<DailySalesReport> {
           0,
           (sum, row) => sum + reportValue(row['quantity']),
         );
+        final financialRows = branches.entries.map((branch) {
+          final totals = data.totals(branch.key, start, end);
+          return <String, dynamic>{
+            'branch': branch.value,
+            'Total cost': totals['Total cost'] ?? 0.0,
+            'Total profit': totals['Total profit'] ?? 0.0,
+            'Total loss':
+                (totals['Reduce'] ?? 0.0) + (totals['Refunds'] ?? 0.0),
+          };
+        }).toList();
+        double financialTotal(String field) => financialRows.fold<double>(
+          0,
+          (sum, row) => sum + reportValue(row[field]),
+        );
         final metrics = {
           'Total sales': money(total),
           'Total sold items': '${sold.toInt()}',
           'Total transactions': '${sales.length}',
           'Cash allocated': money(cash),
           'Items allocated': '${allocated.toInt()}',
-          'Average sale': money(sold == 0 ? 0 : total / sold),
+          'Total cost': money(financialTotal('Total cost')),
+          'Total profit': money(financialTotal('Total profit')),
+          'Total loss': money(financialTotal('Total loss')),
         };
         final rows = allRows
             .where(
@@ -318,7 +338,35 @@ class _DailySalesReportState extends State<DailySalesReport> {
                               ],
                             ),
                             const SizedBox(height: 12),
-                            if (selectedDetail == 'Items allocated') ...[
+                            if ([
+                              'Total cost',
+                              'Total profit',
+                              'Total loss',
+                            ].contains(selectedDetail)) ...[
+                              Text(
+                                metrics[selectedDetail]!,
+                                style: const TextStyle(
+                                  fontSize: 24,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              if (selectedDetail == 'Total loss')
+                                const Text(
+                                  'Refund amounts and reduced stock value for the selected period.',
+                                ),
+                              if (selectedDetail == 'Total cost')
+                                const Text(
+                                  'Cost of items sold and inventory replacements for the selected period.',
+                                ),
+                              ...financialRows.map(
+                                (row) => ListTile(
+                                  title: Text('${row['branch']}'),
+                                  trailing: Text(
+                                    money(reportValue(row[selectedDetail])),
+                                  ),
+                                ),
+                              ),
+                            ] else if (selectedDetail == 'Items allocated') ...[
                               const Text(
                                 'Current available branch inventory. Quantities show remaining units; made-to-order products are listed separately.',
                               ),
@@ -400,10 +448,6 @@ class _DailySalesReportState extends State<DailySalesReport> {
                                     .toList(),
                               )
                             else ...[
-                              if (selectedDetail == 'Average sale')
-                                Text(
-                                  '${money(total)} / ${sold.toInt()} sold items = ${money(sold == 0 ? 0 : total / sold)}',
-                                ),
                               InventoryRecordsTable(
                                 headings: const [
                                   'Receipt',
@@ -592,12 +636,60 @@ class _DailySalesReportState extends State<DailySalesReport> {
                   const SizedBox(height: 20),
                   Align(
                     alignment: Alignment.centerRight,
-                    child: FilledButton.icon(
-                      onPressed: printing
-                          ? null
-                          : () => printReport(metrics, rows, chart),
-                      icon: const Icon(Icons.print),
-                      label: Text(printing ? 'Preparing…' : 'Print report'),
+                    child: Wrap(
+                      spacing: 12,
+                      runSpacing: 12,
+                      children: [
+                        OutlinedButton.icon(
+                          onPressed: printing
+                              ? null
+                              : () async {
+                                  setState(() => printing = true);
+                                  try {
+                                    final bytes = branchReportCsv(
+                                      data,
+                                      start,
+                                      end,
+                                    );
+                                    final filename =
+                                        'sales-report-${start.year}-${start.month}-${start.day}.csv';
+                                    final path = kIsWeb
+                                        ? filename
+                                        : await FilePicker.platform.saveFile(
+                                            bytes: bytes,
+                                            fileName: filename,
+                                            type: FileType.custom,
+                                            allowedExtensions: ['csv'],
+                                          );
+                                    if (path != null)
+                                      await saveBytes(path, bytes);
+                                  } catch (_) {
+                                    if (mounted)
+                                      ScaffoldMessenger.of(
+                                        context,
+                                      ).showSnackBar(
+                                        const SnackBar(
+                                          content: Text(
+                                            'Unable to save CSV. Please try again.',
+                                          ),
+                                        ),
+                                      );
+                                  } finally {
+                                    if (mounted)
+                                      setState(() => printing = false);
+                                  }
+                                },
+                          icon: const Icon(Icons.download_outlined),
+                          label: const Text('Save CSV file'),
+                        ),
+                        FilledButton.icon(
+                          onPressed: printing
+                              ? null
+                              : () => printReport(metrics, rows, chart),
+                          icon: const Icon(Icons.print),
+                          label: Text(printing ? 'Preparing…' : 'Print report'),
+                        ),
+                      ],
                     ),
                   ),
                 ],

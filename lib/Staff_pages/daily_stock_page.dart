@@ -780,11 +780,21 @@ class _DailyStockPageState extends State<DailyStockPage>
   }
 
   double _discountedTotal(List<Map<String, dynamic>> orderItems) {
+    return _discountedSubtotal(orderItems);
+  }
+
+  double _discountedSubtotal(List<Map<String, dynamic>> orderItems) {
     final total = _cartTotal(orderItems);
     return (_seniorDiscount || _pwdDiscount)
         ? total * (1 - _discountRate)
         : total;
   }
+
+  double _taxValue(List<Map<String, dynamic>> orderItems) =>
+      transactionTaxAmount(
+        _transactionSettings,
+        taxableAmount: _discountedSubtotal(orderItems),
+      );
 
   double _discountValue(List<Map<String, dynamic>> orderItems) {
     final total = _cartTotal(orderItems);
@@ -1398,7 +1408,7 @@ class _DailyStockPageState extends State<DailyStockPage>
 
     String selectedSize = sizeGroups.keys.first;
     String selectedAddon = '';
-    String selectedSugar = '50%';
+    String selectedSugar = '0%';
     int quantity = 1;
 
     Map<String, dynamic> selectedItem() {
@@ -1545,13 +1555,6 @@ class _DailyStockPageState extends State<DailyStockPage>
                                   bgColor: _AppColors.primary.withOpacity(0.10),
                                   textColor: _AppColors.primary,
                                 ),
-                                if (_parsePrice(chosen['sizePriceDelta']) > 0)
-                                  _MiniTag(
-                                    label:
-                                        '+₱${_parsePrice(chosen['sizePriceDelta']).toStringAsFixed(0)} size',
-                                    bgColor: const Color(0xFFFFF3E0),
-                                    textColor: const Color(0xFFE65100),
-                                  ),
                               ],
                             ),
                             const SizedBox(height: 18),
@@ -4309,6 +4312,11 @@ class _DailyStockPageState extends State<DailyStockPage>
       final discountAmount = (_seniorDiscount || _pwdDiscount)
           ? subtotal * _discountRate
           : 0.0;
+      final taxRate = transactionTaxRate(_transactionSettings);
+      final taxAmount = transactionTaxAmount(
+        _transactionSettings,
+        taxableAmount: subtotal - discountAmount,
+      );
       final discountType = _discountName;
 
       final drawerId = _drawerIdForOrder(orderItems);
@@ -4324,10 +4332,15 @@ class _DailyStockPageState extends State<DailyStockPage>
         if (_activeBranchName.trim().isNotEmpty)
           'branchName': _activeBranchName.trim(),
         'staffName': _staffDisplayName,
+        'staffPublicId': _staffPublicId,
         'salesId': salesId,
         'subtotal': subtotal,
         'discount': discountAmount,
         'discountType': discountType,
+        'tax': taxAmount,
+        'taxRate': taxRate,
+        'taxClassification':
+            _transactionSettings['taxClassification']?.toString() ?? 'nonVat',
         'discountProofId': discountProofId.trim(),
         'total': orderTotal,
         'paidAmount': paidAmount,
@@ -4413,31 +4426,35 @@ class _DailyStockPageState extends State<DailyStockPage>
         'timestamp': completedSalePayload['timestamp'],
         'branchName': _activeBranchName,
         'staffName': _staffDisplayName,
+        'staffPublicId': _staffPublicId,
         'items': receiptItems,
         'subtotal': subtotal,
         'discount': discountAmount,
         'discountType': discountType,
+        'tax': taxAmount,
+        'taxRate': taxRate,
+        'taxClassification':
+            _transactionSettings['taxClassification']?.toString() ?? 'nonVat',
         'total': orderTotal,
         'paymentMode': paymentMode,
         'gcashTransactionId': gcashTransactionId,
         'paidAmount': paidAmount,
         'change': change,
       };
-      final receiptPrinted = await _printSavedReceipt(
-        receipt,
-        waitForSaleSync: true,
-      );
+      final printResult = _printSavedReceipt(receipt);
       await _showOrderSuccessDialog(
         salesId: salesId,
         items: receiptItems,
         subtotal: subtotal,
         discountAmount: discountAmount,
+        taxAmount: taxAmount,
         discountType: discountType,
         total: orderTotal,
         paidAmount: paidAmount,
         change: change,
-        receiptPrinted: receiptPrinted,
-        onRetryPrint: () => _printSavedReceipt(receipt, waitForSaleSync: true),
+        printResult: printResult,
+        paymentMode: paymentMode,
+        onRetryPrint: () => _printSavedReceipt(receipt),
       );
     } catch (e) {
       if (processingDialogVisible && mounted) {
@@ -4449,33 +4466,11 @@ class _DailyStockPageState extends State<DailyStockPage>
     }
   }
 
-  Future<bool> _printSavedReceipt(
-    Map<String, dynamic> receipt, {
-    bool waitForSaleSync = false,
-  }) async {
+  Future<bool> _printSavedReceipt(Map<String, dynamic> receipt) async {
     final salesId = receipt['salesId']?.toString() ?? '';
     if (salesId.isEmpty) return false;
 
-    if (waitForSaleSync) {
-      var saleSynced = false;
-      try {
-        saleSynced = await LocalDatabaseSyncService().ensureSaleSynced(salesId);
-      } catch (error) {
-        debugPrint('Unable to confirm Firebase sale sync for $salesId: $error');
-      }
-      if (!saleSynced) {
-        if (mounted) {
-          showTopNotification(
-            context,
-            'Sale sync is pending; receipt was not sent',
-            backgroundColor: const Color(0xFFE65100),
-          );
-        }
-        return false;
-      }
-    }
-
-    await _saveReceiptPrintStatus(salesId, 'printing');
+    unawaited(_saveReceiptPrintStatus(salesId, 'printing'));
     if (mounted) {
       showTopNotification(
         context,
@@ -4486,7 +4481,7 @@ class _DailyStockPageState extends State<DailyStockPage>
 
     try {
       await ThermalPrinterService.instance.printReceipt(receipt);
-      await _saveReceiptPrintStatus(salesId, 'sent');
+      unawaited(_saveReceiptPrintStatus(salesId, 'sent'));
       if (mounted) {
         showTopNotification(
           context,
@@ -4496,7 +4491,9 @@ class _DailyStockPageState extends State<DailyStockPage>
       }
       return true;
     } catch (error) {
-      await _saveReceiptPrintStatus(salesId, 'failed', error: error.toString());
+      unawaited(
+        _saveReceiptPrintStatus(salesId, 'failed', error: error.toString()),
+      );
       if (mounted) {
         showTopNotification(
           context,
@@ -4587,11 +4584,13 @@ class _DailyStockPageState extends State<DailyStockPage>
     required List<Map<String, dynamic>> items,
     required double subtotal,
     required double discountAmount,
+    required double taxAmount,
     required String discountType,
     required double total,
     required double paidAmount,
     required double change,
-    required bool receiptPrinted,
+    required Future<bool> printResult,
+    required String paymentMode,
     required Future<bool> Function() onRetryPrint,
   }) async {
     if (!mounted) return;
@@ -4666,7 +4665,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                               ),
                             ),
                             Text(
-                              'Receipt ID: $salesId',
+                              'Receipt ID: $salesId\nCashier: $_staffDisplayName\nStaff ID: ${_staffPublicId.isEmpty ? 'Not recorded' : _staffPublicId}',
                               style: TextStyle(
                                 color: Colors.white.withOpacity(0.78),
                                 fontSize: 11,
@@ -4747,6 +4746,13 @@ class _DailyStockPageState extends State<DailyStockPage>
                             valueColor: const Color(0xFF2E7D32),
                           ),
                         ],
+                        ...[
+                          const SizedBox(height: 6),
+                          _SummaryRow(
+                            label: 'VAT (12%)',
+                            value: '\u20B1${taxAmount.toStringAsFixed(2)}',
+                          ),
+                        ],
                         const SizedBox(height: 6),
                         _SummaryRow(
                           label: 'Total',
@@ -4754,8 +4760,16 @@ class _DailyStockPageState extends State<DailyStockPage>
                         ),
                         const SizedBox(height: 6),
                         _SummaryRow(
-                          label: 'Customer paid',
+                          label: paymentMode.toLowerCase() == 'cash'
+                              ? 'Cash tendered'
+                              : 'Amount paid',
                           value: '\u20B1${paidAmount.toStringAsFixed(2)}',
+                        ),
+                        const SizedBox(height: 6),
+                        _SummaryRow(
+                          label: 'Net of sales',
+                          value:
+                              '\u20B1${(total - taxAmount).toStringAsFixed(2)}',
                         ),
                         const SizedBox(height: 6),
                         _SummaryRow(
@@ -4768,7 +4782,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                   ),
                 ),
                 _ReceiptPrintActions(
-                  initialSuccess: receiptPrinted,
+                  initialResult: printResult,
                   onRetry: onRetryPrint,
                 ),
                 Padding(
@@ -7407,6 +7421,40 @@ class _DailyStockPageState extends State<DailyStockPage>
       _showStyledSnackBar('Add items to the cart first', isError: true);
       return;
     }
+    final beverageCount = _validCartEntries(orderItems).fold<int>(0, (
+      sum,
+      entry,
+    ) {
+      final item = _knownOrderItems(
+        orderItems,
+      ).firstWhere((item) => _cartKey(item) == entry.key, orElse: () => {});
+      final servings = item['isCoffee'] == true
+          ? 1
+          : bundleDrinkServings(item).length;
+      return sum + entry.value * servings;
+    });
+    if (beverageCount >= 50) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Review large beverage order'),
+          content: Text(
+            'This order contains $beverageCount beverages. Please verify the quantity with the customer before proceeding.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Review quantities'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('Confirm quantity'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true || !mounted) return;
+    }
     final validCartEntries = _validCartEntries(orderItems);
     final salesId = _generateSalesId();
     final paymentController = TextEditingController(
@@ -7597,8 +7645,15 @@ class _DailyStockPageState extends State<DailyStockPage>
                                 ),
                                 const SizedBox(height: 14),
                               ],
+                              if (_taxValue(orderItems) > 0)
+                                _OrderRow(
+                                  label: 'VAT (12%)',
+                                  value:
+                                      '₱${_taxValue(orderItems).toStringAsFixed(2)}',
+                                ),
                               const SizedBox(height: 8),
                               Container(
+                                margin: const EdgeInsets.only(top: 2),
                                 padding: const EdgeInsets.symmetric(
                                   horizontal: 14,
                                   vertical: 12,
@@ -10849,7 +10904,6 @@ class _DailyStockPageState extends State<DailyStockPage>
                 }
               }
               final basePrice = _parsePrice(baseVariant['price']);
-              final sizeDelta = _parsePrice(baseVariant['sizePriceDelta']);
               final sizeCartCount = sizeVariants.fold<int>(0, (sum, item) {
                 final key = _cartKey(item);
                 return sum + (_cart[key] ?? 0);
@@ -10922,28 +10976,6 @@ class _DailyStockPageState extends State<DailyStockPage>
                                   bgColor: const Color(0xFFE8F5E9),
                                   textColor: const Color(0xFF2E7D32),
                                 ),
-                                if (sizeDelta > 0)
-                                  _MiniTag(
-                                    label:
-                                        '+₱${sizeDelta.toStringAsFixed(0)} size',
-                                    bgColor: const Color(0xFFFFF3E0),
-                                    textColor: const Color(0xFFE65100),
-                                  ),
-                                if (addonCount > 0)
-                                  _MiniTag(
-                                    label:
-                                        '$addonCount add-on${addonCount != 1 ? 's' : ''}',
-                                    bgColor: _AppColors.cardBg,
-                                    textColor: _AppColors.textSoft,
-                                  ),
-                                if (sizeCartCount > 0)
-                                  _MiniTag(
-                                    label: '$sizeCartCount in cart',
-                                    bgColor: _AppColors.primary.withOpacity(
-                                      0.1,
-                                    ),
-                                    textColor: _AppColors.primary,
-                                  ),
                               ],
                             ),
                             if (addonEntries.isNotEmpty) ...[
@@ -12725,11 +12757,11 @@ class _MiniTag extends StatelessWidget {
 }
 
 class _ReceiptPrintActions extends StatefulWidget {
-  final bool initialSuccess;
+  final Future<bool> initialResult;
   final Future<bool> Function() onRetry;
 
   const _ReceiptPrintActions({
-    required this.initialSuccess,
+    required this.initialResult,
     required this.onRetry,
   });
 
@@ -12738,8 +12770,23 @@ class _ReceiptPrintActions extends StatefulWidget {
 }
 
 class _ReceiptPrintActionsState extends State<_ReceiptPrintActions> {
-  late bool _printed = widget.initialSuccess;
-  bool _printing = false;
+  bool _printed = false;
+  bool _printing = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _observeInitialPrint();
+  }
+
+  Future<void> _observeInitialPrint() async {
+    final printed = await widget.initialResult;
+    if (!mounted) return;
+    setState(() {
+      _printed = printed;
+      _printing = false;
+    });
+  }
 
   Future<void> _retry() async {
     setState(() => _printing = true);

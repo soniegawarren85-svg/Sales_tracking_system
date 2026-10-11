@@ -41,6 +41,7 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
   // Controllers
   final _descriptionController = TextEditingController();
   final _flavorNameController = TextEditingController();
+  final _costController = TextEditingController(text: '0');
   final _flavorPriceController = TextEditingController();
   final _addonNameController = TextEditingController();
   final _addonPriceController = TextEditingController();
@@ -98,6 +99,7 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
   void dispose() {
     _descriptionController.dispose();
     _flavorNameController.dispose();
+    _costController.dispose();
     _flavorPriceController.dispose();
     _addonNameController.dispose();
     _addonPriceController.dispose();
@@ -306,6 +308,7 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
           'coffeeIdNumber': next,
           'name': _flavorNameController.text.trim(),
           'basePrice': 0,
+          'costPrice': _parsePrice(_costController.text),
           'description': _descriptionController.text.trim(),
           'imageUrl': imageUrl ?? '',
           'sizes': sizes,
@@ -324,6 +327,7 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
         _flavorNameController.clear();
         _flavorPriceController.clear();
         _descriptionController.clear();
+        _costController.text = '0';
         _coffeeImageBytes = null; _coffeeUpload = null;
         _resetSizes();
       });
@@ -386,6 +390,7 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
             ),
             const SizedBox(height: 10),
             _CoffeeImagePicker(
+              // Cost is shown only in the admin editor.
               imageBytes: _coffeeImageBytes,
               imageUrl: '',
               onPick: _pickCoffeeImage,
@@ -395,6 +400,15 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
 
             // ── Section 2: Sizes ─────────────────────────────────────────────
             _sectionHeader('Sizes & Price', Icons.local_drink_rounded),
+            TextFormField(
+              controller: _costController,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: _inputDeco('Cost price (₱)', Icons.payments_outlined),
+              validator: (value) {
+                final cost = num.tryParse(value ?? '');
+                return cost == null || !cost.isFinite || cost < 0 ? 'Enter a valid cost' : null;
+              },
+            ),
             const SizedBox(height: 4),
             Text(
               'Set the selling price for each size.',
@@ -686,6 +700,7 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
     final nameController = TextEditingController(
       text: data['name']?.toString() ?? '',
     );
+    final costController = TextEditingController(text: '${data['costPrice'] ?? 0}');
     final priceController = TextEditingController(
       text: ((data['basePrice'] ?? 0) as num).toStringAsFixed(0),
     );
@@ -726,6 +741,7 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
                       ),
                     ),
                     const SizedBox(height: 10),
+                    TextField(controller: costController, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: _inputDeco('Cost price (₱)', Icons.payments_outlined)),
                     _CoffeeImagePicker(
                       imageBytes: editImageBytes.isEmpty
                           ? null
@@ -827,6 +843,11 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
                 ),
                 ElevatedButton(
                   onPressed: () async {
+                    final cost = num.tryParse(costController.text.trim());
+                    if (cost == null || !cost.isFinite || cost < 0) {
+                      _showSnack('Enter a valid cost price.', isError: true);
+                      return;
+                    }
                     final newImageUrl = editImageBytes.isEmpty
                         ? null
                         : await _uploadCoffeeImage(
@@ -847,6 +868,7 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
                         .toList();
                     await doc.reference.update({
                       'name': nameController.text.trim(),
+                      'costPrice': cost,
                       'basePrice': 0,
                       'description': descriptionController.text.trim(),
                       'imageUrl': ?newImageUrl,
@@ -867,6 +889,7 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
     );
 
     nameController.dispose();
+    costController.dispose();
     priceController.dispose();
     descriptionController.dispose();
     for (final size in sizeDrafts) {

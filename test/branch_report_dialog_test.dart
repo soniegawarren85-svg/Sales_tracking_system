@@ -67,9 +67,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(viewAll);
     await tester.pumpAndSettle();
-    await tester.ensureVisible(find.widgetWithText(ChoiceChip, 'GCash'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(ChoiceChip, 'GCash'));
+    await tester.enterText(find.byType(TextField).last, 'GCash');
     await tester.pumpAndSettle();
     expect(find.text('S-2'), findsOneWidget);
     expect(find.text('S-1'), findsNothing);

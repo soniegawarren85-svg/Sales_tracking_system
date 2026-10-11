@@ -1,5 +1,6 @@
 import 'package:sales_tracking/theme/app_colors.dart';
 import '../services/staff_login_session.dart';
+import '../services/profile_field_validation.dart';
 import '../widgets/branch_staff_activity_dialog.dart';
 import '../services/public_item_id.dart';
 import 'dart:convert';
@@ -332,35 +333,26 @@ class _ProfilePageState extends State<ProfilePage>
       text: staffData['age']?.toString() ?? '',
     );
 
-    try {
-      await showModalBottomSheet<void>(
-        context: context,
-        isScrollControlled: true,
-        backgroundColor: Colors.transparent,
-        useSafeArea: true,
-        builder: (sheetContext) {
-          return _EditProfileSheet(
-            docRef: docRef,
-            firstNameController: firstNameController,
-            lastNameController: lastNameController,
-            emailController: emailController,
-            phoneController: phoneController,
-            addressController: addressController,
-            ageController: ageController,
-            onSaved: () {
-              _showStyledSnackBar('Profile updated successfully.');
-            },
-          );
-        },
-      );
-    } finally {
-      firstNameController.dispose();
-      lastNameController.dispose();
-      emailController.dispose();
-      phoneController.dispose();
-      addressController.dispose();
-      ageController.dispose();
-    }
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      useSafeArea: true,
+      builder: (sheetContext) {
+        return _EditProfileSheet(
+          docRef: docRef,
+          firstNameController: firstNameController,
+          lastNameController: lastNameController,
+          emailController: emailController,
+          phoneController: phoneController,
+          addressController: addressController,
+          ageController: ageController,
+          onSaved: () {
+            _showStyledSnackBar('Profile updated successfully.');
+          },
+        );
+      },
+    );
   }
 
   Future<void> _showChangePasswordSheet() async {
@@ -555,7 +547,12 @@ class _ProfilePageState extends State<ProfilePage>
         return Container(
           decoration: const BoxDecoration(
             gradient: LinearGradient(
-              colors: [AppColors.primaryDeep, _pinkDark, _pinkMid, AppColors.accent],
+              colors: [
+                AppColors.primaryDeep,
+                _pinkDark,
+                _pinkMid,
+                AppColors.accent,
+              ],
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
             ),
@@ -987,44 +984,44 @@ class _ProfilePageState extends State<ProfilePage>
           onTap: _showEditProfileSheet,
           borderRadius: BorderRadius.circular(10),
           child: Container(
-        padding: EdgeInsets.symmetric(
-          horizontal: compact ? 10 : 14,
-          vertical: 9,
-        ),
-        decoration: BoxDecoration(
-          gradient: const LinearGradient(
-            colors: [_accentLight, _accent],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-          ),
-          borderRadius: BorderRadius.circular(10),
-          boxShadow: [
-            BoxShadow(
-              color: _accent.withOpacity(0.45),
-              blurRadius: 10,
-              offset: const Offset(0, 4),
+            padding: EdgeInsets.symmetric(
+              horizontal: compact ? 10 : 14,
+              vertical: 9,
             ),
-          ],
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.edit_rounded, size: 13, color: Colors.white),
-            if (!compact) ...[
-              const SizedBox(width: 6),
-              const Text(
-                'Edit Profile',
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w700,
-                  color: Colors.white,
-                  letterSpacing: 0.3,
-                ),
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                colors: [_accentLight, _accent],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
               ),
-            ],
-          ],
-        ),
-      ),
+              borderRadius: BorderRadius.circular(10),
+              boxShadow: [
+                BoxShadow(
+                  color: _accent.withOpacity(0.45),
+                  blurRadius: 10,
+                  offset: const Offset(0, 4),
+                ),
+              ],
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.edit_rounded, size: 13, color: Colors.white),
+                if (!compact) ...[
+                  const SizedBox(width: 6),
+                  const Text(
+                    'Edit Profile',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      color: Colors.white,
+                      letterSpacing: 0.3,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
         ),
       ),
     );
@@ -1610,6 +1607,7 @@ class _EditProfileSheet extends StatefulWidget {
 
 class _EditProfileSheetState extends State<_EditProfileSheet>
     with SingleTickerProviderStateMixin {
+  final _formKey = GlobalKey<FormState>();
   late AnimationController _sheetAnimCtrl;
   late Animation<double> _sheetFade;
   late Animation<Offset> _sheetSlide;
@@ -1641,6 +1639,12 @@ class _EditProfileSheetState extends State<_EditProfileSheet>
   @override
   void dispose() {
     _sheetAnimCtrl.dispose();
+    widget.firstNameController.dispose();
+    widget.lastNameController.dispose();
+    widget.emailController.dispose();
+    widget.phoneController.dispose();
+    widget.addressController.dispose();
+    widget.ageController.dispose();
     super.dispose();
   }
 
@@ -1653,33 +1657,7 @@ class _EditProfileSheetState extends State<_EditProfileSheet>
     final ageText = widget.ageController.text.trim();
     final age = int.tryParse(ageText);
 
-    if (firstName.isEmpty ||
-        lastName.isEmpty ||
-        email.isEmpty ||
-        phone.isEmpty ||
-        address.isEmpty ||
-        ageText.isEmpty) {
-      _showSheetSnackBar('Please complete all fields.', isError: true);
-      return;
-    }
-
-    if (!RegExp(r'^[\w.-]+@[\w-]+\.[a-zA-Z]{2,}$').hasMatch(email)) {
-      _showSheetSnackBar('Enter a valid email address.', isError: true);
-      return;
-    }
-
-    if (!RegExp(r'^\d{11}$').hasMatch(phone)) {
-      _showSheetSnackBar(
-        'Phone number must be exactly 11 digits.',
-        isError: true,
-      );
-      return;
-    }
-
-    if (age == null || age < 26 || age > 50) {
-      _showSheetSnackBar('Age must be from 26 to 50 only.', isError: true);
-      return;
-    }
+    if (!(_formKey.currentState?.validate() ?? false)) return;
 
     setState(() => _isSaving = true);
 
@@ -1868,22 +1846,6 @@ class _EditProfileSheetState extends State<_EditProfileSheet>
                                 ],
                               ),
                             ),
-                            // Close button
-                            GestureDetector(
-                              onTap: () => Navigator.of(context).pop(),
-                              child: Container(
-                                padding: const EdgeInsets.all(8),
-                                decoration: BoxDecoration(
-                                  color: Colors.white.withOpacity(0.15),
-                                  borderRadius: BorderRadius.circular(10),
-                                ),
-                                child: const Icon(
-                                  Icons.close_rounded,
-                                  color: Colors.white,
-                                  size: 18,
-                                ),
-                              ),
-                            ),
                           ],
                         ),
                       ],
@@ -1899,7 +1861,11 @@ class _EditProfileSheetState extends State<_EditProfileSheet>
                         16,
                         bottomPadding + 16,
                       ),
-                      child: _buildAllFieldsContent(),
+                      child: Form(
+                        key: _formKey,
+                        autovalidateMode: AutovalidateMode.onUserInteraction,
+                        child: _buildAllFieldsContent(),
+                      ),
                     ),
                   ),
 
@@ -1940,7 +1906,7 @@ class _EditProfileSheetState extends State<_EditProfileSheet>
                               shape: RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(14),
                               ),
-                              padding: const EdgeInsets.symmetric(vertical: 14),
+                              padding: const EdgeInsets.symmetric(vertical: 18),
                             ),
                             child: _isSaving
                                 ? const SizedBox(
@@ -1992,6 +1958,7 @@ class _EditProfileSheetState extends State<_EditProfileSheet>
           hint: 'Enter first name',
           icon: Icons.drive_file_rename_outline_rounded,
           textCapitalization: TextCapitalization.words,
+          validator: ProfileFieldValidation.name,
         ),
         const SizedBox(height: 14),
         _SheetTextField(
@@ -2000,6 +1967,7 @@ class _EditProfileSheetState extends State<_EditProfileSheet>
           hint: 'Enter last name',
           icon: Icons.drive_file_rename_outline_rounded,
           textCapitalization: TextCapitalization.words,
+          validator: ProfileFieldValidation.name,
         ),
         const SizedBox(height: 24),
 
@@ -2012,6 +1980,7 @@ class _EditProfileSheetState extends State<_EditProfileSheet>
           hint: 'your@email.com',
           icon: Icons.email_outlined,
           keyboardType: TextInputType.emailAddress,
+          validator: ProfileFieldValidation.gmail,
         ),
         const SizedBox(height: 14),
         _SheetTextField(
@@ -2024,6 +1993,7 @@ class _EditProfileSheetState extends State<_EditProfileSheet>
             FilteringTextInputFormatter.digitsOnly,
             LengthLimitingTextInputFormatter(11),
           ],
+          validator: ProfileFieldValidation.phone,
         ),
         const SizedBox(height: 24),
 
@@ -2037,6 +2007,10 @@ class _EditProfileSheetState extends State<_EditProfileSheet>
           icon: Icons.location_on_outlined,
           maxLines: 2,
           textCapitalization: TextCapitalization.sentences,
+          validator: (value) {
+            if (value?.trim().isEmpty ?? true) return 'This field is required.';
+            return ProfileFieldValidation.wordLimit(value);
+          },
         ),
         const SizedBox(height: 14),
         _SheetTextField(
@@ -2049,6 +2023,7 @@ class _EditProfileSheetState extends State<_EditProfileSheet>
             FilteringTextInputFormatter.digitsOnly,
             LengthLimitingTextInputFormatter(2),
           ],
+          validator: ProfileFieldValidation.age,
         ),
         const SizedBox(height: 16),
         _FieldTip(
@@ -2077,7 +2052,7 @@ class _PasswordField extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return TextField(
+    return TextFormField(
       controller: controller,
       obscureText: obscureText,
       decoration: InputDecoration(
@@ -2373,6 +2348,7 @@ class _SheetTextField extends StatelessWidget {
   final int? maxLines;
   final TextCapitalization textCapitalization;
   final List<TextInputFormatter>? inputFormatters;
+  final String? Function(String?)? validator;
 
   const _SheetTextField({
     required this.controller,
@@ -2383,6 +2359,7 @@ class _SheetTextField extends StatelessWidget {
     this.maxLines = 1,
     this.textCapitalization = TextCapitalization.none,
     this.inputFormatters,
+    this.validator,
   });
 
   static const Color _pinkDark = AppColors.primaryDark;
@@ -2391,12 +2368,13 @@ class _SheetTextField extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return TextField(
+    return TextFormField(
       controller: controller,
       keyboardType: keyboardType,
       maxLines: maxLines,
       textCapitalization: textCapitalization,
       inputFormatters: inputFormatters,
+      validator: validator,
       decoration: InputDecoration(
         labelText: label,
         hintText: hint,

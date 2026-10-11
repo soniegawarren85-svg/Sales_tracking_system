@@ -11,6 +11,17 @@ bool offlineUsernameMatches(Map<String, dynamic> account, String username) =>
           normalizeAccountUsername(username),
     );
 
+bool offlineAccountMatchesLogin(
+  Map<String, dynamic> account,
+  String emailOrAccountId,
+) => emailOrAccountId.contains('@')
+    ? ['email', 'authEmail'].any(
+        (field) =>
+            '${account[field] ?? ''}'.trim().toLowerCase() ==
+            emailOrAccountId.trim().toLowerCase(),
+      )
+    : offlineUsernameMatches(account, emailOrAccountId);
+
 bool offlineAccountAllowed(Map<String, dynamic> account) {
   final role = '${account['role'] ?? 'staff'}'.trim().toLowerCase();
   final status = '${account['status'] ?? ''}'.trim().toLowerCase();

@@ -3,20 +3,31 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 
 Future<List<DocumentReference<Map<String, dynamic>>>> bundleMetadataTargets(
   FirebaseFirestore db,
-  String id,
-) async {
-  final assigned = await db
-      .collection('staff_inventory')
-      .where('sourceInventoryId', isEqualTo: id)
-      .get();
-  final pending = await db
-      .collection('allocation_checklist')
-      .where('sourceInventoryId', isEqualTo: id)
-      .get();
-  return [
-    ...assigned.docs,
-    ...pending.docs,
-  ].map((doc) => doc.reference).toList();
+  String id, {
+  bool Function(Map<String, dynamic>)? needsUpdate,
+}) async {
+  final snapshots = await Future.wait([
+    db
+        .collection('staff_inventory')
+        .where('sourceInventoryId', isEqualTo: id)
+        .get(),
+    db
+        .collection('allocation_checklist')
+        .where('sourceInventoryId', isEqualTo: id)
+        .get(),
+  ]);
+  return snapshots
+      .expand((snapshot) => snapshot.docs)
+      .where((doc) {
+        final data = doc.data();
+        if (data['isDeleted'] == true || data['isVoided'] == true) return false;
+        if (doc.reference.parent.id == 'allocation_checklist' &&
+            !ChecklistStatus.incomingOpen(data))
+          return false;
+        return needsUpdate?.call(data) ?? true;
+      })
+      .map((doc) => doc.reference)
+      .toList();
 }
 
 Future<List<DocumentReference<Map<String, dynamic>>>> readBundleMetadataTargets(
@@ -24,11 +35,13 @@ Future<List<DocumentReference<Map<String, dynamic>>>> readBundleMetadataTargets(
   List<DocumentReference<Map<String, dynamic>>> references,
 ) async {
   final targets = <DocumentReference<Map<String, dynamic>>>[];
-  for (final ref in references) {
-    final data = (await tx.get(ref)).data();
+  for (final snapshot in await Future.wait(references.map(tx.get))) {
+    final ref = snapshot.reference;
+    final data = snapshot.data();
     if (data == null || data['isDeleted'] == true || data['isBundle'] != true)
       continue;
-    if (ref.parent.id == 'allocation_checklist' && !ChecklistStatus.incomingOpen(data))
+    if (ref.parent.id == 'allocation_checklist' &&
+        !ChecklistStatus.incomingOpen(data))
       continue;
     targets.add(ref);
   }
@@ -41,7 +54,7 @@ void writeBundleMetadata(
   Map<String, dynamic> changes,
 ) {
   final metadata = {
-    for (final key in ['name', 'price', 'imageUrl'])
+    for (final key in ['name', 'price', 'costPrice', 'imageUrl'])
       if (changes.containsKey(key)) key: changes[key],
     'updatedAt': FieldValue.serverTimestamp(),
   };

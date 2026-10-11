@@ -57,64 +57,65 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(ChoiceChip, 'Discount'));
+    await tester.enterText(find.byType(TextField), 'Discounted');
     await tester.pumpAndSettle();
-    expect(find.text('2 receipts'), findsOneWidget);
-    expect(find.text('CASH-DISCOUNT'), findsOneWidget);
-    expect(find.text('GCASH-DISCOUNT'), findsOneWidget);
+    expect(find.textContaining('Discounted: 2 transactions'), findsOneWidget);
+    expect(find.text('CASH-DISCOUNT'), findsWidgets);
+    await tester.drag(find.byType(ListView), const Offset(0, -700));
+    await tester.pumpAndSettle();
+    expect(find.text('GCASH-DISCOUNT'), findsWidgets);
     expect(find.text('REGULAR'), findsNothing);
     expect(tester.takeException(), isNull);
   });
 
   for (final width in [390.0, 1100.0]) {
-    testWidgets(
-      'sales filters stay fixed and average uses sold units at $width',
-      (tester) async {
-        tester.view.physicalSize = Size(width, 900);
-        tester.view.devicePixelRatio = 1;
-        addTearDown(tester.view.resetPhysicalSize);
-        addTearDown(tester.view.resetDevicePixelRatio);
-        final data = BranchReportData({
-          'branches': [
-            {'_id': 'b', 'name': 'Branch'},
-          ],
-          'completed_sales': [
-            {
-              '_id': 'sale',
-              'branchId': 'b',
-              'timestamp': DateTime.now(),
-              'total': 600,
-              'items': [
-                {'name': 'Cookie', 'quantity': 3},
-              ],
-            },
-          ],
-        });
-        await tester.pumpWidget(
-          MaterialApp(
-            home: Scaffold(body: DailySalesReport(data: Stream.value(data))),
-          ),
-        );
-        await tester.pumpAndSettle();
-        expect(find.textContaining('report · All branches'), findsNothing);
-        final card = find.ancestor(
-          of: find.text('Average sale'),
-          matching: find.byType(Card),
-        );
-        expect(
-          find.descendant(of: card, matching: find.text('₱200.00')),
-          findsOneWidget,
-        );
-        final chip = find.widgetWithText(ChoiceChip, 'Day');
-        final date = find.byIcon(Icons.calendar_month).first;
-        final chipPosition = tester.getTopLeft(chip);
-        final datePosition = tester.getTopLeft(date);
-        await tester.drag(find.byType(ListView).first, const Offset(0, -450));
-        await tester.pumpAndSettle();
-        expect(tester.getTopLeft(chip), chipPosition);
-        expect(tester.getTopLeft(date), datePosition);
-        expect(tester.takeException(), isNull);
-      },
-    );
+    testWidgets('sales filters stay fixed and cost uses sold units at $width', (
+      tester,
+    ) async {
+      tester.view.physicalSize = Size(width, 900);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final data = BranchReportData({
+        'branches': [
+          {'_id': 'b', 'name': 'Branch'},
+        ],
+        'completed_sales': [
+          {
+            '_id': 'sale',
+            'branchId': 'b',
+            'timestamp': DateTime.now(),
+            'total': 600,
+            'items': [
+              {'name': 'Cookie', 'quantity': 3, 'costPrice': 20},
+            ],
+          },
+        ],
+      });
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(body: DailySalesReport(data: Stream.value(data))),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.textContaining('report · All branches'), findsNothing);
+      final card = find.ancestor(
+        of: find.text('Total cost'),
+        matching: find.byType(Card),
+      );
+      expect(
+        find.descendant(of: card, matching: find.text('₱60.00')),
+        findsOneWidget,
+      );
+      final chip = find.widgetWithText(ChoiceChip, 'Day');
+      final date = find.byIcon(Icons.calendar_month).first;
+      final chipPosition = tester.getTopLeft(chip);
+      final datePosition = tester.getTopLeft(date);
+      await tester.drag(find.byType(ListView).first, const Offset(0, -450));
+      await tester.pumpAndSettle();
+      expect(tester.getTopLeft(chip), chipPosition);
+      expect(tester.getTopLeft(date), datePosition);
+      expect(tester.takeException(), isNull);
+    });
   }
 }

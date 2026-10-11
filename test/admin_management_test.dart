@@ -86,6 +86,10 @@ void main() {
           .onPressed,
       isNull,
     );
+    await tester.tap(find.byType(DropdownButtonFormField<String>));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Other').last);
+    await tester.pumpAndSettle();
     await tester.enterText(find.byType(TextField), 'No longer assigned');
     await tester.pump();
     expect(reason, isNull);
@@ -202,6 +206,133 @@ void main() {
     expect(find.text('Maya'), findsNothing);
     expect(find.byTooltip('Edit'), findsOneWidget);
   });
+  testWidgets('All branches permission changes apply to every branch', (
+    tester,
+  ) async {
+    final db = FakeFirebaseFirestore();
+    await db.collection('branches').doc('branch-dagupan').set({
+      'name': 'Dagupan',
+    });
+    await db.collection('branches').doc('branch-lingayen').set({
+      'name': 'Lingayen',
+    });
+    await db.doc('admin_settings/transactions').set({
+      'branchSettings': {
+        'branch-dagupan': {'allowRefunds': false},
+        'branch-lingayen': {'allowRefunds': true},
+      },
+    });
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: TransactionSettingsDialog(kind: 'permissions', firestore: db),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byType(DropdownButtonFormField<String>));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('All branches').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(SwitchListTile, 'Process refunds'));
+    await tester.pumpAndSettle();
+
+    final saved = (await db.doc('admin_settings/transactions').get()).data()!;
+    final branchSettings = saved['branchSettings'] as Map;
+    expect((branchSettings['branch-dagupan'] as Map)['allowRefunds'], isTrue);
+    expect((branchSettings['branch-lingayen'] as Map)['allowRefunds'], isTrue);
+  });
+  testWidgets('A branch refund setting does not change other branches', (
+    tester,
+  ) async {
+    final db = FakeFirebaseFirestore();
+    await db.collection('branches').doc('branch-dagupan').set({
+      'name': 'Dagupan',
+    });
+    await db.collection('branches').doc('branch-lingayen').set({
+      'name': 'Lingayen',
+    });
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: TransactionSettingsDialog(kind: 'permissions', firestore: db),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(SwitchListTile, 'Process refunds'));
+    await tester.pumpAndSettle();
+
+    final saved = (await db.doc('admin_settings/transactions').get()).data()!;
+    final branchSettings = saved['branchSettings'] as Map;
+    expect((branchSettings['branch-dagupan'] as Map)['allowRefunds'], isFalse);
+    expect(branchSettings.containsKey('branch-lingayen'), isFalse);
+  });
+  testWidgets(
+    'Tax settings can be configured per branch and for all branches',
+    (tester) async {
+      final db = FakeFirebaseFirestore();
+      await db.collection('branches').doc('branch-dagupan').set({
+        'name': 'Dagupan',
+      });
+      await db.collection('branches').doc('branch-lingayen').set({
+        'name': 'Lingayen',
+      });
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: TransactionSettingsDialog(kind: 'tax', firestore: db),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final nonVatRadio = tester.widget<RadioListTile<String>>(
+        find.widgetWithText(RadioListTile<String>, 'Non-VAT registered'),
+      );
+      expect(nonVatRadio.onChanged, isNull);
+      final vatRadio = tester.widget<RadioListTile<String>>(
+        find.widgetWithText(RadioListTile<String>, 'VAT registered (12%)'),
+      );
+      expect(vatRadio.onChanged, isNull);
+
+      await tester.tap(find.byType(Switch).first);
+      await tester.pumpAndSettle();
+      expect(
+        tester
+            .widget<RadioListTile<String>>(
+              find.widgetWithText(
+                RadioListTile<String>,
+                'VAT registered (12%)',
+              ),
+            )
+            .onChanged,
+        isNotNull,
+      );
+      await tester.tap(find.text('VAT registered (12%)'));
+      await tester.pumpAndSettle();
+      var saved = (await db.doc('admin_settings/transactions').get()).data()!;
+      var branchSettings = saved['branchSettings'] as Map;
+      expect((branchSettings['branch-dagupan'] as Map)['taxEnabled'], isTrue);
+      expect(
+        (branchSettings['branch-dagupan'] as Map)['taxClassification'],
+        'vat',
+      );
+      expect(branchSettings.containsKey('branch-lingayen'), isFalse);
+
+      await tester.tap(find.byType(DropdownButtonFormField<String>));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('All branches').last);
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(SwitchListTile, 'Enable tax'));
+      await tester.pumpAndSettle();
+      saved = (await db.doc('admin_settings/transactions').get()).data()!;
+      branchSettings = saved['branchSettings'] as Map;
+      expect((branchSettings['branch-dagupan'] as Map)['taxEnabled'], isTrue);
+      expect((branchSettings['branch-lingayen'] as Map)['taxEnabled'], isTrue);
+    },
+  );
   testWidgets(
     'Reports show six metrics and open current allocations on demand',
     (tester) async {

@@ -1,4 +1,5 @@
 import 'refund_value.dart';
+import 'branch_report_data.dart';
 import 'cash_drawer_service.dart';
 import 'local_write_lock.dart';
 import 'dart:async';
@@ -13,11 +14,13 @@ import 'collection_storage_native.dart'
 
 class LocalDatabaseSyncService {
   LocalDatabaseSyncService._()
-      : _firestore = FirebaseFirestore.instance,
-        _storage = createCollectionStorage();
+    : _firestore = FirebaseFirestore.instance,
+      _storage = createCollectionStorage();
 
-  LocalDatabaseSyncService.forDatabase(this._firestore, {CollectionStorage? storage})
-      : _storage = storage ?? createCollectionStorage();
+  LocalDatabaseSyncService.forDatabase(
+    this._firestore, {
+    CollectionStorage? storage,
+  }) : _storage = storage ?? createCollectionStorage();
 
   static final LocalDatabaseSyncService _instance =
       LocalDatabaseSyncService._();
@@ -106,7 +109,8 @@ class LocalDatabaseSyncService {
       // mutable even when this device has not cached a sale yet.
       if (raw == null || raw.isEmpty) return <Map<String, dynamic>>[];
       final decoded = jsonDecode(raw);
-      if (decoded is! List) throw const FormatException('Invalid offline collection');
+      if (decoded is! List)
+        throw const FormatException('Invalid offline collection');
       return decoded
           .whereType<Map>()
           .map((item) => Map<String, dynamic>.from(_decode(item) as Map))
@@ -206,9 +210,20 @@ class LocalDatabaseSyncService {
       final applied = List<String>.from(
         server['appliedOfflineMutationIds'] as List? ?? [],
       );
-      final row = CashDrawerService.forDay(server, DateTime.now(), receipts: receipts.where((receipt) => receipt['branchId'] == id));
-      if (id != null && server['drawerDate'] != CashDrawerService.dayKey(DateTime.now())) {
-        unawaited(CashDrawerService.ensureToday(_firestore, id).catchError((Object error) { debugPrint('Drawer reset deferred: $error'); }));
+      final row = CashDrawerService.forDay(
+        server,
+        DateTime.now(),
+        receipts: receipts.where((receipt) => receipt['branchId'] == id),
+      );
+      if (id != null &&
+          server['drawerDate'] != CashDrawerService.dayKey(DateTime.now())) {
+        unawaited(
+          CashDrawerService.ensureToday(_firestore, id).catchError((
+            Object error,
+          ) {
+            debugPrint('Drawer reset deferred: $error');
+          }),
+        );
       }
       row['localReceiptIds'] = {
         ...List<String>.from(byId[id]?['localReceiptIds'] as List? ?? []),
@@ -217,7 +232,11 @@ class LocalDatabaseSyncService {
             .map((movement) => movement['receiptId']?.toString() ?? ''),
       }.where((id) => id.isNotEmpty).toList();
       for (final movement in pending) {
-        if (CashDrawerService.dayKey(_asDate(movement['createdAt']) ?? DateTime.now()) != CashDrawerService.dayKey(DateTime.now()) || movement['drawerId'] != id ||
+        if (CashDrawerService.dayKey(
+                  _asDate(movement['createdAt']) ?? DateTime.now(),
+                ) !=
+                CashDrawerService.dayKey(DateTime.now()) ||
+            movement['drawerId'] != id ||
             applied.contains(movement['_localDocId']))
           continue;
         row['balance'] =
@@ -235,7 +254,11 @@ class LocalDatabaseSyncService {
   });
 
   Future<void> refreshCoreCollectionsFromFirebase() async {
-    for (final collection in const ['sales_inventory', 'coffee_products']) {
+    for (final collection in const [
+      'sales_inventory',
+      'coffee_products',
+      'coffee_addons',
+    ]) {
       try {
         final snapshot = await _firestore
             .collection(collection)
@@ -266,11 +289,23 @@ class LocalDatabaseSyncService {
     var changed = false;
     for (var i = 0; i < drawers.length; i++) {
       final data = drawers[i];
-      if (data['drawerDate'] == CashDrawerService.dayKey(DateTime.now())) continue;
+      if (data['drawerDate'] == CashDrawerService.dayKey(DateTime.now()))
+        continue;
       final id = '${data['_localDocId'] ?? data['id'] ?? ''}';
-      drawers[i] = CashDrawerService.forDay(data, DateTime.now(), receipts: receipts.where((receipt) => receipt['branchId'] == id));
+      drawers[i] = CashDrawerService.forDay(
+        data,
+        DateTime.now(),
+        receipts: receipts.where((receipt) => receipt['branchId'] == id),
+      );
       changed = true;
-      if (id.isNotEmpty) unawaited(CashDrawerService.ensureToday(_firestore, id).catchError((Object error) { debugPrint('Drawer reset deferred: $error'); }));
+      if (id.isNotEmpty)
+        unawaited(
+          CashDrawerService.ensureToday(_firestore, id).catchError((
+            Object error,
+          ) {
+            debugPrint('Drawer reset deferred: $error');
+          }),
+        );
     }
     if (changed) await cacheCollectionDocs('staff_cash_drawer', drawers);
   });
@@ -488,12 +523,32 @@ class LocalDatabaseSyncService {
         receiptId.isNotEmpty)
       return;
     final todayReceipts = await getCachedCollection('completed_sales');
-    drawer.addAll(CashDrawerService.forDay(drawer, DateTime.now(), receipts: todayReceipts.where((receipt) => receipt['branchId'] == drawerId)));
-    final movementDate = _asDate(queue.firstWhere((change) => change['_localDocId'] == id)['createdAt']) ?? DateTime.now();
-    final sameDay = CashDrawerService.dayKey(movementDate) == CashDrawerService.dayKey(DateTime.now());
+    drawer.addAll(
+      CashDrawerService.forDay(
+        drawer,
+        DateTime.now(),
+        receipts: todayReceipts.where(
+          (receipt) => receipt['branchId'] == drawerId,
+        ),
+      ),
+    );
+    final movementDate =
+        _asDate(
+          queue.firstWhere(
+            (change) => change['_localDocId'] == id,
+          )['createdAt'],
+        ) ??
+        DateTime.now();
+    final sameDay =
+        CashDrawerService.dayKey(movementDate) ==
+        CashDrawerService.dayKey(DateTime.now());
     drawer['_localDocId'] = drawerId;
-    drawer['balance'] = ((drawer['balance'] as num?)?.toDouble() ?? 0) + (sameDay ? cashDelta : 0);
-    drawer['gcashBalance'] = ((drawer['gcashBalance'] as num?)?.toDouble() ?? 0) + (sameDay ? gcashDelta : 0);
+    drawer['balance'] =
+        ((drawer['balance'] as num?)?.toDouble() ?? 0) +
+        (sameDay ? cashDelta : 0);
+    drawer['gcashBalance'] =
+        ((drawer['gcashBalance'] as num?)?.toDouble() ?? 0) +
+        (sameDay ? gcashDelta : 0);
     drawer['staffId'] = drawerId;
     drawer['branchId'] = drawerId;
     drawer['handledByStaffId'] = staffId;
@@ -538,12 +593,21 @@ class LocalDatabaseSyncService {
             );
             if (applied.contains(id)) return;
             final now = DateTime.now();
-            final current = CashDrawerService.forDay(snapshot.data() ?? {}, now);
-            final sameDay = CashDrawerService.dayKey(_asDate(change['createdAt']) ?? now) == CashDrawerService.dayKey(now);
+            final current = CashDrawerService.forDay(
+              snapshot.data() ?? {},
+              now,
+            );
+            final sameDay =
+                CashDrawerService.dayKey(_asDate(change['createdAt']) ?? now) ==
+                CashDrawerService.dayKey(now);
             transaction.set(ref, {
               ...current,
-              'balance': (current['balance'] as num? ?? 0) + (sameDay ? (change['cashDelta'] as num? ?? 0) : 0),
-              'gcashBalance': (current['gcashBalance'] as num? ?? 0) + (sameDay ? (change['gcashDelta'] as num? ?? 0) : 0),
+              'balance':
+                  (current['balance'] as num? ?? 0) +
+                  (sameDay ? (change['cashDelta'] as num? ?? 0) : 0),
+              'gcashBalance':
+                  (current['gcashBalance'] as num? ?? 0) +
+                  (sameDay ? (change['gcashDelta'] as num? ?? 0) : 0),
               'staffId': drawerId,
               'branchId': drawerId,
               'handledByStaffId': change['staffId'],
@@ -574,6 +638,32 @@ class LocalDatabaseSyncService {
 
   Future<void> recordCompletedSale(Map<String, dynamic> payload) async {
     payload = refundValueRecord(payload);
+    final catalog = <String, List<Map<String, dynamic>>>{};
+    for (final collection in [
+      'sales_inventory',
+      'coffee_products',
+      'coffee_addons',
+    ]) {
+      catalog[collection] = (await getCachedCollection(collection))
+          .map(
+            (row) => <String, dynamic>{
+              ...row,
+              '_id': row['_localDocId'] ?? row['id'],
+            },
+          )
+          .toList();
+    }
+    final resolver = BranchReportData(catalog);
+    payload['items'] = (payload['items'] as List? ?? []).whereType<Map>().map((
+      item,
+    ) {
+      final resolved = resolver.resolveItem(item);
+      return <String, dynamic>{
+        ...Map<String, dynamic>.from(item),
+        if (resolved['costPrice'] != null)
+          'costPrice': reportValue(resolved['costPrice']),
+      };
+    }).toList();
     final now = DateTime.now();
     final salesId = payload['salesId']?.toString().trim();
     final docId = salesId?.isNotEmpty == true

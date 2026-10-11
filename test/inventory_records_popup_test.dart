@@ -95,6 +95,7 @@ void main() {
     await tester.enterText(find.byType(TextField), 'Dubai');
     await tester.pumpAndSettle();
     expect(find.text('Red Velvet'), findsNothing);
+    await tester.ensureVisible(find.text('Restore'));
     await tester.tap(find.text('Restore'));
     await tester.pumpAndSettle();
     expect(find.text('Restore item?'), findsOneWidget);
@@ -111,18 +112,25 @@ void main() {
     expect(find.text('Status'), findsOneWidget);
     await tester.tap(find.byTooltip('Filter by date'));
     await tester.pumpAndSettle();
-    expect(find.byType(DatePickerDialog), findsOneWidget);
+    expect(find.byType(DateRangePickerDialog), findsOneWidget);
     tester
         .state<NavigatorState>(find.byType(Navigator).last)
         .pop(
-          DateTime(2020, 1, 1),
+          DateTimeRange(start: DateTime(2020, 1, 1), end: DateTime(2020, 1, 2)),
         );
     await tester.pumpAndSettle();
     expect(find.text('Wrong entry'), findsNothing);
     expect(find.text('No records match your filters.'), findsOneWidget);
     await tester.tap(find.byTooltip('Filter by date'));
     await tester.pumpAndSettle();
-    tester.state<NavigatorState>(find.byType(Navigator).last).pop(DateTime.now());
+    tester
+        .state<NavigatorState>(find.byType(Navigator).last)
+        .pop(
+          DateTimeRange(
+            start: DateUtils.dateOnly(DateTime.now()),
+            end: DateUtils.dateOnly(DateTime.now()),
+          ),
+        );
     await tester.pumpAndSettle();
     expect(find.text('Wrong entry'), findsOneWidget);
     await tester.tap(find.byTooltip('Close'));
@@ -157,7 +165,11 @@ void main() {
     expect(find.text('Old Cream'), findsNothing);
     await tester.tap(find.byTooltip('Filter by date'));
     await tester.pumpAndSettle();
-    tester.state<NavigatorState>(find.byType(Navigator).last).pop(DateTime(2020, 1, 1));
+    tester
+        .state<NavigatorState>(find.byType(Navigator).last)
+        .pop(
+          DateTimeRange(start: DateTime(2020, 1, 1), end: DateTime(2020, 1, 1)),
+        );
     await tester.pumpAndSettle();
     expect(find.text('Old Cream'), findsOneWidget);
     expect(find.text('Qty'), findsNothing);

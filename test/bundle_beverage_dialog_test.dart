@@ -25,6 +25,7 @@ void main() {
     () {
       final drinks = bundleDrinkServings(bundle);
       expect(drinks.length, 1);
+      expect(drinks.single['sugarLevel'], '0%');
       final plain = customizeBundle(bundle, drinks);
       expect(plain['price'], 500);
       drinks.single['sugarLevel'] = '25%';
@@ -82,6 +83,11 @@ void main() {
     expect(find.textContaining('110'), findsNothing);
     await tester.tap(find.text('25%'));
     await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.textContaining('Cream (+'),
+      200,
+      scrollable: find.byType(Scrollable).first,
+    );
     await tester.tap(find.textContaining('Cream (+'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Done'));

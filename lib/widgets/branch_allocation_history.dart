@@ -237,15 +237,20 @@ class _AllocationHistoryDialogState extends State<AllocationHistoryDialog> {
   String _query = '';
   bool _issuesOnly = false;
   DateTime _day = DateUtils.dateOnly(DateTime.now());
+  DateTime? _endDay;
 
   Future<void> _pickDates() async {
-    final picked = await showDatePicker(
+    final picked = await showDateRangePicker(
       context: context,
       firstDate: DateTime(2000),
       lastDate: DateTime.now().add(const Duration(days: 365)),
-      initialDate: _day,
+      initialDateRange: DateTimeRange(start: _day, end: _endDay ?? _day),
     );
-    if (picked != null && mounted) setState(() => _day = picked);
+    if (picked != null && mounted)
+      setState(() {
+        _day = picked.start;
+        _endDay = picked.end;
+      });
   }
 
   @override
@@ -280,6 +285,10 @@ class _AllocationHistoryDialogState extends State<AllocationHistoryDialog> {
                     ),
                 ],
               ),
+              if (!widget.pendingOnly)
+                Text(
+                  '${MaterialLocalizations.of(context).formatShortDate(_day)} – ${MaterialLocalizations.of(context).formatShortDate(_endDay ?? _day)}',
+                ),
             ],
           ),
         ),
@@ -312,7 +321,11 @@ class _AllocationHistoryDialogState extends State<AllocationHistoryDialog> {
                   .toList();
               final records = groupAllocations(scoped).where((record) {
                 final at = allocationDate(record);
-                final withinDate = DateUtils.isSameDay(at.toLocal(), _day);
+                final withinDate =
+                    !at.toLocal().isBefore(_day) &&
+                    at.toLocal().isBefore(
+                      (_endDay ?? _day).add(const Duration(days: 1)),
+                    );
                 final search =
                     '${record['allocatedByName']} ${record['branchName']} ${record['staffName']} ${record['_items']}'
                         .toLowerCase();

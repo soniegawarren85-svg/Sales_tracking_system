@@ -309,15 +309,24 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
           .snapshots(),
       builder: (context, snapshot) {
         final count = snapshot.data?.docs.length ?? 0;
+        if (count == 0) return const SizedBox.shrink();
         return Padding(
           padding: const EdgeInsets.symmetric(vertical: 8),
           child: FilledButton.icon(
             style: FilledButton.styleFrom(
-              backgroundColor: Colors.white,
-              foregroundColor: AppColors.primary,
+              backgroundColor: AppColors.primary,
+              foregroundColor: Colors.white,
+              elevation: 3,
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(18),
+              ),
             ),
             icon: const Icon(Icons.bookmark_rounded),
-            label: Text('$count pending'),
+            label: Text(
+              '$count held order${count == 1 ? '' : 's'}',
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
             onPressed: () => setState(() {
               _salesInitialView = null;
               _salesInitialGroup = null;

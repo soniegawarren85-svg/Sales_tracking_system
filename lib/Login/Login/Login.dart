@@ -3,6 +3,7 @@ import '../../services/local_database_sync_service.dart';
 import '../../services/offline_login.dart';
 import 'package:sales_tracking/theme/app_colors.dart';
 import '../../services/account_username.dart';
+import '../../services/login_validation.dart';
 import 'package:sales_tracking/services/staff_login_session.dart';
 import 'dart:convert';
 
@@ -225,12 +226,21 @@ class _LoginScreenState extends State<LoginScreen>
       'staff_requests',
     );
     final account = accounts
-        .where((row) => offlineUsernameMatches(row, username))
+        .where((row) => offlineAccountMatchesLogin(row, username))
         .firstOrNull;
-    if (account == null || !offlineAccountAllowed(account)) return false;
-    final saved = prefs.getString(
-      'offlineAccount.' + _normalizeUsername(username),
-    );
+    if (account == null) return false;
+    final statusError = loginAccountStatusError(account);
+    if (statusError != null) {
+      _showMessage(statusError, isError: true);
+      return true;
+    }
+    if (!offlineAccountAllowed(account)) return false;
+    final role = '${account['role'] ?? 'staff'}'.trim().toLowerCase();
+    final publicId =
+        (account[role == 'admin' ? 'adminId' : 'staffId'] ?? username)
+            .toString();
+    final normalizedId = _normalizeUsername(publicId);
+    final saved = prefs.getString('offlineAccount.' + normalizedId);
     final remembered = saved == null
         ? null
         : Map<String, dynamic>.from(jsonDecode(saved));
@@ -238,7 +248,7 @@ class _LoginScreenState extends State<LoginScreen>
         remembered != null &&
         remembered['version'] == offlineCredentialVersion(account) &&
         remembered['passwordHash'] ==
-            _offlinePasswordHash(_normalizeUsername(username), password);
+            _offlinePasswordHash(normalizedId, password);
     final legacyAdmin =
         account['role'] == 'admin' &&
         account['credentialsChangedAt'] == null &&
@@ -248,15 +258,7 @@ class _LoginScreenState extends State<LoginScreen>
         !matchesRemembered &&
         !legacyAdmin)
       return false;
-    final savedRole = (account['role'] ?? 'staff')
-        .toString()
-        .trim()
-        .toLowerCase();
     final userId = account['_localDocId'].toString();
-    final publicId =
-        (account[savedRole == 'admin' ? 'adminId' : 'staffId'] ?? username)
-            .toString();
-    final role = savedRole;
     final isAdmin = role == 'admin';
     await prefs.setString('lastRole', role);
     await prefs.setString('lastUserId', userId);
@@ -305,7 +307,7 @@ class _LoginScreenState extends State<LoginScreen>
     if (isAdmin) await prefs.setString('adminId', publicId);
     await _rememberOfflineAccount(
       username: _normalizeUsername(publicId),
-      password: _passwordController.text.trim(),
+      password: _passwordController.text,
       role: isAdmin ? 'admin' : 'staff',
       userId: accountDoc.id,
       publicId: publicId,
@@ -487,27 +489,70 @@ class _LoginScreenState extends State<LoginScreen>
     return adminDocs;
   }
 
+  Future<List<QueryDocumentSnapshot<Map<String, dynamic>>>>
+  _findAccountsByEmail(String email) async {
+    final collection = FirebaseFirestore.instance.collection('staff_requests');
+    final matches = <String, QueryDocumentSnapshot<Map<String, dynamic>>>{};
+    final emailVariants = {email.trim(), email.trim().toLowerCase()};
+    final queries = <Future<QuerySnapshot<Map<String, dynamic>>>>[];
+    for (final field in const ['email', 'authEmail']) {
+      for (final variant in emailVariants) {
+        queries.add(
+          collection
+              .where(field, isEqualTo: variant)
+              .get(const GetOptions(source: Source.server)),
+        );
+      }
+    }
+    for (final result in await Future.wait(queries)) {
+      for (final doc in result.docs) {
+        final data = doc.data();
+        final normalizedEmail = email.trim().toLowerCase();
+        final hasMatchingEmail = ['email', 'authEmail'].any(
+          (field) =>
+              '${data[field] ?? ''}'.trim().toLowerCase() == normalizedEmail,
+        );
+        if (hasMatchingEmail) {
+          matches[doc.id] = doc;
+        }
+      }
+    }
+    return matches.values.toList();
+  }
+
   Future<void> _onSignInPressed() async {
     if (_isLoading) return;
-    final rawUsername = _usernameController.text.trim().toUpperCase();
-    if (!isValidAccountLoginUsername(rawUsername)) {
-      _showMessage('Wrong username or password.', isError: true);
+    final rawInput = _usernameController.text;
+    final rawPassword = _passwordController.text;
+    final inputError = loginInputError(rawInput, rawPassword);
+    if (inputError != null) {
+      _showMessage(inputError, isError: true);
       return;
     }
-    final username = _normalizeUsername(_usernameController.text);
-    final password = _passwordController.text.trim();
-
-    if (username.isEmpty || password.isEmpty) {
-      _showMessage('Please enter your username and password.', isError: true);
-      return;
-    }
+    final isAccountId = isAccountIdLogin(rawInput);
+    final username = isAccountId
+        ? _normalizeUsername(rawInput)
+        : rawInput.trim().toLowerCase();
+    final password = rawPassword;
+    var accountDocs = <QueryDocumentSnapshot<Map<String, dynamic>>>[];
 
     setState(() => _isLoading = true);
     try {
-      final accountDocs = await _findAccountsByUsername(
-        username,
-      ).timeout(const Duration(seconds: 5));
-      if (_isEmergencyAdminLogin(username, password) &&
+      accountDocs =
+          await (isAccountId
+                  ? _findAccountsByUsername(username)
+                  : _findAccountsByEmail(username))
+              .timeout(const Duration(seconds: 5));
+      final unavailableMessage = accountDocs
+          .map((doc) => loginAccountStatusError(doc.data()))
+          .whereType<String>()
+          .firstOrNull;
+      if (unavailableMessage != null) {
+        _showMessage(unavailableMessage, isError: true);
+        return;
+      }
+      if (isAccountId &&
+          _isEmergencyAdminLogin(username, password) &&
           !accountDocs.any(
             (doc) => doc.data()['credentialsChangedAt'] != null,
           )) {
@@ -517,12 +562,13 @@ class _LoginScreenState extends State<LoginScreen>
         return;
       }
       if (accountDocs.isEmpty) {
-        _showMessage('Wrong username or password.', isError: true);
+        _showMessage(invalidLoginCredentialsMessage(), isError: true);
         return;
       }
 
       // Special handling for admin accounts with valid admin password
-      if (username.startsWith('ADM-') &&
+      if (isAccountId &&
+          username.startsWith('ADM-') &&
           _isAcceptedAdminPassword(password) &&
           !accountDocs.any(
             (doc) => doc.data()['credentialsChangedAt'] != null,
@@ -659,7 +705,7 @@ class _LoginScreenState extends State<LoginScreen>
           return;
         }
         if (lastAuthError != null) throw lastAuthError;
-        _showMessage('Wrong username or password.', isError: true);
+        _showMessage(invalidLoginCredentialsMessage(), isError: true);
         return;
       }
 
@@ -672,6 +718,12 @@ class _LoginScreenState extends State<LoginScreen>
       }
 
       final data = signedInDoc.data();
+      final statusError = loginAccountStatusError(data);
+      if (statusError != null) {
+        await FirebaseAuth.instance.signOut();
+        _showMessage(statusError, isError: true);
+        return;
+      }
       final role = (data['role'] as String?)?.trim().toLowerCase() ?? 'staff';
       final rawStatus = (data['status'] as String? ?? '').trim().toLowerCase();
       final status = rawStatus.isEmpty && role == 'admin'
@@ -708,7 +760,7 @@ class _LoginScreenState extends State<LoginScreen>
         final publicId = (data[isAdmin ? 'adminId' : 'staffId'] ?? username)
             .toString();
         await _rememberOfflineAccount(
-          username: username,
+          username: publicId,
           password: password,
           role: isAdmin ? 'admin' : 'staff',
           userId: uid,
@@ -746,7 +798,14 @@ class _LoginScreenState extends State<LoginScreen>
       if (e.code == 'network-request-failed') {
         await _offlineSignInOrMessage(username, password);
       } else {
-        _showMessage('Wrong username or password.', isError: true);
+        final statusMessage = accountDocs
+            .map((doc) => loginAccountStatusError(doc.data()))
+            .whereType<String>()
+            .firstOrNull;
+        _showMessage(
+          statusMessage ?? invalidLoginCredentialsMessage(),
+          isError: true,
+        );
       }
     } on TimeoutException {
       await _offlineSignInOrMessage(username, password);
@@ -1061,10 +1120,10 @@ class _LoginScreenState extends State<LoginScreen>
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _buildInputField(
-          label: 'Username',
+          label: 'Email Address',
           controller: _usernameController,
           icon: Icons.badge_outlined,
-          keyboardType: TextInputType.text,
+          keyboardType: TextInputType.emailAddress,
         ),
         const SizedBox(height: 18),
         _buildInputField(

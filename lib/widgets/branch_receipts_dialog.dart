@@ -24,7 +24,7 @@ class BranchReceiptsDialog extends StatefulWidget {
 }
 
 class _BranchReceiptsDialogState extends State<BranchReceiptsDialog> {
-  String _search = '', _payment = 'All';
+  String _search = '';
   @override
   Widget build(
     BuildContext context,
@@ -35,16 +35,7 @@ class _BranchReceiptsDialogState extends State<BranchReceiptsDialog> {
       final rows =
           (snapshot.data ?? widget.sales)
               .map(refundValueRecord)
-              .where(
-                (row) =>
-                    (_payment == 'All' ||
-                        (_payment == 'Discounted' &&
-                            reportValue(row['discount']) > 0) ||
-                        '${row['paymentMode'] ?? row['paymentMethod'] ?? (widget.reductions ? '' : 'Cash')}'
-                                .toLowerCase() ==
-                            _payment.toLowerCase()) &&
-                    row.values.join(' ').toLowerCase().contains(_search),
-              )
+              .where((row) => receiptMatchesSearch(row, _search))
               .toList()
             ..sort(
               (a, b) =>
@@ -95,43 +86,20 @@ class _BranchReceiptsDialogState extends State<BranchReceiptsDialog> {
                       setState(() => _search = value.trim().toLowerCase()),
                   decoration: const InputDecoration(
                     hintText:
-                        'Search receipt ID, staff, items or payment details',
+                        'Search receipt, staff, item, Cash, GCash, Discounted or VAT',
                     prefixIcon: Icon(Icons.search),
                   ),
                 ),
               ),
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20),
-                child: Align(
-                  alignment: Alignment.centerLeft,
-                  child: Wrap(
-                    spacing: 8,
-                    children:
-                        [
-                              'All',
-                              'GCash',
-                              'Cash',
-                              if (!widget.reductions) 'Discounted',
-                            ]
-                            .map(
-                              (mode) => ChoiceChip(
-                                label: Text(mode),
-                                selected: _payment == mode,
-                                onSelected: (_) =>
-                                    setState(() => _payment = mode),
-                              ),
-                            )
-                            .toList(),
-                  ),
-                ),
-              ),
-              Padding(
                 padding: const EdgeInsets.all(12),
-                child: Text(
-                  '${rows.length} ${widget.reductions ? 'records' : 'receipts'}',
-                  style: const TextStyle(color: AppColors.textMuted),
-                ),
+                child: Text(widget.period),
               ),
+              if (receiptSearchCategory(_search) != null)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+                  child: Text(receiptSearchSummary(rows, _search)),
+                ),
               Expanded(
                 child: rows.isEmpty
                     ? const Center(
@@ -209,36 +177,13 @@ class _BranchReceiptsDialogState extends State<BranchReceiptsDialog> {
                                   Text(
                                     '${sale['reason'] ?? sale['refundReason']}',
                                   ),
-                                Align(
-                                  alignment: Alignment.centerRight,
-                                  child: TextButton.icon(
-                                    icon: const Icon(Icons.visibility_outlined),
-                                    label: const Text('View details'),
-                                    onPressed: () => showDialog<void>(
-                                      context: context,
-                                      builder: (_) => widget.reductions
-                                          ? AlertDialog(
-                                              title: Text(
-                                                '${sale['itemName'] ?? 'Reduced item'}',
-                                              ),
-                                              content: Text(
-                                                '${sale['quantity'] ?? 0} reduced\n₱${amount.toStringAsFixed(2)}\n${sale['reason'] ?? ''}\n${at ?? ''}',
-                                              ),
-                                              actions: [
-                                                TextButton(
-                                                  onPressed: () =>
-                                                      Navigator.pop(context),
-                                                  child: const Text('Close'),
-                                                ),
-                                              ],
-                                            )
-                                          : ReceiptDetails(
-                                              id: '${sale['_id'] ?? sale['salesId']}',
-                                              sale: sale,
-                                            ),
-                                    ),
+                                if (!widget.reductions) ...[
+                                  const Divider(height: 24),
+                                  ReceiptInlineDetails(
+                                    id: '${sale['_id'] ?? sale['salesId'] ?? ''}',
+                                    sale: sale,
                                   ),
-                                ),
+                                ],
                               ],
                             ),
                           );
@@ -251,4 +196,54 @@ class _BranchReceiptsDialogState extends State<BranchReceiptsDialog> {
       );
     },
   );
+}
+
+String? receiptSearchCategory(String query) {
+  switch (query.trim().toLowerCase()) {
+    case 'cash':
+      return 'Cash';
+    case 'gcash':
+      return 'GCash';
+    case 'discount':
+    case 'discounted':
+      return 'Discounted';
+    case 'vat':
+    case 'tax':
+      return 'VAT';
+    default:
+      return null;
+  }
+}
+
+double receiptTax(Map<String, dynamic> row) => reportValue(
+  row['tax'] ?? row['vatAmount'] ?? row['taxAmount'] ?? row['vat'],
+);
+
+bool receiptMatchesSearch(Map<String, dynamic> row, String query) {
+  final category = receiptSearchCategory(query);
+  if (category == 'Cash' || category == 'GCash') {
+    return '${row['paymentMode'] ?? row['paymentMethod'] ?? 'Cash'}'
+            .trim()
+            .toLowerCase() ==
+        category!.toLowerCase();
+  }
+  if (category == 'Discounted') return reportValue(row['discount']) > 0;
+  if (category == 'VAT') return receiptTax(row) > 0;
+  return row.values
+      .join(' ')
+      .toLowerCase()
+      .contains(query.trim().toLowerCase());
+}
+
+String receiptSearchSummary(List<Map<String, dynamic>> rows, String query) {
+  final category = receiptSearchCategory(query);
+  final amount = rows.fold<double>(
+    0,
+    (sum, row) => sum + reportValue(row['total']),
+  );
+  final extra = category == 'VAT'
+      ? rows.fold<double>(0, (sum, row) => sum + receiptTax(row))
+      : rows.fold<double>(0, (sum, row) => sum + reportValue(row['discount']));
+  return '$category: ${rows.length} transactions \u2022 Total: \u20B1${amount.toStringAsFixed(2)}'
+      '${category == 'VAT' || category == 'Discounted' ? ' \u2022 $category amount: \u20B1${extra.toStringAsFixed(2)}' : ''}';
 }

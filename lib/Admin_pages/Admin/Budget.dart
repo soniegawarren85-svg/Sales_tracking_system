@@ -1,10 +1,15 @@
+import '../../widgets/top_edge_refresh.dart';
+import '../../widgets/branch_receipts_dialog.dart';
+import '../../widgets/screen_loading_region.dart';
+import '../../services/transaction_settings.dart';
+import '../../widgets/branch_allocation_table.dart';
 import '../../services/refund_value.dart';
 import '../../services/session_actor.dart';
 import '../../widgets/assign_inventory_tile.dart';
 import '../../widgets/horizontal_controls.dart';
 import '../../widgets/branch_allocation_history.dart';
 import '../../services/branch_report_data.dart'
-    show validReportSale, reportRefund;
+    show BranchReportData, reportRefund, validReportSale;
 import 'package:firebase_auth/firebase_auth.dart';
 import '../../widgets/assigned_branch_staff.dart';
 import '../../widgets/branch_editor_dialog.dart';
@@ -215,7 +220,7 @@ class _BudgetPageState extends State<BudgetPage>
   final bool _showInlineTransactionDetails = false;
   String _branchSearchQuery = '';
   String? _selectedBranchId;
-  String _allocationFilter = 'All';
+  String _allocationFilter = 'Categories';
   String _allocationSearchQuery = '';
   bool _branchFabExpanded = false;
   String _activeBranchName = 'Branch';
@@ -231,6 +236,47 @@ class _BudgetPageState extends State<BudgetPage>
   late Animation<double> _fadeAnim;
   late Animation<Offset> _slideAnim;
   late final Stream<QuerySnapshot<Map<String, dynamic>>> _branchesStream;
+  late final _reportController = StreamController<BranchReportData>.broadcast(
+    onListen: _startReports,
+  );
+  StreamSubscription<BranchReportData>? _reportSubscription;
+  BranchReportData? _latestReport;
+  late final Stream<BranchReportData> _reportStream = _reportController.stream;
+
+  void _startReports() {
+    _reportSubscription ??= BranchReportData.watch().listen(
+      (data) {
+        _latestReport = data;
+        _reportController.add(data);
+      },
+      onError: (Object error, StackTrace trace) =>
+          _reportController.addError(error, trace),
+    );
+  }
+
+  Future<void> _refreshBranches() async {
+    try {
+      await Future.wait([
+        for (final collection in [
+          'branches',
+          'staff_inventory',
+          'completed_sales',
+          'sales_inventory',
+          'coffee_products',
+        ])
+          _firestore
+              .collection(collection)
+              .get(const GetOptions(source: Source.server)),
+      ]).timeout(const Duration(seconds: 15));
+    } catch (_) {
+      if (mounted)
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Unable to refresh. Please check your connection.'),
+          ),
+        );
+    }
+  }
 
   @override
   void initState() {
@@ -292,6 +338,8 @@ class _BudgetPageState extends State<BudgetPage>
     _currentAllocations.clear();
     _branchInventoryStreams.clear();
     _animController.dispose();
+    _reportSubscription?.cancel();
+    _reportController.close();
     super.dispose();
   }
 
@@ -856,7 +904,7 @@ class _BudgetPageState extends State<BudgetPage>
                     child: SizedBox(
                       width: 16,
                       height: 16,
-                      child: CircularProgressIndicator(
+                      child: ScreenLoadingIndicator(
                         color: kPrimary,
                         strokeWidth: 2,
                       ),
@@ -1085,7 +1133,7 @@ class _BudgetPageState extends State<BudgetPage>
 
                       if (snapshot.connectionState == ConnectionState.waiting) {
                         return const Center(
-                          child: CircularProgressIndicator(color: kPrimary),
+                          child: ScreenLoadingIndicator(color: kPrimary),
                         );
                       }
                       if (docs.isEmpty) {
@@ -1726,7 +1774,7 @@ class _BudgetPageState extends State<BudgetPage>
                             ? const SizedBox(
                                 width: 18,
                                 height: 18,
-                                child: CircularProgressIndicator(
+                                child: ScreenLoadingIndicator(
                                   strokeWidth: 2,
                                   color: Colors.white,
                                 ),
@@ -2327,7 +2375,7 @@ class _BudgetPageState extends State<BudgetPage>
                   );
                 if (!snapshot.hasData)
                   return const Center(
-                    child: CircularProgressIndicator(color: kPrimary),
+                    child: ScreenLoadingIndicator(color: kPrimary),
                   );
                 final records =
                     snapshot.data!.docs
@@ -2390,7 +2438,7 @@ class _BudgetPageState extends State<BudgetPage>
                   if (snapshot.connectionState == ConnectionState.waiting) {
                     return const Padding(
                       padding: EdgeInsets.all(32),
-                      child: CircularProgressIndicator(color: kPrimary),
+                      child: ScreenLoadingIndicator(color: kPrimary),
                     );
                   }
 
@@ -3852,7 +3900,7 @@ class _BudgetPageState extends State<BudgetPage>
               if (branchSnapshot.connectionState == ConnectionState.waiting) {
                 return const Padding(
                   padding: EdgeInsets.all(32),
-                  child: CircularProgressIndicator(color: kPrimary),
+                  child: ScreenLoadingIndicator(color: kPrimary),
                 );
               }
 
@@ -3971,7 +4019,7 @@ class _BudgetPageState extends State<BudgetPage>
                       ConnectionState.waiting) {
                     return const Padding(
                       padding: EdgeInsets.all(32),
-                      child: CircularProgressIndicator(color: kPrimary),
+                      child: ScreenLoadingIndicator(color: kPrimary),
                     );
                   }
 
@@ -4327,63 +4375,74 @@ class _BudgetPageState extends State<BudgetPage>
                   child: _buildAllocationSearch(),
                 ),
               Expanded(
-                child: ListView(
-                  padding: const EdgeInsets.only(bottom: 32),
-                  children: [
-                    if (_selectedBranchId == null) ...[
-                      Padding(
-                        padding: const EdgeInsets.all(16),
-                        child: AdminSalesOverview(
-                          branches: true,
-                          todayOnly: true,
-                          selectedDate: _analyticsDate,
-                        ),
-                      ),
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 16),
-                        child: Card(
-                          color: Colors.white,
-                          child: Padding(
-                            padding: const EdgeInsets.all(18),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const ListTile(
-                                  contentPadding: EdgeInsets.zero,
-                                  leading: CircleAvatar(
-                                    backgroundColor: AppColors.blush,
-                                    child: Icon(
-                                      Icons.pie_chart_outline,
-                                      color: kPrimary,
-                                    ),
-                                  ),
-                                  title: Text(
-                                    'Branch sales reports',
-                                    style: TextStyle(
-                                      fontWeight: FontWeight.w800,
-                                    ),
-                                  ),
-                                  subtitle: Text(
-                                    'Compare branches, review sales, and generate reports',
-                                  ),
-                                ),
-                                Align(
-                                  alignment: Alignment.centerLeft,
-                                  child: FilledButton.icon(
-                                    onPressed: () => showBranchReport(context),
-                                    icon: const Icon(Icons.assessment_outlined),
-                                    label: const Text('View branches report'),
-                                  ),
-                                ),
-                              ],
+                child: ScreenLoadingRegion(
+                  child: TopEdgeRefresh(
+                    onRefresh: _refreshBranches,
+                    child: ListView(
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      padding: const EdgeInsets.only(bottom: 32),
+                      children: [
+                        if (_selectedBranchId == null) ...[
+                          Padding(
+                            padding: const EdgeInsets.all(16),
+                            child: AdminSalesOverview(
+                              branches: true,
+                              todayOnly: true,
+                              selectedDate: _analyticsDate,
                             ),
                           ),
-                        ),
-                      ),
-                      _buildBranchManagementSection(),
-                    ] else
-                      _buildSelectedBranchContent(),
-                  ],
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 16),
+                            child: Card(
+                              color: Colors.white,
+                              child: Padding(
+                                padding: const EdgeInsets.all(18),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    const ListTile(
+                                      contentPadding: EdgeInsets.zero,
+                                      leading: CircleAvatar(
+                                        backgroundColor: AppColors.blush,
+                                        child: Icon(
+                                          Icons.pie_chart_outline,
+                                          color: kPrimary,
+                                        ),
+                                      ),
+                                      title: Text(
+                                        'Branch sales reports',
+                                        style: TextStyle(
+                                          fontWeight: FontWeight.w800,
+                                        ),
+                                      ),
+                                      subtitle: Text(
+                                        'Compare branches, review sales, and generate reports',
+                                      ),
+                                    ),
+                                    Align(
+                                      alignment: Alignment.centerLeft,
+                                      child: FilledButton.icon(
+                                        onPressed: () =>
+                                            showBranchReport(context),
+                                        icon: const Icon(
+                                          Icons.assessment_outlined,
+                                        ),
+                                        label: const Text(
+                                          'View branches report',
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                          _buildBranchManagementSection(),
+                        ] else
+                          _buildSelectedBranchContent(),
+                      ],
+                    ),
+                  ),
                 ),
               ),
             ],
@@ -4546,9 +4605,7 @@ class _BudgetPageState extends State<BudgetPage>
           );
         }
         if (!snapshot.hasData) {
-          return const Center(
-            child: CircularProgressIndicator(color: kPrimary),
-          );
+          return const Center(child: ScreenLoadingIndicator(color: kPrimary));
         }
         final branch = snapshot.data!;
         if (!branch.exists) {
@@ -4589,9 +4646,7 @@ class _BudgetPageState extends State<BudgetPage>
               if (snapshot.connectionState == ConnectionState.waiting)
                 const Padding(
                   padding: EdgeInsets.symmetric(vertical: 20),
-                  child: Center(
-                    child: CircularProgressIndicator(color: kPrimary),
-                  ),
+                  child: Center(child: ScreenLoadingIndicator(color: kPrimary)),
                 )
               else if (branches.isEmpty)
                 Container(
@@ -5055,213 +5110,31 @@ class _BudgetPageState extends State<BudgetPage>
     required String branchId,
     required String branchName,
   }) {
-    final now = DateTime.now();
-    var receiptQuery = '';
-    var paymentFilter = 'All';
-    final receiptsStream = _firestore
+    final today = DateUtils.dateOnly(DateTime.now());
+    final stream = _firestore
         .collection('completed_sales')
         .where('branchId', isEqualTo: branchId)
-        .snapshots();
+        .snapshots()
+        .map(
+          (snapshot) => snapshot.docs
+              .map((doc) => <String, dynamic>{...doc.data(), '_id': doc.id})
+              .where((sale) {
+                final date = cashRecordDate(sale['timestamp']);
+                return validReportSale(sale) &&
+                    sale['isDeleted'] != true &&
+                    sale['deleted'] != true &&
+                    date != null &&
+                    DateUtils.isSameDay(date, today);
+              })
+              .toList(),
+        );
     showDialog<void>(
       context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setDialogState) => Dialog(
-          insetPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 20),
-          backgroundColor: const Color(0xFFFFF8FB),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(24),
-          ),
-          child: SizedBox(
-            width: 720,
-            height: 700,
-            child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-              stream: receiptsStream,
-              builder: (context, snapshot) {
-                final receipts =
-                    (snapshot.data?.docs ?? []).where((doc) {
-                      final sale = doc.data();
-                      final payment = _receiptPayment(sale);
-                      final searchable = [
-                        doc.id,
-                        sale['salesId'],
-                        sale['staffName'],
-                        sale['staffFullName'],
-                        sale['total'],
-                        payment,
-                        sale['items'],
-                      ].join(' ').toLowerCase();
-                      if (paymentFilter == 'Discounted'
-                          ? _parsePrice(sale['discount']) <= 0
-                          : paymentFilter != 'All' &&
-                                payment != paymentFilter.toLowerCase())
-                        return false;
-                      if (receiptQuery.isNotEmpty &&
-                          !searchable.contains(receiptQuery))
-                        return false;
-                      final value = sale['timestamp'];
-                      final date = value is Timestamp
-                          ? value.toDate()
-                          : value is DateTime
-                          ? value
-                          : DateTime.tryParse(value?.toString() ?? '');
-                      return date != null &&
-                          date.year == now.year &&
-                          date.month == now.month &&
-                          date.day == now.day;
-                    }).toList()..sort((a, b) {
-                      final aTime = _dateValue(a.data()['timestamp']);
-                      final bTime = _dateValue(b.data()['timestamp']);
-                      return bTime.compareTo(aTime);
-                    });
-                return Column(
-                  children: [
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(22, 20, 14, 14),
-                      child: Row(
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.all(10),
-                            decoration: BoxDecoration(
-                              color: kPrimary.withOpacity(.12),
-                              borderRadius: BorderRadius.circular(14),
-                            ),
-                            child: const Icon(
-                              Icons.receipt_long_rounded,
-                              color: kDeep,
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  "${_reportDateLabel(now)} receipts",
-                                  style: const TextStyle(
-                                    color: kBannerTop,
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.w900,
-                                  ),
-                                ),
-                                Text(
-                                  branchName,
-                                  style: const TextStyle(
-                                    color: Colors.grey,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          IconButton(
-                            onPressed: () => Navigator.pop(context),
-                            icon: const Icon(Icons.close_rounded),
-                          ),
-                        ],
-                      ),
-                    ),
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          TextField(
-                            onChanged: (value) => setDialogState(
-                              () => receiptQuery = value.trim().toLowerCase(),
-                            ),
-                            textInputAction: TextInputAction.search,
-                            decoration: InputDecoration(
-                              hintText:
-                                  'Search receipt ID, staff, item, or total',
-                              prefixIcon: const Icon(
-                                Icons.search_rounded,
-                                color: kDeep,
-                              ),
-                              border: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          HorizontalControls(
-                            spacing: 8,
-                            children: ['All', 'Cash', 'GCash', 'Discounted']
-                                .map(
-                                  (payment) => ChoiceChip(
-                                    label: Text(payment),
-                                    selected: paymentFilter == payment,
-                                    onSelected: (_) => setDialogState(
-                                      () => paymentFilter = payment,
-                                    ),
-                                  ),
-                                )
-                                .toList(),
-                          ),
-                          const SizedBox(height: 8),
-                        ],
-                      ),
-                    ),
-                    const Divider(height: 1),
-                    if (snapshot.connectionState == ConnectionState.waiting &&
-                        !snapshot.hasData)
-                      const Expanded(
-                        child: Center(
-                          child: CircularProgressIndicator(color: kPrimary),
-                        ),
-                      )
-                    else if (receipts.isEmpty)
-                      const Expanded(
-                        child: Center(
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(
-                                Icons.receipt_long_outlined,
-                                size: 36,
-                                color: Color(0xFFFFB6CC),
-                              ),
-                              SizedBox(height: 12),
-                              Text(
-                                'No matching receipts',
-                                style: TextStyle(
-                                  color: kDeep,
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.w800,
-                                ),
-                              ),
-                              SizedBox(height: 4),
-                              Text(
-                                'Try another search, payment filter, or date.',
-                                textAlign: TextAlign.center,
-                                style: TextStyle(
-                                  color: Colors.grey,
-                                  fontSize: 12,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      )
-                    else
-                      Expanded(
-                        child: ListView.separated(
-                          padding: const EdgeInsets.all(16),
-                          itemCount: receipts.length,
-                          separatorBuilder: (_, __) =>
-                              const SizedBox(height: 12),
-                          itemBuilder: (context, index) =>
-                              _buildBranchReceiptCard(
-                                receipts[index].data(),
-                                receipts[index].id,
-                              ),
-                        ),
-                      ),
-                  ],
-                );
-              },
-            ),
-          ),
-        ),
+      builder: (_) => BranchReceiptsDialog(
+        sales: const [],
+        recordsStream: stream,
+        period: branchName,
+        title: '${today.month}/${today.day}/${today.year} receipts',
       ),
     );
   }
@@ -5761,7 +5634,7 @@ class _BudgetPageState extends State<BudgetPage>
                         !inventory.hasData ||
                         !adjustments.hasData) {
                       return const Center(
-                        child: CircularProgressIndicator(color: kPrimary),
+                        child: ScreenLoadingIndicator(color: kPrimary),
                       );
                     }
                     final sources = {
@@ -5941,9 +5814,30 @@ class _BudgetPageState extends State<BudgetPage>
     );
   }
 
-  Widget _buildPeriodBranchAnalytics(
+  Widget _buildPeriodBranchAnalytics(String branchId, String branchName) =>
+      StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+        stream: transactionSettings.snapshots(),
+        builder: (context, settings) {
+          final allowRefunds =
+              settingsForBranch(
+                settings.data?.data() ?? {},
+                branchId,
+              )['allowRefunds'] !=
+              false;
+          if (!allowRefunds && _analyticsStatus == 'Refund')
+            _analyticsStatus = 'All';
+          return _buildPeriodBranchAnalyticsContent(
+            branchId,
+            branchName,
+            allowRefunds,
+          );
+        },
+      );
+
+  Widget _buildPeriodBranchAnalyticsContent(
     String branchId,
     String branchName,
+    bool allowRefunds,
   ) => StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
     stream: _firestore.collection('branches').doc(branchId).snapshots(),
     builder: (context, branchSnapshot) => _buildBranchActivity(branchId, (
@@ -6183,7 +6077,7 @@ class _BudgetPageState extends State<BudgetPage>
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children:
                       [
-                        ['Refund', const Color(0xFFF9A825)],
+                        if (allowRefunds) ['Refund', const Color(0xFFF9A825)],
                         ['Reduced', const Color(0xFF1976D2)],
                         ['Completed', const Color(0xFFE53935)],
                       ].map((entry) {
@@ -6262,14 +6156,15 @@ class _BudgetPageState extends State<BudgetPage>
                         fontWeight: FontWeight.w800,
                       ),
                     ),
-                    Text(
-                      'Total Refund: ₱${totalRefund.toStringAsFixed(2)}',
-                      style: const TextStyle(
-                        color: Color(0xFFF9A825),
-                        fontSize: 12,
-                        fontWeight: FontWeight.w800,
+                    if (allowRefunds)
+                      Text(
+                        'Total Refund: ₱${totalRefund.toStringAsFixed(2)}',
+                        style: const TextStyle(
+                          color: Color(0xFFF9A825),
+                          fontSize: 12,
+                          fontWeight: FontWeight.w800,
+                        ),
                       ),
-                    ),
                   ],
                 ),
               ),
@@ -6314,10 +6209,17 @@ class _BudgetPageState extends State<BudgetPage>
               height: 240,
               child: BranchAnalyticsBars(
                 key: ValueKey('$branchId|$_analyticsRange|$today'),
-                values: amounts,
+                values: allowRefunds
+                    ? amounts
+                    : List.generate(
+                        amounts.length,
+                        (i) => amounts[i] - refundAmounts[i],
+                      ),
                 labels: labels,
                 colors: graphColors,
-                refunds: _analyticsStatus == 'All' ? refundAmounts : null,
+                refunds: _analyticsStatus == 'All' && allowRefunds
+                    ? refundAmounts
+                    : null,
                 reduced: _analyticsStatus == 'All' ? reducedAmounts : null,
                 selectedStatus: _analyticsStatus,
               ),
@@ -6489,7 +6391,7 @@ class _BudgetPageState extends State<BudgetPage>
   Widget _buildAllocationCategories() => HorizontalControls(
     spacing: 8,
 
-    children: ['All', 'Categories', 'Bundle', 'Beverages']
+    children: ['Categories', 'Bundle', 'Beverages']
         .map(
           (filter) => ChoiceChip(
             label: Text(filter),
@@ -6631,7 +6533,7 @@ class _BudgetPageState extends State<BudgetPage>
           return const Center(
             child: Padding(
               padding: EdgeInsets.all(20),
-              child: CircularProgressIndicator(color: kPrimary),
+              child: ScreenLoadingIndicator(color: kPrimary),
             ),
           );
         }
@@ -6654,205 +6556,69 @@ class _BudgetPageState extends State<BudgetPage>
             padding: EdgeInsets.all(16),
             child: Text('No items allocated to this branch yet.'),
           );
-        return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-          stream: _firestore
-              .collection('completed_sales')
-              .where('branchId', isEqualTo: branchId)
-              .snapshots(),
+        return StreamBuilder<BranchReportData>(
+          stream: _reportStream,
+          initialData: _latestReport,
           builder: (context, salesSnapshot) {
-            final selectedDay = DateTime.now();
-            final soldByName = <String, int>{};
-            final salesByName = <String, double>{};
-            for (final saleDoc in salesSnapshot.data?.docs ?? const []) {
-              final sale = saleDoc.data();
-              if (!validReportSale(sale) ||
-                  reportRefund(sale) ||
-                  sale['type'] == 'reduce' ||
-                  sale['status'] == 'reduced')
-                continue;
-              final soldAt = _dateValue(sale['timestamp']);
-              if (soldAt.year != selectedDay.year ||
-                  soldAt.month != selectedDay.month ||
-                  soldAt.day != selectedDay.day)
-                continue;
-              for (final rawItem
-                  in sale['items'] as List<dynamic>? ?? const []) {
-                if (rawItem is! Map) continue;
-                final quantity = _parseInt(rawItem['quantity'], fallback: 1);
-                // A category sale can use `name: Cookies`, while its actual
-                // allocated product is stored as a variant/flavor.
-                final keys =
-                    [
-                          rawItem['name'],
-                          rawItem['variant'],
-                          rawItem['flavor'],
-                          rawItem['productName'],
-                          rawItem['itemName'],
-                          rawItem['coffeeSize'],
-                        ]
-                        .map((value) => value?.toString().trim() ?? '')
-                        .where((value) => value.isNotEmpty)
-                        .toSet();
-                for (final key in keys) {
-                  soldByName[key] = (soldByName[key] ?? 0) + quantity;
-                  final fallbackPrice =
-                      rows.where((row) => row.name == key).firstOrNull?.price ??
-                      0;
-                  salesByName[key] =
-                      (salesByName[key] ?? 0) +
-                      quantity *
-                          _parsePrice(
-                            rawItem['price'] ??
-                                rawItem['unitPrice'] ??
-                                fallbackPrice,
-                          );
-                }
-              }
-            }
-            return Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: AppColors.surface,
-                border: Border.all(color: kAccent.withOpacity(0.8)),
-                borderRadius: BorderRadius.circular(16),
-                boxShadow: [
-                  BoxShadow(
-                    color: kPrimary.withOpacity(0.06),
-                    blurRadius: 14,
-                    offset: const Offset(0, 5),
-                  ),
-                ],
-              ),
-              child: SizedBox(
-                height: MediaQuery.of(context).size.height * 0.48,
-                child: LayoutBuilder(
-                  builder: (context, constraints) => SingleChildScrollView(
-                    child: SingleChildScrollView(
-                      scrollDirection: Axis.horizontal,
-                      child: ConstrainedBox(
-                        constraints: BoxConstraints(
-                          minWidth: constraints.maxWidth,
-                        ),
-                        child: DataTable(
-                          headingRowColor: WidgetStatePropertyAll(
-                            kPrimary.withOpacity(0.12),
-                          ),
-                          headingTextStyle: const TextStyle(
-                            color: kBannerTop,
-                            fontWeight: FontWeight.w900,
-                          ),
-                          dataTextStyle: const TextStyle(
-                            color: Color(0xFF4A2634),
-                            fontWeight: FontWeight.w600,
-                          ),
-                          columnSpacing: 28,
-                          horizontalMargin: 18,
-                          columns: [
-                            DataColumn(label: Text('ID')),
-                            DataColumn(label: Text('Item name')),
-                            if (showAllocationDetails) ...[
-                              const DataColumn(
-                                label: Text('Allocated'),
-                                numeric: true,
-                              ),
-                              const DataColumn(
-                                label: Text('Remaining'),
-                                numeric: true,
-                              ),
-                            ] else
-                              const DataColumn(
-                                label: Text('Sold'),
-                                numeric: true,
-                              ),
-                            if (!showAllocationDetails)
-                              const DataColumn(
-                                label: Text('Sales'),
-                                numeric: true,
-                              ),
-                            DataColumn(label: Text('Price'), numeric: true),
-                            DataColumn(label: Text('Type')),
-                            DataColumn(label: Text('Action')),
-                          ],
-                          rows: rows
-                              .map(
-                                (row) => DataRow(
-                                  cells: [
-                                    DataCell(
-                                      SizedBox(
-                                        width: 95,
-                                        child: Text(
-                                          row.id,
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                        ),
-                                      ),
-                                    ),
-                                    DataCell(
-                                      SizedBox(
-                                        width: 210,
-                                        child: Text(
-                                          row.name,
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                        ),
-                                      ),
-                                    ),
-                                    if (showAllocationDetails) ...[
-                                      DataCell(Text('${row.allocated}')),
-                                      DataCell(Text('${row.remaining}')),
-                                    ] else
-                                      DataCell(
-                                        Text('${soldByName[row.name] ?? 0}'),
-                                      ),
-                                    if (!showAllocationDetails)
-                                      DataCell(
-                                        Text(
-                                          '₱${(salesByName[row.name] ?? 0).toStringAsFixed(2)}',
-                                        ),
-                                      ),
-                                    DataCell(
-                                      Text('P${row.price.toStringAsFixed(2)}'),
-                                    ),
-                                    DataCell(_allocationTypeChip(row.type)),
-                                    DataCell(
-                                      Row(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          IconButton(
-                                            tooltip: 'Edit / add allocation',
-                                            onPressed: () =>
-                                                _showEditBranchAllocationDialog(
-                                                  row,
-                                                  branchId,
-                                                ),
-                                            icon: const Icon(
-                                              Icons.edit_rounded,
-                                            ),
-                                            color: kDeep,
-                                          ),
-                                          IconButton(
-                                            tooltip: 'Void allocation',
-                                            onPressed: () =>
-                                                _removeBranchAllocation(row),
-                                            icon: const Icon(
-                                              Icons.cancel_outlined,
-                                            ),
-                                            color: Colors.deepOrange.shade500,
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              )
-                              .toList(),
-                        ),
-                      ),
+            if (salesSnapshot.hasError)
+              return const Text('Unable to load branch inventory.');
+            if (!salesSnapshot.hasData)
+              return const Center(child: ScreenLoadingIndicator());
+            final metrics = salesSnapshot.data!.currentInventory(
+              branchId,
+              DateTime.now(),
+            );
+            Map<String, dynamic> metric(_AllocationTableRow row) =>
+                metrics.where((m) => m['id'] == row.id).firstOrNull ?? {};
+            final tableRows = rows
+                .where((row) => metric(row).isNotEmpty)
+                .map(
+                  (row) => <String, dynamic>{
+                    ...metric(row),
+                    'id': row.id,
+                    'name': row.name,
+                    'type': row.type == 'Category' ? 'Categories' : row.type,
+                    'price': row.price,
+                  },
+                )
+                .toList();
+            return BranchAllocationTable(
+              rows: tableRows,
+              beverages: _allocationFilter == 'Beverages',
+              actions: (item) {
+                final row = rows.firstWhere((row) => row.id == item['id']);
+                return Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton(
+                      tooltip: 'Edit / add allocation',
+                      onPressed: () =>
+                          _showEditBranchAllocationDialog(row, branchId),
+                      icon: const Icon(Icons.edit_rounded),
+                      color: kDeep,
                     ),
-                  ),
-                ),
-              ),
+                    IconButton(
+                      tooltip: 'Void allocation',
+                      onPressed: () => _removeBranchAllocation(row),
+                      icon: const Icon(Icons.cancel_outlined),
+                      color: Colors.deepOrange,
+                    ),
+                    IconButton(
+                      tooltip: 'View history',
+                      onPressed: salesSnapshot.hasData
+                          ? () => showBranchItemHistory(
+                              context,
+                              salesSnapshot.data!,
+                              branchId,
+                              item,
+                            )
+                          : null,
+                      icon: const Icon(Icons.history),
+                      color: kDeep,
+                    ),
+                  ],
+                );
+              },
             );
           },
         );
@@ -8458,7 +8224,7 @@ class _BudgetPageState extends State<BudgetPage>
           return const Padding(
             padding: EdgeInsets.all(40),
             child: Center(
-              child: CircularProgressIndicator(color: kPrimary, strokeWidth: 3),
+              child: ScreenLoadingIndicator(color: kPrimary, strokeWidth: 3),
             ),
           );
         }

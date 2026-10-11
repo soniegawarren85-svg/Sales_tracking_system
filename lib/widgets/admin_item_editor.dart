@@ -1,3 +1,4 @@
+import 'dart:async';
 import '../services/checklist_status.dart';
 import 'package:sales_tracking/theme/app_colors.dart';
 import '../services/short_id_service.dart';
@@ -11,7 +12,32 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'admin_catalog.dart';
 
+double reportValueForSave(dynamic value) =>
+    num.tryParse('$value')?.toDouble() ?? 0;
+
+/// Only changed fields are written, so editing a name cannot overwrite a price
+/// or quantity changed by another session while the dialog was open.
+Map<String, dynamic> inventoryChangedFields(
+  Map current,
+  Map<String, dynamic> edited,
+) => {
+  for (final entry in edited.entries)
+    if (entry.value is num
+        ? reportValueForSave(current[entry.key]) != entry.value
+        : jsonEncode(
+                current[entry.key] ?? (entry.value is String ? '' : null),
+              ) !=
+              jsonEncode(entry.value))
+      entry.key: entry.value,
+};
+
 String inventorySaveError(Object error) {
+  // cloud_firestore_web 3.x can wrap a Dart timeout in a JS interop TypeError.
+  if (error is TimeoutException ||
+      error.toString().contains('TimeoutException') ||
+      (error is FirebaseException && error.code == 'deadline-exceeded')) {
+    return 'The database did not confirm the save in time. Check your connection, then reopen this item to check its latest values before saving again.';
+  }
   if (error is StateError) return error.message;
   if (error is ArgumentError) return '${error.message}';
   if (error is FirebaseException) {
@@ -72,6 +98,7 @@ class _ItemEditorState extends State<_ItemEditor> {
   final _additionalBundles = TextEditingController(text: '0');
   late final _data = widget.entry?.details ?? <String, dynamic>{};
   late final _name = TextEditingController(text: '${_data['name'] ?? ''}');
+  late final _cost = TextEditingController(text: '${_data['costPrice'] ?? 0}');
   late final _price = TextEditingController(
     text: '${_data['basePrice'] ?? _data['price'] ?? ''}',
   );
@@ -143,13 +170,23 @@ class _ItemEditorState extends State<_ItemEditor> {
       for (final doc in coffees.docs) {
         options.addAll(bundleBeverageSizes(doc.id, doc.data()));
       }
-      final addons = await (widget.firestore ?? FirebaseFirestore.instance).collection('coffee_addons').get();
+      final addons = await (widget.firestore ?? FirebaseFirestore.instance)
+          .collection('coffee_addons')
+          .get();
       for (final doc in addons.docs) {
         final data = doc.data();
-        if (!catalogItemActive(data, DateTime.now()) || data['isAvailable'] == false) continue;
-        options.add({...data, 'sourceInventoryId': doc.id, 'variantId': doc.id,
-          'sourceCollection': 'coffee_addons', 'isAddon': true, 'untrackedStock': true,
-          'price': data['priceDelta'] ?? data['price'] ?? 0});
+        if (!catalogItemActive(data, DateTime.now()) ||
+            data['isAvailable'] == false)
+          continue;
+        options.add({
+          ...data,
+          'sourceInventoryId': doc.id,
+          'variantId': doc.id,
+          'sourceCollection': 'coffee_addons',
+          'isAddon': true,
+          'untrackedStock': true,
+          'price': data['priceDelta'] ?? data['price'] ?? 0,
+        });
       }
       if (!mounted) return;
       setState(() {
@@ -191,6 +228,7 @@ class _ItemEditorState extends State<_ItemEditor> {
   void dispose() {
     for (final controller in [
       _name,
+      _cost,
       _price,
       _stock,
       _expiry,
@@ -210,8 +248,14 @@ class _ItemEditorState extends State<_ItemEditor> {
       _error = null;
     });
     try {
-      if (_type == 'Bundle' && (_ingredients.isEmpty || _ingredients.any((item) => bundleQuantity(item['quantity']) < 1))) {
-        throw StateError('Each bundle item needs a quantity greater than zero.');
+      if (_type == 'Bundle' &&
+          (_ingredients.isEmpty ||
+              _ingredients.any(
+                (item) => bundleQuantity(item['quantity']) < 1,
+              ))) {
+        throw StateError(
+          'Each bundle item needs a quantity greater than zero.',
+        );
       }
       final url = _photo == null
           ? null
@@ -220,6 +264,15 @@ class _ItemEditorState extends State<_ItemEditor> {
         throw StateError('Image upload failed');
       final changes = <String, dynamic>{
         'name': _name.text.trim(),
+        'costPrice': _type == 'Bundle'
+            ? _ingredients.fold<double>(
+                0,
+                (sum, item) =>
+                    sum +
+                    (num.tryParse('${item['costPrice']}')?.toDouble() ?? 0) *
+                        bundleQuantity(item['quantity']),
+              )
+            : num.parse(_cost.text.trim()),
         _type == 'Beverages' ? 'basePrice' : 'price': _type == 'Beverages'
             ? 0
             : num.parse(_price.text.trim()),
@@ -280,15 +333,49 @@ class _ItemEditorState extends State<_ItemEditor> {
         if (mounted) Navigator.pop(context);
         return;
       }
-      final linked = widget.entry == null
+      final patch = widget.entry == null
+          ? changes
+          : inventoryChangedFields(_data, changes);
+      if (patch.isEmpty) {
+        if (mounted) Navigator.pop(context);
+        return;
+      }
+      final metadata = <String, dynamic>{
+        for (final key in [
+          'name',
+          'costPrice',
+          'price',
+          'basePrice',
+          'sizes',
+          'imageUrl',
+        ])
+          if (patch.containsKey(key)) key: patch[key],
+      };
+      bool needsUpdate(Map<String, dynamic> allocation) {
+        if (_type != 'Categories')
+          return inventoryChangedFields(allocation, metadata).isNotEmpty;
+        final items = (allocation['items'] as List? ?? [])
+            .whereType<Map>()
+            .map((i) => Map<String, dynamic>.from(i))
+            .toList();
+        final index = catalogItemIndex(items, widget.entry!.details);
+        return index >= 0 &&
+            items[index]['isDeleted'] != true &&
+            items[index]['isVoided'] != true &&
+            inventoryChangedFields(items[index], metadata).isNotEmpty;
+      }
+
+      final linked = widget.entry == null || metadata.isEmpty
           ? <DocumentReference<Map<String, dynamic>>>[]
-          : await bundleMetadataTargets(db, ref.id);
+          : await bundleMetadataTargets(db, ref.id, needsUpdate: needsUpdate);
       await db.runTransaction((tx) async {
-        final snapshot = await tx.get(ref);
+        final snapshots = await Future.wait([ref, ...linked].map(tx.get));
+        final snapshot = snapshots.first;
         final allocations =
             <DocumentReference<Map<String, dynamic>>, Map<String, dynamic>>{};
-        for (final target in linked) {
-          final data = (await tx.get(target)).data();
+        for (final assignedSnapshot in snapshots.skip(1)) {
+          final target = assignedSnapshot.reference;
+          final data = assignedSnapshot.data();
           if (data == null ||
               data['isDeleted'] == true ||
               (target.parent.id == 'allocation_checklist' &&
@@ -300,16 +387,11 @@ class _ItemEditorState extends State<_ItemEditor> {
         if (current == null || current['isDeleted'] == true)
           throw StateError('This record is no longer active');
         if (_type != 'Categories') {
-          for (final target in allocations.keys) {
-            tx.update(target, {
-              'basePrice': changes['basePrice'],
-              'sizes': changes['sizes'],
-            });
+          for (final target in allocations.entries) {
+            final update = inventoryChangedFields(target.value, metadata);
+            if (update.isNotEmpty) tx.update(target.key, update);
           }
-          tx.update(ref, {
-            ...changes,
-            'updatedAt': FieldValue.serverTimestamp(),
-          });
+          tx.update(ref, {...patch, 'updatedAt': FieldValue.serverTimestamp()});
           return;
         }
         final items = (current['items'] as List? ?? [])
@@ -327,7 +409,23 @@ class _ItemEditorState extends State<_ItemEditor> {
           final index = catalogItemIndex(items, widget.entry!.details);
           if (index < 0 || items[index]['isDeleted'] == true)
             throw StateError('Item no longer available');
-          items[index] = {...items[index], ...changes};
+          final initialStock = reportValueForSave(
+            _data['stock'] ?? _data['startingStock'],
+          );
+          final currentStock = reportValueForSave(
+            items[index]['stock'] ?? items[index]['startingStock'],
+          );
+          final editedStock = reportValueForSave(changes['stock']);
+          if (editedStock != initialStock && currentStock != initialStock) {
+            throw StateError(
+              'Stock changed while this editor was open. Reopen the item to use the latest stock.',
+            );
+          }
+          items[index] = {
+            ...items[index], ...patch,
+            // A metadata-only edit must not restore stock sold during editing.
+            if (editedStock == initialStock) 'stock': currentStock.toInt(),
+          };
           for (final target in allocations.entries) {
             final assigned = (target.value['items'] as List? ?? [])
                 .whereType<Map>()
@@ -335,7 +433,12 @@ class _ItemEditorState extends State<_ItemEditor> {
                 .toList();
             final match = catalogItemIndex(assigned, widget.entry!.details);
             if (match >= 0) {
-              assigned[match]['price'] = changes['price'];
+              if (assigned[match]['isDeleted'] == true ||
+                  assigned[match]['isVoided'] == true)
+                continue;
+              final update = inventoryChangedFields(assigned[match], metadata);
+              if (update.isEmpty) continue;
+              assigned[match] = {...assigned[match], ...update};
               tx.update(target.key, {'items': assigned});
             }
           }
@@ -432,8 +535,17 @@ class _ItemEditorState extends State<_ItemEditor> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 _field(_name, 'Name'),
+                if (_type != 'Bundle')
+                  _field(_cost, 'Cost price (₱)', number: true),
+                if (_type == 'Bundle')
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 14),
+                    child: Text(
+                      'Cost per bundle: ₱${_ingredients.fold<double>(0, (sum, item) => sum + (num.tryParse('${item['costPrice']}')?.toDouble() ?? 0) * bundleQuantity(item['quantity'])).toStringAsFixed(2)}',
+                    ),
+                  ),
                 if (_type != 'Beverages')
-                  _field(_price, 'Price (₱)', number: true),
+                  _field(_price, 'Selling price (₱)', number: true),
                 if (_type == 'Categories') ...[
                   _field(_stock, 'Current stock', number: true, integer: true),
                   TextFormField(
@@ -475,7 +587,11 @@ class _ItemEditorState extends State<_ItemEditor> {
                         Expanded(child: _field(size.$1, 'Size')),
                         const SizedBox(width: 8),
                         Expanded(
-                          child: _field(size.$2, 'Price (₱)', number: true),
+                          child: _field(
+                            size.$2,
+                            'Selling price (₱)',
+                            number: true,
+                          ),
                         ),
                       ],
                     ),
@@ -534,55 +650,121 @@ class _ItemEditorState extends State<_ItemEditor> {
                   if (_loadingIngredients) const LinearProgressIndicator(),
                   Wrap(
                     spacing: 8,
-                    children: [for (final type in ['Categories', 'Beverages', 'Add-ons'])
-                      ChoiceChip(label: Text(type), selected: _ingredientTab == type,
-                        onSelected: (_) => setState(() => _ingredientTab = type))],
+                    children: [
+                      for (final type in ['Categories', 'Beverages', 'Add-ons'])
+                        ChoiceChip(
+                          label: Text(type),
+                          selected: _ingredientTab == type,
+                          onSelected: (_) =>
+                              setState(() => _ingredientTab = type),
+                        ),
+                    ],
                   ),
-                  if (_ingredientTab == 'Categories') Wrap(spacing: 8, children: [
-                    ChoiceChip(label: const Text('All categories'), selected: _ingredientCategory == null,
-                      onSelected: (_) => setState(() => _ingredientCategory = null)),
-                    for (final category in _ingredientOptions.where((o) => o['parentName'] != null).map((o) => '${o['parentName']}').toSet())
-                      ChoiceChip(label: Text(category), selected: _ingredientCategory == category,
-                        onSelected: (_) => setState(() => _ingredientCategory = category)),
-                  ]),
+                  if (_ingredientTab == 'Categories')
+                    Wrap(
+                      spacing: 8,
+                      children: [
+                        ChoiceChip(
+                          label: const Text('All categories'),
+                          selected: _ingredientCategory == null,
+                          onSelected: (_) =>
+                              setState(() => _ingredientCategory = null),
+                        ),
+                        for (final category
+                            in _ingredientOptions
+                                .where((o) => o['parentName'] != null)
+                                .map((o) => '${o['parentName']}')
+                                .toSet())
+                          ChoiceChip(
+                            label: Text(category),
+                            selected: _ingredientCategory == category,
+                            onSelected: (_) =>
+                                setState(() => _ingredientCategory = category),
+                          ),
+                      ],
+                    ),
                   ...{
-                    for (final option in [..._ingredientOptions, ..._ingredients]) _ingredientKey(option): option,
-                  }.values.where((item) {
-                    final type = item['sourceCollection'] == 'coffee_products' ? 'Beverages'
-                      : item['sourceCollection'] == 'coffee_addons' ? 'Add-ons' : 'Categories';
-                    return type == _ingredientTab && (type != 'Categories' || _ingredientCategory == null || item['parentName'] == _ingredientCategory);
-                  }).map((option) {
-                    final index = _ingredients.indexWhere((i) => _ingredientKey(i) == _ingredientKey(option));
-                    final selected = index >= 0;
-                    final item = selected ? _ingredients[index] : option;
-                    return Card(
-                      margin: const EdgeInsets.symmetric(vertical: 8),
-                      child: Padding(padding: const EdgeInsets.all(16), child: Column(children: [
-                        CheckboxListTile(
-                          contentPadding: EdgeInsets.zero,
-                          title: Text('${item['name']}'),
-                          subtitle: Text('₱${item['price'] ?? 0}\nExpires: ${item['expirationDate'] ?? 'Not recorded'}'),
-                          value: selected,
-                          onChanged: _saving ? null : (value) => setState(() {
-                            _recipeChanged = true;
-                            if (value == true) { _ingredients.add({...option, 'quantity': 1}); }
-                            else { _ingredients.removeAt(index); }
-                          }),
-                        ),
-                        if (selected) TextFormField(
-                          key: ValueKey('quantity-${_ingredientKey(item)}'),
-                          initialValue: '${item['quantity'] ?? 1}',
-                          enabled: !_saving,
-                          keyboardType: TextInputType.number,
-                          decoration: InputDecoration(
-                            labelText: item['coffeeSize'] == null ? 'Quantity per bundle' : 'Qty per ${item['coffeeSize']}',
-                            hintText: 'Enter quantity', border: const OutlineInputBorder()),
-                          validator: (value) => (int.tryParse(value ?? '') ?? 0) <= 0 ? 'Enter a quantity greater than zero' : null,
-                          onChanged: (value) { _recipeChanged = true; item['quantity'] = int.tryParse(value) ?? 0; },
-                        ),
-                      ])),
-                    );
-                  }),
+                        for (final option in [
+                          ..._ingredientOptions,
+                          ..._ingredients,
+                        ])
+                          _ingredientKey(option): option,
+                      }.values
+                      .where((item) {
+                        final type =
+                            item['sourceCollection'] == 'coffee_products'
+                            ? 'Beverages'
+                            : item['sourceCollection'] == 'coffee_addons'
+                            ? 'Add-ons'
+                            : 'Categories';
+                        return type == _ingredientTab &&
+                            (type != 'Categories' ||
+                                _ingredientCategory == null ||
+                                item['parentName'] == _ingredientCategory);
+                      })
+                      .map((option) {
+                        final index = _ingredients.indexWhere(
+                          (i) => _ingredientKey(i) == _ingredientKey(option),
+                        );
+                        final selected = index >= 0;
+                        final item = selected ? _ingredients[index] : option;
+                        return Card(
+                          margin: const EdgeInsets.symmetric(vertical: 8),
+                          child: Padding(
+                            padding: const EdgeInsets.all(16),
+                            child: Column(
+                              children: [
+                                CheckboxListTile(
+                                  contentPadding: EdgeInsets.zero,
+                                  title: Text('${item['name']}'),
+                                  subtitle: Text(
+                                    '₱${item['price'] ?? 0}\nExpires: ${item['expirationDate'] ?? 'Not recorded'}',
+                                  ),
+                                  value: selected,
+                                  onChanged: _saving
+                                      ? null
+                                      : (value) => setState(() {
+                                          _recipeChanged = true;
+                                          if (value == true) {
+                                            _ingredients.add({
+                                              ...option,
+                                              'quantity': 1,
+                                            });
+                                          } else {
+                                            _ingredients.removeAt(index);
+                                          }
+                                        }),
+                                ),
+                                if (selected)
+                                  TextFormField(
+                                    key: ValueKey(
+                                      'quantity-${_ingredientKey(item)}',
+                                    ),
+                                    initialValue: '${item['quantity'] ?? 1}',
+                                    enabled: !_saving,
+                                    keyboardType: TextInputType.number,
+                                    decoration: InputDecoration(
+                                      labelText: item['coffeeSize'] == null
+                                          ? 'Quantity per bundle'
+                                          : 'Qty per ${item['coffeeSize']}',
+                                      hintText: 'Enter quantity',
+                                      border: const OutlineInputBorder(),
+                                    ),
+                                    validator: (value) =>
+                                        (int.tryParse(value ?? '') ?? 0) <= 0
+                                        ? 'Enter a quantity greater than zero'
+                                        : null,
+                                    onChanged: (value) {
+                                      _recipeChanged = true;
+                                      item['quantity'] =
+                                          int.tryParse(value) ?? 0;
+                                    },
+                                  ),
+                              ],
+                            ),
+                          ),
+                        );
+                      }),
                 ],
                 if (_error != null)
                   Text(_error!, style: const TextStyle(color: Colors.red)),

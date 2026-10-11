@@ -118,6 +118,7 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
   String search = '', filter = 'All items';
   int tab = 0;
   DateTime selectedDay = DateUtils.dateOnly(DateTime.now());
+  DateTime? selectedEnd;
   bool acceptingAll = false;
   final busy = <String>{};
   late final stream = checklistQuery(
@@ -134,6 +135,9 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
   }
 
   dynamic _checklistDate(Map<String, dynamic> data) {
+    if (data['kind'] == 'return' &&
+        ChecklistStatus.label(data) == ChecklistStatus.completed)
+      return data['confirmedAt'] ?? data['decidedAt'] ?? data['createdAt'];
     final isReceived =
         data['kind'] != 'return' &&
         ChecklistStatus.label(data) == ChecklistStatus.received;
@@ -147,13 +151,20 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
   }
 
   Future<void> pickDay() async {
-    final picked = await showDatePicker(
+    final picked = await showDateRangePicker(
       context: context,
-      initialDate: selectedDay,
+      initialDateRange: DateTimeRange(
+        start: selectedDay,
+        end: selectedEnd ?? selectedDay,
+      ),
       firstDate: DateTime(2000),
       lastDate: DateTime.now().add(const Duration(days: 365)),
     );
-    if (picked != null && mounted) setState(() => selectedDay = picked);
+    if (picked != null && mounted)
+      setState(() {
+        selectedDay = picked.start;
+        selectedEnd = picked.end;
+      });
   }
 
   Future<void> acceptAll(
@@ -540,43 +551,6 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
                     ),
                   ),
                 ),
-                if (widget.admin && widget.returnsOnly && !widget.pendingOnly)
-                  IconButton(
-                    tooltip: 'View pending returns',
-                    onPressed: () => showDialog<void>(
-                      context: context,
-                      builder: (_) => _ChecklistDialog(
-                        ids: widget.ids,
-                        db: widget.db,
-                        admin: true,
-                        pendingOnly: true,
-                        returnsOnly: true,
-                      ),
-                    ),
-                    icon: const Icon(
-                      Icons.visibility_outlined,
-                      color: Colors.white,
-                    ),
-                  ),
-                if (!widget.pendingOnly && !widget.returnsOnly)
-                  TextButton.icon(
-                    style: TextButton.styleFrom(
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(horizontal: 6),
-                      textStyle: const TextStyle(fontSize: 12),
-                    ),
-                    onPressed: () => showDialog<void>(
-                      context: context,
-                      builder: (_) => _ChecklistDialog(
-                        ids: widget.ids,
-                        db: widget.db,
-                        admin: widget.admin,
-                        pendingOnly: true,
-                      ),
-                    ),
-                    icon: const Icon(Icons.visibility_outlined, size: 18),
-                    label: const Text('View pending'),
-                  ),
                 IconButton(
                   tooltip: 'Close checklist',
                   onPressed: () => Navigator.pop(context),
@@ -593,10 +567,12 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
               decoration: InputDecoration(
                 prefixIcon: const Icon(Icons.search),
                 hintText: 'Search',
-                suffixIcon: widget.pendingOnly
+                suffixIcon:
+                    (widget.pendingOnly ||
+                        tab != (widget.returnsOnly && !widget.admin ? 2 : 1))
                     ? null
                     : IconButton(
-                        tooltip: 'Filter by date',
+                        tooltip: 'Filter by date range',
                         onPressed: pickDay,
                         icon: const Icon(Icons.calendar_today_outlined),
                       ),
@@ -643,7 +619,19 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
                       final at = rawDate is Timestamp
                           ? rawDate.toDate()
                           : DateTime.tryParse('$rawDate');
-                      if (!DateUtils.isSameDay(at?.toLocal(), selectedDay))
+                      final filterDate = widget.returnsOnly
+                          ? ChecklistStatus.label(d) ==
+                                ChecklistStatus.completed
+                          : ChecklistStatus.label(d) ==
+                                ChecklistStatus.received;
+                      if (filterDate &&
+                          (at == null ||
+                              at.toLocal().isBefore(selectedDay) ||
+                              !at.toLocal().isBefore(
+                                (selectedEnd ?? selectedDay).add(
+                                  const Duration(days: 1),
+                                ),
+                              )))
                         return false;
                       final inTab = widget.returnsOnly
                           ? d['kind'] == 'return' &&
@@ -700,13 +688,12 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
                           ),
                         ),
                       ),
-                    if (!widget.pendingOnly)
+                    if (!widget.pendingOnly &&
+                        tab == (widget.returnsOnly && !widget.admin ? 2 : 1))
                       Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 12),
                         child: Text(
-                          MaterialLocalizations.of(
-                            context,
-                          ).formatMediumDate(selectedDay),
+                          '${MaterialLocalizations.of(context).formatMediumDate(selectedDay)} – ${MaterialLocalizations.of(context).formatMediumDate(selectedEnd ?? selectedDay)}',
                         ),
                       ),
                     if (!widget.pendingOnly)
@@ -738,6 +725,13 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
                                 ),
                               ),
                           ],
+                        ),
+                      ),
+                    if (widget.returnsOnly && tab == (widget.admin ? 1 : 2))
+                      Padding(
+                        padding: const EdgeInsets.all(12),
+                        child: Text(
+                          'Completed returns: ${docs.length} • ${docs.fold<num>(0, (sum, doc) => sum + (num.tryParse('${doc.data()['quantity']}') ?? 0))} items',
                         ),
                       ),
                     const SizedBox(height: 8),
@@ -773,7 +767,7 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
                               db: widget.db,
                               scopeIds: widget.ids,
                               searchText: search,
-                              selectedDay: selectedDay,
+
                               onSubmitted: () => setState(() => tab = 1),
                             )
                           : widget.returnsOnly

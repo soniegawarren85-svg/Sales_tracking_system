@@ -4025,16 +4025,34 @@ class _AllCategPageState extends State<AllCategPage>
   String _displayItemId(Map<String, dynamic> item, {String? fallback}) {
     for (final key in [
       'publicId',
+      'addonId',
+      'coffeeId',
+      'bundleId',
       'id',
       'itemId',
       'variantId',
       'sourceItemId',
     ]) {
       final value = item[key]?.toString().trim() ?? '';
-      if (value.isNotEmpty) return publicItemId(value);
+      if (value.isEmpty) continue;
+      if (RegExp(r'^[A-Za-z0-9]{20}$').hasMatch(value)) continue;
+      return publicItemId(value);
     }
     final safeFallback = fallback?.trim() ?? '';
     return safeFallback.isNotEmpty ? safeFallback : '--';
+  }
+
+  String _allocationDateLabel(dynamic value) {
+    final date = value is Timestamp
+        ? value.toDate()
+        : value is DateTime
+        ? value
+        : DateTime.tryParse(value?.toString() ?? '');
+    if (date == null) return '--';
+    final year = date.year.toString().padLeft(4, '0');
+    final month = date.month.toString().padLeft(2, '0');
+    final day = date.day.toString().padLeft(2, '0');
+    return '$year-$month-$day';
   }
 
   Widget _tableReduceButton({
@@ -4082,6 +4100,7 @@ class _AllCategPageState extends State<AllCategPage>
               : null,
           columns: [
             _tableColumn('ID'),
+            _tableColumn('Allocated'),
             _tableColumn('Bundle Name'),
             _tableColumn('Price'),
             _tableColumn('Stock'),
@@ -4092,17 +4111,17 @@ class _AllCategPageState extends State<AllCategPage>
             final bundleName = bundle['name']?.toString() ?? 'Bundle';
             final bundleStock = _bundleStockForData(bundle);
             final bundlePrice = _parsePrice(bundle['price']);
-            final bundleId = inventoryDisplayId(bundle);
+            final bundleId = _displayItemId(bundle);
             final bundleExpirationDate = _bundleExpirationDate(bundle);
 
             return DataRow(
               cells: [
+                _tableCell(bundleId, width: 160, color: AppColors.primaryDark),
                 _tableCell(
-                  bundleId.isNotEmpty
-                      ? bundleId
-                      : bundle['sourceDocId']?.toString() ?? '--',
-                  width: 160,
-                  color: AppColors.primaryDark,
+                  _allocationDateLabel(
+                    bundle['assignedAt'] ?? bundle['allocatedAt'],
+                  ),
+                  width: 120,
                 ),
                 _tableCell(bundleName, width: 180, weight: FontWeight.w900),
                 _tableCell(
@@ -4132,7 +4151,7 @@ class _AllCategPageState extends State<AllCategPage>
 
   Widget _buildCoffeeCategoryCard(Map<String, dynamic> category, int index) {
     final coffeeName = category['categoryName']?.toString() ?? 'Beverages';
-    final coffeeId = inventoryDisplayId(category);
+    final coffeeId = _displayItemId(category);
     final items =
         (category['items'] as List?)?.cast<Map<String, dynamic>>() ?? [];
     final addonByName = <String, Map<String, dynamic>>{};
@@ -4190,6 +4209,7 @@ class _AllCategPageState extends State<AllCategPage>
             compact: true,
             columns: [
               _tableColumn('ID'),
+              _tableColumn('Allocated'),
               _tableColumn('Beverages Name'),
               _tableColumn('Small'),
               _tableColumn('Medium'),
@@ -4227,6 +4247,12 @@ class _AllCategPageState extends State<AllCategPage>
                         coffeeId.isNotEmpty ? coffeeId : '--',
                         width: 105,
                         color: AppColors.primaryDark,
+                      ),
+                      _tableCell(
+                        _allocationDateLabel(
+                          category['assignedAt'] ?? category['allocatedAt'],
+                        ),
+                        width: 120,
                       ),
                       _tableCell(
                         coffeeName,
@@ -4709,6 +4735,64 @@ class _AllCategPageState extends State<AllCategPage>
     List<Map<String, dynamic>> addonDocs,
     Map<String, dynamic> category,
   ) async {
+    var displayAddons = addonDocs;
+    final needsCanonicalIds = addonDocs.any(
+      (addon) => _displayItemId(addon) == '--',
+    );
+    if (needsCanonicalIds) {
+      try {
+        displayAddons = await Future.wait(
+          addonDocs.map((addon) async {
+            if (_displayItemId(addon) != '--') {
+              return addon;
+            }
+            final sourceId =
+                (addon['id'] ?? addon['sourceInventoryId'] ?? addon['addonId'])
+                    ?.toString()
+                    .trim();
+            if (sourceId == null || sourceId.isEmpty) return addon;
+            final canonical = await FirebaseFirestore.instance
+                .collection('coffee_addons')
+                .doc(sourceId)
+                .get();
+            final canonicalData = canonical.data();
+            final canonicalId =
+                canonicalData?['publicId'] ?? canonicalData?['addonId'];
+            if (canonicalId == null ||
+                canonicalId.toString().trim().isEmpty ||
+                RegExp(
+                  r'^[A-Za-z0-9]{20}$',
+                ).hasMatch(canonicalId.toString().trim())) {
+              return addon;
+            }
+            return {...addon, 'publicId': canonicalId};
+          }),
+        );
+      } catch (error) {
+        debugPrint('Unable to resolve beverage add-on IDs: $error');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            _buildSnackBar(
+              'Could not refresh add-on IDs: $error',
+              isError: true,
+            ),
+          );
+        }
+      }
+    }
+    displayAddons = displayAddons
+        .map(
+          (addon) => {
+            ...addon,
+            'allocatedAt':
+                addon['assignedAt'] ??
+                addon['allocatedAt'] ??
+                category['assignedAt'] ??
+                category['allocatedAt'],
+          },
+        )
+        .toList();
+    if (!mounted) return;
     var searchQuery = '';
     await showDialog<void>(
       context: context,
@@ -4784,7 +4868,7 @@ class _AllCategPageState extends State<AllCategPage>
                   Expanded(
                     child: Builder(
                       builder: (context) {
-                        final filteredAddons = addonDocs.where((addon) {
+                        final filteredAddons = displayAddons.where((addon) {
                           if (searchQuery.isEmpty) return true;
                           return [
                             _displayItemId(addon),
@@ -4805,9 +4889,10 @@ class _AllCategPageState extends State<AllCategPage>
                           child: Table(
                             columnWidths: const {
                               0: FlexColumnWidth(1.1),
-                              1: FlexColumnWidth(1.5),
-                              2: FlexColumnWidth(1.0),
-                              3: FlexColumnWidth(0.9),
+                              1: FlexColumnWidth(1.0),
+                              2: FlexColumnWidth(1.5),
+                              3: FlexColumnWidth(1.0),
+                              4: FlexColumnWidth(0.9),
                             },
                             border: TableBorder(
                               horizontalInside: BorderSide(
@@ -4823,6 +4908,7 @@ class _AllCategPageState extends State<AllCategPage>
                                 ),
                                 children: const [
                                   _AddonHeaderCell('ID'),
+                                  _AddonHeaderCell('Allocated'),
                                   _AddonHeaderCell('Add-on'),
                                   _AddonHeaderCell('Status'),
                                   _AddonHeaderCell('Price'),
@@ -4845,6 +4931,11 @@ class _AllCategPageState extends State<AllCategPage>
                                     _AddonCell(
                                       addonId,
                                       color: const Color(0xFF2E7D32),
+                                    ),
+                                    _AddonCell(
+                                      _allocationDateLabel(
+                                        addon['allocatedAt'],
+                                      ),
                                     ),
                                     _AddonCell(
                                       addonName,
@@ -5010,6 +5101,7 @@ class _AllCategPageState extends State<AllCategPage>
         ),
         columns: [
           _tableColumn('ID'),
+          _tableColumn('Allocated'),
           _tableColumn('Items Name'),
           _tableColumn('Price'),
           _tableColumn('Stock'),
@@ -5029,6 +5121,10 @@ class _AllCategPageState extends State<AllCategPage>
                 ),
                 width: 140,
                 color: AppColors.primaryDark,
+              ),
+              _tableCell(
+                _allocationDateLabel(item['allocatedAt'] ?? item['assignedAt']),
+                width: 120,
               ),
               _tableCell(
                 item['name']?.toString() ?? 'Item',
@@ -5819,6 +5915,14 @@ class _AllCategPageState extends State<AllCategPage>
                     visibleDocs.add({
                       ...data,
                       'name': data['name'] ?? 'Beverages',
+                      'publicId':
+                          rootData['publicId'] ??
+                          rootData['coffeeId'] ??
+                          data['publicId'],
+                      'coffeeId':
+                          rootData['coffeeId'] ??
+                          rootData['publicId'] ??
+                          data['coffeeId'],
                       'imageUrl': rootData['imageUrl'] ?? data['imageUrl'],
                       'items': coffeeItems,
                       'addonOptions': coffeeItems
@@ -5893,6 +5997,8 @@ class _AllCategPageState extends State<AllCategPage>
                     final itemData = Map<String, dynamic>.from(item);
                     itemData['sourceDocId'] = data['sourceDocId'];
                     itemData['categoryName'] = categoryName;
+                    itemData['allocatedAt'] =
+                        itemData['assignedAt'] ?? data['assignedAt'];
                     return itemData;
                   }).toList();
                   if (itemRecords.isEmpty) continue;
@@ -5918,6 +6024,7 @@ class _AllCategPageState extends State<AllCategPage>
                     'sourceDocId': data['sourceDocId'],
                     'publicId': data['publicId'],
                     'coffeeId': data['coffeeId'],
+                    'allocatedAt': data['assignedAt'] ?? data['allocatedAt'],
                     'isLowStock': data['isLowStock'] == true,
                   };
                 }

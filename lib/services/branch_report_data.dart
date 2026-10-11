@@ -1,4 +1,6 @@
 import 'refund_value.dart';
+import 'bundle_stock_service.dart';
+import 'transaction_settings.dart';
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
@@ -48,7 +50,7 @@ bool reportRefund(Map row) =>
     '${row['salesId']}'.toUpperCase().startsWith('R-');
 
 class BranchReportData {
-  static Stream<BranchReportData> watch() {
+  static Stream<BranchReportData> watch({FirebaseFirestore? firestore}) {
     const names = [
       'branches',
       'completed_sales',
@@ -61,6 +63,7 @@ class BranchReportData {
       'budget_history',
       'staff_cash_drawer',
       'daily_reports',
+      'admin_settings',
     ];
     final values = <String, List<Map<String, dynamic>>>{};
     final subscriptions = <StreamSubscription>[];
@@ -69,15 +72,21 @@ class BranchReportData {
       onListen: () {
         for (final name in names) {
           subscriptions.add(
-            FirebaseFirestore.instance.collection(name).snapshots().listen((
-              snapshot,
-            ) {
-              values[name] = snapshot.docs
-                  .map((doc) => <String, dynamic>{...doc.data(), '_id': doc.id})
-                  .toList();
-              if (values.length == names.length)
-                controller.add(BranchReportData(Map.from(values)));
-            }, onError: controller.addError),
+            (firestore ?? FirebaseFirestore.instance)
+                .collection(name)
+                .snapshots()
+                .listen((snapshot) {
+                  values[name] = snapshot.docs
+                      .map(
+                        (doc) => <String, dynamic>{
+                          ...doc.data(),
+                          '_id': doc.id,
+                        },
+                      )
+                      .toList();
+                  if (values.length == names.length)
+                    controller.add(BranchReportData(Map.from(values)));
+                }, onError: controller.addError),
           );
         }
       },
@@ -96,6 +105,16 @@ class BranchReportData {
       collection == 'completed_sales'
       ? (collections[collection] ?? []).map(refundValueRecord).toList()
       : collections[collection] ?? [];
+
+  bool refundsEnabled(String? branch) =>
+      settingsForBranch(
+        rows(
+              'admin_settings',
+            ).where((r) => r['_id'] == 'transactions').firstOrNull ??
+            {},
+        branch ?? '',
+      )['allowRefunds'] !=
+      false;
 
   List<int> hours(String? branch, DateTime day) {
     final settings = rows(
@@ -150,6 +169,7 @@ class BranchReportData {
       'budget_history',
       'staff_cash_drawer',
       'daily_reports',
+      'admin_settings',
     ];
     final snapshots = await Future.wait(
       names.map((name) => FirebaseFirestore.instance.collection(name).get()),
@@ -198,6 +218,28 @@ class BranchReportData {
       ? reportValue(row['lossAmount']).abs()
       : reportValue(row['quantity']) *
             reportValue(row['unitPrice'] ?? row['bundlePrice']);
+
+  double profitForSales(Iterable<Map<String, dynamic>> selected) =>
+      selected.where(validReportSale).fold<double>(0, (sum, sale) {
+        final refund = reportRefund(sale);
+        final cost = (sale['items'] as List? ?? [])
+            .whereType<Map>()
+            .fold<double>(
+              0,
+              (sum, item) =>
+                  sum +
+                  reportValue(item['quantity']).abs() *
+                      reportValue(resolveItem(item)['costPrice']),
+            );
+        return sum +
+            (refund
+                ? -reportValue(sale['total']).abs()
+                : reportValue(sale['total'])) -
+            (!refund || sale['refundMethod'] == 'inventory' ? cost : 0);
+      });
+
+  double profitForItems(Iterable<Map<String, dynamic>> selected) => selected
+      .fold<double>(0, (total, item) => total + reportValue(item['profit']));
 
   double todayCashDrawer(String branch) {
     final now = DateTime.now();
@@ -297,9 +339,29 @@ class BranchReportData {
         );
     return {
       'Starting fund': openingFor(start),
+      'Total cost': items(
+        branch,
+        start,
+        end,
+      ).fold<double>(0, (sum, item) => sum + reportValue(item['totalCost'])),
+      'Total profit': profitForItems(items(branch, start, end)),
       'Total revenue': selected
           .where((row) => !reportRefund(row))
           .fold(0, (sum, row) => sum + reportValue(row['total'])),
+      'Total net sales': selected
+          .where((row) => !reportRefund(row))
+          .fold<double>(
+            0,
+            (sum, row) =>
+                sum +
+                reportValue(row['total']) -
+                reportValue(
+                  row['tax'] ??
+                      row['vatAmount'] ??
+                      row['taxAmount'] ??
+                      row['vat'],
+                ),
+          ),
       'Total cash drawer today': todayCashDrawer(branch),
       'Refunds': selected
           .where(reportRefund)
@@ -312,6 +374,19 @@ class BranchReportData {
       'Total discount': selected
           .where((row) => !reportRefund(row))
           .fold<double>(0, (sum, row) => sum + reportValue(row['discount'])),
+      'Total VAT / tax': selected
+          .where((row) => !reportRefund(row))
+          .fold<double>(
+            0,
+            (sum, row) =>
+                sum +
+                reportValue(
+                  row['tax'] ??
+                      row['vatAmount'] ??
+                      row['taxAmount'] ??
+                      row['vat'],
+                ),
+          ),
       'Total sold': selected
           .where((row) => !reportRefund(row))
           .fold<double>(
@@ -339,12 +414,13 @@ class BranchReportData {
       ...rows('coffee_addons'),
     ];
     final identity =
-        '${item['itemId'] ?? item['id'] ?? item['variantId'] ?? ''}';
+        '${item['itemId'] ?? item['id'] ?? item['variantId'] ?? item['coffeeId'] ?? ''}';
     final source = sources
         .where(
           (row) =>
               row['_id'] == (sourceId ?? item['sourceInventoryId']) ||
-              row['_id'] == identity,
+              row['_id'] == identity ||
+              (item['publicId'] != null && row['publicId'] == item['publicId']),
         )
         .firstOrNull;
     final candidates = source == null ? sources : [source];
@@ -358,6 +434,8 @@ class BranchReportData {
           .where(
             (v) =>
                 '${v['id']}' == identity ||
+                (item['publicId'] != null &&
+                    v['publicId'] == item['publicId']) ||
                 (source != null &&
                     '${v['name']}' == '${item['variant'] ?? item['name']}'),
           )
@@ -368,6 +446,7 @@ class BranchReportData {
           'publicId': match['publicId'] ?? match['id'],
           'name': match['name'] ?? item['variant'] ?? item['name'],
           'price': item['price'] ?? match['price'],
+          'costPrice': item['costPrice'] ?? match['costPrice'],
           'expirationDate': item['expirationDate'] ?? match['expirationDate'],
           'type': 'Categories',
         };
@@ -380,6 +459,7 @@ class BranchReportData {
             source['publicId'] ?? source['coffeeId'] ?? source['bundleId'],
         'name': source['name'],
         'price': item['price'] ?? source['price'],
+        'costPrice': item['costPrice'] ?? source['costPrice'],
         'expirationDate': item['expirationDate'] ?? source['expirationDate'],
         'sizes': source['sizes'],
         'basePrice': source['basePrice'],
@@ -405,6 +485,152 @@ class BranchReportData {
     };
   }
 
+  /// Current allocations only. Historical reports deliberately retain archived rows.
+  List<Map<String, dynamic>> currentInventory(String branch, DateTime day) {
+    final start = DateUtils.dateOnly(day);
+    final active = <String, Map<String, dynamic>>{};
+    bool usable(Map value) {
+      final expiry = cashRecordDate(value['expirationDate']);
+      return value['isDeleted'] != true &&
+          value['isVoided'] != true &&
+          value['removedAt'] == null &&
+          (expiry == null || !DateUtils.dateOnly(expiry).isBefore(start));
+    }
+
+    for (final allocation in rows('staff_inventory').where(
+      (row) =>
+          (row['staffId'] == branch || row['branchId'] == branch) &&
+          usable(row),
+    )) {
+      final sourceId = '${allocation['sourceInventoryId'] ?? ''}';
+      final source = [
+        ...rows('sales_inventory'),
+        ...rows('coffee_products'),
+        ...rows('coffee_addons'),
+      ].where((r) => r['_id'] == sourceId).firstOrNull;
+      // Allocations with a missing/deleted source must not resurrect old catalog items.
+      if (sourceId.isNotEmpty && (source == null || !usable(source))) continue;
+      if (allocation['isBundle'] == true &&
+          reportValue(allocation['bundleCount']) > 0 &&
+          availableBundleStock(allocation, now: start) == 0)
+        continue;
+      final variants =
+          allocation['isBundle'] == true ||
+              allocation['isCoffee'] == true ||
+              allocation['isAddon'] == true
+          ? [allocation]
+          : (allocation['items'] as List? ?? []).whereType<Map>();
+      for (final variant in variants) {
+        if (!usable(variant)) continue;
+        Map? currentVariant;
+        if (source?['items'] is List && source?['isBundle'] != true) {
+          currentVariant = (source!['items'] as List)
+              .whereType<Map>()
+              .where(
+                (v) =>
+                    (variant['id'] != null && v['id'] == variant['id']) ||
+                    (variant['publicId'] != null &&
+                        v['publicId'] == variant['publicId']),
+              )
+              .firstOrNull;
+          if (currentVariant == null || !usable(currentVariant)) continue;
+        }
+        final catalogItem = currentVariant ?? source;
+        final resolved = resolveItem({
+          ...variant,
+          if (catalogItem != null) ...{
+            'name': catalogItem['name'],
+            'costPrice': catalogItem['costPrice'] ?? variant['costPrice'],
+            'price': catalogItem['price'],
+            if (catalogItem['imageUrl'] != null)
+              'imageUrl': catalogItem['imageUrl'],
+          },
+        }, sourceId);
+        final id = inventoryDisplayId(resolved);
+        final previous = active[id];
+        active[id] = {
+          ...resolved,
+          'id': id,
+          'costRecorded': resolved['costPrice'] != null,
+          'remaining':
+              reportValue(previous?['remaining']) +
+              (allocation['isBundle'] == true
+                  ? availableBundleStock(allocation, now: start)
+                  : reportValue(variant['stock'] ?? variant['startingStock'])),
+          if (allocation['isCoffee'] == true) 'remaining': null,
+          'status': 'Available',
+        };
+      }
+    }
+    final metrics = items(branch, start, start.add(const Duration(days: 1)));
+    return active.values.map((row) {
+      final metric =
+          metrics.where((m) => m['id'] == row['id']).firstOrNull ??
+          <String, dynamic>{};
+      return {...metric, ...row};
+    }).toList();
+  }
+
+  /// Current catalog membership and costs, with activity from the selected range.
+  /// Archived sales remain in analytics/history, never in the live allocation list.
+  List<Map<String, dynamic>> currentAllocatedItems(
+    String branch,
+    DateTime start,
+    DateTime end, {
+    DateTime? now,
+  }) {
+    final history = {
+      for (final row in items(branch, start, end)) row['id']: row,
+    };
+    return currentInventory(branch, now ?? DateTime.now()).map((current) {
+      final period = history[current['id']] ?? <String, dynamic>{};
+      final row = <String, dynamic>{
+        ...current,
+        for (final key in [
+          'starting',
+          'added',
+          'sold',
+          'sales',
+          'netSales',
+          'vatAmount',
+          'totalCost',
+          'profit',
+          'netProfit',
+          'unitProfit',
+          'refund',
+          'reduce',
+          'history',
+          'allocationDate',
+          'sizeSales',
+        ])
+          if (period.containsKey(key)) key: period[key],
+      };
+      final cost = reportValue(current['costPrice']);
+      if (reportValue(row['sold']) == 0) {
+        row['unitProfit'] = reportValue(current['price']) - cost;
+      }
+      row['allocationCost'] = current['type'] == 'Beverages'
+          ? reportValue(row['totalCost'])
+          : cost * (reportValue(row['starting']) + reportValue(row['added']));
+      return row;
+    }).toList();
+  }
+
+  Map<String, double> allocationReportTotals(
+    String branch,
+    DateTime start,
+    DateTime end, {
+    DateTime? now,
+  }) => {
+    ...totals(branch, start, end),
+    'Total cost': currentAllocatedItems(
+      branch,
+      start,
+      end,
+      now: now,
+    ).fold<double>(0, (sum, row) => sum + reportValue(row['allocationCost'])),
+  };
+
   List<Map<String, dynamic>> items(
     String branch,
     DateTime start,
@@ -427,6 +653,12 @@ class BranchReportData {
           'sizeSales': <String, Map<String, dynamic>>{},
           'sold': 0.0,
           'sales': 0.0,
+          'netSales': 0.0,
+          'vatAmount': 0.0,
+          'netProfit': 0.0,
+          'totalCost': 0.0,
+          'costPrice': reportValue(item['costPrice']),
+          'costRecorded': item['costPrice'] != null,
           'refund': 0.0,
           'reduce': 0.0,
           'price': reportValue(item['price']),
@@ -570,6 +802,7 @@ class BranchReportData {
             ? 'Expired'
             : 'Available';
         if (at != null) {
+          item['allocationDate'] = at;
           item['allocationSnapshot'] =
               reportValue(item['allocationSnapshot']) +
               reportValue(
@@ -611,9 +844,43 @@ class BranchReportData {
           detail['sales'] = reportValue(detail['sales']) + qty * price;
         }
         final field = refund ? 'refund' : 'sold';
+        final receiptGross = (sale['items'] as List? ?? [])
+            .whereType<Map>()
+            .fold<double>(
+              0,
+              (sum, line) =>
+                  sum +
+                  reportValue(line['quantity']).abs() *
+                      reportValue(line['price'] ?? line['unitPrice']),
+            );
+        final lineGross =
+            qty *
+            reportValue(raw['price'] ?? raw['unitPrice'] ?? item['price']);
+        final lineRevenue = sale['total'] == null || receiptGross == 0
+            ? lineGross
+            : reportValue(sale['total']).abs() * lineGross / receiptGross;
+        item['netSales'] =
+            reportValue(item['netSales']) +
+            (refund ? -lineRevenue : lineRevenue);
+        final saleTax = reportValue(
+          sale['tax'] ?? sale['vatAmount'] ?? sale['taxAmount'] ?? sale['vat'],
+        );
+        final lineTax = receiptGross == 0
+            ? 0.0
+            : saleTax * lineGross / receiptGross;
+        item['vatAmount'] =
+            reportValue(item['vatAmount']) + (refund ? -lineTax : lineTax);
+        if (refund && sale['refundMethod'] == 'inventory') {
+          item['totalCost'] =
+              reportValue(item['totalCost']) +
+              qty * reportValue(raw['costPrice'] ?? item['costPrice']);
+        }
         item[field] =
             reportValue(item[field]) + reportValue(raw['quantity']).abs();
         if (field == 'sold') {
+          item['totalCost'] =
+              reportValue(item['totalCost']) +
+              qty * reportValue(raw['costPrice'] ?? item['costPrice']);
           item['sales'] =
               reportValue(item['sales']) +
               reportValue(raw['quantity']).abs() *
@@ -658,10 +925,49 @@ class BranchReportData {
       final missing =
           reportValue(item['allocationSnapshot']) -
           reportValue(item['allocated']);
+      final hasStockEvidence =
+          item['remaining'] != null ||
+          reportValue(item['allocated']) > 0 ||
+          reportValue(item['allocationSnapshot']) > 0;
       var balance = missing > 0 ? missing : 0.0;
+      // A live remaining-stock snapshot anchors today's ledger, including old
+      // allocations whose complete movement history was not recorded.
+      if (item['remaining'] != null) {
+        balance =
+            reportValue(item['remaining']) -
+            events.fold<double>(
+              0,
+              (sum, event) => sum + reportValue(event['qty']),
+            );
+      }
       if (missing > 0)
         item['allocated'] = reportValue(item['allocationSnapshot']);
       final visible = <Map<String, dynamic>>[];
+      item['added'] = events
+          .where(
+            (event) =>
+                event['activity'] == 'Allocation' &&
+                !(event['time'] as DateTime).isBefore(start),
+          )
+          .fold<double>(0, (sum, event) => sum + reportValue(event['qty']));
+      item['starting'] =
+          balance +
+          events
+              .where((event) => (event['time'] as DateTime).isBefore(start))
+              .fold<double>(0, (sum, event) => sum + reportValue(event['qty']));
+      item['profit'] =
+          reportValue(item['netSales']) - reportValue(item['totalCost']);
+      item['netProfit'] =
+          reportValue(item['profit']) - reportValue(item['vatAmount']);
+      item['unitProfit'] = reportValue(item['sold']) > 0
+          ? (reportValue(item['sales']) - reportValue(item['totalCost'])) /
+                reportValue(item['sold'])
+          : reportValue(item['price']) - reportValue(item['costPrice']);
+      item['allocationDate'] =
+          events
+              .where((event) => event['activity'] == 'Allocation')
+              .lastOrNull?['time'] ??
+          item['allocationDate'];
       var firstAllocation = balance == 0;
       for (final event in events) {
         if ((event['time'] as DateTime).isBefore(start)) {
@@ -671,7 +977,7 @@ class BranchReportData {
         }
         if (visible.isEmpty && balance != 0) {
           visible.add({
-            'time': null,
+            'time': start,
             'activity': missing > 0
                 ? 'Starting allocation (saved balance)'
                 : 'Opening balance',
@@ -693,14 +999,24 @@ class BranchReportData {
       }
       if (visible.isEmpty && balance != 0)
         visible.add({
-          'time': null,
+          'time': start,
           'activity': 'Opening balance',
           'qty': balance,
           'balance': balance,
         });
       item['history'] = visible;
-      if (reportValue(item['allocated']) == 0) {
-        visible.removeWhere((event) => event['time'] == null);
+      if (hasStockEvidence) item['remaining'] ??= balance;
+      if (hasStockEvidence &&
+          (balance > 0 || reportValue(item['starting']) > 0))
+        item['relevant'] = true;
+      if (hasStockEvidence &&
+          reportValue(item['remaining']) <= 50 &&
+          item['status'] == 'Available') {
+        item['status'] = 'Low stock';
+      }
+      if (!hasStockEvidence) {
+        item['starting'] = null;
+        visible.removeWhere((event) => event['activity'] == 'Opening balance');
         for (final event in visible) {
           event['balance'] = null;
         }

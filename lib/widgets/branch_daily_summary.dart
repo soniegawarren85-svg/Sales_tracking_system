@@ -1,3 +1,4 @@
+import 'screen_loading_region.dart';
 import 'package:sales_tracking/theme/app_colors.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
@@ -162,15 +163,12 @@ class _BranchDailySummaryState extends State<BranchDailySummary> {
     builder: (context, snapshot) {
       if (snapshot.hasError) return const Text('Unable to load daily summary.');
       if (!snapshot.hasData)
-        return const Center(child: CircularProgressIndicator());
+        return const Center(child: ScreenLoadingIndicator());
       if (widget.compact)
         return Column(
           crossAxisAlignment: CrossAxisAlignment.end,
           children: [
-            const Text(
-              'Cash Drawer',
-              style: TextStyle(color: Colors.white70),
-            ),
+            const Text('Cash Drawer', style: TextStyle(color: Colors.white70)),
             Text(
               '₱${snapshot.data!['Closing cash drawer']!.toStringAsFixed(2)}',
               style: const TextStyle(

@@ -67,11 +67,19 @@ class _TransactionSettingsDialogState extends State<TransactionSettingsDialog> {
     String branchId,
     Map<String, dynamic> patch,
     String message,
+  ) => saveBranches([branchId], patch, message);
+
+  Future<void> saveBranches(
+    List<String> branchIds,
+    Map<String, dynamic> patch,
+    String message,
   ) async {
     setState(() => busy = true);
     try {
       await reference.set({
-        'branchSettings': {branchId: patch},
+        'branchSettings': {
+          for (final branchId in branchIds) branchId: patch,
+        },
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
       if (mounted) notify(message);
@@ -270,20 +278,26 @@ class _TransactionSettingsDialogState extends State<TransactionSettingsDialog> {
   Widget _branchDropdown(
     List<QueryDocumentSnapshot<Map<String, dynamic>>> branches,
     String branchId,
+    {bool includeAll = false}
   ) => DropdownButtonFormField<String>(
     value: branchId,
     decoration: const InputDecoration(
       labelText: 'Branch',
       border: OutlineInputBorder(),
     ),
-    items: branches
-        .map(
-          (branch) => DropdownMenuItem(
-            value: branch.id,
-            child: Text(branch.data()['name']?.toString() ?? branch.id),
-          ),
-        )
-        .toList(),
+    items: [
+      if (includeAll)
+        const DropdownMenuItem(
+          value: allBranchesSelection,
+          child: Text('All branches'),
+        ),
+      ...branches.map(
+        (branch) => DropdownMenuItem(
+          value: branch.id,
+          child: Text(branch.data()['name']?.toString() ?? branch.id),
+        ),
+      ),
+    ],
     onChanged: busy
         ? null
         : (value) {
@@ -294,6 +308,8 @@ class _TransactionSettingsDialogState extends State<TransactionSettingsDialog> {
             });
           },
   );
+
+  bool get _hasAllBranches => widget.kind == 'permissions' || widget.kind == 'tax';
 
   @override
   Widget build(BuildContext context) => AlertDialog(
@@ -306,6 +322,8 @@ class _TransactionSettingsDialogState extends State<TransactionSettingsDialog> {
     title: Text(
       widget.kind == 'discounts'
           ? 'Discount Control'
+          : widget.kind == 'tax'
+          ? 'Tax Configuration'
           : widget.kind == 'permissions'
           ? 'Security and Approval'
           : 'Payment Settings',
@@ -328,16 +346,21 @@ class _TransactionSettingsDialogState extends State<TransactionSettingsDialog> {
           if (branches.isEmpty) {
             return const Text('Create a branch before configuring settings.');
           }
-          final branchId =
-              branches.any((branch) => branch.id == selectedBranchId)
+          final isAllBranches =
+              _hasAllBranches &&
+              selectedBranchId == allBranchesSelection;
+          final branchId = isAllBranches
+              ? branches.first.id
+              : branches.any((branch) => branch.id == selectedBranchId)
               ? selectedBranchId!
               : branches.first.id;
-          final branchName =
-              branches
-                  .firstWhere((branch) => branch.id == branchId)
-                  .data()['name']
-                  ?.toString() ??
-              branchId;
+          final branchName = isAllBranches
+              ? 'All branches'
+              : branches
+                        .firstWhere((branch) => branch.id == branchId)
+                        .data()['name']
+                        ?.toString() ??
+                    branchId;
           return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
             stream: reference.snapshots(),
             builder: (context, snapshot) {
@@ -345,23 +368,139 @@ class _TransactionSettingsDialogState extends State<TransactionSettingsDialog> {
                 return Text('Unable to load settings: ${snapshot.error}');
               if (!snapshot.hasData)
                 return const Center(child: CircularProgressIndicator());
-              final data = settingsForBranch(
-                snapshot.data!.data() ?? {},
-                branchId,
-              );
+              final rawSettings = snapshot.data!.data() ?? {};
+              final data = settingsForBranch(rawSettings, branchId);
+              if (widget.kind == 'tax') {
+                final branchTaxSettings = branches
+                    .map(
+                      (branch) =>
+                          settingsForBranch(rawSettings, branch.id),
+                    )
+                    .toList();
+                final taxEnabled = isAllBranches
+                    ? branchTaxSettings.every(
+                        (settings) => settings['taxEnabled'] == true,
+                      )
+                    : data['taxEnabled'] == true;
+                final classifications = branchTaxSettings
+                    .map(
+                      (settings) =>
+                          settings['taxClassification']?.toString() ??
+                          'nonVat',
+                    )
+                    .toSet();
+                final taxClassification = isAllBranches
+                    ? classifications.length == 1
+                          ? classifications.single
+                          : null
+                    : data['taxClassification']?.toString() ?? 'nonVat';
+                final targetBranches = isAllBranches
+                    ? branches.map((branch) => branch.id).toList()
+                    : [branchId];
+                return SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      _branchDropdown(
+                        branches,
+                        isAllBranches ? allBranchesSelection : branchId,
+                        includeAll: true,
+                      ),
+                      const SizedBox(height: 8),
+                      SwitchListTile(
+                        title: const Text('Enable tax'),
+                        value: taxEnabled,
+                        onChanged: busy
+                            ? null
+                            : (value) => saveBranches(
+                                targetBranches,
+                                {'taxEnabled': value},
+                                'Tax setting updated for $branchName.',
+                              ),
+                      ),
+                      const Align(
+                        alignment: Alignment.centerLeft,
+                        child: Padding(
+                          padding: EdgeInsets.fromLTRB(16, 8, 16, 0),
+                          child: Text(
+                            'Tax classification',
+                            style: TextStyle(fontWeight: FontWeight.w600),
+                          ),
+                        ),
+                      ),
+                      RadioListTile<String>(
+                        title: const Text('Non-VAT registered'),
+                        value: 'nonVat',
+                        groupValue: taxClassification,
+                        onChanged: busy || !taxEnabled
+                            ? null
+                            : (value) {
+                                if (value == null) return;
+                                saveBranches(
+                                  targetBranches,
+                                  {'taxClassification': value},
+                                  'Tax classification updated for $branchName.',
+                                );
+                              },
+                      ),
+                      RadioListTile<String>(
+                        title: const Text('VAT registered (12%)'),
+                        value: 'vat',
+                        groupValue: taxClassification,
+                        onChanged: busy || !taxEnabled
+                            ? null
+                            : (value) {
+                                if (value == null) return;
+                                saveBranches(
+                                  targetBranches,
+                                  {'taxClassification': value},
+                                  'Tax classification updated for $branchName.',
+                                );
+                              },
+                      ),
+                      const Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 16),
+                        child: Text(
+                          'VAT is added to the discounted order amount in the staff cashier when tax is enabled.',
+                          style: TextStyle(color: AppColors.textMuted),
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              }
               if (widget.kind == 'permissions')
                 return Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    _branchDropdown(branches, branchId),
+                    _branchDropdown(
+                      branches,
+                      isAllBranches ? allBranchesSelection : branchId,
+                      includeAll: true,
+                    ),
                     const SizedBox(height: 8),
                     ...staffPermissions.entries.map(
                       (entry) => SwitchListTile(
                         title: Text(entry.value),
-                        value: data[entry.key] != false,
+                        value: isAllBranches
+                            ? branches.every(
+                                (branch) =>
+                                    settingsForBranch(
+                                      rawSettings,
+                                      branch.id,
+                                    )[entry.key] !=
+                                    false,
+                              )
+                            : data[entry.key] != false,
                         onChanged: busy
                             ? null
-                            : (value) => save(
+                            : (value) => isAllBranches
+                            ? saveBranches(
+                                branches.map((branch) => branch.id).toList(),
+                                {entry.key: value},
+                                'Permission updated for all branches.',
+                              )
+                            : save(
                                 branchId,
                                 {entry.key: value},
                                 '$branchName permission updated successfully.',

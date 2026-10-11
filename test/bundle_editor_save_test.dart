@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'package:sales_tracking/services/bundle_metadata_service.dart';
+import 'package:sales_tracking/services/checklist_status.dart';
 import 'package:fake_cloud_firestore/fake_cloud_firestore.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
@@ -105,4 +108,144 @@ void main() {
       );
     },
   );
+  testWidgets(
+    'metadata save preserves concurrent stock and updates allocation cost',
+    (tester) async {
+      final db = FakeFirebaseFirestore();
+      final item = <String, dynamic>{
+        'id': 'v',
+        'publicId': 'CO-1',
+        'name': 'Cookie',
+        'stock': 100,
+        'price': 50,
+        'costPrice': 25,
+        'expirationDate': '2099-12-31',
+      };
+      final category = <String, dynamic>{
+        'id': 'cat',
+        'name': 'Cookies',
+        'items': [item],
+      };
+      await db.doc('sales_inventory/cat').set(category);
+      await db.doc('staff_inventory/a').set({
+        'sourceInventoryId': 'cat',
+        'items': [
+          {...item, 'stock': 10},
+        ],
+      });
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Builder(
+            builder: (context) => Scaffold(
+              body: TextButton(
+                onPressed: () => showAdminItemEditor(
+                  context,
+                  entry: AdminCatalogEntry(
+                    id: 'CO-1',
+                    name: 'Cookie',
+                    type: 'Categories',
+                    source: category,
+                    details: item,
+                    images: [],
+                  ),
+                  firestore: db,
+                  upload: (_) async => null,
+                ),
+                child: const Text('Edit'),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.text('Edit'));
+      await tester.pumpAndSettle();
+      // A sale arrives after the editor opened, before the admin changes cost.
+      await db.doc('sales_inventory/cat').update({
+        'items': [
+          {...item, 'stock': 80},
+        ],
+      });
+      await tester.enterText(
+        find.byWidgetPredicate(
+          (w) => w is TextFormField && w.controller?.text == '25',
+        ),
+        '30',
+      );
+      await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+      await tester.pumpAndSettle();
+      final saved =
+          ((await db.doc('sales_inventory/cat').get()).data()!['items'] as List)
+              .single;
+      expect(saved['stock'], 80);
+      expect(saved['costPrice'], 30);
+      final allocation =
+          ((await db.doc('staff_inventory/a').get()).data()!['items'] as List)
+              .single;
+      expect(allocation['stock'], 10);
+      expect(allocation['costPrice'], 30);
+      expect(find.text('Edit'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+  test('timeout and wrapped web timeout show a useful save status', () {
+    for (final error in [
+      TimeoutException('save'),
+      StateError(
+        "TypeError: Instance of 'TimeoutException': type 'TimeoutException' is not a subtype of type 'JavaScriptObject'",
+      ),
+    ]) {
+      final message = inventorySaveError(error);
+      expect(message, contains('did not confirm'));
+      expect(message, isNot(contains('JavaScriptObject')));
+    }
+  });
+  test(
+    'save scopes exclude closed, deleted and unrelated allocation records',
+    () async {
+      final db = FakeFirebaseFirestore();
+      for (var i = 0; i < 60; i++) {
+        await db.doc('allocation_checklist/closed$i').set({
+          'sourceInventoryId': 'cat',
+          'status': ChecklistStatus.received,
+          'costPrice': 0,
+        });
+        await db.doc('staff_inventory/deleted$i').set({
+          'sourceInventoryId': 'cat',
+          'isDeleted': true,
+          'costPrice': 0,
+        });
+      }
+      await db.doc('staff_inventory/active').set({
+        'sourceInventoryId': 'cat',
+        'costPrice': 0,
+      });
+      await db.doc('staff_inventory/current').set({
+        'sourceInventoryId': 'cat',
+        'costPrice': 50,
+      });
+      await db.doc('allocation_checklist/pending').set({
+        'sourceInventoryId': 'cat',
+        'status': ChecklistStatus.awaiting,
+        'costPrice': 0,
+      });
+      final targets = await bundleMetadataTargets(
+        db,
+        'cat',
+        needsUpdate: (data) => data['costPrice'] != 50,
+      );
+      expect(targets.map((r) => r.path).toSet(), {
+        'staff_inventory/active',
+        'allocation_checklist/pending',
+      });
+    },
+  );
+  test('only changed fields are included in inventory updates', () {
+    expect(
+      inventoryChangedFields(
+        {'name': 'Cookie', 'price': 89.0, 'costPrice': 50, 'stock': 200},
+        {'name': 'Cookie', 'price': 89, 'costPrice': 55, 'stock': 200},
+      ),
+      {'costPrice': 55},
+    );
+  });
 }

@@ -44,6 +44,7 @@ class _AdminVoidInventoryState extends State<AdminVoidInventory> {
   late String _type = widget.type;
   String _query = '';
   DateTime _day = DateUtils.dateOnly(DateTime.now());
+  DateTime? _endDay;
   FirebaseFirestore get _db => widget.firestore ?? FirebaseFirestore.instance;
   final Set<String> _restoring = {};
   bool _expired(Map data) {
@@ -180,7 +181,10 @@ class _AdminVoidInventoryState extends State<AdminVoidInventory> {
             ? data['expirationDate']
             : data['removedAt'] ?? data['deletedAt'],
       );
-      if (date == null || !DateUtils.isSameDay(date, _day)) return;
+      if (date == null ||
+          date.isBefore(_day) ||
+          !date.isBefore((_endDay ?? _day).add(const Duration(days: 1))))
+        return;
       records.add((doc: doc, data: data, field: field, parent: parent));
     }
 
@@ -406,9 +410,8 @@ class _AdminVoidInventoryState extends State<AdminVoidInventory> {
             decoration: InputDecoration(
               hintText: 'Search items',
               prefixIcon: const Icon(Icons.search),
-              helperText: MaterialLocalizations.of(
-                context,
-              ).formatFullDate(_day),
+              helperText:
+                  '${MaterialLocalizations.of(context).formatShortDate(_day)} – ${MaterialLocalizations.of(context).formatShortDate(_endDay ?? _day)}',
               suffixIcon: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -416,14 +419,20 @@ class _AdminVoidInventoryState extends State<AdminVoidInventory> {
                     tooltip: 'Filter by date',
                     icon: const Icon(Icons.calendar_month),
                     onPressed: () async {
-                      final dates = await showDatePicker(
+                      final dates = await showDateRangePicker(
                         context: context,
-                        initialDate: _day,
+                        initialDateRange: DateTimeRange(
+                          start: _day,
+                          end: _endDay ?? _day,
+                        ),
                         firstDate: DateTime(2000),
                         lastDate: DateTime(2100),
                       );
                       if (dates != null && mounted)
-                        setState(() => _day = dates);
+                        setState(() {
+                          _day = dates.start;
+                          _endDay = dates.end;
+                        });
                     },
                   ),
                 ],

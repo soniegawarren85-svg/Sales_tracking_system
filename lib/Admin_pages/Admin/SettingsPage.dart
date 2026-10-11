@@ -1,6 +1,7 @@
 import 'package:crypto/crypto.dart';
 import '../../widgets/transaction_settings_dialog.dart';
 import '../../services/catalog_image_service.dart';
+import '../../services/profile_field_validation.dart';
 import 'package:sales_tracking/theme/app_colors.dart';
 import '../../services/public_item_id.dart';
 import 'dart:convert';
@@ -327,6 +328,18 @@ class _SettingsPageState extends State<SettingsPage> {
                           const TransactionSettingsDialog(kind: 'payments'),
                     ),
                   ),
+                  _settingItem(
+                    icon: Icons.percent_rounded,
+                    title: "Tax Configuration",
+                    subtitle: "Set VAT status for each branch",
+                    iconColor: const Color(0xFF00897B),
+                    iconBg: const Color(0xFFE0F2F1),
+                    onTap: () => showDialog(
+                      context: context,
+                      builder: (_) =>
+                          const TransactionSettingsDialog(kind: 'tax'),
+                    ),
+                  ),
 
                   const SizedBox(height: 6),
 
@@ -583,7 +596,9 @@ class _SettingsPageState extends State<SettingsPage> {
 
     final route = DialogRoute<void>(
       context: context,
-      builder: (dialogContext) => Dialog(
+      builder: (dialogContext) {
+        final formKey = GlobalKey<FormState>();
+        return Dialog(
         insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
         child: ConstrainedBox(
@@ -593,7 +608,10 @@ class _SettingsPageState extends State<SettingsPage> {
           ),
           child: SingleChildScrollView(
             padding: const EdgeInsets.fromLTRB(24, 22, 24, 18),
-            child: Column(
+            child: Form(
+              key: formKey,
+              autovalidateMode: AutovalidateMode.onUserInteraction,
+              child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -602,42 +620,50 @@ class _SettingsPageState extends State<SettingsPage> {
                   style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700),
                 ),
                 const SizedBox(height: 18),
-                TextField(
+                TextFormField(
                   readOnly: readOnly,
                   controller: firstName,
+                  validator: (value) => ProfileFieldValidation.name(value),
                   decoration: const InputDecoration(labelText: 'First name'),
                 ),
                 const SizedBox(height: 10),
-                TextField(
+                TextFormField(
                   readOnly: readOnly,
                   controller: middleName,
+                  validator: (value) =>
+                      ProfileFieldValidation.name(value, required: false),
                   decoration: const InputDecoration(labelText: 'Middle name'),
                 ),
                 const SizedBox(height: 10),
-                TextField(
+                TextFormField(
                   readOnly: readOnly,
                   controller: lastName,
+                  validator: (value) =>
+                      ProfileFieldValidation.name(value, required: false),
                   decoration: const InputDecoration(labelText: 'Last name'),
                 ),
                 const SizedBox(height: 10),
-                TextField(
+                TextFormField(
                   readOnly: readOnly,
                   controller: email,
                   keyboardType: TextInputType.emailAddress,
+                  validator: (value) => ProfileFieldValidation.gmail(value),
                   decoration: const InputDecoration(labelText: 'Gmail / email'),
                 ),
                 const SizedBox(height: 10),
-                TextField(
+                TextFormField(
                   readOnly: readOnly,
                   controller: age,
                   keyboardType: TextInputType.number,
+                  validator: (value) => ProfileFieldValidation.age(value),
                   decoration: const InputDecoration(labelText: 'Age'),
                 ),
                 const SizedBox(height: 10),
-                TextField(
+                TextFormField(
                   readOnly: readOnly,
                   controller: address,
                   maxLines: 3,
+                  validator: ProfileFieldValidation.wordLimit,
                   decoration: const InputDecoration(labelText: 'Address'),
                 ),
                 const SizedBox(height: 18),
@@ -652,11 +678,7 @@ class _SettingsPageState extends State<SettingsPage> {
                     if (!readOnly)
                       FilledButton(
                         onPressed: () async {
-                          if (firstName.text.trim().isEmpty) {
-                            _showStyledSnackBar(
-                              'Enter your first name.',
-                              isError: true,
-                            );
+                          if (!(formKey.currentState?.validate() ?? false)) {
                             return;
                           }
                           try {
@@ -703,9 +725,11 @@ class _SettingsPageState extends State<SettingsPage> {
                 ),
               ],
             ),
+            ),
           ),
         ),
-      ),
+      );
+      },
     );
     await Navigator.of(context).push(route);
     await route.completed;

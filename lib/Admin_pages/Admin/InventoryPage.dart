@@ -3112,6 +3112,7 @@ class _InventoryPageState extends State<InventoryPage>
   }
 
   Map<String, dynamic>? _selectedCategory;
+  String _monitorBranch = '';
 
   Future<void> _openCreateSheet(Widget form) => showModalBottomSheet<void>(
     context: context,
@@ -3153,7 +3154,7 @@ class _InventoryPageState extends State<InventoryPage>
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: PinkTheme.scaffoldBg,
-      floatingActionButton: _catalogType == 'Categories'
+      floatingActionButton: _catalogType == 'Categories' && _monitorBranch.isEmpty
           ? FloatingActionButton(
               heroTag: 'inventory_add_item',
               tooltip: 'Add item',
@@ -3229,6 +3230,7 @@ class _InventoryPageState extends State<InventoryPage>
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(20, 4, 20, 0),
                 child: AdminCatalog(
+                  onBranchChanged: (value) => setState(() => _monitorBranch = value),
                   pinnedControls: true,
                   type: _catalogType,
                   onBeverageTabChanged: (value) =>
@@ -3497,6 +3499,11 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
   Future<String?>? _bundleUpload;
   final ImagePicker _bundlePicker = ImagePicker();
   final Map<String, Map<int, int>> selectedVariantQuantities = {};
+  double get _bundleCost => _inventory.fold<double>(0, (total, parent) {
+    final variants = (parent['items'] as List? ?? []).whereType<Map>().toList();
+    final quantities = selectedVariantQuantities['${parent['id']}'] ?? {};
+    return total + quantities.entries.fold<double>(0, (sum, entry) => entry.key < 0 || entry.key >= variants.length ? sum : sum + (num.tryParse('${variants[entry.key]['costPrice']}')?.toDouble() ?? 0) * entry.value);
+  });
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final List<Map<String, dynamic>> bundles = [];
   bool _isSaving = false;
@@ -5098,6 +5105,7 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
 
                 // Bundle price
                 _styledFieldLabel('Bundle Price'),
+                Padding(padding: const EdgeInsets.symmetric(vertical: 8), child: Text('Cost per bundle: ₱${_bundleCost.toStringAsFixed(2)}', style: const TextStyle(fontWeight: FontWeight.w700))),
                 const SizedBox(height: 8),
                 _enhancedField(
                   controller: bundlePriceController,

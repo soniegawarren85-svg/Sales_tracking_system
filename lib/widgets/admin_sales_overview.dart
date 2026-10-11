@@ -1,8 +1,10 @@
+import 'screen_loading_region.dart';
 import 'package:sales_tracking/theme/app_colors.dart';
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'admin_recent_sales.dart';
+import '../services/branch_report_data.dart';
 
 /// Receipt totals are counted once; refund records are excluded from gross sales.
 List<Map<String, dynamic>> completedReceipts(
@@ -56,6 +58,7 @@ class _AdminSalesOverviewState extends State<AdminSalesOverview> {
   Timer? _midnight;
   DateTime _day = DateUtils.dateOnly(DateTime.now());
   late Stream<QuerySnapshot<Map<String, dynamic>>> _sales;
+  late final _reports = BranchReportData.watch();
 
   @override
   void initState() {
@@ -106,7 +109,7 @@ class _AdminSalesOverviewState extends State<AdminSalesOverview> {
         if (snapshot.hasError)
           return const Text('Unable to load branch totals.');
         if (!snapshot.hasData)
-          return const Center(child: CircularProgressIndicator());
+          return const Center(child: ScreenLoadingIndicator());
         return _totals(
           snapshot.data!.docs
               .where((doc) => doc.data()['isVoided'] != true)
@@ -117,14 +120,25 @@ class _AdminSalesOverviewState extends State<AdminSalesOverview> {
     );
   }
 
-  Widget _totals(
+  Widget _totals(Set<String>? branchIds) => StreamBuilder<BranchReportData>(
+    stream: _reports,
+    builder: (context, snapshot) {
+      if (snapshot.hasError) return const Text('Unable to load sales totals.');
+      if (!snapshot.hasData)
+        return const Center(child: ScreenLoadingIndicator());
+      return _totalsContent(branchIds, snapshot.data);
+    },
+  );
+
+  Widget _totalsContent(
     Set<String>? branchIds,
+    BranchReportData? report,
   ) => StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
     stream: _sales,
     builder: (context, snapshot) {
       if (snapshot.hasError) return const Text('Unable to load sales totals.');
       if (!snapshot.hasData)
-        return const Center(child: CircularProgressIndicator());
+        return const Center(child: ScreenLoadingIndicator());
       final records = snapshot.data!.docs.map((doc) => doc.data());
       final sales =
           completedReceipts(
@@ -157,7 +171,13 @@ class _AdminSalesOverviewState extends State<AdminSalesOverview> {
           Icons.payments_outlined,
         ),
         ('Total sold', sold.toStringAsFixed(0), Icons.shopping_bag_outlined),
-        ('Total transactions', '${sales.length}', Icons.receipt_long_outlined),
+        (
+          'Total profit',
+          report == null
+              ? 'Loading…'
+              : '₱${report.profitForSales(records.where((r) => branchIds == null || branchIds.contains(r['branchId']))).toStringAsFixed(2)}',
+          Icons.trending_up,
+        ),
       ];
       return LayoutBuilder(
         builder: (context, constraints) {
@@ -291,7 +311,7 @@ class _AdminBranchRankingState extends State<AdminBranchRanking> {
                   if (snapshot.hasError || branches.hasError)
                     return const Text('Unable to load branch report.');
                   if (!snapshot.hasData || !branches.hasData)
-                    return const Center(child: CircularProgressIndicator());
+                    return const Center(child: ScreenLoadingIndicator());
                   final names = {
                     for (final doc in branches.data!.docs)
                       doc.id: '${doc.data()['name'] ?? 'Branch'}',

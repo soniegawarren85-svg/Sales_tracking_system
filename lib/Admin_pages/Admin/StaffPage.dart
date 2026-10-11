@@ -254,7 +254,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                 Padding(
                   padding: const EdgeInsets.all(16),
                   child: _buildStatsRow(
-                    total: staff.length,
+                    total: accepted.length,
                     active: accepted.length - inactive,
                     pending: deactivated.length,
                     deactivated: inactive,
@@ -2924,22 +2924,19 @@ class _AnimatedAdminCardState extends State<_AnimatedAdminCard>
                             widget.admin.lastName,
                           ].where((value) => value.trim().isNotEmpty).join(' '),
                           'Staff ID': publicItemId(widget.admin.staffId),
-                          'Username':
-                              '${widget.admin.details['username'] ?? widget.admin.staffId}',
                           'Age':
                               '${widget.admin.details['age'] ?? 'Not provided'}',
                           'Email': widget.admin.email,
                           'Phone': widget.admin.phone,
                           'Address': widget.admin.address,
-                          'Role': widget.admin.role,
+                          'Role': widget.admin.role.toLowerCase() == 'staff'
+                              ? 'Cashier'
+                              : widget.admin.role,
                           'Account status': widget.admin.status == 'accepted'
                               ? 'Active account'
                               : widget.admin.status,
                           'Created': _staffDate(
                             widget.admin.details['createdAt'],
-                          ),
-                          'Last login': _staffDate(
-                            widget.admin.details['lastLoginAt'],
                           ),
                         }.entries.map(
                           (detail) => _buildDetailTile(

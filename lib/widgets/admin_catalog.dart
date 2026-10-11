@@ -2,6 +2,7 @@ import 'package:sales_tracking/theme/app_colors.dart';
 import '../services/short_id_service.dart';
 import '../services/public_item_id.dart';
 import 'admin_addons.dart';
+import 'branch_inventory_monitor.dart';
 import '../services/bundle_stock_service.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -249,8 +250,10 @@ class AdminCatalog extends StatefulWidget {
     this.onVoid,
     this.onView,
     this.firestore,
+    this.onBranchChanged,
   });
   final FirebaseFirestore? firestore;
+  final ValueChanged<String>? onBranchChanged;
   final ValueChanged<Map<String, dynamic>?>? onCategorySelected;
   final Widget? actions;
   final ValueChanged<bool>? onBeverageTabChanged;
@@ -280,6 +283,37 @@ class _AdminCatalogState extends State<AdminCatalog> {
 
   String _filter = 'All';
   String _query = '';
+  String _branch = '';
+  Widget _branchPicker() => StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+    stream: (widget.firestore ?? FirebaseFirestore.instance)
+        .collection('branches')
+        .snapshots(),
+    builder: (context, snapshot) => DropdownButtonFormField<String>(
+      initialValue: _branch,
+      decoration: const InputDecoration(
+        labelText: 'Inventory location',
+        border: OutlineInputBorder(),
+      ),
+      items: [
+        const DropdownMenuItem(value: '', child: Text('Main branch')),
+        for (final doc
+            in snapshot.data?.docs ??
+                <QueryDocumentSnapshot<Map<String, dynamic>>>[])
+          DropdownMenuItem(
+            value: doc.id,
+            child: Text('${doc.data()['name'] ?? doc.id}'),
+          ),
+      ],
+      onChanged: (value) {
+        setState(() => _branch = value ?? '');
+        widget.onBranchChanged?.call(_branch);
+      },
+    ),
+  );
+  bool _low(AdminCatalogEntry e) => e.stock != null && e.stock! <= 50;
+  bool _near(AdminCatalogEntry e) => catalogExpiryLabel(
+    e,
+  ).split('\n').any((date) => inventoryNearExpiry(date));
   String? _category;
   bool _showAddons = false;
 
@@ -355,14 +389,16 @@ class _AdminCatalogState extends State<AdminCatalog> {
                 .where(
                   (entry) =>
                       (filter == 'All' || entry.type == filter) &&
-                      (widget.type != 'Categories' ||
+                      (_query.isNotEmpty ||
+                          widget.type != 'Categories' ||
                           catalogCategoryKey(entry.source) == _category) &&
-                      '${entry.id} ${entry.name}'.toLowerCase().contains(
-                        _query,
-                      ),
+                      '${entry.id} ${entry.name} ${catalogExpiryLabel(entry)} ${_low(entry) ? 'low stock' : ''} ${_near(entry) ? 'near expiry expiring soon malapit ma expire' : ''}'
+                          .toLowerCase()
+                          .contains(_query),
                 )
                 .toList();
             final sections = <Widget>[
+              if (!widget.gallery) _branchPicker(),
               if (widget.gallery)
                 Wrap(
                   spacing: 8,
@@ -390,6 +426,30 @@ class _AdminCatalogState extends State<AdminCatalog> {
                 ),
               ),
               const SizedBox(height: 12),
+              if (!widget.gallery &&
+                  _branch.isEmpty &&
+                  inventoryAlertSearch(_query))
+                Wrap(
+                  spacing: 12,
+                  children: [
+                    Chip(
+                      avatar: const Icon(
+                        Icons.warning_amber,
+                        color: Colors.orange,
+                      ),
+                      label: Text('Low stock: ${entries.where(_low).length}'),
+                    ),
+                    Chip(
+                      avatar: const Icon(
+                        Icons.event_busy,
+                        color: Colors.deepOrange,
+                      ),
+                      label: Text(
+                        'Near expiry: ${entries.where(_near).length}',
+                      ),
+                    ),
+                  ],
+                ),
               Flex(
                 direction: MediaQuery.sizeOf(context).width < 600
                     ? Axis.vertical
@@ -470,7 +530,7 @@ class _AdminCatalogState extends State<AdminCatalog> {
                             ),
                     ),
                   ),
-                  if (widget.actions != null)
+                  if (widget.actions != null && _branch.isEmpty)
                     Align(
                       alignment: Alignment.centerRight,
                       child: widget.actions!,
@@ -490,7 +550,17 @@ class _AdminCatalogState extends State<AdminCatalog> {
                     ),
                   ),
                 ),
-              if (!widget.gallery && widget.type == 'Beverages' && _showAddons)
+              if (!widget.gallery && _branch.isNotEmpty)
+                BranchInventoryMonitor(
+                  key: ValueKey(_branch),
+                  branchId: _branch,
+                  type: widget.type,
+                  query: _query,
+                  firestore: widget.firestore,
+                )
+              else if (!widget.gallery &&
+                  widget.type == 'Beverages' &&
+                  _showAddons)
                 AdminAddonsTable(query: _query, firestore: widget.firestore)
               else if (entries.isEmpty)
                 const Padding(
@@ -618,13 +688,30 @@ class _AdminCatalogState extends State<AdminCatalog> {
           ),
         ],
       );
-      Widget status(AdminCatalogEntry entry) => Text(
-        entry.available ? 'Available' : 'Unavailable',
-        style: TextStyle(
-          fontSize: 12,
-          fontWeight: FontWeight.w600,
-          color: entry.available ? Colors.green.shade700 : Colors.red.shade700,
-        ),
+      Widget status(AdminCatalogEntry entry) => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (_low(entry))
+            const Icon(Icons.warning_amber, color: Colors.orange, size: 19),
+          if (_near(entry))
+            const Icon(Icons.event_busy, color: Colors.deepOrange, size: 19),
+          Text(
+            _low(entry)
+                ? 'Low stock'
+                : entry.available
+                ? 'Available'
+                : 'Unavailable',
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: _low(entry)
+                  ? Colors.orange.shade800
+                  : entry.available
+                  ? Colors.green.shade700
+                  : Colors.red.shade700,
+            ),
+          ),
+        ],
       );
       Widget cell(Widget child, [int flex = 1]) => Expanded(
         flex: flex,
@@ -663,6 +750,7 @@ class _AdminCatalogState extends State<AdminCatalog> {
                         children: [
                           cell(const Text('ID')),
                           cell(const Text('Item'), 3),
+                          cell(const Text('Cost price')),
                           if (beverages)
                             ...[
                               'Small',
@@ -709,6 +797,9 @@ class _AdminCatalogState extends State<AdminCatalog> {
                             spacing: 16,
                             runSpacing: 8,
                             children: [
+                              Text(
+                                'Cost: ₱${(num.tryParse('${entry.details['costPrice'] ?? entry.source['costPrice']}') ?? 0).toStringAsFixed(2)}',
+                              ),
                               if (beverages)
                                 ...['Small', 'Medium', 'Large'].map(
                                   (size) =>
@@ -748,6 +839,11 @@ class _AdminCatalogState extends State<AdminCatalog> {
                             ),
                           ),
                           cell(identity(entry), 3),
+                          cell(
+                            Text(
+                              '₱${(num.tryParse('${entry.details['costPrice'] ?? entry.source['costPrice']}') ?? 0).toStringAsFixed(2)}',
+                            ),
+                          ),
                           if (beverages)
                             ...['Small', 'Medium', 'Large'].map(
                               (size) => cell(

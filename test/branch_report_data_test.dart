@@ -4,22 +4,13 @@ import 'package:sales_tracking/widgets/admin_sales_overview.dart';
 
 void main() {
   test('branch analytics recognizes legacy refund records', () {
-    expect(
-      reportRefund({'total': -99}),
-      isTrue,
-    );
-    expect(
-      reportRefund({'status': 'refunded', 'total': 99}),
-      isTrue,
-    );
+    expect(reportRefund({'total': -99}), isTrue);
+    expect(reportRefund({'status': 'refunded', 'total': 99}), isTrue);
     expect(
       reportRefund({'salesId': 'R-20261006-1000-123', 'total': 99}),
       isTrue,
     );
-    expect(
-      reportRefund({'status': 'completed', 'total': 99}),
-      isFalse,
-    );
+    expect(reportRefund({'status': 'completed', 'total': 99}), isFalse);
   });
 
   test(
@@ -78,6 +69,41 @@ void main() {
     expect(items.single['allocated'], 10);
     expect(items.single['price'], 50);
   });
+  test(
+    'branch summary profit matches itemized profit when a sale has no items',
+    () {
+      final data = BranchReportData({
+        'completed_sales': [
+          {
+            'branchId': 'b',
+            'timestamp': '2026-10-04T10:00:00',
+            'total': 99,
+            'items': [
+              {
+                'id': 'cookie',
+                'name': 'Cookie',
+                'quantity': 1,
+                'price': 99,
+                'costPrice': 50,
+              },
+            ],
+          },
+          {
+            'branchId': 'b',
+            'timestamp': '2026-10-04T11:00:00',
+            'total': 220,
+            'items': <Map<String, dynamic>>[],
+          },
+        ],
+      });
+      final start = DateTime(2026, 10, 4);
+      final end = DateTime(2026, 10, 5);
+      final items = data.items('b', start, end);
+      expect(items, hasLength(1));
+      expect(items.single['profit'], 49);
+      expect(data.totals('b', start, end)['Total profit'], 49);
+    },
+  );
   test(
     'today uses configured 1200 instead of stale submitted 1000 and excludes GCash',
     () {

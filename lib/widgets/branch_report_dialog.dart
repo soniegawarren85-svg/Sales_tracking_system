@@ -1,7 +1,9 @@
 import 'horizontal_controls.dart';
+import '../services/branch_report_csv.dart';
 import 'report_item_history.dart';
 import 'item_sales_dialog.dart';
 import '../services/report_pdf_theme.dart';
+import '../services/report_print.dart';
 import '../services/number_format.dart';
 import 'branch_receipts_dialog.dart';
 import 'dart:async';
@@ -12,11 +14,9 @@ import 'package:flutter/foundation.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
-import 'package:printing/printing.dart';
 import '../services/branch_report_data.dart';
 import '../services/save_bytes.dart';
 import '../theme/app_colors.dart';
-import 'admin_recent_sales.dart';
 import 'admin_sales_overview.dart';
 import 'branch_analytics_bars.dart';
 import 'historical_cash_drawer.dart';
@@ -49,10 +49,12 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
   late Future<BranchReportData> _data =
       widget.reportData ?? BranchReportData.load();
   DateTime _day = DateUtils.dateOnly(DateTime.now());
+  DateTimeRange? _customRange;
   String _period = 'Day', _search = '', _payment = 'All', _status = 'All';
   bool _printing = false;
+  bool _allowRefunds = true;
   String _itemType = 'All', _rank = 'All';
-  String _tableType = 'Categories', _comparison = 'Complete';
+  String _tableType = 'All', _comparison = 'Complete';
   bool _tableAddons = false;
   Timer? _closingTimer;
   StreamSubscription<BranchReportData>? _liveSubscription;
@@ -94,7 +96,11 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
   }
 
   Map<String, double> reportTotals(BranchReportData data) {
-    final values = data.totals(widget.branchId!, range.$1, range.$2);
+    final values = data.allocationReportTotals(
+      widget.branchId!,
+      range.$1,
+      range.$2,
+    );
     if (_period == 'Day' && !DateUtils.isSameDay(_day, DateTime.now())) {
       values['Total cash drawer today'] = values['Closing cash drawer'] ?? 0;
     }
@@ -118,7 +124,12 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
       : label == 'Closing cash drawer' && !closingReady
       ? '--'
       : money(value);
-  (DateTime, DateTime) get range => branchReportRange(_day, _period);
+  (DateTime, DateTime) get range => _customRange == null
+      ? branchReportRange(_day, _period)
+      : (
+          _customRange!.start,
+          DateUtils.dateOnly(_customRange!.end).add(const Duration(days: 1)),
+        );
   String money(num value) => formatMoney(value);
   String get title => widget.branchId == null
       ? 'Branch sales report'
@@ -128,23 +139,15 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
             ? 'Weekly'
             : _period == 'Month'
             ? 'Monthly'
+            : _period == 'Range'
+            ? 'Date range'
             : 'Yearly'} Report';
   String get dates =>
       '${range.$1.month}/${range.$1.day}/${range.$1.year} - ${range.$2.subtract(const Duration(days: 1)).month}/${range.$2.subtract(const Duration(days: 1)).day}/${range.$2.year}';
   List<Map<String, dynamic>> filteredSales(BranchReportData data) =>
       data
           .sales(widget.branchId, range.$1, range.$2)
-          .where(
-            (row) =>
-                (_payment == 'All' ||
-                    '${row['paymentMode'] ?? row['paymentMethod'] ?? 'Cash'}'
-                            .toLowerCase() ==
-                        _payment.toLowerCase()) &&
-                (_search.isEmpty ||
-                    '${row['salesId']} ${row['staffName']} ${row['branchName']} ${row['items']}'
-                        .toLowerCase()
-                        .contains(_search)),
-          )
+          .where((row) => receiptMatchesSearch(row, _search))
           .toList()
         ..sort(
           (a, b) => (cashRecordDate(b['timestamp']) ?? DateTime(0)).compareTo(
@@ -196,7 +199,7 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
   }
 
   List<Map<String, dynamic>> visibleItems(BranchReportData data) => data
-      .items(widget.branchId!, range.$1, range.$2)
+      .currentAllocatedItems(widget.branchId!, range.$1, range.$2)
       .where(
         (row) =>
             _search.isEmpty ||
@@ -499,25 +502,27 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
     return pdf.save();
   }
 
-  Future<void> export(BranchReportData data, bool save) async {
+  Future<void> export(BranchReportData data) async {
     setState(() => _printing = true);
     try {
-      final bytes = await buildPdf(data);
-      if (save) {
+      final bytes = branchReportCsv(
+        data,
+        range.$1,
+        range.$2,
+        branchId: widget.branchId,
+      );
+      {
         final filename =
-            'branch-report-${_day.year}-${_day.month}-${_day.day}.pdf';
+            'branch-report-${_day.year}-${_day.month}-${_day.day}.csv';
         final path = kIsWeb
             ? filename
             : await FilePicker.platform.saveFile(
                 bytes: bytes,
-                fileName:
-                    'branch-report-${_day.year}-${_day.month}-${_day.day}.pdf',
+                fileName: filename,
                 type: FileType.custom,
-                allowedExtensions: ['pdf'],
+                allowedExtensions: ['csv'],
               );
         if (path != null) await saveBytes(path, bytes);
-      } else {
-        await Printing.layoutPdf(onLayout: (_) async => bytes);
       }
     } catch (error) {
       if (mounted)
@@ -526,6 +531,24 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
             content: Text('Unable to generate report. Please try again.'),
           ),
         );
+    } finally {
+      if (mounted) setState(() => _printing = false);
+    }
+  }
+
+  Future<void> printReport(BranchReportData data) async {
+    setState(() => _printing = true);
+    try {
+      await printReportDocument(
+        name: 'branch-report-${_day.year}-${_day.month}-${_day.day}.pdf',
+        build: () => buildPdf(data),
+      );
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Unable to print report: $error')),
+        );
+      }
     } finally {
       if (mounted) setState(() => _printing = false);
     }
@@ -580,16 +603,27 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
                     tooltip: 'Select report date',
                     icon: const Icon(Icons.calendar_month),
                     onPressed: () async {
-                      final picked = await showDatePicker(
+                      final picked = await showDateRangePicker(
                         context: context,
-                        initialDate: _day,
+                        initialDateRange:
+                            _customRange ??
+                            DateTimeRange(
+                              start: range.$1,
+                              end:
+                                  range.$2
+                                      .subtract(const Duration(days: 1))
+                                      .isAfter(DateTime.now())
+                                  ? DateUtils.dateOnly(DateTime.now())
+                                  : range.$2.subtract(const Duration(days: 1)),
+                            ),
                         firstDate: DateTime(2020),
                         lastDate: DateTime.now(),
                       );
                       if (picked != null && mounted)
                         setState(() {
-                          _day = picked;
-                          _period = 'Day';
+                          _day = picked.start;
+                          _customRange = picked;
+                          _period = 'Range';
                         });
                     },
                   ),
@@ -611,8 +645,10 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
                             (period) => ChoiceChip(
                               label: Text(period),
                               selected: _period == period,
-                              onSelected: (_) =>
-                                  setState(() => _period = period),
+                              onSelected: (_) => setState(() {
+                                _period = period;
+                                _customRange = null;
+                              }),
                             ),
                           )
                           .toList(),
@@ -646,6 +682,10 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
                   if (!snapshot.hasData)
                     return const Center(child: CircularProgressIndicator());
                   final data = snapshot.data!;
+                  _allowRefunds = data.refundsEnabled(widget.branchId);
+                  if (!_allowRefunds && _status == 'Refund') _status = 'All';
+                  if (!_allowRefunds && _comparison == 'Refund')
+                    _comparison = 'Complete';
                   return ListView(
                     padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
                     children: [
@@ -661,18 +701,20 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
                           OutlinedButton.icon(
                             onPressed: _printing
                                 ? null
-                                : () => export(data, true),
-                            icon: const Icon(Icons.picture_as_pdf),
-                            label: const Text('Save PDF'),
+                                : () => printReport(data),
+                            icon: const Icon(Icons.print),
+                            label: Text(
+                              _printing ? 'Preparing…' : 'Print report',
+                            ),
                           ),
                           FilledButton.icon(
-                            onPressed: _printing
-                                ? null
-                                : () => export(data, false),
-                            icon: const Icon(Icons.print_outlined),
-                            label: Text(
-                              _printing ? 'Generating...' : 'Print report',
+                            onPressed: _printing ? null : () => export(data),
+                            style: FilledButton.styleFrom(
+                              backgroundColor: Colors.green.shade700,
+                              foregroundColor: Colors.white,
                             ),
+                            icon: const Icon(Icons.table_view),
+                            label: const Text('Save CSV File'),
                           ),
                         ],
                       ),
@@ -780,7 +822,7 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
           ),
           Wrap(
             spacing: 10,
-            children: ['Complete', 'Refund', 'Reduce']
+            children: ['Complete', if (_allowRefunds) 'Refund', 'Reduce']
                 .map(
                   (value) => ChoiceChip(
                     label: Text(value),
@@ -950,6 +992,12 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
         TimeOfDay(hour: minutes ~/ 60, minute: minutes % 60).format(context);
     final totals = reportTotals(data);
     final items = visibleItems(data);
+    bool matchesTableType(Map<String, dynamic> row) =>
+        _tableType == 'All' ||
+        row['type'] == (_tableAddons ? 'Add-ons' : _tableType);
+    double tableSum(String key) => items
+        .where(matchesTableType)
+        .fold<double>(0, (sum, row) => sum + reportValue(row[key]));
     final chart = bars(data);
     final all = _status == 'All';
     final values = List.generate(
@@ -960,9 +1008,11 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
           ? chart.$3[i]
           : _status == 'Complete'
           ? chart.$1[i]
-          : chart.$1[i] + chart.$2[i] + chart.$3[i],
+          : chart.$1[i] + (_allowRefunds ? chart.$2[i] : 0) + chart.$3[i],
     );
-    final ranked = rankedItems(items);
+    final ranked = rankedItems(
+      data.items(widget.branchId!, range.$1, range.$2),
+    );
     final chartColor = _status == 'Refund'
         ? const Color(0xFFF9A825)
         : _status == 'Reduce'
@@ -973,32 +1023,34 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
         'Sales summary',
         Column(
           children: [
-            ...totals.entries.map(
-              (entry) => Container(
-                margin: const EdgeInsets.only(bottom: 8),
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: AppColors.surfaceTint,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        entry.key.replaceAll('discount', 'discounted'),
-                      ),
+            ...totals.entries
+                .where((entry) => _allowRefunds || entry.key != 'Refunds')
+                .map(
+                  (entry) => Container(
+                    margin: const EdgeInsets.only(bottom: 8),
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: AppColors.surfaceTint,
+                      borderRadius: BorderRadius.circular(12),
                     ),
-                    Text(
-                      summaryValue(entry.key, entry.value),
-                      style: const TextStyle(
-                        fontWeight: FontWeight.w800,
-                        color: AppColors.primaryDark,
-                      ),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            entry.key.replaceAll('discount', 'discounted'),
+                          ),
+                        ),
+                        Text(
+                          summaryValue(entry.key, entry.value),
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w800,
+                            color: AppColors.primaryDark,
+                          ),
+                        ),
+                      ],
                     ),
-                  ],
+                  ),
                 ),
-              ),
-            ),
             if (_period == 'Day')
               Text(
                 'Shop hours: ${timeLabel(openingMinutes)}–${timeLabel(_closingMinutes)}. Closing cash drawer is available from ${timeLabel(_closingMinutes)} and includes later cash orders that day. GCash is excluded.',
@@ -1033,9 +1085,17 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
         Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            if (items.any((item) => item['costRecorded'] == false))
+              const Padding(
+                padding: EdgeInsets.only(bottom: 12),
+                child: Text(
+                  'Some items have no recorded cost price. Set their costs in Inventory to complete the profit calculation.',
+                  style: TextStyle(color: Colors.deepOrange),
+                ),
+              ),
             Wrap(
               spacing: 10,
-              children: ['Categories', 'Bundle', 'Beverages']
+              children: ['All', 'Categories', 'Bundle', 'Beverages']
                   .map(
                     (type) => ChoiceChip(
                       label: Text(type),
@@ -1060,6 +1120,7 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
                 headingRowColor: const WidgetStatePropertyAll(AppColors.blush),
                 columns: [
                   'ID',
+                  'Allocation date',
                   'Item',
                   if (_tableType == 'Beverages' && !_tableAddons) ...[
                     'Small',
@@ -1069,93 +1130,200 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
                     'Unit price',
                   if (_tableType != 'Beverages') ...[
                     'Starting allocated',
+                    'Allocated in period',
                     'Remaining allocated',
                   ],
                   'Sales',
-                  'Sold',
-                  'Refund',
+                  'Sold items',
+                  'Cost price',
+                  'Profit per item',
+                  'Total profit',
+                  'Net profit',
+                  if (_allowRefunds) 'Refund',
                   'Reduce',
                   if (_tableType != 'Beverages') 'Expiration date',
                   'Status',
                   'Action',
                 ].map((label) => DataColumn(label: Text(label))).toList(),
-                rows: items
-                    .where(
-                      (row) =>
-                          row['type'] ==
-                          (_tableAddons ? 'Add-ons' : _tableType),
-                    )
-                    .map(
-                      (row) => DataRow(
-                        cells: [
-                          DataCell(Text('${row['id']}')),
-                          DataCell(Text('${row['name']}')),
-                          if (_tableType == 'Beverages' && !_tableAddons)
-                            ...['Small', 'Medium', 'Large'].map((size) {
-                              final option = (row['sizes'] as List? ?? [])
-                                  .whereType<Map>()
-                                  .where(
-                                    (s) =>
-                                        '${s['name']}'.toLowerCase() ==
-                                        size.toLowerCase(),
-                                  )
-                                  .firstOrNull;
-                              return DataCell(
-                                Text(
-                                  option == null
-                                      ? '?'
-                                      : money(
-                                          reportValue(row['basePrice']) +
-                                              reportValue(option['priceDelta']),
-                                        ),
-                                ),
-                              );
-                            })
-                          else
-                            DataCell(Text(money(reportValue(row['price'])))),
-                          ...[
-                            if (_tableType != 'Beverages') ...[
-                              'allocated',
-                              'remaining',
-                            ],
-                            'sales',
-                            'sold',
-                            'refund',
-                            'reduce',
-                          ].map(
-                            (key) => DataCell(
-                              Text(
-                                key == 'sales'
-                                    ? money(reportValue(row['sales']))
-                                    : row[key] == null
-                                    ? 'Not recorded'
-                                    : formatNumber(reportValue(row[key])),
-                              ),
-                            ),
-                          ),
-                          if (_tableType != 'Beverages')
+                rows: [
+                  ...items
+                      .where(matchesTableType)
+                      .map(
+                        (row) => DataRow(
+                          cells: [
+                            DataCell(Text('${row['id']}')),
                             DataCell(
                               Text(
-                                '${row['expirationDate'] ?? '?'}'
-                                    .split('T')
-                                    .first,
+                                row['allocationDate'] == null
+                                    ? 'Not recorded'
+                                    : MaterialLocalizations.of(
+                                        context,
+                                      ).formatShortDate(
+                                        row['allocationDate'] as DateTime,
+                                      ),
                               ),
                             ),
-                          DataCell(Text('${row['status']}')),
-                          DataCell(
-                            TextButton(
-                              onPressed: () => showDialog<void>(
-                                context: context,
-                                builder: (_) =>
-                                    ReportItemHistory(item: row, period: dates),
+                            DataCell(Text('${row['name']}')),
+                            if (_tableType == 'Beverages' && !_tableAddons)
+                              ...['Small', 'Medium', 'Large'].map((size) {
+                                final option = (row['sizes'] as List? ?? [])
+                                    .whereType<Map>()
+                                    .where(
+                                      (s) =>
+                                          '${s['name']}'.toLowerCase() ==
+                                          size.toLowerCase(),
+                                    )
+                                    .firstOrNull;
+                                return DataCell(
+                                  Text(
+                                    option == null
+                                        ? '?'
+                                        : money(
+                                            reportValue(row['basePrice']) +
+                                                reportValue(
+                                                  option['priceDelta'],
+                                                ),
+                                          ),
+                                  ),
+                                );
+                              })
+                            else
+                              DataCell(Text(money(reportValue(row['price'])))),
+                            ...[
+                              if (_tableType != 'Beverages') ...[
+                                'starting',
+                                'added',
+                                'remaining',
+                              ],
+                              'sales',
+                              'sold',
+                              'costPrice',
+                              'unitProfit',
+                              'profit',
+                              'netProfit',
+                              if (_allowRefunds) 'refund',
+                              'reduce',
+                            ].map(
+                              (key) => DataCell(
+                                Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    if (key == 'remaining' &&
+                                        row[key] != null &&
+                                        reportValue(row[key]) <= 50)
+                                      const Icon(
+                                        Icons.warning_amber,
+                                        color: Colors.orange,
+                                        size: 18,
+                                      ),
+                                    Text(
+                                      key == 'unitProfit' &&
+                                              _tableType == 'Beverages' &&
+                                              reportValue(row['sold']) == 0
+                                          ? 'Varies by size'
+                                          : [
+                                              'sales',
+                                              'costPrice',
+                                              'unitProfit',
+                                              'totalCost',
+                                              'profit',
+                                              'netProfit',
+                                            ].contains(key)
+                                          ? money(reportValue(row[key]))
+                                          : row[key] == null
+                                          ? 'Not recorded'
+                                          : formatNumber(reportValue(row[key])),
+                                    ),
+                                  ],
+                                ),
                               ),
-                              child: const Text('View history'),
                             ),
-                          ),
-                        ],
+                            if (_tableType != 'Beverages')
+                              DataCell(
+                                Text(
+                                  '${row['expirationDate'] ?? '?'}'
+                                      .split('T')
+                                      .first,
+                                ),
+                              ),
+                            DataCell(Text('${row['status']}')),
+                            DataCell(
+                              TextButton(
+                                onPressed: () => showDialog<void>(
+                                  context: context,
+                                  builder: (_) => ReportItemHistory(
+                                    item: row,
+                                    period: dates,
+                                    initialRange: DateTimeRange(
+                                      start: range.$1,
+                                      end: range.$2.subtract(
+                                        const Duration(days: 1),
+                                      ),
+                                    ),
+                                    loadRange: (selected) =>
+                                        data
+                                            .items(
+                                              widget.branchId!,
+                                              selected.start,
+                                              selected.end.add(
+                                                const Duration(days: 1),
+                                              ),
+                                            )
+                                            .where(
+                                              (item) => item['id'] == row['id'],
+                                            )
+                                            .firstOrNull ??
+                                        {
+                                          ...row,
+                                          'history': <Map<String, dynamic>>[],
+                                        },
+                                  ),
+                                ),
+                                child: const Text('View history'),
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
-                    )
-                    .toList(),
+                  DataRow(
+                    color: const WidgetStatePropertyAll(AppColors.blush),
+                    cells: [
+                      const DataCell(
+                        Text(
+                          'Total',
+                          style: TextStyle(fontWeight: FontWeight.bold),
+                        ),
+                      ),
+                      const DataCell(Text('')),
+                      const DataCell(Text('')),
+                      if (_tableType == 'Beverages' && !_tableAddons) ...[
+                        const DataCell(Text('')),
+                        const DataCell(Text('')),
+                        const DataCell(Text('')),
+                      ] else
+                        const DataCell(Text('')),
+                      if (_tableType != 'Beverages') ...[
+                        for (final key in ['starting', 'added', 'remaining'])
+                          DataCell(Text(formatNumber(tableSum(key)))),
+                      ],
+                      DataCell(Text(money(tableSum('sales')))),
+                      DataCell(Text(formatNumber(tableSum('sold')))),
+                      DataCell(
+                        Text(
+                          'Total cost: ${money(tableSum('allocationCost'))}',
+                        ),
+                      ),
+                      const DataCell(Text('')),
+                      DataCell(Text(money(tableSum('profit')))),
+                      DataCell(Text(money(tableSum('netProfit')))),
+                      if (_allowRefunds) const DataCell(Text('')),
+                      const DataCell(Text('')),
+                      if (_tableType != 'Beverages') const DataCell(Text('')),
+                      const DataCell(Text('')),
+                      const DataCell(Text('')),
+                    ],
+                  ),
+                ],
               ),
             ),
           ],
@@ -1177,7 +1345,7 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
                   onSelected: (_) => setState(() => _status = 'All'),
                 ),
                 for (final entry in [
-                  ('Refund', const Color(0xFFF9A825)),
+                  if (_allowRefunds) ('Refund', const Color(0xFFF9A825)),
                   ('Reduce', const Color(0xFF1976D2)),
                   ('Complete', const Color(0xFFE53935)),
                 ])
@@ -1206,13 +1374,14 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
                 fontWeight: FontWeight.w700,
               ),
             ),
-            Text(
-              'Total Refund: ${money(totals['Refunds']!)}',
-              style: const TextStyle(
-                color: Color(0xFFF9A825),
-                fontWeight: FontWeight.w700,
+            if (_allowRefunds)
+              Text(
+                'Total Refund: ${money(totals['Refunds']!)}',
+                style: const TextStyle(
+                  color: Color(0xFFF9A825),
+                  fontWeight: FontWeight.w700,
+                ),
               ),
-            ),
             const SizedBox(height: 16),
             SizedBox(
               height: 280,
@@ -1228,7 +1397,7 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
                       values: values,
                       labels: chart.$4,
                       colors: [chartColor, chartColor],
-                      refunds: all ? chart.$2 : null,
+                      refunds: all && _allowRefunds ? chart.$2 : null,
                       reduced: all ? chart.$3 : null,
                       selectedStatus: _status == 'Complete'
                           ? 'Completed'
@@ -1248,9 +1417,7 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
                 Text(
                   'Total loss: ${money(totals['Reduce']! + totals['Refunds']!)}',
                 ),
-                Text(
-                  'Total profit: ${money(totals['Total revenue']! - totals['Reduce']! - totals['Refunds']!)}',
-                ),
+                Text('Total profit: ${money(totals['Total profit'] ?? 0)}'),
               ],
             ),
             const Text(

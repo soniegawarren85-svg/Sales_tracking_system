@@ -1,3 +1,4 @@
+import 'screen_loading_region.dart';
 import '../services/refund_value.dart';
 import '../services/inventory_display_ids.dart';
 import 'package:sales_tracking/theme/app_colors.dart';
@@ -98,7 +99,6 @@ class _AdminRecentSalesState extends State<AdminRecentSales> {
             ],
           ),
           const SizedBox(height: 4),
-          Text('Today', style: const TextStyle(color: Colors.black54)),
           const SizedBox(height: 16),
           StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
             stream: _sales,
@@ -111,7 +111,7 @@ class _AdminRecentSalesState extends State<AdminRecentSales> {
                   ),
                 );
               if (!snapshot.hasData)
-                return const Center(child: CircularProgressIndicator());
+                return const Center(child: ScreenLoadingIndicator());
               final branch = BranchSession.instance.branchId;
               final docs =
                   snapshot.data!.docs
@@ -126,14 +126,33 @@ class _AdminRecentSalesState extends State<AdminRecentSales> {
                       ),
                     );
               if (docs.isEmpty)
-                return const Padding(
-                  padding: EdgeInsets.all(24),
-                  child: Text('No sales recorded today.'),
+                return const Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Today • ×0 receipts',
+                      style: TextStyle(color: Colors.black54),
+                    ),
+                    Padding(
+                      padding: EdgeInsets.all(24),
+                      child: Text('No sales recorded today.'),
+                    ),
+                  ],
                 );
               final pages = (docs.length / 5).ceil();
               final page = _page.clamp(0, pages - 1);
               return Column(
                 children: [
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Padding(
+                      padding: const EdgeInsets.only(bottom: 12),
+                      child: Text(
+                        'Today • ×${docs.length} receipts',
+                        style: const TextStyle(color: Colors.black54),
+                      ),
+                    ),
+                  ),
                   LayoutBuilder(
                     builder: (context, constraints) {
                       final width = constraints.maxWidth >= 760
@@ -277,23 +296,6 @@ class ReceiptDetails extends StatelessWidget {
   final String id;
   final Map<String, dynamic> _sale;
   Map<String, dynamic> get sale => refundValueRecord(_sale);
-  Widget _line(String label, dynamic value) => Padding(
-    padding: const EdgeInsets.symmetric(vertical: 5),
-    child: Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Expanded(
-          child: Text(label, style: const TextStyle(color: Colors.black54)),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: SelectableText(
-            value == null || '$value'.isEmpty ? 'Not recorded' : '$value',
-          ),
-        ),
-      ],
-    ),
-  );
   @override
   Widget build(BuildContext context) => AlertDialog(
     backgroundColor: AppColors.surface,
@@ -328,93 +330,7 @@ class ReceiptDetails extends StatelessWidget {
     content: SizedBox(
       width: 600,
       child: SingleChildScrollView(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            _line('Record ID', id),
-            _line('Date & time', _date(context, sale['timestamp'])),
-            _line('Status', saleStatus(sale)),
-            _ReceiptIdentity(sale: sale),
-            const Divider(),
-            ...saleItems(sale).map(
-              (item) => Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    '${item['isBundle'] == true
-                        ? 'Bundle'
-                        : item['isCoffee'] == true
-                        ? 'Beverages'
-                        : item['name'] ?? 'Item'}',
-                    style: const TextStyle(fontWeight: FontWeight.w700),
-                  ),
-                  if (item['variant'] != null ||
-                      item['isBundle'] == true ||
-                      item['isCoffee'] == true)
-                    _line(
-                      'Variant',
-                      (item['variant']?.toString().trim().isNotEmpty ?? false)
-                          ? item['variant']
-                          : item['name'],
-                    ),
-                  _ReceiptItemId(item: Map<String, dynamic>.from(item)),
-                  _line(
-                    'Quantity × unit price',
-                    '${item['quantity']} × ${_money(item['price'])}',
-                  ),
-                  _line(
-                    'Line total',
-                    _money(
-                      saleNumber(item['quantity']) * saleNumber(item['price']),
-                    ),
-                  ),
-                  if (saleNumber(item['refunded']) > 0)
-                    _line('Refunded quantity', item['refunded']),
-                  if (saleNumber(item['reducedQuantity']) > 0)
-                    _line('Reduced quantity', item['reducedQuantity']),
-                  const Divider(),
-                ],
-              ),
-            ),
-            _line('Subtotal', _money(sale['subtotal'])),
-            if (saleNumber(sale['discount']) != 0) ...[
-              _line('Discount', _money(sale['discount'])),
-              _line('Discount type', sale['discountType']),
-              _line('Discount ID', sale['discountProofId']),
-            ],
-            Container(
-              margin: const EdgeInsets.symmetric(vertical: 12),
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: AppColors.blush,
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: DefaultTextStyle(
-                style: const TextStyle(
-                  color: AppColors.primaryDeep,
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold,
-                ),
-                child: _line('Total', _money(sale['total'])),
-              ),
-            ),
-            _line(
-              saleStatus(sale) == 'Refund' ? 'Refund method' : 'Payment method',
-              sale['refundMethod'] == 'inventory'
-                  ? 'Inventory replacement'
-                  : sale['paymentMode'],
-            ),
-            if ('${sale['paymentMode']}'.trim().toLowerCase() == 'gcash')
-              _line('GCash transaction ID', sale['gcashTransactionId']),
-            _line('Amount paid', _money(sale['paidAmount'])),
-            _line('Change', _money(sale['change'])),
-            if (sale['reason'] != null || sale['refundReason'] != null)
-              _line('Refund reason', sale['reason'] ?? sale['refundReason']),
-            if (sale['originalSalesId'] != null)
-              _line('Original receipt', sale['originalSalesId']),
-          ],
-        ),
+        child: ReceiptInlineDetails(id: id, sale: sale),
       ),
     ),
     actions: [
@@ -446,6 +362,12 @@ class _ReceiptItemIdState extends State<_ReceiptItemId> {
   late final Future<String?> identifier = resolve();
   Future<String?> resolve() async {
     final item = widget.item;
+    final recorded = inventoryDisplayId(item);
+    if (recorded != '--' &&
+        (item['publicId'] != null ||
+            RegExp(r'^[A-Z]{2,5}-[0-9]+$').hasMatch(recorded)))
+      return recorded;
+    if (recorded == '--') return null;
     for (final collection in ['sales_inventory', 'coffee_products']) {
       final snapshot = await FirebaseFirestore.instance
           .collection(collection)
@@ -478,7 +400,7 @@ class _ReceiptItemIdState extends State<_ReceiptItemId> {
   Widget build(BuildContext context) => FutureBuilder<String?>(
     future: identifier,
     builder: (context, snapshot) =>
-        const ReceiptDetails(id: '', sale: {})._line(
+        const ReceiptInlineDetails(id: '', sale: {})._line(
           'Item ID',
           snapshot.connectionState == ConnectionState.waiting
               ? 'Loading...'
@@ -532,7 +454,7 @@ class _ReceiptIdentityState extends State<_ReceiptIdentity> {
     builder: (context, snapshot) {
       final resolved = snapshot.data ?? {};
       final sale = widget.sale;
-      final details = ReceiptDetails(id: '', sale: sale);
+      final details = ReceiptInlineDetails(id: '', sale: sale);
       return Column(
         children: [
           details._line(
@@ -562,5 +484,117 @@ class _ReceiptIdentityState extends State<_ReceiptIdentity> {
         ],
       );
     },
+  );
+}
+
+/// Full receipt details shared by branch and daily-report receipt lists.
+class ReceiptInlineDetails extends StatelessWidget {
+  const ReceiptInlineDetails({super.key, required this.id, required this.sale});
+  final String id;
+  final Map<String, dynamic> sale;
+  Widget _line(String label, dynamic value) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 5),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(
+          child: Text(label, style: const TextStyle(color: Colors.black54)),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: SelectableText(
+            value == null || '$value'.isEmpty ? 'Not recorded' : '$value',
+          ),
+        ),
+      ],
+    ),
+  );
+
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      _line('Record ID', id),
+      _line('Date & time', _date(context, sale['timestamp'])),
+      _line('Status', saleStatus(sale)),
+      _ReceiptIdentity(sale: sale),
+      const Divider(),
+      ...saleItems(sale).map(
+        (item) => Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '${item['isBundle'] == true
+                  ? 'Bundle'
+                  : item['isCoffee'] == true
+                  ? 'Beverages'
+                  : item['name'] ?? 'Item'}',
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
+            if (item['variant'] != null ||
+                item['isBundle'] == true ||
+                item['isCoffee'] == true)
+              _line(
+                'Variant',
+                (item['variant']?.toString().trim().isNotEmpty ?? false)
+                    ? item['variant']
+                    : item['name'],
+              ),
+            _ReceiptItemId(item: Map<String, dynamic>.from(item)),
+            _line(
+              'Quantity × unit price',
+              '${item['quantity']} × ${_money(item['price'])}',
+            ),
+            _line(
+              'Line total',
+              _money(saleNumber(item['quantity']) * saleNumber(item['price'])),
+            ),
+            if (saleNumber(item['refunded']) > 0)
+              _line('Refunded quantity', item['refunded']),
+            if (saleNumber(item['reducedQuantity']) > 0)
+              _line('Reduced quantity', item['reducedQuantity']),
+            const Divider(),
+          ],
+        ),
+      ),
+      _line('Subtotal', _money(sale['subtotal'])),
+      if (saleNumber(sale['tax']) != 0) _line('VAT / tax', _money(sale['tax'])),
+      if (saleNumber(sale['discount']) != 0) ...[
+        _line('Discount', _money(sale['discount'])),
+        _line('Discount type', sale['discountType']),
+        _line('Discount ID', sale['discountProofId']),
+      ],
+      Container(
+        margin: const EdgeInsets.symmetric(vertical: 12),
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: AppColors.blush,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: DefaultTextStyle(
+          style: const TextStyle(
+            color: AppColors.primaryDeep,
+            fontSize: 20,
+            fontWeight: FontWeight.bold,
+          ),
+          child: _line('Total', _money(sale['total'])),
+        ),
+      ),
+      _line(
+        saleStatus(sale) == 'Refund' ? 'Refund method' : 'Payment method',
+        sale['refundMethod'] == 'inventory'
+            ? 'Inventory replacement'
+            : sale['paymentMode'],
+      ),
+      if ('${sale['paymentMode']}'.trim().toLowerCase() == 'gcash')
+        _line('GCash transaction ID', sale['gcashTransactionId']),
+      _line('Amount paid', _money(sale['paidAmount'])),
+      _line('Change', _money(sale['change'])),
+      if (sale['reason'] != null || sale['refundReason'] != null)
+        _line('Refund reason', sale['reason'] ?? sale['refundReason']),
+      if (sale['originalSalesId'] != null)
+        _line('Original receipt', sale['originalSalesId']),
+    ],
   );
 }

@@ -6,6 +6,7 @@ import '../services/staff_sales_history_scope.dart';
 import '../services/public_item_id.dart';
 import '../widgets/staff_refund_dialog.dart';
 import '../services/staff_login_session.dart';
+import '../widgets/staff_branch_label.dart';
 // dashboard_page.dart
 
 import 'dart:async';
@@ -2922,7 +2923,18 @@ class _Header extends StatelessWidget {
                         const SizedBox(width: 14),
 
                         // Brand name + tagline
-                        Expanded(child: _BrandTitle()),
+                        Expanded(
+                          child: _BrandTitle(
+                            branchIds: (data['branchIds'] as List? ?? [])
+                                .map((id) => id.toString())
+                                .where((id) => id.trim().isNotEmpty)
+                                .toList(),
+                            staffIdentifiers: [uid, data['staffId']?.toString()]
+                                .whereType<String>()
+                                .where((id) => id.trim().isNotEmpty)
+                                .toList(),
+                          ),
+                        ),
 
                         // Message button
                         Row(
@@ -3082,7 +3094,10 @@ class _LogoFrame extends StatelessWidget {
 
 // ── Brand title ───────────────────────────────────────────────────────────────
 class _BrandTitle extends StatelessWidget {
-  const _BrandTitle();
+  final List<String> branchIds;
+  final List<String> staffIdentifiers;
+
+  const _BrandTitle({required this.branchIds, required this.staffIdentifiers});
 
   @override
   Widget build(BuildContext context) {
@@ -3127,6 +3142,10 @@ class _BrandTitle extends StatelessWidget {
               ),
             ),
           ],
+        ),
+        StaffBranchLabel(
+          branchIds: branchIds,
+          staffIdentifiers: staffIdentifiers,
         ),
       ],
     );

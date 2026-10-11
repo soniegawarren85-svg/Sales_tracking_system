@@ -33,9 +33,9 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Checklist'));
     await tester.pumpAndSettle();
-    expect(find.text('No matching transactions.'), findsOneWidget);
-    await tester.tap(find.text('View pending'));
-    await tester.pumpAndSettle();
+    expect(find.textContaining('pending delivery'), findsOneWidget);
+    expect(find.textContaining('Received delivery'), findsNothing);
+    expect(find.byTooltip('Filter by date range'), findsNothing);
     expect(find.textContaining('pending delivery'), findsOneWidget);
     expect(find.textContaining('Received delivery'), findsNothing);
     expect(find.text('Confirm Received'), findsOneWidget);
@@ -52,9 +52,7 @@ void main() {
       'status': 'Received',
       'name': 'Yesterday allocation',
       'createdAt': Timestamp.fromDate(now.subtract(const Duration(days: 1))),
-      'assignedAt': Timestamp.fromDate(
-        now.subtract(const Duration(days: 1)),
-      ),
+      'assignedAt': Timestamp.fromDate(now.subtract(const Duration(days: 1))),
       'confirmedAt': Timestamp.fromDate(now),
     });
     await tester.pumpWidget(
@@ -74,10 +72,15 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.textContaining('Yesterday allocation'), findsOneWidget);
     expect(find.textContaining('Received:'), findsOneWidget);
+    await tester.tap(find.byTooltip('Filter by date range'));
+    await tester.pumpAndSettle();
+    expect(find.byType(DateRangePickerDialog), findsOneWidget);
+    await tester.tap(find.byTooltip('Close'));
+    await tester.pumpAndSettle();
     expect(find.textContaining('Assigned:'), findsNothing);
     expect(tester.takeException(), isNull);
   });
-  testWidgets('older returns stay in pending view and accept all spans dates', (
+  testWidgets('older returns remain visible and batch acceptance spans dates', (
     tester,
   ) async {
     SharedPreferences.setMockInitialValues({
@@ -115,15 +118,10 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Returns'));
     await tester.pumpAndSettle();
-    expect(find.text('Accept'), findsNothing);
-    expect(find.text('View pending'), findsNothing);
-    expect(find.byTooltip('View pending returns'), findsOneWidget);
-    expect(find.text('Accept all (2)'), findsNothing);
-    await tester.tap(find.byTooltip('View pending returns'));
-    await tester.pumpAndSettle();
-    expect(find.text('Pending returns'), findsOneWidget);
-    expect(find.text('Accept all (2)'), findsOneWidget);
-    await tester.tap(find.text('Accept all (2)'));
+    expect(find.text('Accept'), findsOneWidget);
+    expect(find.byTooltip('Filter by date range'), findsNothing);
+    await tester.ensureVisible(find.text('Accept'));
+    await tester.tap(find.text('Accept'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Proceed'));
     await tester.pumpAndSettle();

@@ -12,6 +12,7 @@ import io.flutter.plugin.common.MethodChannel
 import java.io.IOException
 import java.util.UUID
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 
 class MainActivity : FlutterActivity() {
     private val channelName = "com.example.sales_tracking/thermal_printer"
@@ -110,8 +111,24 @@ class MainActivity : FlutterActivity() {
         for ((mode, createSocket) in socketFactories) {
             var candidate: BluetoothSocket? = null
             try {
-                candidate = createSocket()
-                candidate.connect()
+                val socket = createSocket()
+                candidate = socket
+                val finished = AtomicBoolean(false)
+                val cancelConnect = Runnable {
+                    if (finished.compareAndSet(false, true)) {
+                        try { socket.close() } catch (_: IOException) { }
+                    }
+                }
+                mainHandler.postDelayed(cancelConnect, 2000)
+                try {
+                    socket.connect()
+                    if (!finished.compareAndSet(false, true)) {
+                        throw IOException("Printer connection timed out.")
+                    }
+                } finally {
+                    finished.set(true)
+                    mainHandler.removeCallbacks(cancelConnect)
+                }
                 if (candidate.isConnected) {
                     printerSocket = candidate
                     return true

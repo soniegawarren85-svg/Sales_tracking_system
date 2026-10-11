@@ -306,7 +306,7 @@ class ThermalPrinterService {
     bytes.addAll(generator.reset());
     bytes.addAll(
       generator.text(
-        'SALES TRACKING SYSTEM',
+        "Angel'z Bites Cupcakes",
         styles: const PosStyles(
           align: PosAlign.center,
           bold: true,
@@ -328,6 +328,11 @@ class ThermalPrinterService {
       ),
     );
     bytes.addAll(generator.text('Date: ${_formatDate(timestamp)}'));
+    bytes.addAll(
+      generator.text(
+        'Staff ID: ${_ascii(receipt['staffPublicId']?.toString() ?? 'Not recorded')}',
+      ),
+    );
     bytes.addAll(
       generator.text(
         'Cashier: ${_ascii(receipt['staffName']?.toString() ?? 'Staff')}',
@@ -367,11 +372,18 @@ class ThermalPrinterService {
       );
       bytes.addAll(_receiptRow(generator, discountType, -discount));
     }
+    final tax = _number(receipt['tax']);
+    if (tax > 0) {
+      final taxRate = _number(receipt['taxRate']) * 100;
+      bytes.addAll(
+        _receiptRow(generator, 'VAT (${taxRate.toStringAsFixed(0)}%)', tax),
+      );
+    }
     bytes.addAll(_receiptRow(generator, 'TOTAL', total, bold: true));
     bytes.addAll(generator.text('Payment: ${_ascii(paymentMethod)}'));
     if (paymentMethod.toLowerCase() == 'cash') {
       bytes.addAll(
-        _receiptRow(generator, 'Received', _number(receipt['paidAmount'])),
+        _receiptRow(generator, 'Cash tendered', _number(receipt['paidAmount'])),
       );
       bytes.addAll(
         _receiptRow(generator, 'Change', _number(receipt['change'])),

@@ -28,6 +28,7 @@ List<Map<String, dynamic>> bundleBeverageSizes(
           'sourceCollection': 'coffee_products',
           'publicId': data['publicId'] ?? data['coffeeId'],
           'isCoffee': true,
+          'costPrice': data['costPrice'] ?? 0,
           'price':
               (num.tryParse('${data['basePrice']}') ?? 0) +
               (num.tryParse('${size['priceDelta']}') ?? 0),
@@ -98,12 +99,23 @@ class BundleStockService {
   }) async {
     if (quantity < 1 || quantity > 100)
       throw ArgumentError('Add between 1 and 100 bundles at a time.');
-    final candidates = await db.collection('sales_inventory').get();
+
     final ref = db.collection('sales_inventory').doc(id);
     final batchId = db.collection('sales_inventory').doc().id;
     final initial = newBundle ?? (await ref.get()).data();
     if (initial == null) throw StateError('Bundle no longer exists.');
     final requested = ingredients ?? bundleRows(initial['items']);
+    final needsLegacyLookup = requested.any(
+      (item) =>
+          ![
+            'coffee_products',
+            'coffee_addons',
+          ].contains(item['sourceCollection']) &&
+          '${item['sourceInventoryId'] ?? ''}'.isEmpty,
+    );
+    final candidates = needsLegacyLookup
+        ? (await db.collection('sales_inventory').get()).docs
+        : <QueryDocumentSnapshot<Map<String, dynamic>>>[];
     final selectedSources = <String>{};
     for (final ingredient in requested) {
       if ([
@@ -116,7 +128,7 @@ class BundleStockService {
         selectedSources.add(sourceId);
         continue;
       }
-      for (final candidate in candidates.docs) {
+      for (final candidate in candidates) {
         if (candidate.data()['isBundle'] == true ||
             candidate.data()['isDeleted'] == true)
           continue;
@@ -146,10 +158,26 @@ class BundleStockService {
       final recipe = requested;
       if (recipe.isEmpty) throw StateError('This bundle has no ingredients.');
       final sources = <String, Map<String, dynamic>>{};
-      for (final sourceId in selectedSources) {
-        final current = (await tx.get(
+      final ingredientRefs = <DocumentReference<Map<String, dynamic>>>{
+        for (final sourceId in selectedSources)
           db.collection('sales_inventory').doc(sourceId),
-        )).data();
+        for (final item in recipe.where(
+          (item) => [
+            'coffee_products',
+            'coffee_addons',
+          ].contains(item['sourceCollection']),
+        ))
+          db
+              .collection('${item['sourceCollection']}')
+              .doc('${item['sourceInventoryId']}'),
+      };
+      final ingredientSnapshots = await Future.wait(ingredientRefs.map(tx.get));
+      final ingredientData = {
+        for (final snapshot in ingredientSnapshots)
+          snapshot.reference.path: snapshot.data(),
+      };
+      for (final sourceId in selectedSources) {
+        final current = ingredientData['sales_inventory/$sourceId'];
         if (current != null && current['isDeleted'] != true)
           sources[sourceId] = current;
       }
@@ -165,9 +193,7 @@ class BundleStockService {
         (item) => item['sourceCollection'] == 'coffee_addons',
       )) {
         final addonId = '${ingredient['sourceInventoryId']}';
-        final data = (await tx.get(
-          db.collection('coffee_addons').doc(addonId),
-        )).data();
+        final data = ingredientData['coffee_addons/$addonId'];
         if (data == null ||
             data['isDeleted'] == true ||
             data['isAvailable'] == false ||
@@ -180,9 +206,7 @@ class BundleStockService {
       )) {
         final coffeeId = '${ingredient['sourceInventoryId']}';
         if (coffees.containsKey(coffeeId)) continue;
-        final data = (await tx.get(
-          db.collection('coffee_products').doc(coffeeId),
-        )).data();
+        final data = ingredientData['coffee_products/$coffeeId'];
         if (data == null) throw StateError('Beverage no longer exists.');
         coffees[coffeeId] = data;
       }
@@ -194,6 +218,7 @@ class BundleStockService {
           fresh.add({
             ...ingredient,
             'name': data['name'],
+            'costPrice': data['costPrice'] ?? 0,
             'publicId': data['publicId'],
             'isAddon': true,
             'expirationDate': data['expirationDate'],
@@ -281,6 +306,7 @@ class BundleStockService {
           'name': item['name'],
           'publicId': item['publicId'],
           'price': item['price'] ?? 0,
+          'costPrice': item['costPrice'] ?? 0,
           'parentName': sources[match.$1]!['name'],
           'sourceInventoryId': match.$1,
           'variantId': item['id'] ?? item['publicId'] ?? item['name'],
@@ -352,6 +378,13 @@ class BundleStockService {
       final saved = <String, dynamic>{
         if (newBundle != null) ...newBundle,
         ...changes,
+        'costPrice': fresh.fold<double>(
+          0,
+          (sum, item) =>
+              sum +
+              (num.tryParse('${item['costPrice']}')?.toDouble() ?? 0) *
+                  bundleQuantity(item['quantity']),
+        ),
         'bundleCount': bundleQuantity(bundle['bundleCount']) + quantity,
         'bundleInstances': instances,
         'items': fresh.map((item) => {...item}..remove('remaining')).toList(),

@@ -30,7 +30,7 @@ class ChecklistReturnDialog extends StatefulWidget {
 class _ChecklistReturnDialogState extends State<ChecklistReturnDialog> {
   final options = <Map<String, dynamic>>[];
   final branches = <String, String>{};
-  String source = 'All', error = '';
+  String error = '';
   String? branch;
   bool loading = true, saving = false;
   String? batchId;
@@ -457,45 +457,14 @@ class _ChecklistReturnDialogState extends State<ChecklistReturnDialog> {
     final visible = options
         .where(
           (o) =>
-              (widget.selectedDay == null ||
-                  DateUtils.isSameDay(
-                    o['date'] is Timestamp
-                        ? (o['date'] as Timestamp).toDate()
-                        : o['date'] is DateTime
-                        ? o['date'] as DateTime
-                        : DateTime.tryParse('${o['date']}'),
-                    widget.selectedDay,
-                  )) &&
-              (source == 'All' || o['collection'] == source) &&
-              '${o['label']} ${o['reason']}'.toLowerCase().contains(
-                widget.searchText.toLowerCase(),
-              ),
+              "${o['label']} ${o['reason']} ${o['collection'] == 'completed_sales' ? 'Refund' : 'Reduce'}"
+                  .toLowerCase()
+                  .contains(widget.searchText.toLowerCase()),
         )
         .toList();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12),
-          child: Wrap(
-            alignment: WrapAlignment.start,
-            spacing: 8,
-            children: [
-              for (final entry in {
-                'All': 'All',
-                'stock_adjustments': 'Reduce',
-                'completed_sales': 'Refund',
-              }.entries)
-                ChoiceChip(
-                  label: Text(entry.value),
-                  selected: source == entry.key,
-                  onSelected: saving
-                      ? null
-                      : (_) => setState(() => source = entry.key),
-                ),
-            ],
-          ),
-        ),
         if (branches.length > 1 && visible.any((o) => o['branchId'] == null))
           Padding(
             padding: const EdgeInsets.all(8),

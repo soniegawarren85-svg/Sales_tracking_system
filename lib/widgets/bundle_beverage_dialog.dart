@@ -19,7 +19,7 @@ List<Map<String, dynamic>> bundleDrinkServings(Map<String, dynamic> bundle) {
         ])
           key: part[key],
         'serving': i + 1,
-        'sugarLevel': '50%',
+        'sugarLevel': '0%',
         'addons': <Map<String, dynamic>>[],
       });
     }

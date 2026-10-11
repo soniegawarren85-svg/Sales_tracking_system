@@ -5,7 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:sales_tracking/widgets/branch_allocation_history.dart';
 
 void main() {
-  testWidgets('history defaults to today and uses a single-day picker', (
+  testWidgets('history defaults to today and filters an inclusive date range', (
     tester,
   ) async {
     final db = FakeFirebaseFirestore();
@@ -29,15 +29,16 @@ void main() {
     expect(find.byType(InputChip), findsNothing);
     await tester.tap(find.byTooltip('Filter by date'));
     await tester.pumpAndSettle();
-    expect(find.byType(DatePickerDialog), findsOneWidget);
-    await tester.tap(find.byTooltip('Switch to input'));
-    await tester.pumpAndSettle();
+    expect(find.byType(DateRangePickerDialog), findsOneWidget);
     final yesterday = DateTime.now().subtract(const Duration(days: 1));
-    await tester.enterText(
-      find.byType(TextField).last,
-      '${yesterday.month}/${yesterday.day}/${yesterday.year}',
-    );
-    await tester.tap(find.text('OK'));
+    tester
+        .state<NavigatorState>(find.byType(Navigator).last)
+        .pop(
+          DateTimeRange(
+            start: DateUtils.dateOnly(yesterday),
+            end: DateUtils.dateOnly(DateTime.now()),
+          ),
+        );
     await tester.pumpAndSettle();
     expect(find.text('Qty: 5 allocated units'), findsOneWidget);
     expect(tester.takeException(), isNull);

@@ -25,6 +25,10 @@ class _ReportSalesTimelineState extends State<ReportSalesTimeline> {
   Widget build(BuildContext context) {
     final branches = widget.data.rows('branches');
     if (!branches.any((b) => b['_id'] == branch)) branch = null;
+    final allowRefunds = branch == null
+        ? branches.any((b) => widget.data.refundsEnabled('${b['_id']}'))
+        : widget.data.refundsEnabled(branch);
+    if (!allowRefunds && status == 'Refund') status = 'All';
     final hours = widget.data.hours(branch, widget.start);
     final points = widget.period == 'Day'
         ? hours.length
@@ -89,7 +93,7 @@ class _ReportSalesTimelineState extends State<ReportSalesTimeline> {
           ? refunds[i]
           : status == 'Reduced'
           ? reduced[i]
-          : completed[i] + refunds[i] + reduced[i],
+          : completed[i] + (allowRefunds ? refunds[i] : 0) + reduced[i],
     );
     return Card(
       color: Colors.white,
@@ -98,8 +102,10 @@ class _ReportSalesTimelineState extends State<ReportSalesTimeline> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
-              'Sales, refunds & reductions',
+            Text(
+              allowRefunds
+                  ? 'Sales, refunds & reductions'
+                  : 'Sales & reductions',
               style: TextStyle(
                 color: AppColors.primaryDeep,
                 fontSize: 20,
@@ -124,15 +130,16 @@ class _ReportSalesTimelineState extends State<ReportSalesTimeline> {
             ),
             Wrap(
               spacing: 8,
-              children: ['All', 'Completed', 'Refund', 'Reduced']
-                  .map(
-                    (s) => ChoiceChip(
-                      label: Text(s),
-                      selected: status == s,
-                      onSelected: (_) => setState(() => status = s),
-                    ),
-                  )
-                  .toList(),
+              children:
+                  ['All', 'Completed', if (allowRefunds) 'Refund', 'Reduced']
+                      .map(
+                        (s) => ChoiceChip(
+                          label: Text(s),
+                          selected: status == s,
+                          onSelected: (_) => setState(() => status = s),
+                        ),
+                      )
+                      .toList(),
             ),
             const SizedBox(height: 12),
             Wrap(
@@ -143,10 +150,11 @@ class _ReportSalesTimelineState extends State<ReportSalesTimeline> {
                   'Sales: ₱${completed.fold<double>(0, (a, b) => a + b).toStringAsFixed(2)}',
                   style: const TextStyle(color: AppColors.primaryDark),
                 ),
-                Text(
-                  'Refunds: ₱${refunds.fold<double>(0, (a, b) => a + b).toStringAsFixed(2)}',
-                  style: const TextStyle(color: Color(0xFF9C6500)),
-                ),
+                if (allowRefunds)
+                  Text(
+                    'Refunds: ₱${refunds.fold<double>(0, (a, b) => a + b).toStringAsFixed(2)}',
+                    style: const TextStyle(color: Color(0xFF9C6500)),
+                  ),
                 Text(
                   'Reduced stock value: ₱${reduced.fold<double>(0, (a, b) => a + b).toStringAsFixed(2)}',
                   style: const TextStyle(color: Color(0xFF1976D2)),
@@ -166,7 +174,7 @@ class _ReportSalesTimelineState extends State<ReportSalesTimeline> {
                     values: values,
                     labels: labels,
                     selectedStatus: status,
-                    refunds: status == 'All' ? refunds : null,
+                    refunds: status == 'All' && allowRefunds ? refunds : null,
                     reduced: status == 'All' ? reduced : null,
                     colors: status == 'Refund'
                         ? const [Color(0xFFF9A825), Color(0xFFF9A825)]

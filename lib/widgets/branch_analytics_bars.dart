@@ -184,7 +184,12 @@ class _BranchAnalyticsBarsState extends State<BranchAnalyticsBars> {
                                                       );
                                               final details =
                                                   selectedStatus == 'All'
-                                                  ? 'Completed: ₱${completed.toStringAsFixed(2)}\nRefund: ₱${(refunds?[index] ?? 0).toStringAsFixed(2)}\nReduced: ₱${(reduced?[index] ?? 0).toStringAsFixed(2)}'
+                                                  ? [
+                                                      'Completed: ₱${completed.toStringAsFixed(2)}',
+                                                      if (refunds != null)
+                                                        'Refund: ₱${refunds![index].toStringAsFixed(2)}',
+                                                      'Reduced: ₱${(reduced?[index] ?? 0).toStringAsFixed(2)}',
+                                                    ].join('\n')
                                                   : '$selectedStatus: ₱${value.toStringAsFixed(2)}';
                                               showDialog<void>(
                                                 context: context,

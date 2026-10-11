@@ -216,7 +216,7 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(find.text('Starting fund'), findsOneWidget);
-    expect(find.text('Cash drawer'), findsOneWidget);
+    expect(find.text('Closing cash drawer'), findsOneWidget);
     for (final period in ['Week', 'Month', 'Year', 'Day']) {
       final chip = find.widgetWithText(ChoiceChip, period);
       await tester.ensureVisible(chip);
@@ -227,7 +227,7 @@ void main() {
         period == 'Day' ? findsOneWidget : findsNothing,
       );
       expect(
-        find.text('Cash drawer'),
+        find.text('Closing cash drawer'),
         period == 'Day' ? findsOneWidget : findsNothing,
       );
     }

@@ -14,6 +14,18 @@ const staffPermissions = {
   'allowReceiptHistory': 'View receipt history',
   'allowDiscounts': 'Apply discounts',
 };
+const allBranchesSelection = '__all_branches__';
+const _branchScopedKeys = [
+  'discounts',
+  'payments',
+  'discountsEnabled',
+  'taxEnabled',
+  'taxClassification',
+  'allowRefunds',
+  'allowHoldOrders',
+  'allowReceiptHistory',
+  'allowDiscounts',
+];
 DocumentReference<Map<String, dynamic>> get transactionSettings =>
     FirebaseFirestore.instance.collection('admin_settings').doc('transactions');
 
@@ -22,10 +34,46 @@ Map<String, dynamic> settingsForBranch(
   String branchId,
 ) {
   final branchSettings = settings['branchSettings'];
-  if (branchId.isEmpty || branchSettings is! Map) return settings;
-  final scopedSettings = branchSettings[branchId];
-  if (scopedSettings is! Map) return settings;
-  return {...settings, ...Map<String, dynamic>.from(scopedSettings)};
+  if (branchId.isEmpty) return settings;
+  final scopedSettings = branchSettings is Map
+      ? branchSettings[branchId]
+      : null;
+  final scoped = scopedSettings is Map
+      ? Map<String, dynamic>.from(scopedSettings)
+      : <String, dynamic>{};
+  final result = {...settings, ...scoped};
+  for (final key in _branchScopedKeys) {
+    if (scoped.containsKey(key)) continue;
+    if (key == 'discounts') {
+      result[key] = defaultDiscounts;
+    } else if (key == 'payments') {
+      result[key] = defaultPayments;
+    } else if (key == 'taxEnabled') {
+      result[key] = false;
+    } else if (key == 'taxClassification') {
+      result[key] = 'nonVat';
+    } else {
+      result[key] = true;
+    }
+  }
+  return result;
+}
+
+double transactionTaxRate(Map<String, dynamic> settings) {
+  if (settings['taxEnabled'] != true ||
+      settings['taxClassification'] != 'vat') {
+    return 0;
+  }
+  return 0.12;
+}
+
+double transactionTaxAmount(
+  Map<String, dynamic> settings, {
+  required double taxableAmount,
+}) {
+  final rate = transactionTaxRate(settings);
+  if (rate == 0) return 0;
+  return taxableAmount - taxableAmount / (1 + rate);
 }
 
 List<Map<String, dynamic>> settingRows(Map<String, dynamic> data, String key) =>

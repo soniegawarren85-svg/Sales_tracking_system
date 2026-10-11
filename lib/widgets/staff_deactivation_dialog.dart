@@ -9,6 +9,7 @@ class StaffDeactivationDialog extends StatefulWidget {
 }
 
 class _StaffDeactivationDialogState extends State<StaffDeactivationDialog> {
+  String? selectedReason;
   final reason = TextEditingController();
   @override
   void dispose() {
@@ -26,13 +27,32 @@ class _StaffDeactivationDialogState extends State<StaffDeactivationDialog> {
         children: [
           Text('Deactivate ${widget.name}? Enter a reason before confirming.'),
           const SizedBox(height: 16),
-          TextField(
-            controller: reason,
-            onChanged: (_) => setState(() {}),
-            maxLines: 3,
-            maxLength: 500,
+          DropdownButtonFormField<String>(
+            initialValue: selectedReason,
             decoration: const InputDecoration(labelText: 'Reason'),
+            items:
+                const [
+                      'Resigned',
+                      'End of contract',
+                      'Extended absence',
+                      'Policy violation',
+                      'Other',
+                    ]
+                    .map(
+                      (value) =>
+                          DropdownMenuItem(value: value, child: Text(value)),
+                    )
+                    .toList(),
+            onChanged: (value) => setState(() => selectedReason = value),
           ),
+          if (selectedReason == 'Other')
+            TextField(
+              controller: reason,
+              onChanged: (_) => setState(() {}),
+              maxLines: 3,
+              maxLength: 500,
+              decoration: const InputDecoration(labelText: 'Other reason'),
+            ),
         ],
       ),
     ),
@@ -47,9 +67,14 @@ class _StaffDeactivationDialogState extends State<StaffDeactivationDialog> {
             borderRadius: BorderRadius.circular(12),
           ),
         ),
-        onPressed: reason.text.trim().isEmpty
+        onPressed:
+            selectedReason == null ||
+                (selectedReason == 'Other' && reason.text.trim().isEmpty)
             ? null
-            : () => Navigator.pop(context, reason.text.trim()),
+            : () => Navigator.pop(
+                context,
+                selectedReason == 'Other' ? reason.text.trim() : selectedReason,
+              ),
         child: const Text('Deactivate'),
       ),
     ],

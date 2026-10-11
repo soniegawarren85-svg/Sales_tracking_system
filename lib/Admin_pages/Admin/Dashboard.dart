@@ -1,3 +1,4 @@
+import '../../widgets/screen_loading_region.dart';
 import 'package:sales_tracking/widgets/top_edge_refresh.dart';
 import '../../widgets/admin_message_preview.dart';
 import '../../widgets/admin_profile_label.dart';
@@ -184,23 +185,25 @@ class _AdminDashboardState extends State<AdminDashboard>
           children: [
             if (MediaQuery.sizeOf(context).width >= 600) _buildSidebar(),
             Expanded(
-              child: AnimatedSwitcher(
-                duration: const Duration(milliseconds: 320),
-                switchInCurve: Curves.easeOut,
-                switchOutCurve: Curves.easeIn,
-                transitionBuilder: (child, animation) => FadeTransition(
-                  opacity: animation,
-                  child: SlideTransition(
-                    position: Tween<Offset>(
-                      begin: const Offset(0, 0.02),
-                      end: Offset.zero,
-                    ).animate(animation),
-                    child: child,
+              child: ScreenLoadingRegion(
+                child: AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 320),
+                  switchInCurve: Curves.easeOut,
+                  switchOutCurve: Curves.easeIn,
+                  transitionBuilder: (child, animation) => FadeTransition(
+                    opacity: animation,
+                    child: SlideTransition(
+                      position: Tween<Offset>(
+                        begin: const Offset(0, 0.02),
+                        end: Offset.zero,
+                      ).animate(animation),
+                      child: child,
+                    ),
                   ),
-                ),
-                child: KeyedSubtree(
-                  key: ValueKey(_selectedIndex),
-                  child: _buildBody(),
+                  child: KeyedSubtree(
+                    key: ValueKey(_selectedIndex),
+                    child: _buildBody(),
+                  ),
                 ),
               ),
             ),
@@ -266,6 +269,7 @@ class _AdminDashboardState extends State<AdminDashboard>
         }
       },
       child: NestedScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
         headerSliverBuilder: (context, innerBoxScrolled) => [
           SliverPadding(
             padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),

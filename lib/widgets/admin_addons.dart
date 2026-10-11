@@ -204,6 +204,7 @@ class _AddonEditorState extends State<_AddonEditor> {
   final form = GlobalKey<FormState>();
   late final data = widget.record?.data() ?? <String, dynamic>{};
   late final name = TextEditingController(text: '${data['name'] ?? ''}');
+  late final cost = TextEditingController(text: '${data['costPrice'] ?? 0}');
   late final price = TextEditingController(text: '${data['priceDelta'] ?? ''}');
   late final expiry = TextEditingController(
     text: '${data['expirationDate'] ?? ''}',
@@ -215,6 +216,7 @@ class _AddonEditorState extends State<_AddonEditor> {
   @override
   void dispose() {
     name.dispose();
+    cost.dispose();
     price.dispose();
     expiry.dispose();
     super.dispose();
@@ -240,6 +242,7 @@ class _AddonEditorState extends State<_AddonEditor> {
           'publicId': await ShortIdService.next('AD'),
         'name': name.text.trim(),
         'priceDelta': num.parse(price.text),
+        'costPrice': num.parse(cost.text),
         'expirationDate': expiry.text,
         'isDeleted': false,
         if (url != null) 'imageUrl': url,
@@ -292,6 +295,19 @@ class _AddonEditorState extends State<_AddonEditor> {
                 },
               ),
               const SizedBox(height: 14),
+              TextFormField(
+                controller: cost,
+                decoration: const InputDecoration(labelText: 'Cost price (₱)'),
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
+                validator: (v) {
+                  final n = num.tryParse(v ?? '');
+                  return n == null || !n.isFinite || n < 0
+                      ? 'Enter a valid cost'
+                      : null;
+                },
+              ),
               TextFormField(
                 controller: expiry,
                 readOnly: true,
