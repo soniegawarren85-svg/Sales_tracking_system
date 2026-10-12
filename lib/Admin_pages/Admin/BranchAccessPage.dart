@@ -3,6 +3,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import '../../services/branch_session.dart';
+import '../../services/number_format.dart';
 
 class BranchAccessPage extends StatefulWidget {
   const BranchAccessPage({super.key});
@@ -231,7 +232,7 @@ class _BranchAccessPageState extends State<BranchAccessPage> {
                 ),
               ),
               Text(
-                '₱${total.toStringAsFixed(2)}',
+                '${formatMoney(total)}',
                 style: const TextStyle(
                   color: AppColors.primaryDark,
                   fontSize: 17,
@@ -611,9 +612,7 @@ class _BranchAccessPageState extends State<BranchAccessPage> {
                       trailing: Text(
                         isVoided ? 'VOIDED' : 'ACTIVE',
                         style: TextStyle(
-                          color: isVoided
-                              ? Colors.red
-                              : AppColors.primary,
+                          color: isVoided ? Colors.red : AppColors.primary,
                           fontSize: 10,
                           fontWeight: FontWeight.w900,
                         ),
@@ -1037,9 +1036,7 @@ class _BranchCard extends StatelessWidget {
               isActive
                   ? Icons.check_circle_rounded
                   : Icons.chevron_right_rounded,
-              color: isActive
-                  ? AppColors.primary
-                  : const Color(0xFFBDB5BE),
+              color: isActive ? AppColors.primary : const Color(0xFFBDB5BE),
             ),
           ],
         ),

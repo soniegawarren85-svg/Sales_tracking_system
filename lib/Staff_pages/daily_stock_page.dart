@@ -1,3 +1,4 @@
+import '../widgets/staff_mobile_sales_layout.dart';
 import '../widgets/staff_sales_item_grid.dart';
 import '../services/transaction_settings.dart';
 import '../widgets/bundle_beverage_dialog.dart';
@@ -18,6 +19,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/inventory.dart';
 import '../services/inventory_service.dart';
+import '../services/number_format.dart';
 import '../services/branch_report_schedule.dart';
 import '../services/local_database_sync_service.dart';
 import '../services/thermal_printer_service.dart';
@@ -1635,7 +1637,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                                       ),
                                       label: Text(
                                         addonPrice > 0
-                                            ? '$addonName (+₱${addonPrice.toStringAsFixed(0)})'
+                                            ? '$addonName (+${formatMoney(addonPrice)})'
                                             : addonName,
                                       ),
                                       labelStyle: TextStyle(
@@ -1771,7 +1773,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                                   ),
                                   const SizedBox(height: 4),
                                   Text(
-                                    '₱${totalPrice.toStringAsFixed(2)}',
+                                    '${formatMoney(totalPrice)}',
                                     style: const TextStyle(
                                       fontSize: 22,
                                       fontWeight: FontWeight.w900,
@@ -2161,7 +2163,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                                               ),
                                               const SizedBox(height: 6),
                                               Text(
-                                                '₱${itemPrice.toStringAsFixed(2)} per pc',
+                                                '${formatMoney(itemPrice)} per pc',
                                                 style: const TextStyle(
                                                   fontSize: 13,
                                                   color: _AppColors.textSoft,
@@ -2210,7 +2212,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                                           WrapCrossAlignment.center,
                                       children: [
                                         Text(
-                                          'Total ₱${totalPrice.toStringAsFixed(2)}',
+                                          'Total ${formatMoney(totalPrice)}',
                                           style: const TextStyle(
                                             fontSize: 13,
                                             fontWeight: FontWeight.w600,
@@ -2473,7 +2475,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                                         ),
                                       ),
                                       Text(
-                                        '₱${lineTotal.toStringAsFixed(2)}',
+                                        '${formatMoney(lineTotal)}',
                                         style: const TextStyle(
                                           fontSize: 12,
                                           fontWeight: FontWeight.w700,
@@ -2504,7 +2506,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                         ),
                       ),
                       Text(
-                        '₱${totalValue.toStringAsFixed(2)}',
+                        '${formatMoney(totalValue)}',
                         style: const TextStyle(
                           fontSize: 14,
                           fontWeight: FontWeight.w700,
@@ -2722,7 +2724,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                           ),
                         ),
                         Text(
-                          '₱${itemPrice.toStringAsFixed(2)}',
+                          '${formatMoney(itemPrice)}',
                           style: const TextStyle(
                             fontSize: 12,
                             fontWeight: FontWeight.w700,
@@ -2742,7 +2744,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                           ),
                         ),
                         Text(
-                          '₱${selectedTotal.toStringAsFixed(2)}',
+                          '${formatMoney(selectedTotal)}',
                           style: const TextStyle(
                             fontSize: 14,
                             fontWeight: FontWeight.w700,
@@ -3082,7 +3084,7 @@ class _DailyStockPageState extends State<DailyStockPage>
     }
     if (amount > _cashDrawer) {
       _showStyledSnackBar(
-        'Cannot request more than available (₱${_cashDrawer.toStringAsFixed(2)})',
+        'Cannot request more than available (${formatMoney(_cashDrawer)})',
         isError: true,
       );
       return;
@@ -3102,7 +3104,7 @@ class _DailyStockPageState extends State<DailyStockPage>
               'handledByStaffId': _currentUserId,
             }, SetOptions(merge: true));
       }
-      _showStyledSnackBar('Deducted ₱${amount.toStringAsFixed(2)} from drawer');
+      _showStyledSnackBar('Deducted ${formatMoney(amount)} from drawer');
       _budgetRequestController.clear();
     } catch (e) {
       _showStyledSnackBar('Error processing request: $e', isError: true);
@@ -3207,7 +3209,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                             ),
                             const SizedBox(width: 8),
                             Text(
-                              'Drawer Balance: ₱${_cashDrawer.toStringAsFixed(2)}',
+                              'Drawer Balance: ${formatMoney(_cashDrawer)}',
                               style: const TextStyle(
                                 fontWeight: FontWeight.w700,
                                 color: _AppColors.primary,
@@ -3394,7 +3396,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                             ),
                             const SizedBox(height: 8),
                             Text(
-                              '₱${_cashDrawer.toStringAsFixed(2)}',
+                              '${formatMoney(_cashDrawer)}',
                               style: const TextStyle(
                                 fontSize: 28,
                                 fontWeight: FontWeight.w800,
@@ -3558,7 +3560,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                                     ),
                                     Expanded(
                                       child: Text(
-                                        '₱${total.toStringAsFixed(2)}',
+                                        '${formatMoney(total)}',
                                         style: const TextStyle(
                                           fontSize: 13,
                                           fontWeight: FontWeight.w800,
@@ -3609,7 +3611,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                                               ),
                                             ),
                                             Text(
-                                              '₱${(qty * price).toStringAsFixed(2)}',
+                                              '${formatMoney((qty * price))}',
                                               style: const TextStyle(
                                                 fontSize: 11,
                                                 fontWeight: FontWeight.w600,
@@ -3623,21 +3625,21 @@ class _DailyStockPageState extends State<DailyStockPage>
                                 const SizedBox(height: 4),
                                 _CompactAmountLine(
                                   label: 'Subtotal:',
-                                  value: '₱${subtotal.toStringAsFixed(2)}',
+                                  value: '${formatMoney(subtotal)}',
                                 ),
                                 if (discount > 0.01)
                                   _CompactAmountLine(
                                     label: 'Discount ($discountType):',
-                                    value: '-₱${discount.toStringAsFixed(2)}',
+                                    value: '-${formatMoney(discount)}',
                                     valueColor: const Color(0xFF2E7D32),
                                   ),
                                 _CompactAmountLine(
                                   label: 'Customer Payment:',
-                                  value: '₱${paidAmount.toStringAsFixed(2)}',
+                                  value: '${formatMoney(paidAmount)}',
                                 ),
                                 _CompactAmountLine(
                                   label: 'Change:',
-                                  value: '₱${change.toStringAsFixed(2)}',
+                                  value: '${formatMoney(change)}',
                                   valueColor: const Color(0xFF2E7D32),
                                 ),
                                 Container(
@@ -3663,7 +3665,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                                         ),
                                       ),
                                       Text(
-                                        '₱${total.toStringAsFixed(2)}',
+                                        '${formatMoney(total)}',
                                         style: const TextStyle(
                                           fontSize: 13,
                                           fontWeight: FontWeight.w800,
@@ -4089,7 +4091,7 @@ class _DailyStockPageState extends State<DailyStockPage>
           ? 'Automatic daily cash drawer report'
           : 'Daily cash drawer report submitted',
       'message':
-          '$staffName submitted $dateKey branch sales report. Total sales: ₱${totalSales.toStringAsFixed(2)}.',
+          '$staffName submitted $dateKey branch sales report. Total sales: ${formatMoney(totalSales)}.',
       'category': 'Reports',
       'time':
           '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}',
@@ -4721,7 +4723,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                                   ),
                                 ),
                                 Text(
-                                  '\u20B1${lineTotal.toStringAsFixed(2)}',
+                                  '${formatMoney(lineTotal)}',
                                   style: const TextStyle(
                                     color: _AppColors.textMid,
                                     fontSize: 13,
@@ -4735,14 +4737,13 @@ class _DailyStockPageState extends State<DailyStockPage>
                         const Divider(color: _AppColors.divider, height: 22),
                         _SummaryRow(
                           label: 'Subtotal',
-                          value: '\u20B1${subtotal.toStringAsFixed(2)}',
+                          value: '${formatMoney(subtotal)}',
                         ),
                         if (discountAmount > 0) ...[
                           const SizedBox(height: 6),
                           _SummaryRow(
                             label: '$discountType discount',
-                            value:
-                                '- \u20B1${discountAmount.toStringAsFixed(2)}',
+                            value: '- ${formatMoney(discountAmount)}',
                             valueColor: const Color(0xFF2E7D32),
                           ),
                         ],
@@ -4750,31 +4751,30 @@ class _DailyStockPageState extends State<DailyStockPage>
                           const SizedBox(height: 6),
                           _SummaryRow(
                             label: 'VAT (12%)',
-                            value: '\u20B1${taxAmount.toStringAsFixed(2)}',
+                            value: '${formatMoney(taxAmount)}',
                           ),
                         ],
                         const SizedBox(height: 6),
                         _SummaryRow(
                           label: 'Total',
-                          value: '\u20B1${total.toStringAsFixed(2)}',
+                          value: '${formatMoney(total)}',
                         ),
                         const SizedBox(height: 6),
                         _SummaryRow(
                           label: paymentMode.toLowerCase() == 'cash'
                               ? 'Cash tendered'
                               : 'Amount paid',
-                          value: '\u20B1${paidAmount.toStringAsFixed(2)}',
+                          value: '${formatMoney(paidAmount)}',
                         ),
                         const SizedBox(height: 6),
                         _SummaryRow(
                           label: 'Net of sales',
-                          value:
-                              '\u20B1${(total - taxAmount).toStringAsFixed(2)}',
+                          value: '${formatMoney((total - taxAmount))}',
                         ),
                         const SizedBox(height: 6),
                         _SummaryRow(
                           label: 'Change',
-                          value: '\u20B1${change.toStringAsFixed(2)}',
+                          value: '${formatMoney(change)}',
                           valueColor: const Color(0xFF2E7D32),
                         ),
                       ],
@@ -5577,7 +5577,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                                     ),
                                   ),
                                   Text(
-                                    '₱${lineTotal.toStringAsFixed(2)}',
+                                    '${formatMoney(lineTotal)}',
                                     style: const TextStyle(
                                       fontSize: 12,
                                       fontWeight: FontWeight.w600,
@@ -5650,7 +5650,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                             ),
                           ),
                           Text(
-                            '₱${paidAmount.toStringAsFixed(2)}',
+                            '${formatMoney(paidAmount)}',
                             style: const TextStyle(
                               fontSize: 11,
                               fontWeight: FontWeight.w600,
@@ -5672,7 +5672,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                               ),
                             ),
                             Text(
-                              '-₱${discount.toStringAsFixed(2)}',
+                              '-${formatMoney(discount)}',
                               style: const TextStyle(
                                 fontSize: 11,
                                 fontWeight: FontWeight.w600,
@@ -5715,7 +5715,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                               ),
                             ),
                             Text(
-                              '₱${total.toStringAsFixed(2)}',
+                              '${formatMoney(total)}',
                               style: const TextStyle(
                                 fontSize: 13,
                                 fontWeight: FontWeight.w800,
@@ -5738,7 +5738,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                             ),
                           ),
                           Text(
-                            '₱${change.toStringAsFixed(2)}',
+                            '${formatMoney(change)}',
                             style: const TextStyle(
                               fontSize: 11,
                               fontWeight: FontWeight.w700,
@@ -6070,7 +6070,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                       'Date: ${receipt!['timestamp'] is Timestamp ? (receipt!['timestamp'] as Timestamp).toDate().toString() : receipt!['timestamp'] ?? 'Unknown'}',
                     ),
                     Text(
-                      'Discount: ${receipt!['discountType'] ?? 'None'} • ₱${_parsePrice(receipt!['discount']).toStringAsFixed(2)}',
+                      'Discount: ${receipt!['discountType'] ?? 'None'} • ${formatMoney(_parsePrice(receipt!['discount']))}',
                     ),
                     const SizedBox(height: 8),
                     ...((receipt!['items'] as List<dynamic>? ?? [])
@@ -6095,9 +6095,9 @@ class _DailyStockPageState extends State<DailyStockPage>
                               '${item['name']} ${item['variant']?.toString().isNotEmpty == true ? '(${item['variant']})' : ''}',
                             ),
                             subtitle: Text(
-                              '$kind • $qty x ₱${(refundLine / qty).toStringAsFixed(2)} after discount',
+                              '$kind • $qty x ${formatMoney((refundLine / qty))} after discount',
                             ),
-                            trailing: Text('₱${refundLine.toStringAsFixed(2)}'),
+                            trailing: Text('${formatMoney(refundLine)}'),
                           );
                         })),
                     const SizedBox(height: 10),
@@ -6133,7 +6133,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                                     'Confirm full receipt refund?',
                                   ),
                                   content: Text(
-                                    'Refund ₱${amount.toStringAsFixed(2)} for ${receipt!['salesId']}?',
+                                    'Refund ${formatMoney(amount)} for ${receipt!['salesId']}?',
                                   ),
                                   actions: [
                                     TextButton(
@@ -6662,7 +6662,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                                 builder: (context) => AlertDialog(
                                   title: const Text('Proceed with refund?'),
                                   content: Text(
-                                    '$qty x $itemLabel\nRefund amount: ₱${(unitPrice * qty).toStringAsFixed(2)}\nReason: $reason',
+                                    '$qty x $itemLabel\nRefund amount: ${formatMoney((unitPrice * qty))}\nReason: $reason',
                                   ),
                                   actions: [
                                     TextButton(
@@ -7008,7 +7008,7 @@ class _DailyStockPageState extends State<DailyStockPage>
     unawaited(
       firestore.collection('admin_notifications').add({
         'title': 'Refund recorded',
-        'message': '$staffName refunded ₱${refundAmount.toStringAsFixed(2)}.',
+        'message': '$staffName refunded ${formatMoney(refundAmount)}.',
         'category': 'Refunds',
         'type': 'refund',
         'salesId': offlineRefundId,
@@ -7098,7 +7098,7 @@ class _DailyStockPageState extends State<DailyStockPage>
     await firestore.collection('admin_notifications').add({
       'title': 'Refund recorded',
       'message':
-          '$staffName refunded $itemCount item${itemCount == 1 ? '' : 's'} for ₱${refundAmount.toStringAsFixed(2)}. Cash drawer was deducted.',
+          '$staffName refunded $itemCount item${itemCount == 1 ? '' : 's'} for ${formatMoney(refundAmount)}. Cash drawer was deducted.',
       'category': 'Refunds',
       'type': 'refund',
       'salesId': refundId,
@@ -7267,7 +7267,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                                   ),
                                 ),
                                 Text(
-                                  '₱${lineTotal.toStringAsFixed(2)}',
+                                  '${formatMoney(lineTotal)}',
                                   style: const TextStyle(
                                     color: _AppColors.textMid,
                                     fontSize: 13,
@@ -7280,13 +7280,13 @@ class _DailyStockPageState extends State<DailyStockPage>
                         const Divider(color: _AppColors.divider, height: 24),
                         _OrderRow(
                           label: 'Subtotal',
-                          value: '₱${total.toStringAsFixed(2)}',
+                          value: '${formatMoney(total)}',
                         ),
                         if (hasDiscount) ...[
                           const SizedBox(height: 6),
                           _OrderRow(
                             label: _discountLabel,
-                            value: '- ₱${discountValue.toStringAsFixed(2)}',
+                            value: '- ${formatMoney(discountValue)}',
                             isDiscount: true,
                           ),
                         ],
@@ -7321,7 +7321,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                                 ),
                               ),
                               Text(
-                                '₱${_discountedTotal(orderItems).toStringAsFixed(2)}',
+                                '${formatMoney(_discountedTotal(orderItems))}',
                                 style: const TextStyle(
                                   fontSize: 18,
                                   fontWeight: FontWeight.w900,
@@ -7615,7 +7615,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                                         ),
                                       ),
                                       Text(
-                                        '₱${lineTotal.toStringAsFixed(2)}',
+                                        '${formatMoney(lineTotal)}',
                                         style: const TextStyle(
                                           color: _AppColors.textMid,
                                           fontSize: 13,
@@ -7632,15 +7632,14 @@ class _DailyStockPageState extends State<DailyStockPage>
                               // Totals
                               _OrderRow(
                                 label: 'Subtotal',
-                                value:
-                                    '₱${_cartTotal(orderItems).toStringAsFixed(2)}',
+                                value: '${formatMoney(_cartTotal(orderItems))}',
                               ),
                               if (hasDiscount && !isDiscountExpanded) ...[
                                 const SizedBox(height: 6),
                                 _OrderRow(
                                   label: _discountLabel,
                                   value:
-                                      '- ₱${_discountValue(orderItems).toStringAsFixed(2)}',
+                                      '- ${formatMoney(_discountValue(orderItems))}',
                                   isDiscount: true,
                                 ),
                                 const SizedBox(height: 14),
@@ -7649,7 +7648,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                                 _OrderRow(
                                   label: 'VAT (12%)',
                                   value:
-                                      '₱${_taxValue(orderItems).toStringAsFixed(2)}',
+                                      '${formatMoney(_taxValue(orderItems))}',
                                 ),
                               const SizedBox(height: 8),
                               Container(
@@ -7684,7 +7683,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                                       ),
                                     ),
                                     Text(
-                                      '₱${totalDue.toStringAsFixed(2)}',
+                                      '${formatMoney(totalDue)}',
                                       style: const TextStyle(
                                         fontSize: 18,
                                         fontWeight: FontWeight.w900,
@@ -7903,7 +7902,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                                       ),
                                     ),
                                     Text(
-                                      '₱${(change >= 0 ? change : 0).toStringAsFixed(2)}',
+                                      '${formatMoney((change >= 0 ? change : 0))}',
                                       style: TextStyle(
                                         fontWeight: FontWeight.w800,
                                         fontSize: 16,
@@ -7926,7 +7925,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                                   const SizedBox(width: 6),
                                   Expanded(
                                     child: Text(
-                                      'Cash Drawer: ₱${_cashDrawer.toStringAsFixed(2)}',
+                                      'Cash Drawer: ${formatMoney(_cashDrawer)}',
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
                                       style: const TextStyle(
@@ -7950,7 +7949,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                                     ),
                                   ),
                                   child: Text(
-                                    'Cash drawer is not enough for ₱${change.toStringAsFixed(2)} change.',
+                                    'Cash drawer is not enough for ${formatMoney(change)} change.',
                                     style: const TextStyle(
                                       color: Color(0xFFB71C1C),
                                       fontSize: 12,
@@ -8407,9 +8406,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      _cashDrawer > 0
-                          ? '₱${_cashDrawer.toStringAsFixed(2)}'
-                          : '₱0.00',
+                      _cashDrawer > 0 ? '${formatMoney(_cashDrawer)}' : '₱0.00',
                       style: TextStyle(
                         color: _AppColors.primaryDark,
                         fontSize: _cashDrawer > 0 ? 24 : 18,
@@ -8885,7 +8882,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                       borderRadius: BorderRadius.circular(16),
                     ),
                   ),
-                  child: const Text('Review Order'),
+                  child: const Text('Review ticket'),
                 ),
               ),
             ],
@@ -8953,15 +8950,13 @@ class _DailyStockPageState extends State<DailyStockPage>
         return Container(
           color: _AppColors.bg,
           child: SafeArea(
+            top: false,
             bottom: false,
             child: Padding(
               padding: const EdgeInsets.only(bottom: _staffBottomNavReserve),
               child: Column(
                 children: [
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(20, 16, 20, 10),
-                    child: _buildTabletSalesHeader(),
-                  ),
+                  _buildTabletSalesHeader(),
                   Expanded(
                     child: Row(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -9039,21 +9034,18 @@ class _DailyStockPageState extends State<DailyStockPage>
 
   Widget _buildTabletSalesHeader() {
     return Container(
-      padding: const EdgeInsets.fromLTRB(18, 10, 18, 10),
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
+      padding: EdgeInsets.fromLTRB(
+        18,
+        10 + MediaQuery.paddingOf(context).top,
+        18,
+        10,
+      ),
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
           colors: [_AppColors.primary, _AppColors.primaryLight],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
-        borderRadius: BorderRadius.circular(22),
-        boxShadow: [
-          BoxShadow(
-            color: _AppColors.primary.withOpacity(0.18),
-            blurRadius: 18,
-            offset: const Offset(0, 8),
-          ),
-        ],
       ),
       child: Row(
         children: [
@@ -9133,7 +9125,9 @@ class _DailyStockPageState extends State<DailyStockPage>
         return Align(
           alignment: Alignment.centerRight,
           child: FractionallySizedBox(
-            widthFactor: 0.48,
+            widthFactor: MediaQuery.sizeOf(context).shortestSide < 600
+                ? 1
+                : 0.48,
             heightFactor: 1,
             child: Material(
               color: AppColors.surface,
@@ -9504,7 +9498,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                 ),
               ),
               Text(
-                '\u20B1${total.toStringAsFixed(2)}',
+                '${formatMoney(total)}',
                 style: TextStyle(
                   color: hasItems ? _AppColors.primary : _AppColors.textSoft,
                   fontSize: 16,
@@ -9569,8 +9563,10 @@ class _DailyStockPageState extends State<DailyStockPage>
       children: [
         _buildPrinterSettingsCard(),
         const SizedBox(height: 14),
-        _buildBudgetCard(),
-        const SizedBox(height: 14),
+        if (MediaQuery.sizeOf(context).shortestSide >= 600) ...[
+          _buildBudgetCard(),
+          const SizedBox(height: 14),
+        ],
         _buildOrderControlExpansionTile(orderItems),
         const SizedBox(height: 14),
         _buildDiscountExpansionTile(orderItems: orderItems),
@@ -9800,6 +9796,13 @@ class _DailyStockPageState extends State<DailyStockPage>
             ),
           ),
         ),
+        IconButton(
+          tooltip: 'Cashier tools',
+          onPressed: () =>
+              _showTabletToolsDrawer(_knownOrderItems(_latestOrderItems)),
+          icon: const Icon(Icons.menu_rounded),
+          color: _AppColors.primary,
+        ),
       ],
     );
   }
@@ -9888,7 +9891,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                     borderRadius: BorderRadius.circular(16),
                   ),
                 ),
-                child: const Text('Review Order'),
+                child: const Text('Review ticket'),
               ),
             ),
           ],
@@ -10382,7 +10385,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                               runSpacing: 6,
                               children: [
                                 _MiniTag(
-                                  label: '\u20B1${price.toStringAsFixed(0)}',
+                                  label: '${formatMoney(price)}',
                                   bgColor: const Color(0xFFE8F5E9),
                                   textColor: const Color(0xFF2E7D32),
                                 ),
@@ -10549,7 +10552,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                                 runSpacing: 6,
                                 children: [
                                   _MiniTag(
-                                    label: '\u20B1${price.toStringAsFixed(0)}',
+                                    label: '${formatMoney(price)}',
                                     bgColor: const Color(0xFFE8F5E9),
                                     textColor: const Color(0xFF2E7D32),
                                   ),
@@ -10767,7 +10770,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                             runSpacing: 6,
                             children: [
                               _MiniTag(
-                                label: '₱${price.toStringAsFixed(0)}',
+                                label: '${formatMoney(price)}',
                                 bgColor: const Color(0xFFE8F5E9),
                                 textColor: const Color(0xFF2E7D32),
                               ),
@@ -10784,8 +10787,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                               ),
                               if (qty > 0)
                                 _MiniTag(
-                                  label:
-                                      '₱${(price * qty).toStringAsFixed(0)} total',
+                                  label: '${formatMoney((price * qty))} total',
                                   bgColor: _AppColors.primary.withOpacity(0.1),
                                   textColor: _AppColors.primary,
                                 ),
@@ -10972,7 +10974,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                               runSpacing: 6,
                               children: [
                                 _MiniTag(
-                                  label: '₱${basePrice.toStringAsFixed(0)}',
+                                  label: '${formatMoney(basePrice)}',
                                   bgColor: const Color(0xFFE8F5E9),
                                   textColor: const Color(0xFF2E7D32),
                                 ),
@@ -10987,7 +10989,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                                   final addonName = entry.key;
                                   final addonPrice = entry.value;
                                   final priceLabel = addonPrice > 0
-                                      ? ' +₱${addonPrice.toStringAsFixed(0)}'
+                                      ? ' +${formatMoney(addonPrice)}'
                                       : '';
                                   return _MiniTag(
                                     label: '$addonName$priceLabel',
@@ -11032,7 +11034,7 @@ class _DailyStockPageState extends State<DailyStockPage>
     final originalPrice = originalPrices.isEmpty
         ? 0.0
         : originalPrices.reduce(min);
-    final priceLabel = '\u20B1${originalPrice.toStringAsFixed(0)}';
+    final priceLabel = '${formatMoney(originalPrice)}';
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -11258,7 +11260,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                             Row(
                               children: [
                                 _MiniTag(
-                                  label: '₱${price.toStringAsFixed(0)}',
+                                  label: '${formatMoney(price)}',
                                   bgColor: const Color(0xFFE8F5E9),
                                   textColor: const Color(0xFF2E7D32),
                                 ),
@@ -11665,7 +11667,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                                       ),
                                       const SizedBox(height: 4),
                                       Text(
-                                        '\u20B1${price.toStringAsFixed(2)} each',
+                                        '${formatMoney(price)} each',
                                         style: const TextStyle(
                                           color: _AppColors.textSoft,
                                           fontSize: 11,
@@ -11673,7 +11675,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                                       ),
                                       const SizedBox(height: 4),
                                       Text(
-                                        'Line total: \u20B1${subtotal.toStringAsFixed(2)}',
+                                        'Line total: ${formatMoney(subtotal)}',
                                         style: const TextStyle(
                                           color: _AppColors.primary,
                                           fontSize: 12,
@@ -11727,14 +11729,13 @@ class _DailyStockPageState extends State<DailyStockPage>
               children: [
                 _SummaryRow(
                   label: 'Subtotal',
-                  value: '\u20B1${_cartTotal(orderItems).toStringAsFixed(2)}',
+                  value: '${formatMoney(_cartTotal(orderItems))}',
                 ),
                 if (_seniorDiscount || _pwdDiscount) ...[
                   const SizedBox(height: 6),
                   _SummaryRow(
                     label: _discountLabel,
-                    value:
-                        '- \u20B1${_discountValue(orderItems).toStringAsFixed(2)}',
+                    value: '- ${formatMoney(_discountValue(orderItems))}',
                     valueColor: const Color(0xFF2E7D32),
                   ),
                 ],
@@ -11760,7 +11761,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                         ),
                       ),
                       Text(
-                        '\u20B1${_discountedTotal(orderItems).toStringAsFixed(2)}',
+                        '${formatMoney(_discountedTotal(orderItems))}',
                         style: const TextStyle(
                           color: _AppColors.primary,
                           fontSize: 19,
@@ -12008,7 +12009,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                                 ),
                               ),
                               Text(
-                                '₱${subtotal.toStringAsFixed(2)}',
+                                '${formatMoney(subtotal)}',
                                 style: const TextStyle(
                                   fontWeight: FontWeight.w700,
                                   color: _AppColors.textMid,
@@ -12032,14 +12033,13 @@ class _DailyStockPageState extends State<DailyStockPage>
                 const SizedBox(height: 8),
                 _SummaryRow(
                   label: 'Subtotal',
-                  value: '₱${_cartTotal(orderItems).toStringAsFixed(2)}',
+                  value: '${formatMoney(_cartTotal(orderItems))}',
                 ),
                 if (_seniorDiscount || _pwdDiscount) ...[
                   const SizedBox(height: 6),
                   _SummaryRow(
                     label: _discountLabel,
-                    value:
-                        '- ₱${_discountValue(orderItems).toStringAsFixed(2)}',
+                    value: '- ${formatMoney(_discountValue(orderItems))}',
                     valueColor: const Color(0xFF2E7D32),
                   ),
                 ],
@@ -12067,7 +12067,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                         ),
                       ),
                       Text(
-                        '₱${_discountedTotal(orderItems).toStringAsFixed(2)}',
+                        '${formatMoney(_discountedTotal(orderItems))}',
                         style: const TextStyle(
                           fontSize: 20,
                           fontWeight: FontWeight.w900,
@@ -12076,47 +12076,6 @@ class _DailyStockPageState extends State<DailyStockPage>
                       ),
                     ],
                   ),
-                ),
-              ],
-            ),
-          ),
-
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 14, 20, 0),
-            child: Wrap(
-              alignment: WrapAlignment.spaceBetween,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              spacing: 8,
-              runSpacing: 2,
-              children: [
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Icon(
-                      Icons.bluetooth_rounded,
-                      color: _AppColors.primary,
-                      size: 18,
-                    ),
-                    const SizedBox(width: 7),
-                    const Text(
-                      'Receipt printer',
-                      style: TextStyle(
-                        color: _AppColors.textSoft,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ],
-                ),
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    _buildPrinterStatusLabel(),
-                    TextButton(
-                      onPressed: () => showThermalPrinterSettings(context),
-                      child: const Text('Settings'),
-                    ),
-                  ],
                 ),
               ],
             ),
@@ -12222,21 +12181,6 @@ class _DailyStockPageState extends State<DailyStockPage>
                     ],
                   ),
                 const SizedBox(height: 10),
-                if (isCompact)
-                  _QuickActionButton(
-                    icon: Icons.assignment_return_rounded,
-                    label: 'Refund',
-                    onPressed: () => _showRefundDialog(orderItems),
-                    color: const Color(0xFFE65100),
-                    horizontal: true,
-                  )
-                else
-                  _QuickActionButton(
-                    icon: Icons.assignment_return_rounded,
-                    label: 'Refund',
-                    onPressed: () => _showRefundDialog(orderItems),
-                    color: const Color(0xFFE65100),
-                  ),
               ],
             ),
           ),
@@ -12315,7 +12259,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                           borderRadius: BorderRadius.circular(20),
                         ),
                         child: Text(
-                          '₱${_discountedTotal(orderItems).toStringAsFixed(0)}',
+                          '${formatMoney(_discountedTotal(orderItems))}',
                           style: const TextStyle(
                             fontSize: 12,
                             fontWeight: FontWeight.w700,
@@ -12449,8 +12393,13 @@ class _DailyStockPageState extends State<DailyStockPage>
       onTap: onTap,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 250),
-        width: 150,
-        padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
+        width: MediaQuery.sizeOf(context).shortestSide < 600
+            ? (MediaQuery.sizeOf(context).width - 44) / 3
+            : 150,
+        padding: EdgeInsets.symmetric(
+          vertical: MediaQuery.sizeOf(context).shortestSide < 600 ? 10 : 14,
+          horizontal: MediaQuery.sizeOf(context).shortestSide < 600 ? 6 : 16,
+        ),
         decoration: BoxDecoration(
           color: selected ? _AppColors.primary : _AppColors.cardBg,
           borderRadius: BorderRadius.circular(18),
@@ -12464,15 +12413,20 @@ class _DailyStockPageState extends State<DailyStockPage>
           children: [
             Icon(
               icon,
-              size: 17,
+              size: MediaQuery.sizeOf(context).shortestSide < 600 ? 15 : 17,
               color: selected ? Colors.white : _AppColors.textMid,
             ),
-            const SizedBox(width: 8),
+            SizedBox(
+              width: MediaQuery.sizeOf(context).shortestSide < 600 ? 4 : 8,
+            ),
             Text(
               label,
               style: TextStyle(
                 color: selected ? Colors.white : _AppColors.textMid,
                 fontWeight: FontWeight.w800,
+                fontSize: MediaQuery.sizeOf(context).shortestSide < 600
+                    ? 11
+                    : 14,
               ),
             ),
           ],
@@ -12488,16 +12442,31 @@ class _DailyStockPageState extends State<DailyStockPage>
       backgroundColor: _AppColors.bg,
       body: isTabletLandscape
           ? _buildTabletSalesBody()
+          : MediaQuery.sizeOf(context).shortestSide < 600
+          ? StaffMobileSalesLayout(
+              reviewing: _showCartReview,
+              onBack: () => setState(() => _showCartReview = false),
+              onTools: () =>
+                  _showTabletToolsDrawer(_knownOrderItems(_latestOrderItems)),
+              body: _buildOrderSection(),
+              actions:
+                  !_showCartReview &&
+                      (!_showBundleView || _selectedGroupName == null)
+                  ? _buildDockedOrderActions()
+                  : null,
+            )
           : SafeArea(
+              top: _showCartReview,
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 10),
-                    child: _showCartReview
-                        ? _buildOrderReviewHeader()
-                        : _buildPageHeader(),
-                  ),
+                  if (_showCartReview)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 16, 16, 10),
+                      child: _buildOrderReviewHeader(),
+                    )
+                  else
+                    _buildTabletSalesHeader(),
                   Expanded(
                     child: SingleChildScrollView(
                       physics: const ClampingScrollPhysics(),
@@ -12516,7 +12485,14 @@ class _DailyStockPageState extends State<DailyStockPage>
 
   Widget _buildDockedOrderActions() {
     return Container(
-      padding: const EdgeInsets.fromLTRB(16, 6, 16, 6 + _staffBottomNavReserve),
+      padding: EdgeInsets.fromLTRB(
+        MediaQuery.sizeOf(context).shortestSide < 600 ? 12 : 16,
+        6,
+        MediaQuery.sizeOf(context).shortestSide < 600 ? 12 : 16,
+        MediaQuery.sizeOf(context).shortestSide < 600
+            ? 32
+            : 6 + _staffBottomNavReserve,
+      ),
       decoration: BoxDecoration(
         color: _AppColors.bg.withOpacity(0.96),
         border: Border(

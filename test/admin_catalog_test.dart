@@ -1,5 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sales_tracking/widgets/admin_catalog.dart';
+import 'package:fake_cloud_firestore/fake_cloud_firestore.dart';
+import 'package:flutter/material.dart';
 
 void main() {
   final today = DateTime(2026, 9, 24);
@@ -90,5 +92,62 @@ void main() {
     expect(entries.first.id, 'COF-001');
     expect(entries.first.stock, isNull);
     expect(entries.last.available, isFalse);
+  });
+
+  testWidgets('branch dropdown, search and category stay in original order', (
+    tester,
+  ) async {
+    final db = FakeFirebaseFirestore();
+    await db.collection('sales_inventory').doc('cookies').set({
+      'name': 'Cookies',
+      'items': [
+        for (var i = 0; i < 20; i++)
+          {'id': 'CO-$i', 'name': 'Cookie $i', 'stock': 5, 'price': 50},
+      ],
+    });
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Padding(
+            padding: const EdgeInsets.all(12),
+            child: AdminCatalog(
+              firestore: db,
+              type: 'Categories',
+              pinnedControls: true,
+              onOpen: (_) {},
+              actions: const Text('Add Category'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final branch = tester.getTopLeft(
+      find.byType(DropdownButtonFormField<String>),
+    );
+    final search = tester.getTopLeft(find.byType(TextField));
+    final category = tester.getTopLeft(
+      find.widgetWithText(ChoiceChip, 'Cookies'),
+    );
+    expect(branch.dy, lessThan(search.dy));
+    expect(search.dy, lessThan(category.dy));
+    await tester.drag(
+      find.byKey(const ValueKey('inventory-table-scroll')),
+      const Offset(0, -300),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      tester.getTopLeft(find.byType(DropdownButtonFormField<String>)),
+      branch,
+    );
+    expect(tester.getTopLeft(find.byType(TextField)), search);
+    expect(
+      tester.getTopLeft(find.widgetWithText(ChoiceChip, 'Cookies')),
+      category,
+    );
+    expect(find.text('Add Category'), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 }

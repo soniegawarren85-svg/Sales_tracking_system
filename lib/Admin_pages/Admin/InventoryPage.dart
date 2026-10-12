@@ -22,7 +22,15 @@ import 'package:image_picker/image_picker.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import '../../services/expiry_notification_service.dart';
+import '../../services/number_format.dart';
 import 'pink_theme.dart';
+
+double _parseAmount(dynamic value) {
+  if (value is num) return value.toDouble();
+  final text = value?.toString() ?? '';
+  final cleaned = text.replaceAll(RegExp(r'[^0-9.]'), '');
+  return double.tryParse(cleaned) ?? 0.0;
+}
 
 // ──────────────────────────────────────────────────────────────────────────────
 
@@ -158,6 +166,12 @@ class InventoryPage extends StatefulWidget {
 
 class _InventoryPageState extends State<InventoryPage>
     with SingleTickerProviderStateMixin {
+  bool _headerCollapsed = false;
+  Widget _collapsible(Widget child) => AnimatedSize(
+    duration: const Duration(milliseconds: 200),
+    alignment: Alignment.topCenter,
+    child: _headerCollapsed ? const SizedBox.shrink() : child,
+  );
   String _catalogType = 'Categories';
   bool _addonsTab = false;
   Uint8List? selectedImageBytes;
@@ -2380,7 +2394,11 @@ class _InventoryPageState extends State<InventoryPage>
                                                           height: 4,
                                                         ),
                                                         Text(
-                                                          '₱ $itemPrice',
+                                                          formatMoney(
+                                                            _parseAmount(
+                                                              itemPrice,
+                                                            ),
+                                                          ),
                                                           style:
                                                               const TextStyle(
                                                                 fontSize: 14,
@@ -2564,13 +2582,6 @@ class _InventoryPageState extends State<InventoryPage>
         : codeSource.toUpperCase().padRight(4, 'X');
 
     return 'CAT-$datePart-$timePart-$code';
-  }
-
-  double _parseAmount(dynamic value) {
-    if (value is num) return value.toDouble();
-    final text = value?.toString() ?? '';
-    final cleaned = text.replaceAll(RegExp(r'[^0-9.]'), '');
-    return double.tryParse(cleaned) ?? 0.0;
   }
 
   int _parseQuantity(dynamic value) {
@@ -3154,7 +3165,8 @@ class _InventoryPageState extends State<InventoryPage>
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: PinkTheme.scaffoldBg,
-      floatingActionButton: _catalogType == 'Categories' && _monitorBranch.isEmpty
+      floatingActionButton:
+          _catalogType == 'Categories' && _monitorBranch.isEmpty
           ? FloatingActionButton(
               heroTag: 'inventory_add_item',
               tooltip: 'Add item',
@@ -3168,61 +3180,68 @@ class _InventoryPageState extends State<InventoryPage>
       body: SafeArea(
         child: Column(
           children: [
-            Container(
-              padding: const EdgeInsets.all(20),
-              decoration: const BoxDecoration(
-                gradient: LinearGradient(
-                  colors: [PinkTheme.primaryDark, PinkTheme.accent],
+            _collapsible(
+              Container(
+                padding: const EdgeInsets.all(20),
+                decoration: const BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [PinkTheme.primaryDark, PinkTheme.accent],
+                  ),
+                  borderRadius: BorderRadius.vertical(
+                    bottom: Radius.circular(24),
+                  ),
                 ),
-                borderRadius: BorderRadius.vertical(
-                  bottom: Radius.circular(24),
-                ),
-              ),
-              child: Row(
-                children: [
-                  if (!widget.embedded)
-                    IconButton(
-                      onPressed: () => Navigator.pop(context),
-                      icon: const Icon(Icons.arrow_back, color: Colors.white),
-                    ),
-                  const Expanded(
-                    child: Text(
-                      'Inventory',
-                      style: TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.w900,
-                        color: Colors.white,
+                child: Row(
+                  children: [
+                    if (!widget.embedded)
+                      IconButton(
+                        onPressed: () => Navigator.pop(context),
+                        icon: const Icon(Icons.arrow_back, color: Colors.white),
+                      ),
+                    const Expanded(
+                      child: Text(
+                        'Inventory',
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.w900,
+                          color: Colors.white,
+                        ),
                       ),
                     ),
-                  ),
-                  const AllocationChecklistButton(scopeIds: [], isAdmin: true),
-                ],
+                    const AllocationChecklistButton(
+                      scopeIds: [],
+                      isAdmin: true,
+                    ),
+                  ],
+                ),
               ),
             ),
-            Padding(
-              padding: const EdgeInsets.all(16),
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: Wrap(
-                  spacing: 10,
-                  children: ['Categories', 'Bundle', 'Beverages']
-                      .map(
-                        (type) => ChoiceChip(
-                          selectedColor: AppColors.primaryDark,
-                          checkmarkColor: Colors.white,
-                          labelStyle: TextStyle(
-                            color: _catalogType == type
-                                ? Colors.white
-                                : AppColors.primaryDark,
-                            fontWeight: FontWeight.w700,
+            _collapsible(
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Wrap(
+                    spacing: 10,
+                    children: ['Categories', 'Bundle', 'Beverages']
+                        .map(
+                          (type) => ChoiceChip(
+                            selectedColor: AppColors.primaryDark,
+                            checkmarkColor: Colors.white,
+                            labelStyle: TextStyle(
+                              color: _catalogType == type
+                                  ? Colors.white
+                                  : AppColors.primaryDark,
+                              fontWeight: FontWeight.w700,
+                            ),
+                            label: Text(type),
+                            selected: _catalogType == type,
+                            onSelected: (_) =>
+                                setState(() => _catalogType = type),
                           ),
-                          label: Text(type),
-                          selected: _catalogType == type,
-                          onSelected: (_) =>
-                              setState(() => _catalogType = type),
-                        ),
-                      )
-                      .toList(),
+                        )
+                        .toList(),
+                  ),
                 ),
               ),
             ),
@@ -3230,8 +3249,14 @@ class _InventoryPageState extends State<InventoryPage>
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(20, 4, 20, 0),
                 child: AdminCatalog(
-                  onBranchChanged: (value) => setState(() => _monitorBranch = value),
+                  onBranchChanged: (value) =>
+                      setState(() => _monitorBranch = value),
                   pinnedControls: true,
+                  compactHeader: _headerCollapsed,
+                  onHeaderCollapsed: (collapsed) {
+                    if (mounted && collapsed != _headerCollapsed)
+                      setState(() => _headerCollapsed = collapsed);
+                  },
                   type: _catalogType,
                   onBeverageTabChanged: (value) =>
                       setState(() => _addonsTab = value),
@@ -3502,7 +3527,18 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
   double get _bundleCost => _inventory.fold<double>(0, (total, parent) {
     final variants = (parent['items'] as List? ?? []).whereType<Map>().toList();
     final quantities = selectedVariantQuantities['${parent['id']}'] ?? {};
-    return total + quantities.entries.fold<double>(0, (sum, entry) => entry.key < 0 || entry.key >= variants.length ? sum : sum + (num.tryParse('${variants[entry.key]['costPrice']}')?.toDouble() ?? 0) * entry.value);
+    return total +
+        quantities.entries.fold<double>(
+          0,
+          (sum, entry) => entry.key < 0 || entry.key >= variants.length
+              ? sum
+              : sum +
+                    (num.tryParse(
+                              '${variants[entry.key]['costPrice']}',
+                            )?.toDouble() ??
+                            0) *
+                        entry.value,
+        );
   });
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final List<Map<String, dynamic>> bundles = [];
@@ -4232,7 +4268,9 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
                                           ),
                                         ),
                                         child: Text(
-                                          '₱$bundlePrice',
+                                          formatMoney(
+                                            _parseAmount(bundlePrice),
+                                          ),
                                           style: const TextStyle(
                                             color: Colors.white,
                                             fontSize: 12,
@@ -4338,7 +4376,9 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
                                               ),
                                               const SizedBox(width: 8),
                                               Text(
-                                                '₱$itemPrice',
+                                                formatMoney(
+                                                  _parseAmount(itemPrice),
+                                                ),
                                                 style: const TextStyle(
                                                   fontSize: 11,
                                                   fontWeight: FontWeight.w700,
@@ -4846,7 +4886,7 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
                                 borderRadius: BorderRadius.circular(14),
                               ),
                               child: Text(
-                                '₱${bundle['price']?.toString() ?? '0'}',
+                                formatMoney(_parseAmount(bundle['price'])),
                                 style: const TextStyle(
                                   fontSize: 15,
                                   fontWeight: FontWeight.w900,
@@ -5105,7 +5145,13 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
 
                 // Bundle price
                 _styledFieldLabel('Bundle Price'),
-                Padding(padding: const EdgeInsets.symmetric(vertical: 8), child: Text('Cost per bundle: ₱${_bundleCost.toStringAsFixed(2)}', style: const TextStyle(fontWeight: FontWeight.w700))),
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  child: Text(
+                    'Cost per bundle: ${formatMoney(_bundleCost)}',
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                ),
                 const SizedBox(height: 8),
                 _enhancedField(
                   controller: bundlePriceController,
@@ -5356,7 +5402,7 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
                                           Text(
                                             itemPrice != '0' &&
                                                     itemPrice.isNotEmpty
-                                                ? '₱$itemPrice  •  ${variants.length} variant${variants.length == 1 ? '' : 's'}'
+                                                ? '${formatMoney(_parseAmount(itemPrice))}  •  ${variants.length} variant${variants.length == 1 ? '' : 's'}'
                                                 : item['sourceCollection'] ==
                                                       'coffee_products'
                                                 ? '${variants.length} size${variants.length == 1 ? '' : 's'}'
@@ -5504,7 +5550,11 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
                                                   ),
                                                   const SizedBox(height: 4),
                                                   Text(
-                                                    '₱$variantPrice',
+                                                    formatMoney(
+                                                      _parseAmount(
+                                                        variantPrice,
+                                                      ),
+                                                    ),
                                                     style: const TextStyle(
                                                       fontSize: 12,
                                                       fontWeight:
@@ -7061,7 +7111,7 @@ class _RemovedInventoryPageState extends State<RemovedInventoryPage>
                       children: [
                         _infoChip(
                           icon: Icons.payments_rounded,
-                          label: '₱${variant['price'] ?? '0'}',
+                          label: formatMoney(_parseAmount(variant['price'])),
                         ),
                         const SizedBox(width: 8),
                         _infoChip(

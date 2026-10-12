@@ -7,13 +7,26 @@ String csvCell(dynamic value) {
   var text = value == null ? '' : '$value';
   if (value is String &&
       RegExp(r'^[=+@\-\t\r]').hasMatch(text) &&
-      !RegExp(r'^-?\d+(\.\d+)?$').hasMatch(text))
+      !RegExp(r'^-?\d+(\.\d+)?$').hasMatch(text)) {
     text = "'$text";
+  }
   return '"${text.replaceAll('"', '""')}"';
 }
 
 /// Excel-compatible UTF-8 CSV with separate, labelled sections per branch.
 Uint8List branchReportCsv(
+  BranchReportData data,
+  DateTime start,
+  DateTime end, {
+  String? branchId,
+  DateTime? now,
+}) => Uint8List.fromList(
+  utf8.encode(
+    '\uFEFF${branchReportRows(data, start, end, branchId: branchId, now: now).map((row) => row.map(csvCell).join(',')).join('\r\n')}',
+  ),
+);
+
+List<List<dynamic>> branchReportRows(
   BranchReportData data,
   DateTime start,
   DateTime end, {
@@ -25,6 +38,11 @@ Uint8List branchReportCsv(
   String money(dynamic value) => reportValue(value).toStringAsFixed(2);
   double sum(Iterable<Map<String, dynamic>> rows, String field) =>
       rows.fold<double>(0, (total, row) => total + reportValue(row[field]));
+  double soldCost(Iterable<Map<String, dynamic>> rows) => rows.fold<double>(
+    0,
+    (total, row) =>
+        total + reportValue(row['costPrice']) * reportValue(row['sold']),
+  );
   final rows = <List<dynamic>>[
     ['SALES REPORT'],
     [
@@ -70,8 +88,8 @@ Uint8List branchReportCsv(
       [],
       ['2. CURRENT ALLOCATED ITEMS'],
       [
-        'Total cost basis',
-        'Cost price x starting allocation plus additions; made-to-order beverages use recorded cost of sold units.',
+        'Total cost',
+        'Cost price x sold items; unsold inventory contributes 0.',
       ],
     ]);
     for (final type in ['Categories', 'Bundle', 'Beverages', 'Add-ons']) {
@@ -110,6 +128,8 @@ Uint8List branchReportCsv(
           'Sales',
           'Sold items',
           'Total profit',
+          'Net profit',
+          'Total cost',
           'Expiry',
         ],
         for (final row in selected)
@@ -129,6 +149,8 @@ Uint8List branchReportCsv(
             money(row['sales']),
             row['sold'],
             money(row['profit']),
+            money(row['netProfit']),
+            money(reportValue(row['costPrice']) * reportValue(row['sold'])),
             cashRecordDate(row['expirationDate']) == null
                 ? ''
                 : date(cashRecordDate(row['expirationDate'])!),
@@ -137,7 +159,7 @@ Uint8List branchReportCsv(
           'TOTAL',
           '',
           '',
-          'Total cost: ${money(sum(selected, 'allocationCost'))}',
+          '',
           if (beverage) ...['', '', ''] else '',
           if (!beverage) ...[
             sum(selected, 'starting'),
@@ -147,6 +169,8 @@ Uint8List branchReportCsv(
           money(sum(selected, 'sales')),
           sum(selected, 'sold'),
           money(sum(selected, 'profit')),
+          money(sum(selected, 'netProfit')),
+          money(soldCost(selected)),
           '',
         ],
         [],
@@ -363,9 +387,5 @@ Uint8List branchReportCsv(
       [],
     ]);
   }
-  return Uint8List.fromList(
-    utf8.encode(
-      '\uFEFF${rows.map((row) => row.map(csvCell).join(',')).join('\r\n')}',
-    ),
-  );
+  return rows;
 }

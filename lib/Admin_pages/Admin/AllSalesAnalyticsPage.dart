@@ -1,5 +1,6 @@
 import 'package:sales_tracking/theme/app_colors.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import '../../services/number_format.dart';
 import 'package:flutter/material.dart';
 
 class AllSalesAnalyticsPage extends StatefulWidget {
@@ -76,7 +77,8 @@ class _AllSalesAnalyticsPageState extends State<AllSalesAnalyticsPage> {
     // Beverages products are stored separately from sales_inventory. Their sale
     // records carry their own marker, so they must not be rejected by the
     // category inventory key check above.
-    final isCoffee = item['isCoffee'] == true ||
+    final isCoffee =
+        item['isCoffee'] == true ||
         (item['coffeeId']?.toString().trim().isNotEmpty ?? false);
     if (isCoffee) return true;
     final source =
@@ -157,7 +159,7 @@ class _AllSalesAnalyticsPageState extends State<AllSalesAnalyticsPage> {
                     ? '${item['name']} (${item['variant']})'
                     : item['name']?.toString() ?? 'Item';
                 final qty = _money(item['quantity']);
-                  saleTotal += _money(item['price']) * qty;
+                saleTotal += _money(item['price']) * qty;
                 final kind = item['isBundle'] == true
                     ? 'Bundle'
                     : (item['isCoffee'] == true ? 'Beverages' : 'Categories');
@@ -183,7 +185,7 @@ class _AllSalesAnalyticsPageState extends State<AllSalesAnalyticsPage> {
                 : _ranking == 'Low Selling'
                 ? (categoryItems.reversed.take(5).toList())
                 : categoryItems;
-              final chart = points.entries.toList();
+            final chart = points.entries.toList();
             return ListView(
               padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
               children: [
@@ -192,7 +194,13 @@ class _AllSalesAnalyticsPageState extends State<AllSalesAnalyticsPage> {
                 Wrap(
                   spacing: 8,
                   children: ['Day', 'Week', 'Month']
-                      .map((p) => _chip(p, _period == p, () => setState(() => _period = p)))
+                      .map(
+                        (p) => _chip(
+                          p,
+                          _period == p,
+                          () => setState(() => _period = p),
+                        ),
+                      )
                       .toList(),
                 ),
                 const SizedBox(height: 14),
@@ -203,7 +211,10 @@ class _AllSalesAnalyticsPageState extends State<AllSalesAnalyticsPage> {
                   ),
                 ),
                 const SizedBox(height: 16),
-                _sectionTitle('Best-Selling Items', Icons.local_fire_department_rounded),
+                _sectionTitle(
+                  'Best-Selling Items',
+                  Icons.local_fire_department_rounded,
+                ),
                 const SizedBox(height: 14),
                 _filterLabel('Item range'),
                 const SizedBox(height: 8),
@@ -211,10 +222,30 @@ class _AllSalesAnalyticsPageState extends State<AllSalesAnalyticsPage> {
                   spacing: 8,
                   runSpacing: 8,
                   children: [
-                    _chip('All', _category == 'All', () => setState(() => _category = 'All'), icon: Icons.apps_rounded),
-                    _chip('Categories', _category == 'Categories', () => setState(() => _category = 'Categories'), icon: Icons.category_rounded),
-                    _chip('Bundle', _category == 'Bundle', () => setState(() => _category = 'Bundle'), icon: Icons.card_giftcard_rounded),
-                    _chip('Beverages', _category == 'Beverages', () => setState(() => _category = 'Beverages'), icon: Icons.coffee_rounded),
+                    _chip(
+                      'All',
+                      _category == 'All',
+                      () => setState(() => _category = 'All'),
+                      icon: Icons.apps_rounded,
+                    ),
+                    _chip(
+                      'Categories',
+                      _category == 'Categories',
+                      () => setState(() => _category = 'Categories'),
+                      icon: Icons.category_rounded,
+                    ),
+                    _chip(
+                      'Bundle',
+                      _category == 'Bundle',
+                      () => setState(() => _category = 'Bundle'),
+                      icon: Icons.card_giftcard_rounded,
+                    ),
+                    _chip(
+                      'Beverages',
+                      _category == 'Beverages',
+                      () => setState(() => _category = 'Beverages'),
+                      icon: Icons.coffee_rounded,
+                    ),
                   ],
                 ),
                 const SizedBox(height: 14),
@@ -224,9 +255,23 @@ class _AllSalesAnalyticsPageState extends State<AllSalesAnalyticsPage> {
                   spacing: 8,
                   runSpacing: 8,
                   children: [
-                    _chip('All', _ranking == 'All', () => setState(() => _ranking = 'All')),
-                    _chip('Top Selling', _ranking == 'Top Selling', () => setState(() => _ranking = 'Top Selling'), icon: Icons.trending_up_rounded),
-                    _chip('Low Selling', _ranking == 'Low Selling', () => setState(() => _ranking = 'Low Selling'), icon: Icons.trending_down_rounded),
+                    _chip(
+                      'All',
+                      _ranking == 'All',
+                      () => setState(() => _ranking = 'All'),
+                    ),
+                    _chip(
+                      'Top Selling',
+                      _ranking == 'Top Selling',
+                      () => setState(() => _ranking = 'Top Selling'),
+                      icon: Icons.trending_up_rounded,
+                    ),
+                    _chip(
+                      'Low Selling',
+                      _ranking == 'Low Selling',
+                      () => setState(() => _ranking = 'Low Selling'),
+                      icon: Icons.trending_down_rounded,
+                    ),
                   ],
                 ),
                 const SizedBox(height: 16),
@@ -237,7 +282,10 @@ class _AllSalesAnalyticsPageState extends State<AllSalesAnalyticsPage> {
                       child: Center(
                         child: Text(
                           'No items match this filter yet.',
-                          style: TextStyle(color: Colors.black45, fontWeight: FontWeight.w600),
+                          style: TextStyle(
+                            color: Colors.black45,
+                            fontWeight: FontWeight.w600,
+                          ),
                         ),
                       ),
                     ),
@@ -277,10 +325,13 @@ class _AllSalesAnalyticsPageState extends State<AllSalesAnalyticsPage> {
     final type = sale['type']?.toString().trim().toLowerCase() ?? '';
     final status = sale['status']?.toString().trim().toLowerCase() ?? '';
     final isRefund = type == 'refund' || status == 'refund';
-    final reason = (sale['reason'] ?? sale['refundReason'])?.toString().trim() ?? '';
+    final reason =
+        (sale['reason'] ?? sale['refundReason'])?.toString().trim() ?? '';
     final source = sale['source']?.toString().trim() ?? '';
     final hasDiscount = discount > 0.01 && discountType.toLowerCase() != 'none';
-    final hasRefund = isRefund || sale['fullyRefunded'] == true ||
+    final hasRefund =
+        isRefund ||
+        sale['fullyRefunded'] == true ||
         items.any((item) => _money(item['refunded']) > 0);
     final color = hasRefund ? Colors.red.shade700 : Colors.green.shade700;
 
@@ -292,17 +343,29 @@ class _AllSalesAnalyticsPageState extends State<AllSalesAnalyticsPage> {
           children: [
             Row(
               children: [
-                Icon(isRefund ? Icons.replay_rounded : Icons.receipt_long_rounded, color: color),
+                Icon(
+                  isRefund ? Icons.replay_rounded : Icons.receipt_long_rounded,
+                  color: color,
+                ),
                 const SizedBox(width: 10),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(salesId, style: const TextStyle(color: _textDark, fontWeight: FontWeight.w900)),
+                      Text(
+                        salesId,
+                        style: const TextStyle(
+                          color: _textDark,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
                       if (timestamp != null)
                         Text(
                           '${timestamp.hour % 12 == 0 ? 12 : timestamp.hour % 12}:${timestamp.minute.toString().padLeft(2, '0')} ${timestamp.hour >= 12 ? 'PM' : 'AM'}',
-                          style: const TextStyle(color: Colors.black45, fontSize: 12),
+                          style: const TextStyle(
+                            color: Colors.black45,
+                            fontSize: 12,
+                          ),
                         ),
                     ],
                   ),
@@ -310,8 +373,25 @@ class _AllSalesAnalyticsPageState extends State<AllSalesAnalyticsPage> {
                 Column(
                   crossAxisAlignment: CrossAxisAlignment.end,
                   children: [
-                    Text('₱${total.toStringAsFixed(2)}', style: TextStyle(color: color, fontWeight: FontWeight.w900)),
-                    Text(isRefund ? 'Refunded' : hasRefund ? 'Refund activity' : 'Completed', style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w800)),
+                    Text(
+                      '${formatMoney(total)}',
+                      style: TextStyle(
+                        color: color,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    Text(
+                      isRefund
+                          ? 'Refunded'
+                          : hasRefund
+                          ? 'Refund activity'
+                          : 'Completed',
+                      style: TextStyle(
+                        color: color,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
                   ],
                 ),
               ],
@@ -322,13 +402,32 @@ class _AllSalesAnalyticsPageState extends State<AllSalesAnalyticsPage> {
                 final refunded = _money(item['refunded']);
                 final name = item['name']?.toString() ?? 'Item';
                 final variant = item['variant']?.toString() ?? '';
-                final label = '${_money(item['quantity']).toStringAsFixed(0)}x $name${variant.isNotEmpty ? ' ($variant)' : ''}${refunded > 0 ? ' · refunded ${refunded.toStringAsFixed(0)}' : ''}';
+                final label =
+                    '${_money(item['quantity']).toStringAsFixed(0)}x $name${variant.isNotEmpty ? ' ($variant)' : ''}${refunded > 0 ? ' · refunded ${refunded.toStringAsFixed(0)}' : ''}';
                 return Padding(
                   padding: const EdgeInsets.only(bottom: 6),
                   child: Row(
                     children: [
-                      Expanded(child: Text(label, style: TextStyle(color: refunded > 0 ? Colors.red.shade700 : _textDark, fontWeight: FontWeight.w700))),
-                      Text('₱${(_money(item['price']) * _money(item['quantity'])).toStringAsFixed(2)}', style: TextStyle(color: refunded > 0 ? Colors.red.shade700 : Colors.black54, fontWeight: FontWeight.w700)),
+                      Expanded(
+                        child: Text(
+                          label,
+                          style: TextStyle(
+                            color: refunded > 0
+                                ? Colors.red.shade700
+                                : _textDark,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                      Text(
+                        '${formatMoney((_money(item['price']) * _money(item['quantity'])))}',
+                        style: TextStyle(
+                          color: refunded > 0
+                              ? Colors.red.shade700
+                              : Colors.black54,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
                     ],
                   ),
                 );
@@ -338,16 +437,43 @@ class _AllSalesAnalyticsPageState extends State<AllSalesAnalyticsPage> {
             Container(
               width: double.infinity,
               padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(color: _bg, borderRadius: BorderRadius.circular(12)),
+              decoration: BoxDecoration(
+                color: _bg,
+                borderRadius: BorderRadius.circular(12),
+              ),
               child: Column(
                 children: [
-                  _saleDetail('Payment', payment == 'GCash' && gcashId.isNotEmpty ? 'GCash - $gcashId' : payment),
-                  _saleDetail('Customer Paid', '₱${paid.toStringAsFixed(2)}'),
-                  if (hasDiscount) _saleDetail('Discount ($discountType)', '-₱${discount.toStringAsFixed(2)}', color: Colors.green.shade700),
-                  if (proofId.isNotEmpty) _saleDetail(discountType.isEmpty ? 'Discount ID' : '$discountType ID', proofId),
-                  if (hasRefund && reason.isNotEmpty) _saleDetail('Refund Reason${source.isNotEmpty ? ' ($source)' : ''}', reason, color: Colors.red.shade700),
-                  _saleDetail('Change', '₱${change.toStringAsFixed(2)}'),
-                  _saleDetail(isRefund ? 'Refund Amount' : 'Total', '₱${total.toStringAsFixed(2)}', color: color, strong: true),
+                  _saleDetail(
+                    'Payment',
+                    payment == 'GCash' && gcashId.isNotEmpty
+                        ? 'GCash - $gcashId'
+                        : payment,
+                  ),
+                  _saleDetail('Customer Paid', '${formatMoney(paid)}'),
+                  if (hasDiscount)
+                    _saleDetail(
+                      'Discount ($discountType)',
+                      '-${formatMoney(discount)}',
+                      color: Colors.green.shade700,
+                    ),
+                  if (proofId.isNotEmpty)
+                    _saleDetail(
+                      discountType.isEmpty ? 'Discount ID' : '$discountType ID',
+                      proofId,
+                    ),
+                  if (hasRefund && reason.isNotEmpty)
+                    _saleDetail(
+                      'Refund Reason${source.isNotEmpty ? ' ($source)' : ''}',
+                      reason,
+                      color: Colors.red.shade700,
+                    ),
+                  _saleDetail('Change', '${formatMoney(change)}'),
+                  _saleDetail(
+                    isRefund ? 'Refund Amount' : 'Total',
+                    '${formatMoney(total)}',
+                    color: color,
+                    strong: true,
+                  ),
                 ],
               ),
             ),
@@ -357,15 +483,39 @@ class _AllSalesAnalyticsPageState extends State<AllSalesAnalyticsPage> {
     );
   }
 
-  Widget _saleDetail(String label, String value, {Color? color, bool strong = false}) {
+  Widget _saleDetail(
+    String label,
+    String value, {
+    Color? color,
+    bool strong = false,
+  }) {
     return Padding(
       padding: const EdgeInsets.only(top: 4),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Expanded(child: Text(label, style: TextStyle(color: Colors.black54, fontSize: strong ? 12 : 11, fontWeight: strong ? FontWeight.w800 : FontWeight.w600))),
+          Expanded(
+            child: Text(
+              label,
+              style: TextStyle(
+                color: Colors.black54,
+                fontSize: strong ? 12 : 11,
+                fontWeight: strong ? FontWeight.w800 : FontWeight.w600,
+              ),
+            ),
+          ),
           const SizedBox(width: 8),
-          Flexible(child: Text(value, textAlign: TextAlign.right, style: TextStyle(color: color ?? _textDark, fontSize: strong ? 13 : 11, fontWeight: FontWeight.w800))),
+          Flexible(
+            child: Text(
+              value,
+              textAlign: TextAlign.right,
+              style: TextStyle(
+                color: color ?? _textDark,
+                fontSize: strong ? 13 : 11,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
         ],
       ),
     );
@@ -388,7 +538,11 @@ class _AllSalesAnalyticsPageState extends State<AllSalesAnalyticsPage> {
 
   Widget _filterLabel(String label) => Text(
     label,
-    style: const TextStyle(color: _textDark, fontSize: 13, fontWeight: FontWeight.w700),
+    style: const TextStyle(
+      color: _textDark,
+      fontSize: 13,
+      fontWeight: FontWeight.w700,
+    ),
   );
 
   Widget _card({required Widget child}) => Container(
@@ -408,7 +562,12 @@ class _AllSalesAnalyticsPageState extends State<AllSalesAnalyticsPage> {
     child: child,
   );
 
-  Widget _chip(String label, bool selected, VoidCallback onTap, {IconData? icon}) {
+  Widget _chip(
+    String label,
+    bool selected,
+    VoidCallback onTap, {
+    IconData? icon,
+  }) {
     return GestureDetector(
       onTap: onTap,
       child: AnimatedContainer(
@@ -548,7 +707,9 @@ class _AllSalesAnalyticsPageState extends State<AllSalesAnalyticsPage> {
               decoration: BoxDecoration(
                 gradient: rank <= 3
                     ? const LinearGradient(colors: [_primary, _accent])
-                    : const LinearGradient(colors: [Color(0xFFFFE0EC), Color(0xFFFFE0EC)]),
+                    : const LinearGradient(
+                        colors: [Color(0xFFFFE0EC), Color(0xFFFFE0EC)],
+                      ),
                 shape: BoxShape.circle,
               ),
               child: Center(
@@ -572,12 +733,14 @@ class _AllSalesAnalyticsPageState extends State<AllSalesAnalyticsPage> {
           children: [
             Icon(_kindIcon(item.kind), size: 13, color: Colors.black45),
             const SizedBox(width: 4),
-            Text('${item.quantity.toStringAsFixed(0)} sold · ${item.kind}',
-                style: const TextStyle(fontSize: 12.5, color: Colors.black54)),
+            Text(
+              '${item.quantity.toStringAsFixed(0)} sold · ${item.kind}',
+              style: const TextStyle(fontSize: 12.5, color: Colors.black54),
+            ),
           ],
         ),
         trailing: Text(
-          '₱${item.revenue.toStringAsFixed(2)}',
+          '${formatMoney(item.revenue)}',
           style: const TextStyle(
             color: _primary,
             fontWeight: FontWeight.w900,
@@ -647,7 +810,10 @@ class _SalesBars extends StatelessWidget {
   Widget build(BuildContext context) {
     if (values.isEmpty) {
       return const Center(
-        child: Text('No sales data yet.', style: TextStyle(color: Colors.black45)),
+        child: Text(
+          'No sales data yet.',
+          style: TextStyle(color: Colors.black45),
+        ),
       );
     }
     final max = values.map((e) => e.value).reduce((a, b) => a > b ? a : b);

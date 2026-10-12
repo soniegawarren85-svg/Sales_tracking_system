@@ -1,11 +1,21 @@
 import 'dart:convert';
+import 'package:archive/archive.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sales_tracking/services/branch_report_data.dart';
 import 'package:sales_tracking/services/branch_report_csv.dart';
+import 'package:sales_tracking/services/branch_report_excel.dart';
+import 'package:sales_tracking/services/number_format.dart';
+import 'package:sales_tracking/widgets/branch_allocation_table.dart';
 import 'package:sales_tracking/widgets/branch_report_dialog.dart';
+import 'package:xml/xml.dart';
 
 void main() {
+  test('money display groups thousands and preserves two decimals', () {
+    expect(formatMoney(1200), '₱1,200.00');
+    expect(formatMoney(1200.5), '₱1,200.50');
+  });
+
   final day = DateUtils.dateOnly(DateTime.now());
   final end = day.add(const Duration(days: 1));
   BranchReportData fixture({bool sales = false}) {
@@ -97,7 +107,7 @@ void main() {
     });
   }
 
-  test('current allocation costs use catalog costs even with no sales', () {
+  test('report total cost excludes unsold allocated inventory', () {
     final data = fixture();
     final items = data.currentAllocatedItems('b', day, end, now: day);
     expect(items.length, 1);
@@ -106,10 +116,31 @@ void main() {
     expect(items.single['allocationCost'], 2100);
     expect(
       data.allocationReportTotals('b', day, end, now: day)['Total cost'],
-      2100,
+      0,
     );
-    // Cost of sales is kept separate from the cost of allocated inventory.
     expect(data.totals('b', day, end)['Total cost'], 0);
+  });
+
+  test('branch table cost is cost price multiplied by sold quantity', () {
+    expect(
+      branchStockCost({
+        'costPrice': 50,
+        'sold': 1,
+        'starting': 100,
+        'added': 5,
+      }),
+      50,
+    );
+    expect(
+      branchStockCost({
+        'costPrice': 50,
+        'sold': 3,
+        'starting': 100,
+        'added': 5,
+      }),
+      150,
+    );
+    expect(branchStockCost({'costPrice': 50, 'sold': 0, 'starting': 100}), 0);
   });
 
   test(
@@ -121,6 +152,11 @@ void main() {
         closeTo(10.68, .001),
       );
       expect(data.totals('b', day, end)['Total net sales'], closeTo(89, .001));
+      expect(data.totals('b', day, end)['Total cost'], 20);
+      expect(
+        data.allocationReportTotals('b', day, end, now: day)['Total cost'],
+        20,
+      );
       final removedCookie = data
           .items('b', day, end)
           .singleWhere((item) => item['name'] == 'Removed cookie');
@@ -150,7 +186,18 @@ void main() {
       expect(allocations, contains('Og Cookies'));
       expect(allocations, isNot(contains('Expired cookie')));
       expect(allocations, isNot(contains('Removed cookie')));
-      expect(allocations, contains('Total cost: 2100.00'));
+      expect(
+        allocations,
+        contains(
+          '"Total cost","Cost price x sold items; unsold inventory contributes 0."',
+        ),
+      );
+      expect(
+        allocations,
+        contains(
+          '"TOTAL","","","","","42.0","0.0","42.0","0.00","0.0","0.00","0.00","0.00",""',
+        ),
+      );
       expect(csv, contains('"Total VAT / tax","10.68"'));
       expect(csv, contains('"Total net sales","89.00"'));
       final analytics = csv
@@ -170,6 +217,44 @@ void main() {
       expect(csv, contains('S-001'));
     },
   );
+
+  test('Excel report styles totals, uses sold costs, date cells and chart', () {
+    final data = fixture();
+    final rows = branchReportRows(data, day, end, branchId: 'b', now: day);
+    final allocationHeaderIndex = rows.indexWhere(
+      (row) => row.firstOrNull == 'ID',
+    );
+    final allocationHeaders = rows[allocationHeaderIndex];
+    final totalRow = rows.firstWhere((row) => row.firstOrNull == 'TOTAL');
+    expect(totalRow[allocationHeaders.indexOf('Total cost')], '0.00');
+    expect(allocationHeaders, contains('Net profit'));
+
+    final workbook = ZipDecoder().decodeBytes(
+      branchReportExcel(data, day, end, branchId: 'b', now: day),
+    );
+    for (final file in workbook.files.where(
+      (file) => file.name.endsWith('.xml') || file.name.endsWith('.rels'),
+    )) {
+      XmlDocument.parse(utf8.decode(file.content as List<int>));
+    }
+    final sheetFile = workbook.findFile('xl/worksheets/sheet1.xml');
+    final stylesFile = workbook.findFile('xl/styles.xml');
+    final chartFile = workbook.findFile('xl/charts/chart1.xml');
+    expect(sheetFile, isNotNull);
+    expect(stylesFile, isNotNull);
+    expect(chartFile, isNotNull);
+
+    final sheet = utf8.decode(sheetFile!.content as List<int>);
+    final styles = utf8.decode(stylesFile!.content as List<int>);
+    final chart = utf8.decode(chartFile!.content as List<int>);
+    expect(sheet, contains('CO-005'));
+    expect(sheet, contains('s="4"'));
+    expect(sheet, contains('s="5"'));
+    expect(sheet, contains('s="6"><v>'));
+    expect(styles, contains('dd/mm/yyyy'));
+    expect(chart, contains('<c:barDir val="bar"/>'));
+    expect(chart, contains('Net sales'));
+  });
 
   testWidgets(
     'allocation table has adjacent sales and sold, current costs and footer cost',
@@ -202,16 +287,49 @@ void main() {
         scrollable: scroll,
       );
       await tester.pumpAndSettle();
+      final categoryWrap = find
+          .ancestor(of: find.text('Categories'), matching: find.byType(Wrap))
+          .first;
+      final categoryChoices = tester
+          .widgetList<ChoiceChip>(
+            find.descendant(
+              of: categoryWrap,
+              matching: find.byType(ChoiceChip),
+            ),
+          )
+          .map((chip) => (chip.label as Text).data)
+          .toList();
+      expect(categoryChoices, ['Categories', 'Bundle', 'Beverages']);
+      expect(
+        tester
+            .widget<ChoiceChip>(
+              find
+                  .ancestor(
+                    of: find.text('Categories'),
+                    matching: find.byType(ChoiceChip),
+                  )
+                  .first,
+            )
+            .selected,
+        isTrue,
+      );
       final table = tester.widget<DataTable>(find.byType(DataTable).first);
       final headings = table.columns
           .map((column) => (column.label as Text).data)
           .toList();
+      expect(headings.indexOf('Cost price') + 1, headings.indexOf('Price'));
+      expect(
+        headings.indexOf('Price') + 1,
+        headings.indexOf('Starting allocated'),
+      );
       expect(headings[headings.indexOf('Sales') + 1], 'Sold items');
       expect(headings[headings.indexOf('Total profit') + 1], 'Net profit');
-      expect(headings, isNot(contains('Total cost')));
+      expect(headings[headings.indexOf('Net profit') + 1], 'Total cost');
+      expect(headings.last, 'Action');
       expect(find.text('Expired cookie'), findsNothing);
       expect(find.text('Removed cookie'), findsNothing);
-      expect(find.textContaining('Total cost: '), findsOneWidget);
+      expect(find.text('₱2,100.00'), findsNothing);
+      expect(find.text('₱0.00'), findsWidgets);
       expect(tester.takeException(), isNull);
     },
   );

@@ -8,6 +8,8 @@ void main() {
       'VAR-1788168154682000-069154',
     );
     expect(publicItemId('COF-123'), 'COF-123');
+    expect(publicItemId('ADM-0001'), 'ADM-001');
+    expect(publicItemId('ADM-003'), 'ADM-003');
   });
   test('legacy auto IDs receive stable case-sensitive numeric codes', () {
     final upper = publicItemId('VAR-Abcdefghijklmnopqrst');

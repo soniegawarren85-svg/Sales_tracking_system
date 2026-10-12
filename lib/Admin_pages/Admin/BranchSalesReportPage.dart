@@ -1,4 +1,5 @@
 import 'package:sales_tracking/theme/app_colors.dart';
+import '../../services/number_format.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'AllSalesAnalyticsPage.dart';
@@ -82,14 +83,7 @@ class _BranchSalesReportPageState extends State<BranchSalesReportPage> {
       ? value.toDouble()
       : double.tryParse(value?.toString() ?? '') ?? 0;
 
-  String _peso(double v) {
-    final parts = v.toStringAsFixed(2).split('.');
-    final whole = parts[0].replaceAllMapped(
-      RegExp(r'\B(?=(\d{3})+(?!\d))'),
-      (m) => ',',
-    );
-    return '₱$whole.${parts[1]}';
-  }
+  String _peso(double v) => formatMoney(v);
 
   String _time(dynamic v) {
     if (v is! Timestamp) return '';
@@ -327,7 +321,9 @@ class _BranchSalesReportPageState extends State<BranchSalesReportPage> {
                 .collection('completed_sales')
                 .snapshots(),
             builder: (context, salesSnapshot) {
-              final allTodaySales = (salesSnapshot.data?.docs ?? []).where((doc) {
+              final allTodaySales = (salesSnapshot.data?.docs ?? []).where((
+                doc,
+              ) {
                 final sale = doc.data();
                 return _isSelectedDate(sale['timestamp']) &&
                     (_branchId == null ||
@@ -336,7 +332,13 @@ class _BranchSalesReportPageState extends State<BranchSalesReportPage> {
               }).toList();
               final todaySales = allTodaySales.where((doc) {
                 if (_paymentFilter == 'All') return true;
-                final mode = doc.data()['paymentMode']?.toString().trim().toLowerCase() ?? 'cash';
+                final mode =
+                    doc
+                        .data()['paymentMode']
+                        ?.toString()
+                        .trim()
+                        .toLowerCase() ??
+                    'cash';
                 return mode == _paymentFilter.toLowerCase();
               }).toList();
               final categories = <String>{
@@ -406,11 +408,11 @@ class _BranchSalesReportPageState extends State<BranchSalesReportPage> {
                   .toList();
               final revenue = _category == 'All'
                   ? filteredSales.fold<double>(0, (sum, sale) {
-                    // Completed sales and refund receipts already store
-                    // their signed net total. Keep each transaction's sign
-                    // so a fully refunded original receipt is not deducted
-                    // twice alongside its negative refund receipt.
-                    return sum + _money(sale.data()['total']);
+                      // Completed sales and refund receipts already store
+                      // their signed net total. Keep each transaction's sign
+                      // so a fully refunded original receipt is not deducted
+                      // twice alongside its negative refund receipt.
+                      return sum + _money(sale.data()['total']);
                     })
                   : filteredSales.fold<double>(
                       0,
@@ -477,7 +479,10 @@ class _BranchSalesReportPageState extends State<BranchSalesReportPage> {
                     // server aggregate cannot show another branch's total.
                     final cashReceipts = allTodaySales.where(
                       (sale) =>
-                          sale.data()['paymentMode']?.toString().toLowerCase() ==
+                          sale
+                              .data()['paymentMode']
+                              ?.toString()
+                              .toLowerCase() ==
                           'cash',
                     );
                     if (cashReceipts.isNotEmpty) {
@@ -487,12 +492,14 @@ class _BranchSalesReportPageState extends State<BranchSalesReportPage> {
                         return sum +
                             (delta == null
                                 ? _money(data['paidAmount']) -
-                                    _money(data['change'])
+                                      _money(data['change'])
                                 : _money(delta));
                       });
                     }
                   } else {
-                    final activeBranchIds = branches.map((branch) => branch.id).toSet();
+                    final activeBranchIds = branches
+                        .map((branch) => branch.id)
+                        .toSet();
                     for (final doc in drawerDocs) {
                       final data = doc.data();
                       final branchKey = data['branchId']?.toString() ?? doc.id;
@@ -502,7 +509,9 @@ class _BranchSalesReportPageState extends State<BranchSalesReportPage> {
                     }
                   }
                   if (_branchId != null) {
-                    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+                    return StreamBuilder<
+                      DocumentSnapshot<Map<String, dynamic>>
+                    >(
                       stream: FirebaseFirestore.instance
                           .collection('staff_budget')
                           .doc(_branchId)
@@ -1077,15 +1086,14 @@ class _BranchSalesReportPageState extends State<BranchSalesReportPage> {
     final gcashId = sale['gcashTransactionId']?.toString().trim() ?? '';
     final paidAmount = _money(sale['paidAmount']);
     final change = _money(sale['change']);
-    final refundReason = (sale['reason'] ?? sale['refundReason'])
-      ?.toString()
-      .trim() ??
-      '';
+    final refundReason =
+        (sale['reason'] ?? sale['refundReason'])?.toString().trim() ?? '';
     final refundSource = sale['source']?.toString().trim() ?? '';
     final hasDiscount = discount > 0.01 && discountType.toLowerCase() != 'none';
-    final hasRefundActivity = saleIsRefund ||
-      sale['fullyRefunded'] == true ||
-      items.any((item) => _money(item['refunded']) > 0);
+    final hasRefundActivity =
+        saleIsRefund ||
+        sale['fullyRefunded'] == true ||
+        items.any((item) => _money(item['refunded']) > 0);
     final total = category == 'All'
         ? _money(sale['total'])
         : items.fold<double>(
@@ -1285,14 +1293,11 @@ class _BranchSalesReportPageState extends State<BranchSalesReportPage> {
                         ? 'GCash - $gcashId'
                         : paymentMode,
                   ),
-                  _reportDetailRow(
-                    'Customer Paid',
-                    _peso(paidAmount),
-                  ),
+                  _reportDetailRow('Customer Paid', _peso(paidAmount)),
                   if (hasDiscount)
                     _reportDetailRow(
                       'Discount ($discountType)',
-                      '-₱${discount.toStringAsFixed(2)}',
+                      '-${formatMoney(discount)}',
                       valueColor: _C.ok,
                     ),
                   if (discountProofId.isNotEmpty)

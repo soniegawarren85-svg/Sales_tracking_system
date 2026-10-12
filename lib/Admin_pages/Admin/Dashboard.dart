@@ -17,6 +17,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../services/inventory_service.dart';
 import '../../services/expiry_notification_service.dart';
 import '../../services/branch_session.dart';
+import '../../services/checklist_status.dart';
 
 import 'InventoryPage.dart';
 import 'Message.dart';
@@ -44,6 +45,8 @@ class _AdminDashboardState extends State<AdminDashboard>
     with TickerProviderStateMixin {
   int _selectedIndex = 0;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _allocationNotices;
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _checklistUpdates;
+  int _pendingReturnCount = 0;
 
   static const String kShopLogoAsset = 'Assets/Image/ob.jpg';
   final _navItems = const [
@@ -76,6 +79,28 @@ class _AdminDashboardState extends State<AdminDashboard>
           },
           onError: (Object error) {
             debugPrint('Allocation notifications: $error');
+          },
+        );
+    _checklistUpdates = FirebaseFirestore.instance
+        .collection('allocation_checklist')
+        .snapshots()
+        .listen(
+          (snapshot) {
+            final returns = <String>{};
+            for (final doc in snapshot.docs) {
+              final data = doc.data();
+              if (!ChecklistStatus.returnOpen(data)) continue;
+              final batchId = data['batchId']?.toString().trim() ?? '';
+              returns.add(
+                batchId.isEmpty ? 'return:${doc.id}' : 'return:$batchId',
+              );
+            }
+            if (mounted) {
+              setState(() => _pendingReturnCount = returns.length);
+            }
+          },
+          onError: (Object error) {
+            debugPrint('Checklist navigation badges: $error');
           },
         );
     ShortIdService.refresh().catchError((Object error) {
@@ -147,6 +172,7 @@ class _AdminDashboardState extends State<AdminDashboard>
   @override
   void dispose() {
     _allocationNotices?.cancel();
+    _checklistUpdates?.cancel();
     BranchSession.instance.removeListener(_onBranchChanged);
     _entranceController.dispose();
     super.dispose();
@@ -664,6 +690,7 @@ class _AdminDashboardState extends State<AdminDashboard>
                 child: _SidebarTile(
                   item: _navItems[index],
                   selected: _selectedIndex == index,
+                  badgeCount: _navigationBadgeCount(index),
                   onTap: () => setState(() => _selectedIndex = index),
                 ),
               ),
@@ -999,11 +1026,19 @@ class _AdminDashboardState extends State<AdminDashboard>
                 scale: animation,
                 child: FadeTransition(opacity: animation, child: child),
               ),
-              child: Icon(
-                item.icon,
-                key: ValueKey(selected),
-                size: MediaQuery.of(context).size.width >= 600 ? 21 : 24,
-                color: selected ? kPrimaryBrown : Colors.grey[400],
+              child: Badge(
+                isLabelVisible: _navigationBadgeCount(index) > 0,
+                label: Text(
+                  _navigationBadgeCount(index) > 99
+                      ? '99+'
+                      : '${_navigationBadgeCount(index)}',
+                ),
+                child: Icon(
+                  item.icon,
+                  key: ValueKey(selected),
+                  size: MediaQuery.of(context).size.width >= 600 ? 21 : 24,
+                  color: selected ? kPrimaryBrown : Colors.grey[400],
+                ),
               ),
             ),
             SizedBox(height: MediaQuery.of(context).size.width >= 600 ? 2 : 4),
@@ -1022,17 +1057,24 @@ class _AdminDashboardState extends State<AdminDashboard>
       ),
     );
   }
+
+  int _navigationBadgeCount(int index) => switch (index) {
+    2 => _pendingReturnCount,
+    _ => 0,
+  };
 }
 
 // ─── Sidebar tile with hover + selection animation ─────────────────────────
 class _SidebarTile extends StatefulWidget {
   final _NavItem item;
   final bool selected;
+  final int badgeCount;
   final VoidCallback onTap;
 
   const _SidebarTile({
     required this.item,
     required this.selected,
+    required this.badgeCount,
     required this.onTap,
   });
 
@@ -1070,10 +1112,16 @@ class _SidebarTileState extends State<_SidebarTile> {
               AnimatedScale(
                 scale: widget.selected ? 1.08 : 1.0,
                 duration: const Duration(milliseconds: 180),
-                child: Icon(
-                  widget.item.icon,
-                  size: 18,
-                  color: widget.selected ? Colors.white : AppColors.blush,
+                child: Badge(
+                  isLabelVisible: widget.badgeCount > 0,
+                  label: Text(
+                    widget.badgeCount > 99 ? '99+' : '${widget.badgeCount}',
+                  ),
+                  child: Icon(
+                    widget.item.icon,
+                    size: 18,
+                    color: widget.selected ? Colors.white : AppColors.blush,
+                  ),
                 ),
               ),
               const SizedBox(width: 10),

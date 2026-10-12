@@ -102,6 +102,7 @@ void main() {
       expect(items, hasLength(1));
       expect(items.single['profit'], 49);
       expect(data.totals('b', start, end)['Total profit'], 49);
+      expect(data.totals('b', start, end)['Total net profit'], 49);
     },
   );
   test(

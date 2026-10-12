@@ -16,163 +16,172 @@ String _staffKey(QueryDocumentSnapshot<Map<String, dynamic>> doc) =>
     '${doc.data()['uid'] ?? doc.data()['userId'] ?? doc.id}';
 
 class AdminStaffBranches extends StatelessWidget {
-  const AdminStaffBranches({super.key});
+  const AdminStaffBranches({super.key, this.firestore});
+  final FirebaseFirestore? firestore;
   @override
-  Widget build(
-    BuildContext context,
-  ) => StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-    stream: FirebaseFirestore.instance.collection('branches').snapshots(),
-    builder: (context, branches) =>
-        StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-          stream: FirebaseFirestore.instance
-              .collection('staff_requests')
-              .snapshots(),
-          builder: (context, staff) {
-            if (branches.hasError || staff.hasError)
-              return const Text('Unable to load branch staff.');
-            if (!branches.hasData || !staff.hasData)
-              return const Center(child: CircularProgressIndicator());
-            final docs = branches.data!.docs
-                .where((doc) => doc.data()['isVoided'] != true)
-                .toList();
-            if (docs.isEmpty)
-              return const Text(
-                'Create a branch in Allocation to assign staff.',
-              );
-            return LayoutBuilder(
-              builder: (context, constraints) {
-                final columns = constraints.maxWidth >= 720 ? 2 : 1;
-                return SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: Row(
-                    children: docs.map((doc) {
-                      final data = doc.data();
-                      final ids = (data['staffIds'] as List? ?? [])
-                          .map((id) => '$id')
-                          .toSet();
-                      final members = staff.data!.docs
-                          .where(
-                            (member) =>
-                                ids.contains(_staffKey(member)) &&
-                                member.data()['status'] == 'accepted',
-                          )
-                          .toList();
-                      return SizedBox(
-                        width: columns == 2
-                            ? constraints.maxWidth / 2
-                            : constraints.maxWidth * .9,
-                        child: Card(
-                          color: AppColors.blush,
-                          clipBehavior: Clip.antiAlias,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(24),
-                          ),
-                          child: InkWell(
-                            onTap: () => showModalBottomSheet<void>(
-                              context: context,
-                              isScrollControlled: true,
-                              useSafeArea: true,
-                              showDragHandle: true,
-                              builder: (_) => SizedBox(
-                                height: MediaQuery.sizeOf(context).height * .65,
-                                child: _BranchStaffSheet(branch: doc.reference),
-                              ),
+  Widget build(BuildContext context) {
+    final db = firestore ?? FirebaseFirestore.instance;
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: db.collection('branches').snapshots(),
+      builder: (context, branches) =>
+          StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+            stream: db.collection('staff_requests').snapshots(),
+            builder: (context, staff) {
+              if (branches.hasError || staff.hasError)
+                return const Text('Unable to load branch staff.');
+              if (!branches.hasData || !staff.hasData)
+                return const Center(child: CircularProgressIndicator());
+              final docs = branches.data!.docs
+                  .where((doc) => doc.data()['isVoided'] != true)
+                  .toList();
+              if (docs.isEmpty)
+                return const Text(
+                  'Create a branch in Allocation to assign staff.',
+                );
+              return LayoutBuilder(
+                builder: (context, constraints) {
+                  final columns = constraints.maxWidth >= 720 ? 2 : 1;
+                  return SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      children: docs.map((doc) {
+                        final data = doc.data();
+                        final ids = (data['staffIds'] as List? ?? [])
+                            .map((id) => '$id')
+                            .toSet();
+                        final members = staff.data!.docs
+                            .where(
+                              (member) =>
+                                  ids.contains(_staffKey(member)) &&
+                                  member.data()['status'] == 'accepted',
+                            )
+                            .toList();
+                        return SizedBox(
+                          width: columns == 2
+                              ? constraints.maxWidth / 2
+                              : constraints.maxWidth * .9,
+                          child: Card(
+                            color: AppColors.blush,
+                            clipBehavior: Clip.antiAlias,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(24),
                             ),
-                            child: Padding(
-                              padding: const EdgeInsets.all(22),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    'Staff in ${data['name'] ?? 'Branch'}',
-                                    style: const TextStyle(
-                                      color: AppColors.primaryDark,
-                                      fontSize: 20,
-                                      fontWeight: FontWeight.w800,
-                                    ),
+                            child: InkWell(
+                              onTap: () => showModalBottomSheet<void>(
+                                context: context,
+                                isScrollControlled: true,
+                                useSafeArea: true,
+                                showDragHandle: true,
+                                builder: (_) => SizedBox(
+                                  height:
+                                      MediaQuery.sizeOf(context).height * .65,
+                                  child: _BranchStaffSheet(
+                                    branch: doc.reference,
+                                    firestore: db,
                                   ),
-                                  const SizedBox(height: 6),
-                                  Text('${members.length} assigned staff'),
-                                  const SizedBox(height: 18),
-                                  Wrap(
-                                    spacing: 6,
-                                    runSpacing: 6,
-                                    children: [
-                                      ...members
-                                          .take(5)
-                                          .map(
-                                            (member) => Tooltip(
-                                              message: _staffName(
-                                                member.data(),
-                                              ),
-                                              child: ProfileAvatar(
-                                                data: member.data(),
+                                ),
+                              ),
+                              child: Padding(
+                                padding: const EdgeInsets.all(22),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      'Staff in ${data['name'] ?? 'Branch'}',
+                                      style: const TextStyle(
+                                        color: AppColors.primaryDark,
+                                        fontSize: 20,
+                                        fontWeight: FontWeight.w800,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 6),
+                                    Text('${members.length} assigned staff'),
+                                    const SizedBox(height: 18),
+                                    Wrap(
+                                      spacing: 6,
+                                      runSpacing: 6,
+                                      children: [
+                                        ...members
+                                            .take(5)
+                                            .map(
+                                              (member) => Tooltip(
+                                                message: _staffName(
+                                                  member.data(),
+                                                ),
+                                                child: ProfileAvatar(
+                                                  data: member.data(),
+                                                ),
                                               ),
                                             ),
+                                        if (members.length > 5)
+                                          CircleAvatar(
+                                            child: Text(
+                                              '+${members.length - 5}',
+                                            ),
                                           ),
-                                      if (members.length > 5)
-                                        CircleAvatar(
-                                          child: Text('+${members.length - 5}'),
-                                        ),
-                                      if (members.isEmpty)
-                                        const CircleAvatar(
-                                          backgroundColor: Colors.white,
-                                          child: Icon(
-                                            Icons.person_outline,
-                                            color: AppColors.primary,
+                                        if (members.isEmpty)
+                                          const CircleAvatar(
+                                            backgroundColor: Colors.white,
+                                            child: Icon(
+                                              Icons.person_outline,
+                                              color: AppColors.primary,
+                                            ),
                                           ),
-                                        ),
-                                    ],
-                                  ),
-                                  const Divider(height: 28),
-                                  FilledButton.icon(
-                                    label: const Text('Activity logs'),
-                                    onPressed: () => showBranchStaffActivity(
-                                      context,
-                                      doc.id,
-                                      '${data['name'] ?? 'Branch'}',
+                                      ],
                                     ),
-                                    icon: const Icon(Icons.history_rounded),
+                                    const Divider(height: 28),
+                                    FilledButton.icon(
+                                      label: const Text('Activity logs'),
+                                      onPressed: () => showBranchStaffActivity(
+                                        context,
+                                        doc.id,
+                                        '${data['name'] ?? 'Branch'}',
+                                      ),
+                                      icon: const Icon(Icons.history_rounded),
 
-                                    style: FilledButton.styleFrom(
-                                      foregroundColor: Colors.white,
-                                      backgroundColor: AppColors.primaryDark,
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(12),
+                                      style: FilledButton.styleFrom(
+                                        foregroundColor: Colors.white,
+                                        backgroundColor: AppColors.primaryDark,
+                                        shape: RoundedRectangleBorder(
+                                          borderRadius: BorderRadius.circular(
+                                            12,
+                                          ),
+                                        ),
                                       ),
                                     ),
-                                  ),
-                                  const SizedBox(height: 8),
-                                  const Row(
-                                    children: [
-                                      Expanded(
-                                        child: Text('View & assign staff'),
-                                      ),
-                                      Icon(
-                                        Icons.arrow_forward,
-                                        color: AppColors.primary,
-                                      ),
-                                    ],
-                                  ),
-                                ],
+                                    const SizedBox(height: 8),
+                                    const Row(
+                                      children: [
+                                        Expanded(
+                                          child: Text('View & assign staff'),
+                                        ),
+                                        Icon(
+                                          Icons.arrow_forward,
+                                          color: AppColors.primary,
+                                        ),
+                                      ],
+                                    ),
+                                  ],
+                                ),
                               ),
                             ),
                           ),
-                        ),
-                      );
-                    }).toList(),
-                  ),
-                );
-              },
-            );
-          },
-        ),
-  );
+                        );
+                      }).toList(),
+                    ),
+                  );
+                },
+              );
+            },
+          ),
+    );
+  }
 }
 
 class _BranchStaffSheet extends StatefulWidget {
-  const _BranchStaffSheet({required this.branch});
+  const _BranchStaffSheet({required this.branch, required this.firestore});
   final DocumentReference<Map<String, dynamic>> branch;
+  final FirebaseFirestore firestore;
   @override
   State<_BranchStaffSheet> createState() => _BranchStaffSheetState();
 }
@@ -190,7 +199,7 @@ class _BranchStaffSheetState extends State<_BranchStaffSheet> {
       _error = null;
     });
     try {
-      await FirebaseFirestore.instance.runTransaction((transaction) async {
+      await widget.firestore.runTransaction((transaction) async {
         final branch = await transaction.get(widget.branch);
         final member = await transaction.get(staff.reference);
         final data = member.data();
@@ -252,9 +261,7 @@ class _BranchStaffSheetState extends State<_BranchStaffSheet> {
         stream: widget.branch.snapshots(),
         builder: (context, branch) =>
             StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-              stream: FirebaseFirestore.instance
-                  .collection('staff_requests')
-                  .snapshots(),
+              stream: widget.firestore.collection('staff_requests').snapshots(),
               builder: (context, snapshot) {
                 if (snapshot.hasError || branch.hasError)
                   return const Center(
@@ -272,6 +279,12 @@ class _BranchStaffSheetState extends State<_BranchStaffSheet> {
                           (doc.data()['status'] == 'accepted' ||
                               ids.contains(_staffKey(doc))),
                     )
+                    .where((doc) {
+                      if (ids.contains(_staffKey(doc))) return true;
+                      final branchIds = (doc.data()['branchIds'] as List? ?? [])
+                          .map((id) => '$id');
+                      return !branchIds.any((id) => id != widget.branch.id);
+                    })
                     .toList();
                 staff.sort(
                   (a, b) => (ids.contains(_staffKey(b)) ? 1 : 0).compareTo(

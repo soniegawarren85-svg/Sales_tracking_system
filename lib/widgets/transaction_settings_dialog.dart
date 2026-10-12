@@ -76,9 +76,46 @@ class _TransactionSettingsDialogState extends State<TransactionSettingsDialog> {
   ) async {
     setState(() => busy = true);
     try {
+      final currentSettings = (await reference.get()).data() ?? {};
+      Map<String, dynamic> patchForBranch(String branchId) {
+        if (widget.kind != 'payments' ||
+            patch['payments'] is! List ||
+            branchIds.length < 2) {
+          return patch;
+        }
+        final sourceRows = settingRows(
+          settingsForBranch(currentSettings, branchIds.first),
+          'payments',
+        );
+        final targetRows = settingRows(
+          settingsForBranch(currentSettings, branchId),
+          'payments',
+        );
+        final payments = (patch['payments'] as List)
+            .whereType<Map>()
+            .map((row) => Map<String, dynamic>.from(row))
+            .map((row) {
+              final source = sourceRows
+                  .where((existing) => existing['id'] == row['id'])
+                  .firstOrNull;
+              final target = targetRows
+                  .where((existing) => existing['id'] == row['id'])
+                  .firstOrNull;
+              if (source != null &&
+                  target != null &&
+                  row['qrUrl'] == source['qrUrl']) {
+                row['qrUrl'] = target['qrUrl'];
+              }
+              return row;
+            })
+            .toList();
+        return {...patch, 'payments': payments};
+      }
+
       await reference.set({
         'branchSettings': {
-          for (final branchId in branchIds) branchId: patch,
+          for (final branchId in branchIds)
+            branchId: patchForBranch(branchId),
         },
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
@@ -309,7 +346,11 @@ class _TransactionSettingsDialogState extends State<TransactionSettingsDialog> {
           },
   );
 
-  bool get _hasAllBranches => widget.kind == 'permissions' || widget.kind == 'tax';
+  bool get _hasAllBranches =>
+      widget.kind == 'permissions' ||
+      widget.kind == 'tax' ||
+      widget.kind == 'discounts' ||
+      widget.kind == 'payments';
 
   @override
   Widget build(BuildContext context) => AlertDialog(
@@ -510,16 +551,30 @@ class _TransactionSettingsDialogState extends State<TransactionSettingsDialog> {
                   ],
                 );
               final rows = settingRows(data, widget.kind);
+              final targetBranches = isAllBranches
+                  ? branches.map((branch) => branch.id).toList()
+                  : [branchId];
+              final discountsEnabled = isAllBranches
+                  ? branches.every(
+                      (branch) =>
+                          settingsForBranch(rawSettings, branch.id)['discountsEnabled'] !=
+                          false,
+                    )
+                  : data['discountsEnabled'] != false;
               return SingleChildScrollView(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    _branchDropdown(branches, branchId),
+                    _branchDropdown(
+                      branches,
+                      isAllBranches ? allBranchesSelection : branchId,
+                      includeAll: true,
+                    ),
                     const SizedBox(height: 8),
                     if (widget.kind == 'discounts')
                       SwitchListTile(
                         title: const Text('Enable discounts'),
-                        value: data['discountsEnabled'] != false,
+                        value: discountsEnabled,
                         onChanged: busy
                             ? null
                             : (value) async {
@@ -529,8 +584,8 @@ class _TransactionSettingsDialogState extends State<TransactionSettingsDialog> {
                                       'Turn off all discounts in the $branchName staff cashier?',
                                     ))
                                   return;
-                                await save(
-                                  branchId,
+                                await saveBranches(
+                                  targetBranches,
                                   {'discountsEnabled': value},
                                   '$branchName discount control updated successfully.',
                                 );
@@ -589,8 +644,8 @@ class _TransactionSettingsDialogState extends State<TransactionSettingsDialog> {
                                                   );
                                                   if (updated != null) {
                                                     rows[entry.key] = updated;
-                                                    await save(
-                                                      branchId,
+                                                    await saveBranches(
+                                                      targetBranches,
                                                       {widget.kind: rows},
                                                       'Saved for $branchName.',
                                                     );
@@ -614,8 +669,8 @@ class _TransactionSettingsDialogState extends State<TransactionSettingsDialog> {
                                                   ...row,
                                                   'isVoided': !voided,
                                                 };
-                                                await save(
-                                                  branchId,
+                                                await saveBranches(
+                                                  targetBranches,
                                                   {widget.kind: rows},
                                                   voided
                                                       ? 'Restored for $branchName.'
@@ -640,7 +695,7 @@ class _TransactionSettingsDialogState extends State<TransactionSettingsDialog> {
                                 );
                                 if (row != null) {
                                   rows.add(row);
-                                  await save(branchId, {
+                                  await saveBranches(targetBranches, {
                                     widget.kind: rows,
                                   }, 'Added for $branchName.');
                                 }

@@ -3,15 +3,11 @@ import '../services/branch_report_data.dart';
 import '../theme/app_colors.dart';
 import 'historical_cash_drawer.dart';
 import 'report_item_history.dart';
+import '../services/number_format.dart';
 
-/// Stock investment for counted products; beverages are prepared on demand.
-double branchStockCost(Map row) => row['type'] == 'Beverages'
-    ? reportValue(
-        row['totalCost'] ??
-            reportValue(row['costPrice']) * reportValue(row['sold']),
-      )
-    : reportValue(row['costPrice']) *
-          (reportValue(row['starting']) + reportValue(row['added']));
+/// Cost of sold units, excluding unsold starting and additional stock.
+double branchStockCost(Map row) =>
+    reportValue(row['costPrice']) * reportValue(row['sold']);
 double? branchSizePrice(Map row, String size) {
   final option = (row['sizes'] as List? ?? [])
       .whereType<Map>()
@@ -61,11 +57,12 @@ class BranchAllocationTable extends StatelessWidget {
     required this.beverages,
     required this.actions,
     this.inventory = false,
+    this.allowRefunds = true,
   });
   final List<Map<String, dynamic>> rows;
-  final bool beverages, inventory;
+  final bool beverages, inventory, allowRefunds;
   final Widget Function(Map<String, dynamic>) actions;
-  String money(dynamic v) => '₱${reportValue(v).toStringAsFixed(2)}';
+  String money(dynamic v) => formatMoney(reportValue(v));
   String qty(dynamic v) => v == null ? '—' : reportValue(v).toStringAsFixed(0);
   @override
   Widget build(BuildContext context) {
@@ -82,28 +79,37 @@ class BranchAllocationTable extends StatelessWidget {
         if (!beverages) ('remaining', 'Stock'),
         ('status', 'Availability'),
       ] else ...[
-        if (!beverages) ('starting', 'Starting allocation'),
-        ('added', 'Allocated today'),
-        if (!beverages) ('remaining', 'Remaining allocation'),
-        ('stockCost', 'Total cost'),
-        ('profit', 'Total profit'),
-        ('sold', 'Total sold'),
-        ('sales', 'Sales'),
         if (beverages)
           for (final size in ['Small', 'Medium', 'Large']) (size, size)
         else
-          ('price', 'Price'),
+          ('price', 'Unit price'),
+        if (!beverages) ...[
+          ('starting', 'Starting allocated'),
+          ('added', 'Allocated in period'),
+          ('remaining', 'Remaining allocated'),
+        ],
+        ('sales', 'Sales'),
+        ('sold', 'Sold items'),
+        ('costPrice', 'Cost price'),
+        ('unitProfit', 'Profit per item'),
+        ('profit', 'Total profit'),
+        ('netProfit', 'Net profit'),
+        if (allowRefunds) ('refund', 'Refund'),
+        ('reduce', 'Reduce'),
+        if (!beverages) ('expirationDate', 'Expiration date'),
+        ('status', 'Status'),
       ],
       ('actions', 'Actions'),
     ];
     const totalKeys = {
       'starting',
-      'added',
       'remaining',
-      'stockCost',
+      'added',
       'profit',
+      'netProfit',
       'sold',
       'sales',
+      'stockCost',
     };
     bool low(Map row) =>
         !beverages &&
@@ -145,6 +151,8 @@ class BranchAllocationTable extends StatelessWidget {
         final price = branchSizePrice(row, key);
         return Text(price == null ? '—' : money(price));
       }
+      if (key == 'status' && !inventory)
+        return Text('${row['status'] ?? 'Not recorded'}');
       if (key == 'status')
         return Row(
           mainAxisSize: MainAxisSize.min,
@@ -171,9 +179,17 @@ class BranchAllocationTable extends StatelessWidget {
             Text(qty(row[key])),
           ],
         );
-      if (['starting', 'added', 'sold'].contains(key))
+      if (['starting', 'added', 'remaining', 'sold'].contains(key))
         return Text(qty(row[key]));
-      if (['stockCost', 'profit', 'sales', 'price', 'costPrice'].contains(key))
+      if ([
+        'stockCost',
+        'profit',
+        'netProfit',
+        'unitProfit',
+        'sales',
+        'price',
+        'costPrice',
+      ].contains(key))
         return Text(
           money(key == 'stockCost' ? branchStockCost(row) : row[key]),
         );
@@ -234,7 +250,12 @@ class BranchAllocationTable extends StatelessWidget {
                           key == 'id'
                               ? 'Total'
                               : totalKeys.contains(key)
-                              ? (['stockCost', 'profit', 'sales'].contains(key)
+                              ? ([
+                                      'stockCost',
+                                      'profit',
+                                      'netProfit',
+                                      'sales',
+                                    ].contains(key)
                                     ? money(sum)
                                     : qty(sum))
                               : '',

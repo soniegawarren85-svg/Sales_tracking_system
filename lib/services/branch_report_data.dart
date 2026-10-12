@@ -345,6 +345,11 @@ class BranchReportData {
         end,
       ).fold<double>(0, (sum, item) => sum + reportValue(item['totalCost'])),
       'Total profit': profitForItems(items(branch, start, end)),
+      'Total net profit': items(
+        branch,
+        start,
+        end,
+      ).fold<double>(0, (sum, item) => sum + reportValue(item['netProfit'])),
       'Total revenue': selected
           .where((row) => !reportRefund(row))
           .fold(0, (sum, row) => sum + reportValue(row['total'])),
@@ -621,15 +626,7 @@ class BranchReportData {
     DateTime start,
     DateTime end, {
     DateTime? now,
-  }) => {
-    ...totals(branch, start, end),
-    'Total cost': currentAllocatedItems(
-      branch,
-      start,
-      end,
-      now: now,
-    ).fold<double>(0, (sum, row) => sum + reportValue(row['allocationCost'])),
-  };
+  }) => totals(branch, start, end);
 
   List<Map<String, dynamic>> items(
     String branch,

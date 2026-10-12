@@ -334,7 +334,7 @@ void main() {
     },
   );
   testWidgets(
-    'Reports show six metrics and open current allocations on demand',
+    'Reports show financial metrics and open current allocations on demand',
     (tester) async {
       tester.view.resetPhysicalSize();
       final now = Timestamp.now();
@@ -347,6 +347,7 @@ void main() {
             'branchId': 'b',
             'timestamp': now,
             'total': 200,
+            'tax': 21,
             'items': [
               {
                 'name': 'Cookie',
@@ -364,7 +365,13 @@ void main() {
             '_id': 'c',
             'name': 'Cookies',
             'items': [
-              {'id': 'v', 'publicId': 'CO-001', 'name': 'Red', 'price': 100},
+              {
+                'id': 'v',
+                'publicId': 'CO-001',
+                'name': 'Red',
+                'price': 100,
+                'costPrice': 50,
+              },
             ],
           },
         ],
@@ -392,6 +399,12 @@ void main() {
       expect(find.text('Total sold items'), findsOneWidget);
       expect(find.text('Total transactions'), findsOneWidget);
       expect(find.text('Items allocated'), findsOneWidget);
+      expect(find.text('Total VAT'), findsOneWidget);
+      expect(find.text('₱21.00'), findsOneWidget);
+      expect(find.text('Total net profit'), findsOneWidget);
+      expect(find.text('₱79.00'), findsOneWidget);
+      expect(find.text('Total net sales'), findsOneWidget);
+      expect(find.text('₱179.00'), findsOneWidget);
       expect(find.text('Remaining'), findsNothing);
       await tester.tap(find.text('View allocated'));
       await tester.pumpAndSettle();

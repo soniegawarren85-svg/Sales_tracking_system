@@ -80,6 +80,31 @@ void main() {
     expect(find.textContaining('Assigned:'), findsNothing);
     expect(tester.takeException(), isNull);
   });
+  testWidgets('staff checklist and returns share a row on tablet', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(768, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: AllocationChecklistButton(
+            scopeIds: const ['branch'],
+            database: FakeFirebaseFirestore(),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final checklist = tester.getRect(find.text('Checklist'));
+    final returns = tester.getRect(find.text('Returns'));
+    expect(checklist.center.dy, closeTo(returns.center.dy, 1));
+    expect(checklist.right, lessThan(returns.left));
+    expect(tester.takeException(), isNull);
+  });
   testWidgets('older returns remain visible and batch acceptance spans dates', (
     tester,
   ) async {
@@ -120,11 +145,15 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Accept'), findsOneWidget);
     expect(find.byTooltip('Filter by date range'), findsNothing);
-    await tester.ensureVisible(find.text('Accept'));
-    await tester.tap(find.text('Accept'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Proceed'));
-    await tester.pumpAndSettle();
+    for (var i = 0; i < 2; i++) {
+      await tester.ensureVisible(find.text('Accept').first);
+      await tester.tap(find.text('Accept').first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Proceed'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Done'));
+      await tester.pumpAndSettle();
+    }
     for (var day = 1; day <= 2; day++) {
       expect(
         (await db.doc('allocation_checklist/old$day').get()).data()!['status'],

@@ -9,6 +9,62 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 
+String? validateStaffName(
+  String? value, {
+  String label = 'Name',
+  bool isRequired = true,
+}) {
+  final name = value?.trim() ?? '';
+  if (name.isEmpty) return isRequired ? '$label is required.' : null;
+  if (!RegExp(r'^[A-Za-z]+(?: [A-Za-z]+)*$').hasMatch(name)) {
+    return 'Use letters only; numbers and special characters are not allowed.';
+  }
+  return null;
+}
+
+String? validateStaffAge(String? value) {
+  final age = int.tryParse(value?.trim() ?? '');
+  if (age == null || age < 20 || age > 50) {
+    return 'Enter a valid age from 20 to 50.';
+  }
+  return null;
+}
+
+String? validateStaffPhone(String? value) {
+  if (!RegExp(r'^09\d{9}$').hasMatch(value?.trim() ?? '')) {
+    return 'Phone must start with 09 and contain 11 digits.';
+  }
+  return null;
+}
+
+String? validateStaffEmail(String? value) {
+  if (!RegExp(
+    r'^[\w\-.]+@([\w-]+\.)+[\w-]{2,}$',
+  ).hasMatch(value?.trim() ?? '')) {
+    return 'Enter a valid email address.';
+  }
+  return null;
+}
+
+String? validateStaffPassword(String? value) {
+  final password = (value ?? '').trim();
+  final hasNumber = RegExp(r'\d').hasMatch(password);
+  final hasUppercase = RegExp(r'[A-Z]').hasMatch(password);
+  final hasSpecialCharacter = RegExp(r'[^A-Za-z0-9\s]').hasMatch(password);
+  if (password.length < 7 ||
+      !hasNumber ||
+      (!hasUppercase && !hasSpecialCharacter)) {
+    return 'Use at least 7 characters, a number, and an uppercase letter or special character.';
+  }
+  return null;
+}
+
+String? validateStaffPasswordConfirmation(String? value, String password) {
+  if ((value ?? '').isEmpty) return 'Confirm Password is required.';
+  if ((value ?? '').trim() != password.trim()) return 'Passwords do not match.';
+  return null;
+}
+
 class StaffPage extends StatefulWidget {
   const StaffPage({super.key});
 
@@ -42,6 +98,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
+  final _confirmPasswordFieldKey = GlobalKey<FormFieldState<String>>();
 
   // ─── STREAMS ──────────────────────────────────────────────
   Stream<QuerySnapshot<Map<String, dynamic>>> get _staffStream =>
@@ -1335,134 +1392,141 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
   }
 
   Widget _buildCreateStaffForm() {
-    return Form(
-      key: _createStaffFormKey,
-      child: Container(
-        padding: const EdgeInsets.all(18),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(22),
-          boxShadow: [
-            BoxShadow(
-              color: AppColors.brand.withOpacity(0.08),
-              blurRadius: 18,
-              offset: const Offset(0, 7),
-            ),
-          ],
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Staff Create Account',
-              style: TextStyle(
-                color: AppColors.text,
-                fontWeight: FontWeight.w900,
-                fontSize: 20,
+    return AutofillGroup(
+      child: Form(
+        key: _createStaffFormKey,
+        autovalidateMode: AutovalidateMode.onUserInteraction,
+        child: Container(
+          padding: const EdgeInsets.all(18),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(22),
+            boxShadow: [
+              BoxShadow(
+                color: AppColors.brand.withOpacity(0.08),
+                blurRadius: 18,
+                offset: const Offset(0, 7),
               ),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              'Fill up the staff information and create the account directly.',
-              style: TextStyle(color: Colors.grey.shade600, fontSize: 13),
-            ),
-            const SizedBox(height: 18),
-            _buildCreateField(_firstNameController, 'First Name'),
-            _buildCreateField(
-              _middleNameController,
-              'Middle Name',
-              requiredField: false,
-            ),
-            _buildCreateField(_lastNameController, 'Last Name'),
-            _buildCreateField(
-              _ageController,
-              'Age',
-              keyboardType: TextInputType.number,
-              validator: (value) {
-                final age = int.tryParse(value?.trim() ?? '');
-                if (age == null || age < 18 || age > 50) {
-                  return 'Enter a valid age from 18 to 50.';
-                }
-                return null;
-              },
-            ),
-            _buildCreateField(
-              _phoneController,
-              'Phone Number',
-              keyboardType: TextInputType.phone,
-              validator: (value) {
-                final phone = value?.trim() ?? '';
-                if (!RegExp(r'^09\d{9}$').hasMatch(phone)) {
-                  return 'Phone must start with 09 and contain 11 digits.';
-                }
-                return null;
-              },
-            ),
-            _buildCreateField(_addressController, 'Address', maxLines: 2),
-            _buildCreateField(
-              _emailController,
-              'Email',
-              keyboardType: TextInputType.emailAddress,
-              validator: (value) {
-                final email = value?.trim() ?? '';
-                if (!RegExp(
-                  r'^[\w\-.]+@([\w-]+\.)+[\w-]{2,}$',
-                ).hasMatch(email)) {
-                  return 'Enter a valid email address.';
-                }
-                return null;
-              },
-            ),
-            _buildCreateField(
-              _passwordController,
-              'Password',
-              obscureText: true,
-              validator: (value) {
-                final password = value?.trim() ?? '';
-                if (!RegExp(
-                  r'^(?=.*[0-9])(?=.*[!@#\$%^&*]).{8,}$',
-                ).hasMatch(password)) {
-                  return 'Use 8+ chars with a number and special character.';
-                }
-                return null;
-              },
-            ),
-            _buildCreateField(
-              _confirmPasswordController,
-              'Confirm Password',
-              obscureText: true,
-            ),
-            const SizedBox(height: 12),
-            SizedBox(
-              width: double.infinity,
-              height: 52,
-              child: ElevatedButton.icon(
-                onPressed: _isCreatingStaff ? null : _createStaffAccount,
-                icon: _isCreatingStaff
-                    ? const SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: Colors.white,
-                        ),
-                      )
-                    : const Icon(Icons.person_add_alt_1_rounded),
-                label: Text(
-                  _isCreatingStaff ? 'Creating...' : 'Create Account',
-                  style: const TextStyle(fontWeight: FontWeight.w800),
+            ],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Staff Create Account',
+                style: TextStyle(
+                  color: AppColors.text,
+                  fontWeight: FontWeight.w900,
+                  fontSize: 20,
                 ),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.primary,
-                  foregroundColor: Colors.white,
-                  elevation: 0,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(16),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'Fill up the staff information and create the account directly.',
+                style: TextStyle(color: Colors.grey.shade600, fontSize: 13),
+              ),
+              const SizedBox(height: 18),
+              _buildCreateField(
+                _firstNameController,
+                'First Name',
+                validator: (value) =>
+                    validateStaffName(value, label: 'First Name'),
+              ),
+              _buildCreateField(
+                _middleNameController,
+                'Middle Name',
+                requiredField: false,
+                validator: (value) => validateStaffName(
+                  value,
+                  label: 'Middle Name',
+                  isRequired: false,
+                ),
+              ),
+              _buildCreateField(
+                _lastNameController,
+                'Last Name',
+                validator: (value) =>
+                    validateStaffName(value, label: 'Last Name'),
+              ),
+              _buildCreateField(
+                _ageController,
+                'Age',
+                keyboardType: TextInputType.number,
+                validator: validateStaffAge,
+              ),
+              _buildCreateField(
+                _phoneController,
+                'Phone Number',
+                keyboardType: TextInputType.phone,
+                validator: validateStaffPhone,
+              ),
+              _buildCreateField(
+                _addressController,
+                'Address',
+                requiredField: false,
+                maxLines: 2,
+              ),
+              _buildCreateField(
+                _emailController,
+                'Email',
+                keyboardType: TextInputType.emailAddress,
+                validator: validateStaffEmail,
+              ),
+              _buildCreateField(
+                _passwordController,
+                'Password',
+                obscureText: true,
+                autofillHints: const [AutofillHints.newPassword],
+                validator: validateStaffPassword,
+                onChanged: (_) {
+                  if (_confirmPasswordController.text.isNotEmpty) {
+                    _confirmPasswordFieldKey.currentState?.validate();
+                  }
+                },
+              ),
+              _buildCreateField(
+                _confirmPasswordController,
+                'Confirm Password',
+                obscureText: true,
+                fieldKey: _confirmPasswordFieldKey,
+                autofillHints: const [AutofillHints.newPassword],
+                validator: (value) => validateStaffPasswordConfirmation(
+                  value,
+                  _passwordController.text,
+                ),
+              ),
+              const SizedBox(height: 12),
+              SizedBox(
+                width: double.infinity,
+                height: 52,
+                child: ElevatedButton.icon(
+                  onPressed: _isCreatingStaff ? null : _createStaffAccount,
+                  icon: _isCreatingStaff
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : const Icon(Icons.person_add_alt_1_rounded),
+                  label: Text(
+                    _isCreatingStaff ? 'Creating...' : 'Create Account',
+                    style: const TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primary,
+                    foregroundColor: Colors.white,
+                    elevation: 0,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                    ),
                   ),
                 ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -1476,6 +1540,9 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
     int maxLines = 1,
     TextInputType keyboardType = TextInputType.text,
     String? Function(String?)? validator,
+    Key? fieldKey,
+    List<String>? autofillHints,
+    ValueChanged<String>? onChanged,
   }) {
     final effectiveMaxLines = obscureText ? 1 : maxLines;
     final effectiveKeyboardType =
@@ -1486,11 +1553,13 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
       child: TextFormField(
-        key: PageStorageKey<String>('staff_create_field_$label'),
+        key: fieldKey ?? PageStorageKey<String>('staff_create_field_$label'),
         controller: controller,
         obscureText: obscureText,
         maxLines: effectiveMaxLines,
         keyboardType: effectiveKeyboardType,
+        autofillHints: autofillHints,
+        onChanged: onChanged,
         textInputAction: effectiveMaxLines > 1
             ? TextInputAction.newline
             : TextInputAction.next,

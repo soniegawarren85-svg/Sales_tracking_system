@@ -416,7 +416,7 @@ class _ChecklistReturnDialogState extends State<ChecklistReturnDialog> {
             size: 38,
           ),
           title: const Text(
-            'Return submitted successfully',
+            'Items returned successfully',
             style: TextStyle(
               fontSize: 18,
               color: AppColors.primaryDeep,
@@ -424,17 +424,11 @@ class _ChecklistReturnDialogState extends State<ChecklistReturnDialog> {
             ),
           ),
           content: Text(
-            '$count return records were sent together. You can track admin acceptance in Pending Confirmation.',
+            'Successfully returned $count ${count == 1 ? 'item' : 'items'}.',
           ),
-          actions: [
-            FilledButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('View pending confirmation'),
-            ),
-          ],
         ),
       );
-      if (mounted) widget.onSubmitted?.call();
+      if (mounted) await load();
     } on TimeoutException {
       if (mounted)
         setState(

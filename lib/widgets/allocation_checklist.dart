@@ -51,12 +51,13 @@ class AllocationChecklistButton extends StatelessWidget {
               returnsOnly: returns,
             ),
           );
-          if (compact)
+          if (compact) {
             return IconButton.filledTonal(
               tooltip: label,
               onPressed: open,
               icon: icon,
             );
+          }
           return Tooltip(
             message: label,
             child: FilledButton.icon(
@@ -75,11 +76,11 @@ class AllocationChecklistButton extends StatelessWidget {
 
         if (isAdmin) return button(returns: true);
         return Flex(
-          direction: compact ? Axis.horizontal : Axis.vertical,
+          direction: Axis.horizontal,
           mainAxisSize: MainAxisSize.min,
           children: [
             button(returns: false),
-            SizedBox(width: compact ? 8 : 0, height: compact ? 0 : 8),
+            const SizedBox(width: 8),
             button(returns: true),
           ],
         );

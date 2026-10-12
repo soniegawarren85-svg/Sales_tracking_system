@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'pink_theme.dart';
+import '../../services/number_format.dart';
 
 // ──────────────────────────────────────────────────────────────────────────────
 // FADE + SLIDE ANIMATION WRAPPER
@@ -812,7 +813,7 @@ class _ExpiredCardState extends State<_ExpiredCard>
                           child: _statTile(
                             icon: Icons.payments_rounded,
                             label: 'Price',
-                            value: '₱$price',
+                            value: formatMoney(double.tryParse('$price') ?? 0),
                             iconColor: const Color(0xFF2E7D32),
                             bgColor: const Color(0xFFE8F5E9),
                           ),
@@ -961,7 +962,10 @@ class _ExpiredCardState extends State<_ExpiredCard>
                                         ),
                                       ),
                                       Text(
-                                        '₱${(double.tryParse(price) ?? 0) * (int.tryParse(stock) ?? 0)}',
+                                        formatMoney(
+                                          (double.tryParse(price) ?? 0) *
+                                              (int.tryParse(stock) ?? 0),
+                                        ),
                                         style: const TextStyle(
                                           fontSize: 13,
                                           fontWeight: FontWeight.w800,

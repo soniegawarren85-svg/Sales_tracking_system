@@ -1,5 +1,5 @@
 import 'horizontal_controls.dart';
-import '../services/branch_report_csv.dart';
+import '../services/branch_report_excel.dart';
 import 'report_item_history.dart';
 import 'item_sales_dialog.dart';
 import '../services/report_pdf_theme.dart';
@@ -19,6 +19,7 @@ import '../services/save_bytes.dart';
 import '../theme/app_colors.dart';
 import 'admin_sales_overview.dart';
 import 'branch_analytics_bars.dart';
+import 'branch_allocation_table.dart';
 import 'historical_cash_drawer.dart';
 
 Future<void> showBranchReport(
@@ -54,7 +55,7 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
   bool _printing = false;
   bool _allowRefunds = true;
   String _itemType = 'All', _rank = 'All';
-  String _tableType = 'All', _comparison = 'Complete';
+  String _tableType = 'Categories', _comparison = 'Complete';
   bool _tableAddons = false;
   Timer? _closingTimer;
   StreamSubscription<BranchReportData>? _liveSubscription;
@@ -505,7 +506,7 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
   Future<void> export(BranchReportData data) async {
     setState(() => _printing = true);
     try {
-      final bytes = branchReportCsv(
+      final bytes = branchReportExcel(
         data,
         range.$1,
         range.$2,
@@ -513,14 +514,14 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
       );
       {
         final filename =
-            'branch-report-${_day.year}-${_day.month}-${_day.day}.csv';
+            'branch-report-${_day.year}-${_day.month}-${_day.day}.xlsx';
         final path = kIsWeb
             ? filename
             : await FilePicker.platform.saveFile(
                 bytes: bytes,
                 fileName: filename,
                 type: FileType.custom,
-                allowedExtensions: ['csv'],
+                allowedExtensions: ['xlsx'],
               );
         if (path != null) await saveBytes(path, bytes);
       }
@@ -714,7 +715,7 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
                               foregroundColor: Colors.white,
                             ),
                             icon: const Icon(Icons.table_view),
-                            label: const Text('Save CSV File'),
+                            label: const Text('Save Excel File'),
                           ),
                         ],
                       ),
@@ -993,11 +994,17 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
     final totals = reportTotals(data);
     final items = visibleItems(data);
     bool matchesTableType(Map<String, dynamic> row) =>
-        _tableType == 'All' ||
         row['type'] == (_tableAddons ? 'Add-ons' : _tableType);
     double tableSum(String key) => items
         .where(matchesTableType)
-        .fold<double>(0, (sum, row) => sum + reportValue(row[key]));
+        .fold<double>(
+          0,
+          (sum, row) =>
+              sum +
+              (key == 'allocationCost'
+                  ? branchStockCost(row)
+                  : reportValue(row[key])),
+        );
     final chart = bars(data);
     final all = _status == 'All';
     final values = List.generate(
@@ -1095,7 +1102,7 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
               ),
             Wrap(
               spacing: 10,
-              children: ['All', 'Categories', 'Bundle', 'Beverages']
+              children: ['Categories', 'Bundle', 'Beverages']
                   .map(
                     (type) => ChoiceChip(
                       label: Text(type),
@@ -1122,27 +1129,28 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
                   'ID',
                   'Allocation date',
                   'Item',
+                  if (_allowRefunds) 'Refund',
+                  'Reduce',
+                  if (_tableType != 'Beverages') 'Expiration date',
+                  'Status',
+                  'Cost price',
                   if (_tableType == 'Beverages' && !_tableAddons) ...[
                     'Small',
                     'Medium',
                     'Large',
                   ] else
-                    'Unit price',
+                    'Price',
                   if (_tableType != 'Beverages') ...[
                     'Starting allocated',
-                    'Allocated in period',
                     'Remaining allocated',
+                    'Allocated in period',
                   ],
                   'Sales',
                   'Sold items',
-                  'Cost price',
                   'Profit per item',
                   'Total profit',
                   'Net profit',
-                  if (_allowRefunds) 'Refund',
-                  'Reduce',
-                  if (_tableType != 'Beverages') 'Expiration date',
-                  'Status',
+                  'Total cost',
                   'Action',
                 ].map((label) => DataColumn(label: Text(label))).toList(),
                 rows: [
@@ -1164,6 +1172,21 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
                               ),
                             ),
                             DataCell(Text('${row['name']}')),
+                            if (_allowRefunds)
+                              DataCell(Text(money(reportValue(row['refund'])))),
+                            DataCell(Text(money(reportValue(row['reduce'])))),
+                            if (_tableType != 'Beverages')
+                              DataCell(
+                                Text(
+                                  '${row['expirationDate'] ?? '?'}'
+                                      .split('T')
+                                      .first,
+                                ),
+                              ),
+                            DataCell(Text('${row['status']}')),
+                            DataCell(
+                              Text(money(reportValue(row['costPrice']))),
+                            ),
                             if (_tableType == 'Beverages' && !_tableAddons)
                               ...['Small', 'Medium', 'Large'].map((size) {
                                 final option = (row['sizes'] as List? ?? [])
@@ -1192,17 +1215,14 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
                             ...[
                               if (_tableType != 'Beverages') ...[
                                 'starting',
-                                'added',
                                 'remaining',
+                                'added',
                               ],
                               'sales',
                               'sold',
-                              'costPrice',
                               'unitProfit',
                               'profit',
                               'netProfit',
-                              if (_allowRefunds) 'refund',
-                              'reduce',
                             ].map(
                               (key) => DataCell(
                                 Row(
@@ -1238,15 +1258,7 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
                                 ),
                               ),
                             ),
-                            if (_tableType != 'Beverages')
-                              DataCell(
-                                Text(
-                                  '${row['expirationDate'] ?? '?'}'
-                                      .split('T')
-                                      .first,
-                                ),
-                              ),
-                            DataCell(Text('${row['status']}')),
+                            DataCell(Text(money(branchStockCost(row)))),
                             DataCell(
                               TextButton(
                                 onPressed: () => showDialog<void>(
@@ -1296,6 +1308,11 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
                       ),
                       const DataCell(Text('')),
                       const DataCell(Text('')),
+                      if (_allowRefunds) const DataCell(Text('')),
+                      const DataCell(Text('')),
+                      if (_tableType != 'Beverages') const DataCell(Text('')),
+                      const DataCell(Text('')),
+                      const DataCell(Text('')),
                       if (_tableType == 'Beverages' && !_tableAddons) ...[
                         const DataCell(Text('')),
                         const DataCell(Text('')),
@@ -1303,23 +1320,15 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
                       ] else
                         const DataCell(Text('')),
                       if (_tableType != 'Beverages') ...[
-                        for (final key in ['starting', 'added', 'remaining'])
+                        for (final key in ['starting', 'remaining', 'added'])
                           DataCell(Text(formatNumber(tableSum(key)))),
                       ],
                       DataCell(Text(money(tableSum('sales')))),
                       DataCell(Text(formatNumber(tableSum('sold')))),
-                      DataCell(
-                        Text(
-                          'Total cost: ${money(tableSum('allocationCost'))}',
-                        ),
-                      ),
                       const DataCell(Text('')),
                       DataCell(Text(money(tableSum('profit')))),
                       DataCell(Text(money(tableSum('netProfit')))),
-                      if (_allowRefunds) const DataCell(Text('')),
-                      const DataCell(Text('')),
-                      if (_tableType != 'Beverages') const DataCell(Text('')),
-                      const DataCell(Text('')),
+                      DataCell(Text(money(tableSum('allocationCost')))),
                       const DataCell(Text('')),
                     ],
                   ),

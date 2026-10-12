@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../services/number_format.dart';
 import '../services/branch_report_data.dart';
 import '../theme/app_colors.dart';
 
@@ -38,7 +39,7 @@ class _ReportItemHistoryState extends State<ReportItemHistory> {
                     !date.isBefore(_range!.start) &&
                     date.isBefore(_range!.end.add(const Duration(days: 1))));
           }).toList();
-    String money(dynamic v) => '₱${reportValue(v).toStringAsFixed(2)}';
+    String money(dynamic v) => formatMoney(reportValue(v));
     String qty(dynamic v) => reportValue(v).toStringAsFixed(0);
     return AlertDialog(
       title: Row(

@@ -90,6 +90,8 @@ void main() {
         'remaining': 80,
         'costPrice': 25,
         'profit': 500,
+        'unitProfit': 25,
+        'netProfit': 400,
         'sold': 20,
         'sales': 1000,
         'price': 50,
@@ -107,6 +109,26 @@ void main() {
       );
       final table = tester.widget<DataTable>(find.byType(DataTable));
       expect((table.columns[1].label as Text).data, 'Allocation date');
+      final headings = table.columns
+          .map((column) => (column.label as Text).data)
+          .toList();
+      expect(headings, [
+        'ID',
+        'Allocation date',
+        'Item',
+        'Cost price',
+        'Price',
+        'Starting allocation',
+        'Remaining allocation',
+        'Allocated today',
+        'Sales',
+        'Sold items',
+        'Profit per item',
+        'Total profit',
+        'Net profit',
+        'Total cost',
+        'Actions',
+      ]);
       final total = table.rows.last.cells
           .map((c) => (c.child as Text).data)
           .toList();
@@ -118,6 +140,7 @@ void main() {
           '80',
           '₱2500.00',
           '₱500.00',
+          '₱400.00',
           '20',
           '₱1000.00',
         ]),

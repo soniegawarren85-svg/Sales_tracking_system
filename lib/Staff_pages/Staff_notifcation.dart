@@ -3,6 +3,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import '../services/number_format.dart';
 
 class StaffNotificationPage extends StatelessWidget {
   const StaffNotificationPage({super.key});
@@ -140,7 +141,7 @@ class StaffNotificationPage extends StatelessWidget {
                                 children: [
                                   _InfoChip(
                                     label: 'Sales',
-                                    value: '₱${totalSales.toStringAsFixed(2)}',
+                                    value: '${formatMoney(totalSales)}',
                                   ),
                                   const SizedBox(width: 8),
                                   _InfoChip(
@@ -150,7 +151,7 @@ class StaffNotificationPage extends StatelessWidget {
                                   const SizedBox(width: 8),
                                   _InfoChip(
                                     label: 'Drawer',
-                                    value: '₱${cashDrawer.toStringAsFixed(2)}',
+                                    value: '${formatMoney(cashDrawer)}',
                                   ),
                                 ],
                               ),
@@ -212,11 +213,11 @@ class StaffNotificationPage extends StatelessWidget {
             ),
             const SizedBox(height: 12),
             Text(
-              'Total sales: ₱${totalSales.toStringAsFixed(2)}',
+              'Total sales: ${formatMoney(totalSales)}',
               style: GoogleFonts.dmSans(fontSize: 14),
             ),
             Text(
-              'Cash drawer: ₱${cashDrawer.toStringAsFixed(2)}',
+              'Cash drawer: ${formatMoney(cashDrawer)}',
               style: GoogleFonts.dmSans(fontSize: 14),
             ),
             Text(

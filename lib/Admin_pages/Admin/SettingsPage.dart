@@ -593,142 +593,159 @@ class _SettingsPageState extends State<SettingsPage> {
     final address = TextEditingController(
       text: data['address']?.toString() ?? '',
     );
+    final formKey = GlobalKey<FormState>();
 
     final route = DialogRoute<void>(
       context: context,
       builder: (dialogContext) {
-        final formKey = GlobalKey<FormState>();
         return Dialog(
-        insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
-        child: ConstrainedBox(
-          constraints: BoxConstraints(
-            maxWidth: 620,
-            maxHeight: MediaQuery.of(dialogContext).size.height * 0.86,
+          insetPadding: const EdgeInsets.symmetric(
+            horizontal: 20,
+            vertical: 24,
           ),
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.fromLTRB(24, 22, 24, 18),
-            child: Form(
-              key: formKey,
-              autovalidateMode: AutovalidateMode.onUserInteraction,
-              child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                const Text(
-                  'Account information',
-                  style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700),
-                ),
-                const SizedBox(height: 18),
-                TextFormField(
-                  readOnly: readOnly,
-                  controller: firstName,
-                  validator: (value) => ProfileFieldValidation.name(value),
-                  decoration: const InputDecoration(labelText: 'First name'),
-                ),
-                const SizedBox(height: 10),
-                TextFormField(
-                  readOnly: readOnly,
-                  controller: middleName,
-                  validator: (value) =>
-                      ProfileFieldValidation.name(value, required: false),
-                  decoration: const InputDecoration(labelText: 'Middle name'),
-                ),
-                const SizedBox(height: 10),
-                TextFormField(
-                  readOnly: readOnly,
-                  controller: lastName,
-                  validator: (value) =>
-                      ProfileFieldValidation.name(value, required: false),
-                  decoration: const InputDecoration(labelText: 'Last name'),
-                ),
-                const SizedBox(height: 10),
-                TextFormField(
-                  readOnly: readOnly,
-                  controller: email,
-                  keyboardType: TextInputType.emailAddress,
-                  validator: (value) => ProfileFieldValidation.gmail(value),
-                  decoration: const InputDecoration(labelText: 'Gmail / email'),
-                ),
-                const SizedBox(height: 10),
-                TextFormField(
-                  readOnly: readOnly,
-                  controller: age,
-                  keyboardType: TextInputType.number,
-                  validator: (value) => ProfileFieldValidation.age(value),
-                  decoration: const InputDecoration(labelText: 'Age'),
-                ),
-                const SizedBox(height: 10),
-                TextFormField(
-                  readOnly: readOnly,
-                  controller: address,
-                  maxLines: 3,
-                  validator: ProfileFieldValidation.wordLimit,
-                  decoration: const InputDecoration(labelText: 'Address'),
-                ),
-                const SizedBox(height: 18),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(28),
+          ),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxWidth: 620,
+              maxHeight: MediaQuery.of(dialogContext).size.height * 0.86,
+            ),
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(24, 22, 24, 18),
+              child: Form(
+                key: formKey,
+                autovalidateMode: AutovalidateMode.onUserInteraction,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    TextButton(
-                      onPressed: () => Navigator.pop(dialogContext),
-                      child: Text(readOnly ? 'Close' : 'Cancel'),
-                    ),
-                    const SizedBox(width: 10),
-                    if (!readOnly)
-                      FilledButton(
-                        onPressed: () async {
-                          if (!(formKey.currentState?.validate() ?? false)) {
-                            return;
-                          }
-                          try {
-                            await FirebaseFirestore.instance
-                                .collection('staff_requests')
-                                .doc(uid)
-                                .set({
-                                  'firstName': firstName.text.trim(),
-                                  'middleName': middleName.text.trim(),
-                                  'lastName': lastName.text.trim(),
-                                  'email': email.text.trim(),
-                                  if (currentUser?.email != null)
-                                    'authEmail': currentUser!.email,
-                                  'age': age.text.trim(),
-                                  'address': address.text.trim(),
-                                  'updatedAt': FieldValue.serverTimestamp(),
-                                }, SetOptions(merge: true));
-                            final updatedName = [
-                              firstName.text.trim(),
-                              middleName.text.trim(),
-                              lastName.text.trim(),
-                            ].where((part) => part.isNotEmpty).join(' ');
-                            if (updatedName.isNotEmpty) {
-                              await currentUser?.updateDisplayName(updatedName);
-                            }
-                            if (dialogContext.mounted)
-                              Navigator.pop(dialogContext);
-                            if (mounted) {
-                              _showStyledSnackBar(
-                                'Account information updated.',
-                              );
-                            }
-                          } catch (error) {
-                            if (mounted)
-                              _showStyledSnackBar(
-                                'Unable to save account information: $error',
-                                isError: true,
-                              );
-                          }
-                        },
-                        child: const Text('Save'),
+                    const Text(
+                      'Account information',
+                      style: TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.w700,
                       ),
+                    ),
+                    const SizedBox(height: 18),
+                    TextFormField(
+                      readOnly: readOnly,
+                      controller: firstName,
+                      validator: (value) => ProfileFieldValidation.name(value),
+                      decoration: const InputDecoration(
+                        labelText: 'First name',
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    TextFormField(
+                      readOnly: readOnly,
+                      controller: middleName,
+                      validator: (value) =>
+                          ProfileFieldValidation.name(value, required: false),
+                      decoration: const InputDecoration(
+                        labelText: 'Middle name',
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    TextFormField(
+                      readOnly: readOnly,
+                      controller: lastName,
+                      validator: (value) =>
+                          ProfileFieldValidation.name(value, required: false),
+                      decoration: const InputDecoration(labelText: 'Last name'),
+                    ),
+                    const SizedBox(height: 10),
+                    TextFormField(
+                      readOnly: readOnly,
+                      controller: email,
+                      keyboardType: TextInputType.emailAddress,
+                      validator: (value) => ProfileFieldValidation.gmail(value),
+                      decoration: const InputDecoration(
+                        labelText: 'Gmail / email',
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    TextFormField(
+                      readOnly: readOnly,
+                      controller: age,
+                      keyboardType: TextInputType.number,
+                      validator: (value) => ProfileFieldValidation.age(value),
+                      decoration: const InputDecoration(labelText: 'Age'),
+                    ),
+                    const SizedBox(height: 10),
+                    TextFormField(
+                      readOnly: readOnly,
+                      controller: address,
+                      maxLines: 3,
+                      validator: ProfileFieldValidation.wordLimit,
+                      decoration: const InputDecoration(labelText: 'Address'),
+                    ),
+                    const SizedBox(height: 18),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(dialogContext),
+                          child: Text(readOnly ? 'Close' : 'Cancel'),
+                        ),
+                        const SizedBox(width: 10),
+                        if (!readOnly)
+                          FilledButton(
+                            onPressed: () async {
+                              if (!(formKey.currentState?.validate() ??
+                                  false)) {
+                                return;
+                              }
+                              try {
+                                await FirebaseFirestore.instance
+                                    .collection('staff_requests')
+                                    .doc(uid)
+                                    .set({
+                                      'firstName': firstName.text.trim(),
+                                      'middleName': middleName.text.trim(),
+                                      'lastName': lastName.text.trim(),
+                                      'email': email.text.trim(),
+                                      if (currentUser?.email != null)
+                                        'authEmail': currentUser!.email,
+                                      'age': age.text.trim(),
+                                      'address': address.text.trim(),
+                                      'updatedAt': FieldValue.serverTimestamp(),
+                                    }, SetOptions(merge: true));
+                                final updatedName = [
+                                  firstName.text.trim(),
+                                  middleName.text.trim(),
+                                  lastName.text.trim(),
+                                ].where((part) => part.isNotEmpty).join(' ');
+                                if (updatedName.isNotEmpty) {
+                                  await currentUser?.updateDisplayName(
+                                    updatedName,
+                                  );
+                                }
+                                if (dialogContext.mounted)
+                                  Navigator.pop(dialogContext);
+                                if (mounted) {
+                                  _showStyledSnackBar(
+                                    'Account information updated.',
+                                  );
+                                }
+                              } catch (error) {
+                                if (mounted)
+                                  _showStyledSnackBar(
+                                    'Unable to save account information: $error',
+                                    isError: true,
+                                  );
+                              }
+                            },
+                            child: const Text('Save'),
+                          ),
+                      ],
+                    ),
                   ],
                 ),
-              ],
-            ),
+              ),
             ),
           ),
-        ),
-      );
+        );
       },
     );
     await Navigator.of(context).push(route);

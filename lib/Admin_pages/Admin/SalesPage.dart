@@ -7,6 +7,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../models/inventory.dart';
 import '../../services/inventory_service.dart';
 import '../../services/branch_session.dart';
+import '../../services/number_format.dart';
 import 'BranchSalesReportPage.dart';
 
 // ─── THEME ──────────────────────────────────────────────────────────
@@ -602,7 +603,7 @@ class _SalesPageState extends State<SalesPage> with TickerProviderStateMixin {
           ),
           const SizedBox(height: 12),
           Text(
-            "₱${grandTotal.toStringAsFixed(2)}",
+            "${formatMoney(grandTotal)}",
             style: const TextStyle(
               fontSize: 36,
               fontWeight: FontWeight.w900,
@@ -785,9 +786,9 @@ class _AdminReceiptCard extends StatelessWidget {
     final paid = _money(data['paidAmount']);
     final change = _money(data['change']);
     final items = (data['items'] as List<dynamic>? ?? [])
-      .whereType<Map>()
-      .map((item) => Map<String, dynamic>.from(item))
-      .toList();
+        .whereType<Map>()
+        .map((item) => Map<String, dynamic>.from(item))
+        .toList();
     final discount = _money(data['discount']);
     final discountType = data['discountType']?.toString().trim() ?? '';
     final discountProofId = data['discountProofId']?.toString().trim() ?? '';
@@ -795,12 +796,12 @@ class _AdminReceiptCard extends StatelessWidget {
     final status = data['status']?.toString().trim().toLowerCase() ?? '';
     final isRefund = transactionType == 'refund' || status == 'refund';
     final fullyRefunded = data['fullyRefunded'] == true;
-    final hasRefundedItem = items.any((item) => _quantity(item['refunded']) > 0);
+    final hasRefundedItem = items.any(
+      (item) => _quantity(item['refunded']) > 0,
+    );
     final hasRefundActivity = isRefund || fullyRefunded || hasRefundedItem;
-    final refundReason = (data['reason'] ?? data['refundReason'])
-      ?.toString()
-      .trim() ??
-      '';
+    final refundReason =
+        (data['reason'] ?? data['refundReason'])?.toString().trim() ?? '';
     final refundSource = data['source']?.toString().trim() ?? '';
 
     return Padding(
@@ -943,7 +944,7 @@ class _AdminReceiptCard extends StatelessWidget {
                             ),
                           ),
                           Text(
-                            '₱${lineTotal.toStringAsFixed(2)}',
+                            '${formatMoney(lineTotal)}',
                             style: const TextStyle(
                               color: _C.espresso,
                               fontWeight: FontWeight.w900,
@@ -968,21 +969,18 @@ class _AdminReceiptCard extends StatelessWidget {
                   if (discount > 0.01 && discountType.toLowerCase() != 'none')
                     _adminReceiptLine(
                       'Discount ($discountType)',
-                      '-₱${discount.toStringAsFixed(2)}',
+                      '-${formatMoney(discount)}',
                     ),
                   if (discountProofId.isNotEmpty)
                     _adminReceiptLine(
                       discountType.isEmpty ? 'Discount ID' : '$discountType ID',
                       discountProofId,
                     ),
-                  _adminReceiptLine(
-                    'Customer Paid',
-                    '₱${paid.toStringAsFixed(2)}',
-                  ),
-                  _adminReceiptLine('Change', '₱${change.toStringAsFixed(2)}'),
+                  _adminReceiptLine('Customer Paid', '${formatMoney(paid)}'),
+                  _adminReceiptLine('Change', '${formatMoney(change)}'),
                   _adminReceiptLine(
                     isRefund ? 'Refund Amount' : 'Total',
-                    '₱${total.toStringAsFixed(2)}',
+                    '${formatMoney(total)}',
                     strong: true,
                   ),
                 ],
@@ -1632,7 +1630,7 @@ class _SalesCardState extends State<_SalesCard>
                           ],
                         ),
                         child: Text(
-                          "₱${soldValue.toStringAsFixed(2)}",
+                          "${formatMoney(soldValue)}",
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
@@ -1895,7 +1893,7 @@ class _SalesCardState extends State<_SalesCard>
                             ],
                           ),
                           Text(
-                            '₱${filteredTotalLoss.toStringAsFixed(2)}',
+                            '${formatMoney(filteredTotalLoss)}',
                             style: const TextStyle(
                               fontSize: 14,
                               fontWeight: FontWeight.w900,
@@ -2005,7 +2003,7 @@ class _SalesCardState extends State<_SalesCard>
                                       ),
                                       if (unitPrice > 0)
                                         Text(
-                                          'Unit ₱${unitPrice.toStringAsFixed(2)}',
+                                          'Unit ${formatMoney(unitPrice)}',
                                           style: const TextStyle(
                                             fontSize: 12,
                                             color: _C.dustRose,
@@ -2015,7 +2013,7 @@ class _SalesCardState extends State<_SalesCard>
                                   ),
                                   const SizedBox(height: 8),
                                   Text(
-                                    'Loss: ₱${effectiveLoss.toStringAsFixed(2)}',
+                                    'Loss: ${formatMoney(effectiveLoss)}',
                                     style: const TextStyle(
                                       fontSize: 13,
                                       fontWeight: FontWeight.w700,
@@ -2170,7 +2168,7 @@ class _SalesCardState extends State<_SalesCard>
                               ),
                             ),
                             Text(
-                              '₱${totalRefundAmount.toStringAsFixed(2)}',
+                              '${formatMoney(totalRefundAmount)}',
                               style: const TextStyle(
                                 fontSize: 14,
                                 fontWeight: FontWeight.w900,
@@ -2425,7 +2423,7 @@ class _SalesCardState extends State<_SalesCard>
                       ),
                     if (quantity > 0) const SizedBox(width: 10),
                     Text(
-                      "₱${lineTotal.toStringAsFixed(2)}",
+                      "${formatMoney(lineTotal)}",
                       style: const TextStyle(
                         fontSize: 14,
                         fontWeight: FontWeight.w800,

@@ -242,6 +242,8 @@ class AdminCatalog extends StatefulWidget {
     super.key,
     this.gallery = false,
     this.pinnedControls = false,
+    this.compactHeader = false,
+    this.onHeaderCollapsed,
     this.type = 'All',
     required this.onOpen,
     this.onCategorySelected,
@@ -261,6 +263,8 @@ class AdminCatalog extends StatefulWidget {
   final ValueChanged<AdminCatalogEntry>? onView;
   final bool gallery;
   final bool pinnedControls;
+  final bool compactHeader;
+  final ValueChanged<bool>? onHeaderCollapsed;
   final String type;
   final void Function(AdminCatalogEntry entry) onOpen;
   @override
@@ -397,8 +401,121 @@ class _AdminCatalogState extends State<AdminCatalog> {
                           .contains(_query),
                 )
                 .toList();
+            final searchField = TextField(
+              onChanged: (value) =>
+                  setState(() => _query = value.trim().toLowerCase()),
+              decoration: const InputDecoration(
+                hintText: 'Search items',
+                prefixIcon: Icon(Icons.search),
+                border: OutlineInputBorder(),
+              ),
+            );
+            final categorySelector = SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: widget.type == 'Categories'
+                  ? Row(
+                      spacing: 8,
+                      children: categories
+                          .map(
+                            (doc) => ChoiceChip(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 16,
+                                vertical: 8,
+                              ),
+                              selectedColor: AppColors.primaryDark,
+                              checkmarkColor: Colors.white,
+                              labelStyle: TextStyle(
+                                color: catalogCategoryKey(doc) == _category
+                                    ? Colors.white
+                                    : AppColors.primaryDark,
+                                fontWeight: FontWeight.w700,
+                              ),
+                              label: Text('${doc['name'] ?? 'Category'}'),
+                              selected: catalogCategoryKey(doc) == _category,
+                              onSelected: (_) {
+                                setState(
+                                  () => _category = catalogCategoryKey(doc),
+                                );
+                                widget.onCategorySelected?.call(doc);
+                              },
+                            ),
+                          )
+                          .toList(),
+                    )
+                  : Row(
+                      spacing: 8,
+                      children: [
+                        if (!widget.gallery && widget.type == 'Beverages')
+                          for (final addon in [false, true])
+                            ChoiceChip(
+                              label: Text(addon ? 'Add-ons' : 'Beverages'),
+                              selected: _showAddons == addon,
+                              selectedColor: AppColors.primaryDark,
+                              checkmarkColor: Colors.white,
+                              labelStyle: TextStyle(
+                                color: _showAddons == addon
+                                    ? Colors.white
+                                    : AppColors.primaryDark,
+                                fontWeight: FontWeight.w700,
+                              ),
+                              onSelected: (_) => setState(() {
+                                _showAddons = addon;
+                                widget.onBeverageTabChanged?.call(addon);
+                              }),
+                            ),
+                      ],
+                    ),
+            );
+            final categoryAndActions = Flex(
+              direction: MediaQuery.sizeOf(context).width < 600
+                  ? Axis.vertical
+                  : Axis.horizontal,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Flexible(
+                  fit: MediaQuery.sizeOf(context).width < 600
+                      ? FlexFit.loose
+                      : FlexFit.tight,
+                  flex: MediaQuery.sizeOf(context).width < 600 ? 0 : 1,
+                  child: categorySelector,
+                ),
+                if (widget.actions != null &&
+                    _branch.isEmpty &&
+                    !widget.compactHeader)
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: widget.actions!,
+                  ),
+              ],
+            );
+            final alerts =
+                !widget.gallery &&
+                    _branch.isEmpty &&
+                    inventoryAlertSearch(_query)
+                ? Wrap(
+                    spacing: 12,
+                    children: [
+                      Chip(
+                        avatar: const Icon(
+                          Icons.warning_amber,
+                          color: Colors.orange,
+                        ),
+                        label: Text('Low stock: ${entries.where(_low).length}'),
+                      ),
+                      Chip(
+                        avatar: const Icon(
+                          Icons.event_busy,
+                          color: Colors.deepOrange,
+                        ),
+                        label: Text(
+                          'Near expiry: ${entries.where(_near).length}',
+                        ),
+                      ),
+                    ],
+                  )
+                : null;
             final sections = <Widget>[
-              if (!widget.gallery) _branchPicker(),
+              if (!widget.gallery && !widget.compactHeader) _branchPicker(),
               if (widget.gallery)
                 Wrap(
                   spacing: 8,
@@ -416,127 +533,10 @@ class _AdminCatalogState extends State<AdminCatalog> {
                       .toList(),
                 ),
               const SizedBox(height: 10),
-              TextField(
-                onChanged: (value) =>
-                    setState(() => _query = value.trim().toLowerCase()),
-                decoration: const InputDecoration(
-                  hintText: 'Search items',
-                  prefixIcon: Icon(Icons.search),
-                  border: OutlineInputBorder(),
-                ),
-              ),
+              searchField,
               const SizedBox(height: 12),
-              if (!widget.gallery &&
-                  _branch.isEmpty &&
-                  inventoryAlertSearch(_query))
-                Wrap(
-                  spacing: 12,
-                  children: [
-                    Chip(
-                      avatar: const Icon(
-                        Icons.warning_amber,
-                        color: Colors.orange,
-                      ),
-                      label: Text('Low stock: ${entries.where(_low).length}'),
-                    ),
-                    Chip(
-                      avatar: const Icon(
-                        Icons.event_busy,
-                        color: Colors.deepOrange,
-                      ),
-                      label: Text(
-                        'Near expiry: ${entries.where(_near).length}',
-                      ),
-                    ),
-                  ],
-                ),
-              Flex(
-                direction: MediaQuery.sizeOf(context).width < 600
-                    ? Axis.vertical
-                    : Axis.horizontal,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Flexible(
-                    fit: MediaQuery.sizeOf(context).width < 600
-                        ? FlexFit.loose
-                        : FlexFit.tight,
-                    flex: MediaQuery.sizeOf(context).width < 600 ? 0 : 1,
-                    child: SingleChildScrollView(
-                      scrollDirection: Axis.horizontal,
-                      child: widget.type == 'Categories'
-                          ? Row(
-                              spacing: 8,
-                              children: categories
-                                  .map(
-                                    (doc) => ChoiceChip(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 16,
-                                        vertical: 8,
-                                      ),
-                                      selectedColor: AppColors.primaryDark,
-                                      checkmarkColor: Colors.white,
-                                      labelStyle: TextStyle(
-                                        color:
-                                            catalogCategoryKey(doc) == _category
-                                            ? Colors.white
-                                            : AppColors.primaryDark,
-                                        fontWeight: FontWeight.w700,
-                                      ),
-                                      label: Text(
-                                        '${doc['name'] ?? 'Category'}',
-                                      ),
-                                      selected:
-                                          catalogCategoryKey(doc) == _category,
-                                      onSelected: (_) {
-                                        setState(
-                                          () => _category = catalogCategoryKey(
-                                            doc,
-                                          ),
-                                        );
-                                        widget.onCategorySelected?.call(doc);
-                                      },
-                                    ),
-                                  )
-                                  .toList(),
-                            )
-                          : Row(
-                              spacing: 8,
-                              children: [
-                                if (!widget.gallery &&
-                                    widget.type == 'Beverages') ...[
-                                  for (final addon in [false, true])
-                                    ChoiceChip(
-                                      label: Text(
-                                        addon ? 'Add-ons' : 'Beverages',
-                                      ),
-                                      selected: _showAddons == addon,
-                                      selectedColor: AppColors.primaryDark,
-                                      checkmarkColor: Colors.white,
-                                      labelStyle: TextStyle(
-                                        color: _showAddons == addon
-                                            ? Colors.white
-                                            : AppColors.primaryDark,
-                                        fontWeight: FontWeight.w700,
-                                      ),
-                                      onSelected: (_) => setState(() {
-                                        _showAddons = addon;
-                                        widget.onBeverageTabChanged?.call(
-                                          addon,
-                                        );
-                                      }),
-                                    ),
-                                ],
-                              ],
-                            ),
-                    ),
-                  ),
-                  if (widget.actions != null && _branch.isEmpty)
-                    Align(
-                      alignment: Alignment.centerRight,
-                      child: widget.actions!,
-                    ),
-                ],
-              ),
+              if (alerts != null) alerts,
+              categoryAndActions,
               const SizedBox(key: ValueKey('catalog-results'), height: 16),
               if (!widget.gallery && widget.type == 'Beverages' && !_showAddons)
                 const Padding(
@@ -608,12 +608,34 @@ class _AdminCatalogState extends State<AdminCatalog> {
               children: [
                 ...sections.take(split),
                 Expanded(
-                  child: SingleChildScrollView(
-                    key: const ValueKey('inventory-table-scroll'),
-                    padding: const EdgeInsets.only(bottom: 100),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: sections.skip(split).toList(),
+                  child: NotificationListener<ScrollNotification>(
+                    onNotification: (notification) {
+                      if (notification.metrics.axis != Axis.vertical)
+                        return false;
+                      if (notification is ScrollUpdateNotification &&
+                          notification.dragDetails != null) {
+                        if ((notification.scrollDelta ?? 0) > 0)
+                          widget.onHeaderCollapsed?.call(true);
+                        if ((notification.scrollDelta ?? 0) < 0 &&
+                            notification.metrics.pixels <= 0)
+                          widget.onHeaderCollapsed?.call(false);
+                      }
+                      if (notification is OverscrollNotification &&
+                          notification.dragDetails != null) {
+                        widget.onHeaderCollapsed?.call(
+                          notification.overscroll > 0,
+                        );
+                      }
+                      return false;
+                    },
+                    child: SingleChildScrollView(
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      key: const ValueKey('inventory-table-scroll'),
+                      padding: const EdgeInsets.only(bottom: 100),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: sections.skip(split).toList(),
+                      ),
                     ),
                   ),
                 ),

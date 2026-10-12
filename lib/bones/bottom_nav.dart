@@ -1,3 +1,4 @@
+import '../widgets/staff_inventory_badge.dart';
 import 'package:sales_tracking/theme/app_colors.dart';
 import 'dart:async';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -228,7 +229,7 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
     return Scaffold(
       resizeToAvoidBottomInset: false,
       backgroundColor: Colors.white,
-      extendBody: true,
+      extendBody: _selectedIndex != 3 || hasTabletCanvas,
       body: IndexedStack(
         index: _selectedIndex,
         children: [
@@ -246,7 +247,8 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
       bottomNavigationBar: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          _buildPendingOrdersBadge(),
+          if (_selectedIndex != 3 || hasTabletCanvas)
+            _buildPendingOrdersBadge(),
           isTabletLandscape
               ? _buildLandscapeNav()
               : CurvedNavigationBar(
@@ -260,12 +262,15 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
                           ? Colors.white
                           : Colors.white70,
                     ),
-                    Icon(
-                      Icons.inventory_2_rounded,
-                      size: _selectedIndex == 1 ? 32 : 26,
-                      color: _selectedIndex == 1
-                          ? Colors.white
-                          : Colors.white70,
+                    StaffInventoryBadge(
+                      userId: _sessionUserId,
+                      child: Icon(
+                        Icons.inventory_2_rounded,
+                        size: _selectedIndex == 1 ? 32 : 26,
+                        color: _selectedIndex == 1
+                            ? Colors.white
+                            : Colors.white70,
+                      ),
                     ),
                     Icon(
                       Icons.person_outline,
@@ -387,11 +392,16 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
         fixedSize: const Size(46, 46),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
       ),
-      icon: Icon(
-        icon,
-        size: selected ? 26 : 23,
-        color: selected ? Colors.white : Colors.white.withOpacity(0.82),
-      ),
+      icon: index == 1
+          ? StaffInventoryBadge(
+              userId: _sessionUserId,
+              child: Icon(icon, size: selected ? 26 : 23, color: Colors.white),
+            )
+          : Icon(
+              icon,
+              size: selected ? 26 : 23,
+              color: selected ? Colors.white : Colors.white.withOpacity(0.82),
+            ),
     );
   }
 }

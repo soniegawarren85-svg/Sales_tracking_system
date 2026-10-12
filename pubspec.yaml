@@ -51,6 +51,7 @@ dependencies:
   idb_shim: ^2.9.2
   esc_pos_utils_plus: 2.0.4
   permission_handler: 12.0.1
+  archive: ^4.0.9
 
 dev_dependencies:
   flutter_test:
@@ -63,6 +64,7 @@ dev_dependencies:
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
   fake_cloud_firestore: ^2.5.2
+  xml: ^6.6.1
 
 # Disable web platform to avoid Firebase web compatibility issues
 platforms:

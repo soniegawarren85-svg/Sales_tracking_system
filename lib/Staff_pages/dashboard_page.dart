@@ -20,6 +20,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../services/inventory_service.dart';
+import '../services/number_format.dart';
 import '../services/cash_drawer_service.dart';
 import '../services/local_database_sync_service.dart';
 import '../Admin_pages/Admin/Message.dart';
@@ -813,7 +814,7 @@ class _DashboardPageState extends State<DashboardPage>
           .add({
             'title': 'Refund recorded',
             'message':
-                '$staffName refunded $quantity x $itemLabel for ₱${amount.toStringAsFixed(2)}. Cash drawer was deducted.',
+                '$staffName refunded $quantity x $itemLabel for ${formatMoney(amount)}. Cash drawer was deducted.',
             'category': 'Refunds',
             'type': 'refund',
             'salesId': refundId,
@@ -2401,7 +2402,7 @@ class _ReceiptCard extends StatelessWidget {
                             ),
                           ),
                           Text(
-                            '₱${(price * qty).toStringAsFixed(2)}',
+                            '${formatMoney((price * qty))}',
                             style: const TextStyle(
                               color: _C.primaryDark,
                               fontWeight: FontWeight.w900,
@@ -2428,29 +2429,22 @@ class _ReceiptCard extends StatelessWidget {
                           : 'Not recorded',
                     ),
                   if (!compact || isRefund)
-                    _ReceiptLine(
-                      'Customer Paid',
-                      '₱${paid.toStringAsFixed(2)}',
-                    ),
+                    _ReceiptLine('Customer Paid', '${formatMoney(paid)}'),
                   if (!compact || isRefund)
-                    _ReceiptLine('Change', '₱${change.toStringAsFixed(2)}'),
+                    _ReceiptLine('Change', '${formatMoney(change)}'),
                   if (subtotal != 0)
-                    _ReceiptLine('Subtotal', '₱${subtotal.toStringAsFixed(2)}'),
+                    _ReceiptLine('Subtotal', '${formatMoney(subtotal)}'),
                   if (hasDiscount)
                     _ReceiptLine(
                       discountType.isNotEmpty
                           ? 'Discount ($discountType)'
                           : 'Discount',
-                      '-₱${discount.toStringAsFixed(2)}',
+                      '-${formatMoney(discount)}',
                     ),
                   if (isRefund &&
                       (data['reason']?.toString().trim().isNotEmpty ?? false))
                     _ReceiptLine('Refund reason', data['reason'].toString()),
-                  _ReceiptLine(
-                    'Total',
-                    '₱${total.toStringAsFixed(2)}',
-                    strong: true,
-                  ),
+                  _ReceiptLine('Total', '${formatMoney(total)}', strong: true),
                 ],
               ),
             ),
@@ -3706,7 +3700,7 @@ class _StaffProfileCardState extends State<_StaffProfileCard> {
                             ),
                             const SizedBox(height: 6),
                             Text(
-                              '₱${cashDrawerBalance.toStringAsFixed(2)}',
+                              '${formatMoney(cashDrawerBalance)}',
                               style: const TextStyle(
                                 fontSize: 15,
                                 fontWeight: FontWeight.w900,
@@ -3786,7 +3780,7 @@ class _StaffProfileCardState extends State<_StaffProfileCard> {
                           ),
                           const SizedBox(height: 5),
                           Text(
-                            '₱${cashDrawerBalance.toStringAsFixed(2)}',
+                            '${formatMoney(cashDrawerBalance)}',
                             style: const TextStyle(
                               fontSize: 14,
                               fontWeight: FontWeight.w900,
@@ -4753,7 +4747,7 @@ class _HistoryPaymentChip extends StatelessWidget {
             ),
             const Spacer(),
             Text(
-              '₱${value.toStringAsFixed(2)}',
+              '${formatMoney(value)}',
               style: TextStyle(
                 color: selected ? const Color(0xFF1B5E20) : color,
                 fontWeight: FontWeight.w900,
@@ -5007,7 +5001,7 @@ class _HistoryEntryCard extends StatelessWidget {
                         ),
                         const Spacer(),
                         Text(
-                          '₱${totalSoldValue.toStringAsFixed(2)}',
+                          '${formatMoney(totalSoldValue)}',
                           style: const TextStyle(
                             color: Colors.white,
                             fontSize: 16,
@@ -5575,7 +5569,7 @@ class _PerformanceCard extends StatelessWidget {
                             ),
                             const Spacer(),
                             Text(
-                              '₱${totalSoldValue.toStringAsFixed(2)}',
+                              '${formatMoney(totalSoldValue)}',
                               style: const TextStyle(
                                 color: Colors.white,
                                 fontSize: 18,

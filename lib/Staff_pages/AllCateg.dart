@@ -13,6 +13,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../services/inventory_service.dart';
+import '../services/number_format.dart';
 import '../widgets/top_notification.dart';
 
 class AllCategPage extends StatefulWidget {
@@ -841,7 +842,7 @@ class _AllCategPageState extends State<AllCategPage>
                                             .add({
                                               'title': 'Stock reduced',
                                               'message':
-                                                  '$staffName reduced $quantity x ${item['name'] ?? ''}$variantLabel from $currentStock to ${currentStock - quantity}. Expected sales decreased by ₱${reductionAmount.toStringAsFixed(2)}.',
+                                                  '$staffName reduced $quantity x ${item['name'] ?? ''}$variantLabel from $currentStock to ${currentStock - quantity}. Expected sales decreased by ${formatMoney(reductionAmount)}.',
                                               'category': 'Stock',
                                               'type': 'stock_adjustment',
                                               'itemName': item['name'] ?? '',
@@ -1386,7 +1387,7 @@ class _AllCategPageState extends State<AllCategPage>
                                     ),
                                     const SizedBox(height: 6),
                                     Text(
-                                      'Price: ₱${unitPrice.toStringAsFixed(2)}',
+                                      'Price: ${formatMoney(unitPrice)}',
                                       style: const TextStyle(
                                         color: AppColors.primaryDark,
                                         fontSize: 12,
@@ -1537,9 +1538,7 @@ class _AllCategPageState extends State<AllCategPage>
                     ],
                   ),
                   const SizedBox(height: 6),
-                  Text(
-                    'Price: ₱${(entry['price'] as double).toStringAsFixed(2)}',
-                  ),
+                  Text('Price: ${formatMoney((entry['price'] as double))}'),
                   const SizedBox(height: 4),
                   const Text('Reason: Stock reduction'),
                   const SizedBox(height: 4),
@@ -2307,7 +2306,7 @@ class _AllCategPageState extends State<AllCategPage>
                                   ),
                                   const SizedBox(height: 6),
                                   Text(
-                                    'Price: ₱${_parsePrice(data['unitPrice']).toStringAsFixed(2)}',
+                                    'Price: ${formatMoney(_parsePrice(data['unitPrice']))}',
                                     style: const TextStyle(
                                       color: AppColors.primaryDark,
                                       fontSize: 12,
@@ -2623,7 +2622,7 @@ class _AllCategPageState extends State<AllCategPage>
                                                     ],
                                                   ),
                                                   Text(
-                                                    'Bundle price: ₱${bundlePrice.toStringAsFixed(2)}',
+                                                    'Bundle price: ${formatMoney(bundlePrice)}',
                                                     style: const TextStyle(
                                                       color:
                                                           AppColors.primaryDark,
@@ -3646,7 +3645,7 @@ class _AllCategPageState extends State<AllCategPage>
                                     const SizedBox(height: 4),
                                   ],
                                   Text(
-                                    'Bundle price: ₱${_parsePrice(data['bundlePrice'] ?? bundle['price']).toStringAsFixed(2)}',
+                                    'Bundle price: ${formatMoney(_parsePrice(data['bundlePrice'] ?? bundle['price']))}',
                                     style: const TextStyle(
                                       color: AppColors.primaryDark,
                                       fontSize: 12,
@@ -4125,7 +4124,7 @@ class _AllCategPageState extends State<AllCategPage>
                 ),
                 _tableCell(bundleName, width: 180, weight: FontWeight.w900),
                 _tableCell(
-                  '₱${bundlePrice.toStringAsFixed(2)}',
+                  '${formatMoney(bundlePrice)}',
                   width: 100,
                   color: const Color(0xFF2E7D32),
                 ),
@@ -4234,7 +4233,7 @@ class _AllCategPageState extends State<AllCategPage>
                     final item = itemForSize(size);
                     return item == null
                         ? '--'
-                        : '₱${_parsePrice(item['price']).toStringAsFixed(2)}';
+                        : '${formatMoney(_parsePrice(item['price']))}';
                   }
 
                   final totalSold = totalSoldFromReceipts < 0
@@ -4422,7 +4421,7 @@ class _AllCategPageState extends State<AllCategPage>
                         children: [
                           _ItemTag(
                             icon: Icons.payments_outlined,
-                            label: '₱${bundlePrice.toStringAsFixed(2)}',
+                            label: '${formatMoney(bundlePrice)}',
                             bgColor: const Color(0xFFE8F5E9),
                             textColor: const Color(0xFF2E7D32),
                           ),
@@ -4691,7 +4690,7 @@ class _AllCategPageState extends State<AllCategPage>
                         ),
                         _ItemTag(
                           icon: Icons.payments_outlined,
-                          label: '₱${price.toStringAsFixed(0)}',
+                          label: '${formatMoney(price)}',
                           bgColor: const Color(0xFFE8F5E9),
                           textColor: const Color(0xFF2E7D32),
                         ),
@@ -4707,7 +4706,7 @@ class _AllCategPageState extends State<AllCategPage>
                               addon['name']?.toString() ?? 'Add-on';
                           final addonPrice = _parsePrice(addon['priceDelta']);
                           final priceLabel = addonPrice > 0
-                              ? ' +₱${addonPrice.toStringAsFixed(0)}'
+                              ? ' +${formatMoney(addonPrice)}'
                               : '';
                           return _ItemTag(
                             icon: Icons.add_circle_outline_rounded,
@@ -4948,7 +4947,7 @@ class _AllCategPageState extends State<AllCategPage>
                                           : const Color(0xFFC62828),
                                     ),
                                     _AddonCell(
-                                      '₱${price.toStringAsFixed(2)}',
+                                      '${formatMoney(price)}',
                                       color: const Color(0xFF2E7D32),
                                     ),
                                   ],
@@ -5064,7 +5063,7 @@ class _AllCategPageState extends State<AllCategPage>
                 ),
                 _ItemTag(
                   icon: Icons.payments_outlined,
-                  label: '+₱${price.toStringAsFixed(0)}',
+                  label: '+${formatMoney(price)}',
                   bgColor: AppColors.blush,
                   textColor: AppColors.primaryDark,
                 ),
@@ -5132,7 +5131,7 @@ class _AllCategPageState extends State<AllCategPage>
                 weight: FontWeight.w900,
               ),
               _tableCell(
-                '₱${_parsePrice(item['price']).toStringAsFixed(2)}',
+                '${formatMoney(_parsePrice(item['price']))}',
                 width: 100,
                 color: const Color(0xFF2E7D32),
               ),
@@ -5174,6 +5173,7 @@ class _AllCategPageState extends State<AllCategPage>
     List<Map<String, dynamic>> categoryDocs, {
     String emptyMessage = 'No items found.',
   }) {
+    final compact = MediaQuery.sizeOf(context).width < 600;
     if (categoryDocs.isEmpty) {
       return _buildEmptyInventoryState(
         icon: Icons.category_outlined,
@@ -5201,13 +5201,18 @@ class _AllCategPageState extends State<AllCategPage>
       return Column(
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 20, 16, 0),
+            padding: EdgeInsets.fromLTRB(
+              compact ? 12 : 16,
+              compact ? 14 : 20,
+              compact ? 12 : 16,
+              0,
+            ),
             child: SizedBox(
-              height: 54,
+              height: compact ? 46 : 54,
               child: ListView.separated(
                 scrollDirection: Axis.horizontal,
                 itemCount: categoryDocs.length + 1,
-                separatorBuilder: (_, __) => const SizedBox(width: 10),
+                separatorBuilder: (_, __) => SizedBox(width: compact ? 8 : 10),
                 itemBuilder: (context, index) {
                   if (index == 0) {
                     final selected = _showAllCategoryItems;
@@ -5221,10 +5226,12 @@ class _AllCategPageState extends State<AllCategPage>
                         borderRadius: BorderRadius.circular(16),
                         child: AnimatedContainer(
                           duration: const Duration(milliseconds: 180),
-                          constraints: const BoxConstraints(minWidth: 88),
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 12,
-                            vertical: 10,
+                          constraints: BoxConstraints(
+                            minWidth: compact ? 72 : 88,
+                          ),
+                          padding: EdgeInsets.symmetric(
+                            horizontal: compact ? 10 : 12,
+                            vertical: compact ? 7 : 10,
                           ),
                           decoration: BoxDecoration(
                             color: selected
@@ -5243,19 +5250,19 @@ class _AllCategPageState extends State<AllCategPage>
                             children: [
                               Icon(
                                 Icons.apps_rounded,
-                                size: 16,
+                                size: compact ? 14 : 16,
                                 color: selected
                                     ? Colors.white
                                     : AppColors.primaryDark,
                               ),
-                              const SizedBox(width: 8),
+                              SizedBox(width: compact ? 6 : 8),
                               Text(
                                 'All',
                                 style: TextStyle(
                                   color: selected
                                       ? Colors.white
                                       : AppColors.primaryDeep,
-                                  fontSize: 13,
+                                  fontSize: compact ? 12 : 13,
                                   fontWeight: FontWeight.w900,
                                 ),
                               ),
@@ -5286,10 +5293,12 @@ class _AllCategPageState extends State<AllCategPage>
                       borderRadius: BorderRadius.circular(16),
                       child: AnimatedContainer(
                         duration: const Duration(milliseconds: 180),
-                        constraints: const BoxConstraints(minWidth: 128),
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 18,
-                          vertical: 13,
+                        constraints: BoxConstraints(
+                          minWidth: compact ? 104 : 128,
+                        ),
+                        padding: EdgeInsets.symmetric(
+                          horizontal: compact ? 12 : 18,
+                          vertical: compact ? 8 : 13,
                         ),
                         decoration: BoxDecoration(
                           color: selected
@@ -5317,12 +5326,12 @@ class _AllCategPageState extends State<AllCategPage>
                           children: [
                             Icon(
                               Icons.category_rounded,
-                              size: 16,
+                              size: compact ? 14 : 16,
                               color: selected
                                   ? Colors.white
                                   : AppColors.primaryDark,
                             ),
-                            const SizedBox(width: 8),
+                            SizedBox(width: compact ? 6 : 8),
                             Flexible(
                               child: Text(
                                 categoryName,
@@ -5332,7 +5341,7 @@ class _AllCategPageState extends State<AllCategPage>
                                   color: selected
                                       ? Colors.white
                                       : AppColors.primaryDeep,
-                                  fontSize: 13,
+                                  fontSize: compact ? 12 : 13,
                                   fontWeight: FontWeight.w900,
                                 ),
                               ),
@@ -5587,7 +5596,9 @@ class _AllCategPageState extends State<AllCategPage>
                                       ),
                                     _ItemTag(
                                       icon: Icons.payments_outlined,
-                                      label: '₱${item['price'] ?? '0'}',
+                                      label: formatMoney(
+                                        _parsePrice(item['price']),
+                                      ),
                                       bgColor: const Color(0xFFE8F5E9),
                                       textColor: const Color(0xFF2E7D32),
                                     ),
@@ -5665,13 +5676,14 @@ class _AllCategPageState extends State<AllCategPage>
 
   @override
   Widget build(BuildContext context) {
+    final tabletLayout = MediaQuery.sizeOf(context).width >= 600;
     return Scaffold(
       backgroundColor: AppColors.surfaceTint,
       body: NestedScrollView(
         headerSliverBuilder: (context, innerBoxIsScrolled) => [
           SliverAppBar(
             automaticallyImplyLeading: false,
-            expandedHeight: 160,
+            expandedHeight: tabletLayout ? 120 : 160,
             floating: false,
             pinned: true,
             elevation: 0,

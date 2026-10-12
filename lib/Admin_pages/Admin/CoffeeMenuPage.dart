@@ -10,6 +10,7 @@ import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
+import '../../services/number_format.dart';
 
 // ─── Color Palette ──────────────────────────────────────────────────────────
 const _primary = AppColors.primary;
@@ -217,7 +218,10 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
       if (picked == null) return;
       final bytes = await picked.readAsBytes();
       if (!mounted) return;
-      setState(() { _coffeeImageBytes = bytes; _coffeeUpload = _uploadCoffeeImage(bytes).catchError((_) => null); });
+      setState(() {
+        _coffeeImageBytes = bytes;
+        _coffeeUpload = _uploadCoffeeImage(bytes).catchError((_) => null);
+      });
     } catch (e) {
       debugPrint('Beverages image pick failed: $e');
       if (mounted) {
@@ -260,7 +264,10 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
   Future<void> _saveProduct() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
 
-    if (_sizes.any((size) { final price = num.tryParse(size.priceController.text); return price == null || !price.isFinite || price <= 0; })) {
+    if (_sizes.any((size) {
+      final price = num.tryParse(size.priceController.text);
+      return price == null || !price.isFinite || price <= 0;
+    })) {
       _showSnack('Enter a valid selling price for every size.', isError: true);
       return;
     }
@@ -281,8 +288,10 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
 
     setState(() => _savingProduct = true);
     try {
-      final imageUrl = await (_coffeeUpload ?? _uploadCoffeeImage(_coffeeImageBytes));
-      if (_coffeeImageBytes != null && imageUrl == null) throw StateError('Picture could not upload. Please retry.');
+      final imageUrl =
+          await (_coffeeUpload ?? _uploadCoffeeImage(_coffeeImageBytes));
+      if (_coffeeImageBytes != null && imageUrl == null)
+        throw StateError('Picture could not upload. Please retry.');
       final publicCoffeeId = await ShortIdService.next('CF');
       final coffeeId = await _firestore.runTransaction<String>((
         transaction,
@@ -328,7 +337,8 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
         _flavorPriceController.clear();
         _descriptionController.clear();
         _costController.text = '0';
-        _coffeeImageBytes = null; _coffeeUpload = null;
+        _coffeeImageBytes = null;
+        _coffeeUpload = null;
         _resetSizes();
       });
       _showSnack('Beverages product saved! ID: $coffeeId');
@@ -394,7 +404,10 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
               imageBytes: _coffeeImageBytes,
               imageUrl: '',
               onPick: _pickCoffeeImage,
-              onRemove: () => setState(() { _coffeeImageBytes = null; _coffeeUpload = null; }),
+              onRemove: () => setState(() {
+                _coffeeImageBytes = null;
+                _coffeeUpload = null;
+              }),
             ),
             const SizedBox(height: 22),
 
@@ -402,11 +415,15 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
             _sectionHeader('Sizes & Price', Icons.local_drink_rounded),
             TextFormField(
               controller: _costController,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+              ),
               decoration: _inputDeco('Cost price (₱)', Icons.payments_outlined),
               validator: (value) {
                 final cost = num.tryParse(value ?? '');
-                return cost == null || !cost.isFinite || cost < 0 ? 'Enter a valid cost' : null;
+                return cost == null || !cost.isFinite || cost < 0
+                    ? 'Enter a valid cost'
+                    : null;
               },
             ),
             const SizedBox(height: 4),
@@ -440,9 +457,14 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
                           controller: size.priceController,
                           keyboardType: TextInputType.number,
                           inputFormatters: [
-                            FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
+                            FilteringTextInputFormatter.allow(
+                              RegExp(r'[0-9.]'),
+                            ),
                           ],
-                          decoration: _inputDeco('Price (₱)', Icons.payments_outlined),
+                          decoration: _inputDeco(
+                            'Price (₱)',
+                            Icons.payments_outlined,
+                          ),
                         ),
                       ),
                       const SizedBox(width: 4),
@@ -520,7 +542,9 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
                 child: TextField(
                   controller: priceController,
                   keyboardType: TextInputType.number,
-                  inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
+                  inputFormatters: [
+                    FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
+                  ],
                   decoration: _inputDeco('+ ₱', Icons.add_rounded),
                 ),
               ),
@@ -574,10 +598,14 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
                       0,
                     ),
                     onDelete: () async {
-                      final reason = await showVoidReasonDialog(context, '${data['name'] ?? 'Add-on'}');
+                      final reason = await showVoidReasonDialog(
+                        context,
+                        '${data['name'] ?? 'Add-on'}',
+                      );
                       if (reason == null) return;
                       await doc.reference.update({
-                        'voidReason': reason, 'deletedAt': Timestamp.now(),
+                        'voidReason': reason,
+                        'deletedAt': Timestamp.now(),
                         'isDeleted': true,
                         'updatedAt': FieldValue.serverTimestamp(),
                       });
@@ -657,10 +685,14 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
                   firestore: _firestore,
                   onEdit: () => _showEditProductDialog(entry.value),
                   onDelete: () async {
-                    final reason = await showVoidReasonDialog(context, '${entry.value.data()['name'] ?? 'Beverage'}');
+                    final reason = await showVoidReasonDialog(
+                      context,
+                      '${entry.value.data()['name'] ?? 'Beverage'}',
+                    );
                     if (reason == null) return;
                     await entry.value.reference.update({
-                      'voidReason': reason, 'deletedAt': Timestamp.now(),
+                      'voidReason': reason,
+                      'deletedAt': Timestamp.now(),
                       'isDeleted': true,
                       'updatedAt': FieldValue.serverTimestamp(),
                     });
@@ -700,7 +732,9 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
     final nameController = TextEditingController(
       text: data['name']?.toString() ?? '',
     );
-    final costController = TextEditingController(text: '${data['costPrice'] ?? 0}');
+    final costController = TextEditingController(
+      text: '${data['costPrice'] ?? 0}',
+    );
     final priceController = TextEditingController(
       text: ((data['basePrice'] ?? 0) as num).toStringAsFixed(0),
     );
@@ -714,7 +748,10 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
         .map(
           (size) => _OptionDraft(
             name: size['name']?.toString() ?? '',
-            priceDelta: (((size['priceDelta'] ?? 0) as num) + ((data['basePrice'] ?? 0) as num)).toStringAsFixed(2),
+            priceDelta:
+                (((size['priceDelta'] ?? 0) as num) +
+                        ((data['basePrice'] ?? 0) as num))
+                    .toStringAsFixed(2),
           ),
         )
         .toList();
@@ -741,7 +778,16 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
                       ),
                     ),
                     const SizedBox(height: 10),
-                    TextField(controller: costController, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: _inputDeco('Cost price (₱)', Icons.payments_outlined)),
+                    TextField(
+                      controller: costController,
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      decoration: _inputDeco(
+                        'Cost price (₱)',
+                        Icons.payments_outlined,
+                      ),
+                    ),
                     _CoffeeImagePicker(
                       imageBytes: editImageBytes.isEmpty
                           ? null
@@ -802,9 +848,14 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
                                 controller: size.priceController,
                                 keyboardType: TextInputType.number,
                                 inputFormatters: [
-                                  FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
+                                  FilteringTextInputFormatter.allow(
+                                    RegExp(r'[0-9.]'),
+                                  ),
                                 ],
-                                decoration: _inputDeco('Price (₱)', Icons.payments_outlined),
+                                decoration: _inputDeco(
+                                  'Price (₱)',
+                                  Icons.payments_outlined,
+                                ),
                               ),
                             ),
                             IconButton(
@@ -1212,7 +1263,7 @@ class _ProductCardState extends State<_ProductCard>
                                 textColor: _primaryDeep,
                               ),
                               _MiniTag(
-                                label: '₱${basePrice.toStringAsFixed(0)}',
+                                label: '${formatMoney(basePrice)}',
                                 color: const Color(0xFFE8F5E9),
                                 textColor: const Color(0xFF2E7D32),
                               ),
@@ -1327,7 +1378,7 @@ class _ProductCardState extends State<_ProductCard>
                                 ),
                                 if (delta > 0)
                                   Text(
-                                    '+₱${delta.toStringAsFixed(0)}',
+                                    '+${formatMoney(delta)}',
                                     style: const TextStyle(
                                       color: Colors.black38,
                                       fontSize: 11,
@@ -1346,7 +1397,7 @@ class _ProductCardState extends State<_ProductCard>
                                     borderRadius: BorderRadius.circular(20),
                                   ),
                                   child: Text(
-                                    '₱${total.toStringAsFixed(0)}',
+                                    '${formatMoney(total)}',
                                     style: const TextStyle(
                                       color: Colors.white,
                                       fontWeight: FontWeight.w800,
@@ -1478,7 +1529,7 @@ class _FirestoreOptionList extends StatelessWidget {
                 ),
                 child: Text(
                   delta > 0
-                      ? '${data['name']} +₱${delta.toStringAsFixed(0)}'
+                      ? '${data['name']} +${formatMoney(delta)}'
                       : '${data['name']}',
                   style: const TextStyle(
                     color: _primaryDeep,
@@ -1652,7 +1703,7 @@ class _AnimatedChipState extends State<_AnimatedChip>
         side: BorderSide(color: _primary.withOpacity(0.3)),
         label: Text(
           widget.price != '0'
-              ? '${widget.label}  +₱${widget.price}'
+              ? '${widget.label}  +${formatMoney(double.tryParse(widget.price) ?? 0)}'
               : widget.label,
           style: const TextStyle(
             color: _primaryDeep,

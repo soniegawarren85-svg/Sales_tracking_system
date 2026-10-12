@@ -1,3 +1,4 @@
+import '../../widgets/branch_sales_summary.dart';
 import '../../widgets/top_edge_refresh.dart';
 import '../../widgets/branch_receipts_dialog.dart';
 import '../../widgets/screen_loading_region.dart';
@@ -29,6 +30,7 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/services.dart';
 import '../../services/cash_drawer_service.dart';
+import '../../services/number_format.dart';
 
 // ── Color Palette ─────────────────────────────────────────────────
 const kPrimary = AppColors.primary;
@@ -1561,7 +1563,7 @@ class _BudgetPageState extends State<BudgetPage>
                                                           ?.toString() ??
                                                       'Add-on',
                                                   subtitle:
-                                                      '+ P${_parsePrice(data['priceDelta']).toStringAsFixed(2)}',
+                                                      '+ P${formatNumber(_parsePrice(data['priceDelta']), decimals: 2)}',
                                                   selected: selectedAddonIds
                                                       .contains(addonId),
                                                   onChanged: (checked) {
@@ -1594,7 +1596,7 @@ class _BudgetPageState extends State<BudgetPage>
                                                           ?.toString() ??
                                                       'Beverages',
                                                   subtitle:
-                                                      '${data['category'] ?? 'Beverages'} - P${_parsePrice(data['basePrice']).toStringAsFixed(2)} - $sizes sizes',
+                                                      '${data['category'] ?? 'Beverages'} - P${formatNumber(_parsePrice(data['basePrice']), decimals: 2)} - $sizes sizes',
                                                   selected: selectedCoffeeIds
                                                       .contains(productId),
                                                   onChanged: (checked) {
@@ -1632,7 +1634,7 @@ class _BudgetPageState extends State<BudgetPage>
                                                 return AssignInventoryTile(
                                                   title: name,
                                                   subtitle:
-                                                      'Bundle stock: $stock - P${_parsePrice(data['price']).toStringAsFixed(2)}',
+                                                      'Bundle stock: $stock - P${formatNumber(_parsePrice(data['price']), decimals: 2)}',
                                                   icon:
                                                       Icons.inventory_2_rounded,
                                                   controller: controller,
@@ -1706,7 +1708,7 @@ class _BudgetPageState extends State<BudgetPage>
                                                         child: AssignInventoryTile(
                                                           title: itemName,
                                                           subtitle:
-                                                              'Stock: $stock - P${_parsePrice(item['price']).toStringAsFixed(2)}',
+                                                              'Stock: $stock - P${formatNumber(_parsePrice(item['price']), decimals: 2)}',
                                                           icon: Icons
                                                               .category_rounded,
                                                           controller:
@@ -2948,7 +2950,7 @@ class _BudgetPageState extends State<BudgetPage>
                                   ),
                                   const SizedBox(width: 10),
                                   Text(
-                                    '₱${total.toStringAsFixed(2)}',
+                                    '${formatMoney(total)}',
                                     style: const TextStyle(
                                       fontWeight: FontWeight.w900,
                                       color: kDeep,
@@ -3174,7 +3176,7 @@ class _BudgetPageState extends State<BudgetPage>
                             ),
                             const SizedBox(height: 8),
                             Text(
-                              '₱${(totalSales as num?)?.toStringAsFixed(2) ?? '0.00'}',
+                              '${formatMoney((totalSales as num?) ?? 0)}',
                               style: const TextStyle(
                                 fontSize: 18,
                                 fontWeight: FontWeight.w800,
@@ -3211,7 +3213,7 @@ class _BudgetPageState extends State<BudgetPage>
                             ),
                             const SizedBox(height: 8),
                             Text(
-                              '₱${(cashDrawerTotal as num?)?.toStringAsFixed(2) ?? '0.00'}',
+                              '${formatMoney((cashDrawerTotal as num?) ?? 0)}',
                               style: const TextStyle(
                                 fontSize: 18,
                                 fontWeight: FontWeight.w800,
@@ -3236,13 +3238,13 @@ class _BudgetPageState extends State<BudgetPage>
                       Expanded(
                         child: _buildRefundSummaryMetric(
                           'Opening Change Fund',
-                          '₱${openingCashValue.toStringAsFixed(2)}',
+                          '${formatMoney(openingCashValue)}',
                         ),
                       ),
                       Expanded(
                         child: _buildRefundSummaryMetric(
                           'Drawer Gain',
-                          '₱${drawerGainValue.toStringAsFixed(2)}',
+                          '${formatMoney(drawerGainValue)}',
                         ),
                       ),
                     ],
@@ -3401,7 +3403,7 @@ class _BudgetPageState extends State<BudgetPage>
                                     ),
                                   ),
                                   Text(
-                                    '₱${transactionTotal.toStringAsFixed(2)}',
+                                    '${formatMoney(transactionTotal)}',
                                     style: const TextStyle(
                                       fontSize: 11,
                                       fontWeight: FontWeight.w600,
@@ -3483,7 +3485,7 @@ class _BudgetPageState extends State<BudgetPage>
                                         ),
                                         const SizedBox(height: 2),
                                         Text(
-                                          'Price: ₱${priceValue.toStringAsFixed(2)}',
+                                          'Price: ${formatMoney(priceValue)}',
                                           style: const TextStyle(
                                             fontSize: 11,
                                             color: Color(0xFF999999),
@@ -3496,7 +3498,7 @@ class _BudgetPageState extends State<BudgetPage>
                                 const SizedBox(height: 6),
                                 if (paidAmount > 0) ...[
                                   Text(
-                                    'Customer Payment: ₱${paidAmount.toStringAsFixed(2)}',
+                                    'Customer Payment: ${formatMoney(paidAmount)}',
                                     style: const TextStyle(
                                       fontSize: 11,
                                       color: Color(0xFF999999),
@@ -3516,7 +3518,7 @@ class _BudgetPageState extends State<BudgetPage>
                                       ),
                                     ),
                                     Text(
-                                      '₱${change.toStringAsFixed(2)}',
+                                      '${formatMoney(change)}',
                                       style: const TextStyle(
                                         fontSize: 11,
                                         fontWeight: FontWeight.w600,
@@ -3662,7 +3664,7 @@ class _BudgetPageState extends State<BudgetPage>
                               Expanded(
                                 child: _buildRefundSummaryMetric(
                                   'Money Deducted',
-                                  '₱${totalRefundAmount.toStringAsFixed(2)}',
+                                  '${formatMoney(totalRefundAmount)}',
                                 ),
                               ),
                             ],
@@ -3720,7 +3722,7 @@ class _BudgetPageState extends State<BudgetPage>
                                       ),
                                     ),
                                     Text(
-                                      '-₱${amount.toStringAsFixed(2)}',
+                                      '-${formatMoney(amount)}',
                                       style: const TextStyle(
                                         fontWeight: FontWeight.w800,
                                         fontSize: 12,
@@ -4187,7 +4189,7 @@ class _BudgetPageState extends State<BudgetPage>
                                                 ),
                                                 const SizedBox(height: 4),
                                                 Text(
-                                                  'Allocated: ₱${amount.toStringAsFixed(2)}',
+                                                  'Allocated: ${formatMoney(amount)}',
                                                   style: const TextStyle(
                                                     fontSize: 11,
                                                     color: Color(0xFF999999),
@@ -4206,7 +4208,7 @@ class _BudgetPageState extends State<BudgetPage>
                                                   CrossAxisAlignment.end,
                                               children: [
                                                 Text(
-                                                  '₱${amount.toStringAsFixed(2)}',
+                                                  '${formatMoney(amount)}',
                                                   maxLines: 1,
                                                   overflow:
                                                       TextOverflow.ellipsis,
@@ -4843,6 +4845,18 @@ class _BudgetPageState extends State<BudgetPage>
               const SizedBox(height: 8),
               _buildBranchItemsTable(branchId),
               const SizedBox(height: 12),
+              _buildBranchReportSummary(branchId),
+              const SizedBox(height: 16),
+              StreamBuilder<BranchReportData>(
+                stream: _reportStream,
+                initialData: _latestReport,
+                builder: (context, snapshot) => snapshot.hasData
+                    ? BranchSalesSummary(
+                        data: snapshot.data!,
+                        branchId: branchId,
+                      )
+                    : const SizedBox.shrink(),
+              ),
               const SizedBox(height: 16),
               _buildPeriodBranchAnalytics(branchId, branchName),
               const SizedBox(height: 82),
@@ -4852,6 +4866,85 @@ class _BudgetPageState extends State<BudgetPage>
       ],
     );
   }
+
+  (DateTime, DateTime) _branchAnalyticsPeriod() {
+    final today = DateUtils.dateOnly(DateTime.now());
+    return switch (_analyticsRange) {
+      'Week' => (
+        today.subtract(Duration(days: today.weekday - 1)),
+        today
+            .subtract(Duration(days: today.weekday - 1))
+            .add(const Duration(days: 7)),
+      ),
+      'Month' => (DateTime(today.year, 1), DateTime(today.year + 1, 1)),
+      _ => (today, today.add(const Duration(days: 1))),
+    };
+  }
+
+  Widget _buildBranchReportSummary(String branchId) =>
+      StreamBuilder<BranchReportData>(
+        stream: _reportStream,
+        initialData: _latestReport,
+        builder: (context, snapshot) {
+          if (snapshot.hasError) {
+            return const Text('Unable to load sales summary.');
+          }
+          if (!snapshot.hasData) {
+            return const Center(child: ScreenLoadingIndicator());
+          }
+          final range = _branchAnalyticsPeriod();
+          final totals = snapshot.data!.allocationReportTotals(
+            branchId,
+            range.$1,
+            range.$2,
+          );
+          return Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: AppColors.surface,
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: kAccent),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Sales Summary',
+                  style: TextStyle(
+                    color: kBannerTop,
+                    fontSize: 17,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                for (final entry in totals.entries.where(
+                  (entry) => entry.key != 'Closing cash drawer',
+                ))
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 5),
+                    child: Row(
+                      children: [
+                        Expanded(child: Text(entry.key)),
+                        Text(
+                          [
+                                'Total sold',
+                                'Total transactions',
+                              ].contains(entry.key)
+                              ? entry.value.toStringAsFixed(0)
+                              : '${formatMoney(entry.value)}',
+                          style: const TextStyle(
+                            color: kDeep,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+          );
+        },
+      );
 
   Widget _branchActionButton({
     required String label,
@@ -4901,10 +4994,7 @@ class _BudgetPageState extends State<BudgetPage>
       ],
     );
     if (DateUtils.isSameDay(day, DateTime.now())) {
-      return amount(
-        'Current Cash Drawer',
-        '₱${currentCash.toStringAsFixed(2)}',
-      );
+      return amount('Current Cash Drawer', '${formatMoney(currentCash)}');
     }
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
       stream: _firestore
@@ -4933,7 +5023,7 @@ class _BudgetPageState extends State<BudgetPage>
         final closing = _parsePrice(
           report['closingCash'] ?? report['cashDrawerTotal'],
         );
-        return amount('Cash Drawer', '₱${closing.toStringAsFixed(2)}');
+        return amount('Cash Drawer', '${formatMoney(closing)}');
       },
     );
   }
@@ -5046,7 +5136,7 @@ class _BudgetPageState extends State<BudgetPage>
                               ),
                             ),
                             Text(
-                              '₱${revenue.toStringAsFixed(2)}',
+                              '${formatMoney(revenue)}',
                               style: const TextStyle(
                                 color: Colors.white,
                                 fontSize: 25,
@@ -5268,7 +5358,7 @@ class _BudgetPageState extends State<BudgetPage>
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
                   Text(
-                    '₱${total.toStringAsFixed(2)}',
+                    '${formatMoney(total)}',
                     style: const TextStyle(
                       color: kDeep,
                       fontWeight: FontWeight.w900,
@@ -5338,7 +5428,7 @@ class _BudgetPageState extends State<BudgetPage>
                     ),
                   ),
                   Text(
-                    '₱${price.toStringAsFixed(2)}',
+                    '${formatMoney(price)}',
                     style: const TextStyle(fontWeight: FontWeight.w700),
                   ),
                 ],
@@ -5392,18 +5482,15 @@ class _BudgetPageState extends State<BudgetPage>
                     discountType.isEmpty
                         ? 'Discount'
                         : 'Discount ($discountType)',
-                    '-₱${discount.toStringAsFixed(2)}',
+                    '-${formatMoney(discount)}',
                   ),
                 if (paid > 0)
-                  _receiptDetail(
-                    'Customer paid',
-                    '₱${paid.toStringAsFixed(2)}',
-                  ),
+                  _receiptDetail('Customer paid', '${formatMoney(paid)}'),
                 if (change > 0)
-                  _receiptDetail('Change', '₱${change.toStringAsFixed(2)}'),
+                  _receiptDetail('Change', '${formatMoney(change)}'),
                 _receiptDetail(
                   activityStatus == 'Completed' ? 'Total' : 'Loss',
-                  '₱${total.abs().toStringAsFixed(2)}',
+                  '${formatMoney(total.abs())}',
                   isTotal: true,
                 ),
               ],
@@ -6141,7 +6228,7 @@ class _BudgetPageState extends State<BudgetPage>
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Total Completed: ₱${totalCompleted.toStringAsFixed(2)}',
+                      'Total Completed: ${formatMoney(totalCompleted)}',
                       style: const TextStyle(
                         color: Color(0xFFE53935),
                         fontSize: 12,
@@ -6149,7 +6236,7 @@ class _BudgetPageState extends State<BudgetPage>
                       ),
                     ),
                     Text(
-                      'Total Reduced: ₱${totalReduced.toStringAsFixed(2)}',
+                      'Total Reduced: ${formatMoney(totalReduced)}',
                       style: const TextStyle(
                         color: Color(0xFF1976D2),
                         fontSize: 12,
@@ -6158,7 +6245,7 @@ class _BudgetPageState extends State<BudgetPage>
                     ),
                     if (allowRefunds)
                       Text(
-                        'Total Refund: ₱${totalRefund.toStringAsFixed(2)}',
+                        'Total Refund: ${formatMoney(totalRefund)}',
                         style: const TextStyle(
                           color: Color(0xFFF9A825),
                           fontSize: 12,
@@ -6175,7 +6262,7 @@ class _BudgetPageState extends State<BudgetPage>
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Total loss: ₱${totalLoss.toStringAsFixed(2)}',
+                      'Total loss: ${formatMoney(totalLoss)}',
                       style: const TextStyle(
                         color: Color(0xFFD32F2F),
                         fontWeight: FontWeight.w900,
@@ -6539,7 +6626,6 @@ class _BudgetPageState extends State<BudgetPage>
         }
         final rows = docs.expand(_allocationRowsForDocument).where((row) {
           final matchesFilter =
-              _allocationFilter == 'All' ||
               (_allocationFilter == 'Bundle' && row.type == 'Bundle') ||
               (_allocationFilter == 'Beverages' && row.type == 'Beverages') ||
               (_allocationFilter == 'Categories' && row.type == 'Category');
@@ -6568,6 +6654,12 @@ class _BudgetPageState extends State<BudgetPage>
               branchId,
               DateTime.now(),
             );
+            final period = _branchAnalyticsPeriod();
+            final activity = salesSnapshot.data!.items(
+              branchId,
+              period.$1,
+              period.$2,
+            );
             Map<String, dynamic> metric(_AllocationTableRow row) =>
                 metrics.where((m) => m['id'] == row.id).firstOrNull ?? {};
             final tableRows = rows
@@ -6575,6 +6667,9 @@ class _BudgetPageState extends State<BudgetPage>
                 .map(
                   (row) => <String, dynamic>{
                     ...metric(row),
+                    ...?activity
+                        .where((item) => item['id'] == row.id)
+                        .firstOrNull,
                     'id': row.id,
                     'name': row.name,
                     'type': row.type == 'Category' ? 'Categories' : row.type,
@@ -6968,7 +7063,7 @@ class _BudgetPageState extends State<BudgetPage>
                       const SizedBox(height: 6),
                       Text(
                         enabled
-                            ? '₱${(_currentAllocations[branchId] ?? 0).toStringAsFixed(2)}'
+                            ? '${formatMoney((_currentAllocations[branchId] ?? 0))}'
                             : 'Not assigned',
                         style: TextStyle(
                           fontSize: 17,
@@ -7036,7 +7131,7 @@ class _BudgetPageState extends State<BudgetPage>
                           const SizedBox(height: 6),
                           Text(
                             enabled
-                                ? '₱${cashBalance.toStringAsFixed(2)}'
+                                ? '${formatMoney(cashBalance)}'
                                 : 'No drawer',
                             style: TextStyle(
                               fontSize: 17,
@@ -8110,7 +8205,7 @@ class _BudgetPageState extends State<BudgetPage>
                     children: [
                       _buildSummaryCard(
                         label: 'Total Allocated',
-                        value: '₱${totalAllocated.toStringAsFixed(2)}',
+                        value: '${formatMoney(totalAllocated)}',
                         icon: Icons.account_balance_wallet_rounded,
                         gradientColors: const [
                           Color(0xFF1A8F7A),
@@ -8593,7 +8688,7 @@ class _BudgetPageState extends State<BudgetPage>
                             ),
                             const SizedBox(height: 6),
                             Text(
-                              '₱${(_currentAllocations[staffId] ?? 0).toStringAsFixed(2)}',
+                              '${formatMoney((_currentAllocations[staffId] ?? 0))}',
                               style: const TextStyle(
                                 fontSize: 18,
                                 fontWeight: FontWeight.w800,
@@ -8675,7 +8770,7 @@ class _BudgetPageState extends State<BudgetPage>
                                 ),
                                 const SizedBox(height: 6),
                                 Text(
-                                  '₱${cashBalance.toStringAsFixed(2)}',
+                                  '${formatMoney(cashBalance)}',
                                   style: const TextStyle(
                                     fontSize: 18,
                                     fontWeight: FontWeight.w800,

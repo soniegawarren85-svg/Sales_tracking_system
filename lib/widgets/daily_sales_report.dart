@@ -1,3 +1,4 @@
+import 'sales_report_dashboard.dart';
 import 'package:flutter/foundation.dart';
 import 'package:file_picker/file_picker.dart';
 import '../services/branch_report_csv.dart';
@@ -11,11 +12,11 @@ import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import '../services/report_print.dart';
 import '../services/branch_report_data.dart';
+import '../services/number_format.dart';
 import '../services/inventory_display_ids.dart';
 import '../services/report_pdf_theme.dart';
 import '../theme/app_colors.dart';
 import 'inventory_records_table.dart';
-import 'branch_analytics_bars.dart';
 
 class DailySalesReport extends StatefulWidget {
   const DailySalesReport({super.key, this.data});
@@ -28,8 +29,28 @@ class _DailySalesReportState extends State<DailySalesReport> {
   late final source = widget.data ?? BranchReportData.watch();
   DateTime day = DateUtils.dateOnly(DateTime.now());
   String period = 'Day', search = '', type = 'All';
+  DateTimeRange? customRange;
+  Future<void> pickRange() async {
+    final selected = await showDateRangePicker(
+      context: context,
+      initialDateRange: customRange ?? DateTimeRange(start: day, end: day),
+      firstDate: DateTime(2020),
+      lastDate: DateTime.now(),
+    );
+    if (selected != null && mounted)
+      setState(() {
+        customRange = selected;
+        period = 'Custom';
+      });
+  }
+
   bool printing = false;
   (DateTime, DateTime) get range {
+    if (period == 'Custom' && customRange != null)
+      return (
+        customRange!.start,
+        customRange!.end.add(const Duration(days: 1)),
+      );
     switch (period) {
       case 'Week':
         final start = day.subtract(Duration(days: day.weekday - 1));
@@ -53,7 +74,7 @@ class _DailySalesReportState extends State<DailySalesReport> {
         : '${MaterialLocalizations.of(context).formatShortDate(date)} ${TimeOfDay.fromDateTime(date).format(context)}';
   }
 
-  String money(num n) => '₱${n.toStringAsFixed(2)}';
+  String money(num n) => formatMoney(n);
   Future<void> printReport(
     Map<String, String> metrics,
     List<Map<String, dynamic>> rows,
@@ -186,6 +207,17 @@ class _DailySalesReportState extends State<DailySalesReport> {
           0,
           (sum, s) => sum + reportValue(s['total']),
         );
+        final totalVat = sales.fold<double>(
+          0,
+          (sum, sale) =>
+              sum +
+              reportValue(
+                sale['tax'] ??
+                    sale['vatAmount'] ??
+                    sale['taxAmount'] ??
+                    sale['vat'],
+              ),
+        );
         final sold = sales.fold<double>(
           0,
           (sum, s) =>
@@ -267,6 +299,9 @@ class _DailySalesReportState extends State<DailySalesReport> {
             'branch': branch.value,
             'Total cost': totals['Total cost'] ?? 0.0,
             'Total profit': totals['Total profit'] ?? 0.0,
+            'Total VAT': totals['Total VAT / tax'] ?? 0.0,
+            'Total net profit': totals['Total net profit'] ?? 0.0,
+            'Total net sales': totals['Total net sales'] ?? 0.0,
             'Total loss':
                 (totals['Reduce'] ?? 0.0) + (totals['Refunds'] ?? 0.0),
           };
@@ -283,6 +318,9 @@ class _DailySalesReportState extends State<DailySalesReport> {
           'Items allocated': '${allocated.toInt()}',
           'Total cost': money(financialTotal('Total cost')),
           'Total profit': money(financialTotal('Total profit')),
+          'Total VAT': money(totalVat),
+          'Total net profit': money(financialTotal('Total net profit')),
+          'Total net sales': money(total - totalVat),
           'Total loss': money(financialTotal('Total loss')),
         };
         final rows = allRows
@@ -341,6 +379,9 @@ class _DailySalesReportState extends State<DailySalesReport> {
                             if ([
                               'Total cost',
                               'Total profit',
+                              'Total VAT',
+                              'Total net profit',
+                              'Total net sales',
                               'Total loss',
                             ].contains(selectedDetail)) ...[
                               Text(
@@ -357,6 +398,18 @@ class _DailySalesReportState extends State<DailySalesReport> {
                               if (selectedDetail == 'Total cost')
                                 const Text(
                                   'Cost of items sold and inventory replacements for the selected period.',
+                                ),
+                              if (selectedDetail == 'Total VAT')
+                                const Text(
+                                  'VAT collected from completed sales in the selected period.',
+                                ),
+                              if (selectedDetail == 'Total net profit')
+                                const Text(
+                                  'Profit after deducting VAT from item profit for the selected period.',
+                                ),
+                              if (selectedDetail == 'Total net sales')
+                                const Text(
+                                  'Total sales revenue minus VAT for the selected period.',
                                 ),
                               ...financialRows.map(
                                 (row) => ListTile(
@@ -521,12 +574,18 @@ class _DailySalesReportState extends State<DailySalesReport> {
                       scrollDirection: Axis.horizontal,
                       child: Row(
                         spacing: 8,
-                        children: ['Day', 'Week', 'Month', 'Year']
+                        children: ['Day', 'Week', 'Month', 'Year', 'Custom']
                             .map(
                               (p) => ChoiceChip(
                                 label: Text(p),
                                 selected: period == p,
-                                onSelected: (_) => setState(() => period = p),
+                                onSelected: (_) {
+                                  if (p == 'Custom') {
+                                    pickRange();
+                                  } else {
+                                    setState(() => period = p);
+                                  }
+                                },
                               ),
                             )
                             .toList(),
@@ -536,9 +595,17 @@ class _DailySalesReportState extends State<DailySalesReport> {
                   TextButton.icon(
                     icon: const Icon(Icons.calendar_month),
                     label: Text(
-                      MaterialLocalizations.of(context).formatMediumDate(day),
+                      period == 'Custom' && customRange != null
+                          ? '${MaterialLocalizations.of(context).formatShortDate(customRange!.start)} ? ${MaterialLocalizations.of(context).formatShortDate(customRange!.end)}'
+                          : MaterialLocalizations.of(
+                              context,
+                            ).formatMediumDate(day),
                     ),
                     onPressed: () async {
+                      if (period == 'Custom') {
+                        await pickRange();
+                        return;
+                      }
                       final selected = await showDatePicker(
                         context: context,
                         initialDate: day,
@@ -556,77 +623,15 @@ class _DailySalesReportState extends State<DailySalesReport> {
                 padding: const EdgeInsets.all(20),
                 children: [
                   const SizedBox(height: 16),
-                  LayoutBuilder(
-                    builder: (context, c) {
-                      final columns = c.maxWidth < 320
-                          ? 1
-                          : c.maxWidth < 600
-                          ? 2
-                          : 3;
-                      return Wrap(
-                        spacing: 12,
-                        runSpacing: 12,
-                        children: metrics.entries
-                            .map(
-                              (e) => SizedBox(
-                                width:
-                                    (c.maxWidth - (columns - 1) * 12) / columns,
-                                height: c.maxWidth < 600 ? 200 : 160,
-                                child: Card(
-                                  color: AppColors.surfaceTint,
-                                  child: InkWell(
-                                    borderRadius: BorderRadius.circular(16),
-                                    onTap: () => showDetails(e.key),
-                                    child: Padding(
-                                      padding: const EdgeInsets.all(18),
-                                      child: Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                          Text(e.key),
-                                          const Spacer(),
-                                          Text(
-                                            e.value,
-                                            style: const TextStyle(
-                                              fontSize: 22,
-                                              fontWeight: FontWeight.bold,
-                                              color: AppColors.primaryDeep,
-                                            ),
-                                          ),
-                                          const SizedBox(height: 4),
-                                          Text(
-                                            e.key == 'Items allocated'
-                                                ? 'View allocated'
-                                                : 'View details',
-                                            style: const TextStyle(
-                                              fontSize: 12,
-                                              color: AppColors.primaryDark,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            )
-                            .toList(),
-                      );
-                    },
+                  SalesReportMetrics(metrics: metrics, onDetails: showDetails),
+                  const SizedBox(height: 12),
+                  SalesReportDashboard(
+                    data: data,
+                    start: start,
+                    end: end,
+                    period: period,
                   ),
-                  const SizedBox(height: 28),
-                  const Text(
-                    'Sales by branch',
-                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-                  ),
-                  const SizedBox(height: 16),
-                  SizedBox(
-                    height: 320,
-                    child: BranchAnalyticsBars(
-                      values: chart.values.toList(),
-                      labels: chart.keys.toList(),
-                    ),
-                  ),
+                  const SizedBox(height: 12),
                   ReportSalesTimeline(
                     data: data,
                     start: start,
