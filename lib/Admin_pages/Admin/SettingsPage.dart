@@ -53,8 +53,9 @@ class _SettingsPageState extends State<SettingsPage> {
 
   @override
   Widget build(BuildContext context) {
-    if (!_profileReady)
+    if (!_profileReady) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: SystemUiOverlayStyle.light,
       child: Scaffold(
@@ -510,7 +511,7 @@ class _SettingsPageState extends State<SettingsPage> {
 
   Future<void> _pickAndUploadProfilePhoto() async {
     final uid = _profileId;
-    if (uid == null || uid.isEmpty || _isUploadingProfilePhoto) return;
+    if (uid.isEmpty || _isUploadingProfilePhoto) return;
     try {
       final picked = await ImagePicker().pickImage(
         source: ImageSource.gallery,
@@ -532,10 +533,11 @@ class _SettingsPageState extends State<SettingsPage> {
             'updatedAt': FieldValue.serverTimestamp(),
           }, SetOptions(merge: true));
       _lastProfilePhotoUrl = photoUrl;
-      if (FirebaseAuth.instance.currentUser?.uid == _profileId)
+      if (FirebaseAuth.instance.currentUser?.uid == _profileId) {
         await FirebaseAuth.instance.currentUser?.updatePhotoURL(
           photoUrl.startsWith('data:image/') ? null : photoUrl,
         );
+      }
       if (mounted) _showStyledSnackBar('Profile photo updated successfully.');
     } catch (_) {
       if (mounted) {
@@ -545,11 +547,12 @@ class _SettingsPageState extends State<SettingsPage> {
         );
       }
     } finally {
-      if (mounted)
+      if (mounted) {
         setState(() {
           _isUploadingProfilePhoto = false;
           _profilePreview = null;
         });
+      }
     }
   }
 
@@ -566,14 +569,12 @@ class _SettingsPageState extends State<SettingsPage> {
   }) async {
     final uid = _profileId;
     var data = <String, dynamic>{...?incomingData};
-    if (uid != null) {
-      final snapshot = await FirebaseFirestore.instance
-          .collection('staff_requests')
-          .doc(uid)
-          .get();
-      data = {...data, ...?snapshot.data()};
-    }
-    if (!mounted) return;
+    final snapshot = await FirebaseFirestore.instance
+        .collection('staff_requests')
+        .doc(uid)
+        .get();
+    data = {...data, ...?snapshot.data()};
+      if (!mounted) return;
 
     final authUser = FirebaseAuth.instance.currentUser;
     final currentUser = authUser?.uid == _profileId ? authUser : null;
@@ -721,19 +722,21 @@ class _SettingsPageState extends State<SettingsPage> {
                                     updatedName,
                                   );
                                 }
-                                if (dialogContext.mounted)
+                                if (dialogContext.mounted) {
                                   Navigator.pop(dialogContext);
+                                }
                                 if (mounted) {
                                   _showStyledSnackBar(
                                     'Account information updated.',
                                   );
                                 }
                               } catch (error) {
-                                if (mounted)
+                                if (mounted) {
                                   _showStyledSnackBar(
                                     'Unable to save account information: $error',
                                     isError: true,
                                   );
+                                }
                               }
                             },
                             child: const Text('Save'),
@@ -851,13 +854,14 @@ class _SettingsPageState extends State<SettingsPage> {
                       'authEmail': user.email,
                     }, SetOptions(merge: true));
                 final username = prefs.getString('offlineLogin.username');
-                if (username != null)
+                if (username != null) {
                   await prefs.setString(
                     'offlineLogin.passwordHash',
                     sha256
                         .convert(utf8.encode('$username:${next.text}'))
                         .toString(),
                   );
+                }
                 if (context.mounted) Navigator.pop(context);
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(content: Text('Password updated.')),

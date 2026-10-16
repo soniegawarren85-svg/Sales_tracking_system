@@ -246,11 +246,12 @@ class _AllocationHistoryDialogState extends State<AllocationHistoryDialog> {
       lastDate: DateTime.now().add(const Duration(days: 365)),
       initialDateRange: DateTimeRange(start: _day, end: _endDay ?? _day),
     );
-    if (picked != null && mounted)
+    if (picked != null && mounted) {
       setState(() {
         _day = picked.start;
         _endDay = picked.end;
       });
+    }
   }
 
   @override

@@ -84,8 +84,9 @@ class BranchReportData {
                         },
                       )
                       .toList();
-                  if (values.length == names.length)
+                  if (values.length == names.length) {
                     controller.add(BranchReportData(Map.from(values)));
+                  }
                 }, onError: controller.addError),
           );
         }
@@ -445,7 +446,7 @@ class BranchReportData {
                     '${v['name']}' == '${item['variant'] ?? item['name']}'),
           )
           .firstOrNull;
-      if (match != null)
+      if (match != null) {
         return {
           ...item,
           'publicId': match['publicId'] ?? match['id'],
@@ -455,6 +456,7 @@ class BranchReportData {
           'expirationDate': item['expirationDate'] ?? match['expirationDate'],
           'type': 'Categories',
         };
+      }
     }
     if (source != null &&
         (source['isBundle'] == true || source['items'] == null)) {
@@ -517,8 +519,9 @@ class BranchReportData {
       if (sourceId.isNotEmpty && (source == null || !usable(source))) continue;
       if (allocation['isBundle'] == true &&
           reportValue(allocation['bundleCount']) > 0 &&
-          availableBundleStock(allocation, now: start) == 0)
+          availableBundleStock(allocation, now: start) == 0) {
         continue;
+      }
       final variants =
           allocation['isBundle'] == true ||
               allocation['isCoffee'] == true ||
@@ -679,8 +682,9 @@ class BranchReportData {
         for (final saved in savedItems) {
           if (reportValue(saved['quantity']) <= 0) continue;
           final item = ensure(saved, saved['sourceInventoryId']?.toString());
-          if (reportInRange(row['createdAt'], start, end))
+          if (reportInRange(row['createdAt'], start, end)) {
             item['relevant'] = true;
+          }
           item['allocated'] =
               reportValue(item['allocated']) + reportValue(saved['quantity']);
           (item['history'] as List).add({
@@ -720,8 +724,9 @@ class BranchReportData {
         );
         item['allocated'] =
             reportValue(item['allocated']) + reportValue(entry.value);
-        if (reportInRange(row['createdAt'], start, end))
+        if (reportInRange(row['createdAt'], start, end)) {
           item['relevant'] = true;
+        }
         (item['history'] as List).add({
           'time': cashRecordDate(row['createdAt']),
           'activity': 'Allocation',
@@ -748,16 +753,18 @@ class BranchReportData {
             reportValue(
                   variant['assignedStartingStock'] ?? variant['startingStock'],
                 ) <=
-                0)
+                0) {
           continue;
+        }
         final expired = cashRecordDate(variant['expirationDate']);
         final removed = cashRecordDate(
           variant['deletedAt'] ?? variant['removedAt'] ?? row['deletedAt'],
         );
         final deleted =
             row['isDeleted'] == true || variant['isDeleted'] == true;
-        if (expired != null && DateUtils.dateOnly(expired).isBefore(start))
+        if (expired != null && DateUtils.dateOnly(expired).isBefore(start)) {
           continue;
+        }
         if (removed != null && removed.isBefore(start)) continue;
         if (deleted && removed == null) continue;
         final source = [...rows('sales_inventory'), ...rows('coffee_products')]
@@ -766,8 +773,9 @@ class BranchReportData {
         if (source != null) {
           final sourceRemoved = cashRecordDate(source['deletedAt']);
           if (source['isDeleted'] == true &&
-              (sourceRemoved == null || sourceRemoved.isBefore(start)))
+              (sourceRemoved == null || sourceRemoved.isBefore(start))) {
             continue;
+          }
           if (row['isBundle'] != true && row['isCoffee'] != true) {
             final archived = (source['removedItems'] as List? ?? [])
                 .whereType<Map>()
@@ -775,8 +783,9 @@ class BranchReportData {
                 .firstOrNull;
             final removedAt = cashRecordDate(archived?['removedAt']);
             if (archived != null &&
-                (removedAt == null || removedAt.isBefore(start)))
+                (removedAt == null || removedAt.isBefore(start))) {
               continue;
+            }
           }
         }
         final item = ensure(variant, '${row['sourceInventoryId'] ?? ''}');
@@ -789,9 +798,10 @@ class BranchReportData {
               variant['stock'] ??
               variant['bundleCount'] ??
               variant['startingStock'];
-          if (stock != null)
+          if (stock != null) {
             item['remaining'] =
                 reportValue(item['remaining']) + reportValue(stock);
+          }
         }
         item['status'] = deleted && removed != null && removed.isBefore(end)
             ? 'Archived'
@@ -826,8 +836,9 @@ class BranchReportData {
               : 'Sold',
           'qty': refund && sale['refundMethod'] != 'inventory' ? 0.0 : -qty,
         });
-        if (!reportInRange(sale['timestamp'] ?? sale['createdAt'], start, end))
+        if (!reportInRange(sale['timestamp'] ?? sale['createdAt'], start, end)) {
           continue;
+        }
         item['relevant'] = true;
         if (!refund && item['type'] == 'Beverages') {
           final size = '${raw['coffeeSize'] ?? raw['variant'] ?? 'Regular'}';
@@ -908,8 +919,9 @@ class BranchReportData {
         'activity': 'Reduce',
         'qty': -reportValue(loss['quantity']),
       });
-      if (!reportInRange(loss['createdAt'] ?? loss['timestamp'], start, end))
+      if (!reportInRange(loss['createdAt'] ?? loss['timestamp'], start, end)) {
         continue;
+      }
       item['relevant'] = true;
       item['reduce'] =
           reportValue(item['reduce']) + reportValue(loss['quantity']);
@@ -937,8 +949,9 @@ class BranchReportData {
               (sum, event) => sum + reportValue(event['qty']),
             );
       }
-      if (missing > 0)
+      if (missing > 0) {
         item['allocated'] = reportValue(item['allocationSnapshot']);
+      }
       final visible = <Map<String, dynamic>>[];
       item['added'] = events
           .where(
@@ -994,18 +1007,20 @@ class BranchReportData {
         });
         if (event['activity'] == 'Allocation') firstAllocation = false;
       }
-      if (visible.isEmpty && balance != 0)
+      if (visible.isEmpty && balance != 0) {
         visible.add({
           'time': start,
           'activity': 'Opening balance',
           'qty': balance,
           'balance': balance,
         });
+      }
       item['history'] = visible;
       if (hasStockEvidence) item['remaining'] ??= balance;
       if (hasStockEvidence &&
-          (balance > 0 || reportValue(item['starting']) > 0))
+          (balance > 0 || reportValue(item['starting']) > 0)) {
         item['relevant'] = true;
+      }
       if (hasStockEvidence &&
           reportValue(item['remaining']) <= 50 &&
           item['status'] == 'Available') {

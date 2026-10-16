@@ -137,8 +137,9 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
 
   dynamic _checklistDate(Map<String, dynamic> data) {
     if (data['kind'] == 'return' &&
-        ChecklistStatus.label(data) == ChecklistStatus.completed)
+        ChecklistStatus.label(data) == ChecklistStatus.completed) {
       return data['confirmedAt'] ?? data['decidedAt'] ?? data['createdAt'];
+    }
     final isReceived =
         data['kind'] != 'return' &&
         ChecklistStatus.label(data) == ChecklistStatus.received;
@@ -161,11 +162,12 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
       firstDate: DateTime(2000),
       lastDate: DateTime.now().add(const Duration(days: 365)),
     );
-    if (picked != null && mounted)
+    if (picked != null && mounted) {
       setState(() {
         selectedDay = picked.start;
         selectedEnd = picked.end;
       });
+    }
   }
 
   Future<void> acceptAll(
@@ -217,8 +219,9 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
           ),
           FilledButton(
             onPressed: () {
-              if (form.currentState!.validate())
+              if (form.currentState!.validate()) {
                 Navigator.pop(context, reason.trim());
+              }
             },
             child: const Text('Submit report'),
           ),
@@ -257,8 +260,9 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
             actorName: actor.name,
             reason: reason,
             scopeIds: widget.ids,
-          ))
+          )) {
             changed++;
+          }
         }
       }
       success = changed > 0;
@@ -374,10 +378,11 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
         );
       }
     } catch (error) {
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Unable to update checklist: $error')),
         );
+      }
     } finally {
       if (mounted) setState(() => busy.remove(id));
     }
@@ -386,12 +391,13 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
   Widget record(QueryDocumentSnapshot<Map<String, dynamic>> doc) {
     final data = doc.data();
     final returned = data['kind'] == 'return';
-    if (returned)
+    if (returned) {
       return ReturnItemCard(
         key: ValueKey(doc.id),
         db: doc.reference.firestore,
         data: data,
       );
+    }
     final type = AllocationChecklistService.type(data);
     final items = returned
         ? [data]
@@ -584,14 +590,16 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
             child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
               stream: stream,
               builder: (context, snapshot) {
-                if (snapshot.hasError)
+                if (snapshot.hasError) {
                   return const Center(
                     child: Text(
                       'Unable to load checklist. Please reopen to retry.',
                     ),
                   );
-                if (!snapshot.hasData)
+                }
+                if (!snapshot.hasData) {
                   return const Center(child: CircularProgressIndicator());
+                }
                 final all = snapshot.data!.docs;
                 final pending = all
                     .where(
@@ -632,8 +640,9 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
                                 (selectedEnd ?? selectedDay).add(
                                   const Duration(days: 1),
                                 ),
-                              )))
+                              ))) {
                         return false;
+                      }
                       final inTab = widget.returnsOnly
                           ? d['kind'] == 'return' &&
                                 (widget.admin

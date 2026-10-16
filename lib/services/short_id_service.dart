@@ -121,8 +121,9 @@ class ShortIdService {
           final data = current.data()!;
           final aligned = alignInventoryDisplayIds(data, source.data()!);
           final patch = <String, dynamic>{};
-          if (aligned['publicId'] != data['publicId'])
+          if (aligned['publicId'] != data['publicId']) {
             patch['publicId'] = aligned['publicId'];
+          }
           final oldItems = (data['items'] as List? ?? [])
               .whereType<Map>()
               .map((item) => item['publicId'])
@@ -131,8 +132,9 @@ class ShortIdService {
               .whereType<Map>()
               .map((item) => item['publicId'])
               .toList();
-          if (jsonEncode(oldItems) != jsonEncode(newItems))
+          if (jsonEncode(oldItems) != jsonEncode(newItems)) {
             patch['items'] = aligned['items'];
+          }
           if (patch.isNotEmpty) tx.update(allocation.reference, patch);
         });
       }

@@ -49,8 +49,9 @@ void main() {
           ).listen((scope) {
             scopes.add(scope);
             if (!first.isCompleted) first.complete();
-            if (scope.targets.contains('branch-a') && !resolved.isCompleted)
+            if (scope.targets.contains('branch-a') && !resolved.isCompleted) {
               resolved.complete(scope);
+            }
           });
       addTearDown(subscription.cancel);
       await first.future;
@@ -90,8 +91,9 @@ void main() {
             firestore: db,
             readCachedProfiles: () async => [],
           ).listen((scope) {
-            if (scope.targets.contains('new-branch') && !updated.isCompleted)
+            if (scope.targets.contains('new-branch') && !updated.isCompleted) {
               updated.complete(scope);
+            }
           });
       addTearDown(subscription.cancel);
       await db.collection('branches').doc('new-branch').set({

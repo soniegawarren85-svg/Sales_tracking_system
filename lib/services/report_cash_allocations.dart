@@ -19,8 +19,9 @@ Map<String, double> reportCashByOwner(
       final previousTime = previous == null
           ? null
           : cashRecordDate(previous['createdAt'] ?? previous['timestamp']);
-      if (previousTime == null || !at.isBefore(previousTime))
+      if (previousTime == null || !at.isBefore(previousTime)) {
         openings[key] = row;
+      }
     } else {
       totals[owner] =
           (totals[owner] ?? 0) + reportValue(row['amount'] ?? row['budget']);

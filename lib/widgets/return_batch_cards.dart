@@ -369,8 +369,9 @@ class _ReturnBatchListState extends State<ReturnBatchList> {
         }
       }),
     );
-    if (mounted && current == revision)
+    if (mounted && current == revision) {
       setState(() => metadata.addEntries(results));
+    }
   }
 
   @override
@@ -387,8 +388,9 @@ class _ReturnBatchListState extends State<ReturnBatchList> {
           ),
         )
         .toList();
-    if (batches.isEmpty)
+    if (batches.isEmpty) {
       return const Center(child: Text('No matching return batches.'));
+    }
     return ListView.builder(
       padding: const EdgeInsets.all(12),
       itemCount: batches.length,

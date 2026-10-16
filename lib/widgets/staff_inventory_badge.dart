@@ -51,8 +51,9 @@ class StaffInventoryBadge extends StatelessWidget {
                 for (final doc in snapshot.data?.docs ?? []) {
                   final row = doc.data();
                   if (row['isDeleted'] == true ||
-                      !ChecklistStatus.incomingOpen(row))
+                      !ChecklistStatus.incomingOpen(row)) {
                     continue;
+                  }
                   pending.add(
                     '${row['batchId'] ?? row['allocationId'] ?? doc.id}',
                   );

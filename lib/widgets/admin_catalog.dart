@@ -2,12 +2,14 @@ import 'package:sales_tracking/theme/app_colors.dart';
 import '../services/short_id_service.dart';
 import '../services/public_item_id.dart';
 import 'admin_addons.dart';
+import 'inventory_header_transition.dart';
 import 'branch_inventory_monitor.dart';
 import '../services/bundle_stock_service.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
 
 String catalogCategoryKey(Map data) =>
     '${data['name'] ?? ''}'.trim().toLowerCase();
@@ -29,11 +31,13 @@ List<Map<String, dynamic>> currentCatalogCategories(
     if (product['isDeleted'] == true ||
         product['isVoided'] == true ||
         product['isBundle'] == true ||
-        !catalogItemActive(product, now ?? DateTime.now()))
+        !catalogItemActive(product, now ?? DateTime.now())) {
       continue;
+    }
     final items = (product['items'] as List? ?? []).whereType<Map>();
-    if (!items.any((item) => catalogItemActive(item, now ?? DateTime.now())))
+    if (!items.any((item) => catalogItemActive(item, now ?? DateTime.now()))) {
       continue;
+    }
     categories.putIfAbsent(catalogCategoryKey(product), () => product);
   }
   return categories.values.toList();
@@ -69,19 +73,22 @@ List<Map<String, dynamic>> catalogBundleContents(
       (product) => product['isBundle'] != true,
     )) {
       if (item['sourceInventoryId'] != null &&
-          item['sourceInventoryId'] != product['id'])
+          item['sourceInventoryId'] != product['id']) {
         continue;
+      }
       if (item['parentName'] != null &&
           catalogCategoryKey(product) !=
-              '${item['parentName']}'.trim().toLowerCase())
+              '${item['parentName']}'.trim().toLowerCase()) {
         continue;
+      }
       for (final variant
           in (product['items'] as List? ?? []).whereType<Map>()) {
         final id = item['variantId'] ?? item['itemId'];
         if (id != null && '$id'.isNotEmpty
             ? (variant['id'] ?? variant['variantId']) == id
-            : variant['name'] == item['name'])
+            : variant['name'] == item['name']) {
           matches.add(variant);
+        }
       }
     }
     if (matches.length == 1) {
@@ -103,10 +110,11 @@ String catalogExpiryLabel(AdminCatalogEntry entry) {
           .toSet()
           .toList()
         ..sort();
-  if (dates.isEmpty)
+  if (dates.isEmpty) {
     return '${entry.source['expirationDate'] ?? ''}'.isEmpty
         ? 'Not recorded'
         : '${entry.source['expirationDate']}'.split('T').first;
+  }
   return dates.join('\n');
 }
 
@@ -253,9 +261,11 @@ class AdminCatalog extends StatefulWidget {
     this.onView,
     this.firestore,
     this.onBranchChanged,
+    this.scrollController,
   });
   final FirebaseFirestore? firestore;
   final ValueChanged<String>? onBranchChanged;
+  final ScrollController? scrollController;
   final ValueChanged<Map<String, dynamic>?>? onCategorySelected;
   final Widget? actions;
   final ValueChanged<bool>? onBeverageTabChanged;
@@ -272,6 +282,73 @@ class AdminCatalog extends StatefulWidget {
 }
 
 class _AdminCatalogState extends State<AdminCatalog> {
+  final _ownedScrollController = ScrollController();
+  ScrollController get _scrollController =>
+      widget.scrollController ?? _ownedScrollController;
+  double? _wheelTarget;
+  int _wheelAnimation = 0;
+
+  @override
+  void dispose() {
+    _ownedScrollController.dispose();
+    super.dispose();
+  }
+
+  void _smoothWheel(PointerScrollEvent event) {
+    if (!_scrollController.hasClients) return;
+    final position = _scrollController.position;
+    final delta = event.scrollDelta.dy;
+    _updateHeader(delta, position);
+    // Let the header finish revealing space before moving the items as well.
+    if (delta > 0 &&
+        !widget.compactHeader &&
+        widget.onHeaderCollapsed != null) {
+      return;
+    }
+    final previous = _wheelTarget ?? position.pixels;
+    final reversing = (previous - position.pixels) * delta < 0;
+    final target = ((reversing ? position.pixels : previous) + delta)
+        .clamp(position.minScrollExtent, position.maxScrollExtent)
+        .toDouble();
+    final generation = ++_wheelAnimation;
+    _wheelTarget = target;
+    if (MediaQuery.disableAnimationsOf(context)) {
+      position.jumpTo(target);
+      _wheelTarget = null;
+      return;
+    }
+    position
+        .animateTo(
+          target,
+          duration: const Duration(milliseconds: 260),
+          curve: Curves.easeOutCubic,
+        )
+        .whenComplete(() {
+          if (mounted && generation == _wheelAnimation) _wheelTarget = null;
+        });
+  }
+
+  void _updateHeader(double delta, ScrollMetrics metrics) {
+    if (delta > 0) {
+      widget.onHeaderCollapsed?.call(true);
+    } else if (delta < 0 && metrics.pixels <= metrics.minScrollExtent) {
+      widget.onHeaderCollapsed?.call(false);
+    }
+  }
+
+  void _dragInventoryFromControls(DragUpdateDetails details) {
+    if (!_scrollController.hasClients) return;
+    final position = _scrollController.position;
+    final delta = -details.delta.dy;
+    final target = (position.pixels + delta)
+        .clamp(position.minScrollExtent, position.maxScrollExtent)
+        .toDouble();
+    if (delta > 0 || (delta < 0 && target <= position.minScrollExtent)) {
+      _updateHeader(delta, position);
+    }
+    if (target != position.pixels) position.jumpTo(target);
+  }
+
   late final _products = (widget.firestore ?? FirebaseFirestore.instance)
       .collection('sales_inventory')
       .snapshots();
@@ -281,8 +358,9 @@ class _AdminCatalogState extends State<AdminCatalog> {
   @override
   void initState() {
     super.initState();
-    if (widget.firestore == null)
+    if (widget.firestore == null) {
       ShortIdService.refresh().catchError((Object _) {});
+    }
   }
 
   String _filter = 'All';
@@ -292,27 +370,34 @@ class _AdminCatalogState extends State<AdminCatalog> {
     stream: (widget.firestore ?? FirebaseFirestore.instance)
         .collection('branches')
         .snapshots(),
-    builder: (context, snapshot) => DropdownButtonFormField<String>(
-      initialValue: _branch,
-      decoration: const InputDecoration(
-        labelText: 'Inventory location',
-        border: OutlineInputBorder(),
-      ),
-      items: [
-        const DropdownMenuItem(value: '', child: Text('Main branch')),
-        for (final doc
-            in snapshot.data?.docs ??
-                <QueryDocumentSnapshot<Map<String, dynamic>>>[])
-          DropdownMenuItem(
-            value: doc.id,
-            child: Text('${doc.data()['name'] ?? doc.id}'),
-          ),
-      ],
-      onChanged: (value) {
-        setState(() => _branch = value ?? '');
-        widget.onBranchChanged?.call(_branch);
-      },
-    ),
+    builder: (context, snapshot) {
+      final branches =
+          snapshot.data?.docs ??
+          <QueryDocumentSnapshot<Map<String, dynamic>>>[];
+      final selectedBranchExists =
+          _branch.isEmpty || branches.any((branch) => branch.id == _branch);
+      return DropdownButtonFormField<String>(
+        initialValue: _branch,
+        decoration: const InputDecoration(
+          labelText: 'Inventory location',
+          border: OutlineInputBorder(),
+        ),
+        items: [
+          const DropdownMenuItem(value: '', child: Text('Main branch')),
+          if (!selectedBranchExists)
+            DropdownMenuItem(value: _branch, child: Text(_branch)),
+          for (final doc in branches)
+            DropdownMenuItem(
+              value: doc.id,
+              child: Text('${doc.data()['name'] ?? doc.id}'),
+            ),
+        ],
+        onChanged: (value) {
+          setState(() => _branch = value ?? '');
+          widget.onBranchChanged?.call(_branch);
+        },
+      );
+    },
   );
   bool _low(AdminCatalogEntry e) => e.stock != null && e.stock! <= 50;
   bool _near(AdminCatalogEntry e) => catalogExpiryLabel(
@@ -348,15 +433,17 @@ class _AdminCatalogState extends State<AdminCatalog> {
         StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
           stream: _coffees,
           builder: (context, coffees) {
-            if (products.hasError || coffees.hasError)
+            if (products.hasError || coffees.hasError) {
               return const Center(child: Text('Unable to load items.'));
-            if (!products.hasData || !coffees.hasData)
+            }
+            if (!products.hasData || !coffees.hasData) {
               return const Center(
                 child: Padding(
                   padding: EdgeInsets.all(24),
                   child: CircularProgressIndicator(),
                 ),
               );
+            }
             final all = adminCatalogEntries(
               products.data!.docs
                   .map((doc) => {...doc.data(), 'id': doc.id})
@@ -402,6 +489,7 @@ class _AdminCatalogState extends State<AdminCatalog> {
                 )
                 .toList();
             final searchField = TextField(
+              key: const ValueKey('inventory-search'),
               onChanged: (value) =>
                   setState(() => _query = value.trim().toLowerCase()),
               decoration: const InputDecoration(
@@ -479,12 +567,13 @@ class _AdminCatalogState extends State<AdminCatalog> {
                   flex: MediaQuery.sizeOf(context).width < 600 ? 0 : 1,
                   child: categorySelector,
                 ),
-                if (widget.actions != null &&
-                    _branch.isEmpty &&
-                    !widget.compactHeader)
-                  Align(
-                    alignment: Alignment.centerRight,
-                    child: widget.actions!,
+                if (widget.actions != null && _branch.isEmpty)
+                  InventoryHeaderTransition(
+                    collapsed: widget.compactHeader,
+                    child: Align(
+                      alignment: Alignment.centerRight,
+                      child: widget.actions!,
+                    ),
                   ),
               ],
             );
@@ -515,7 +604,11 @@ class _AdminCatalogState extends State<AdminCatalog> {
                   )
                 : null;
             final sections = <Widget>[
-              if (!widget.gallery && !widget.compactHeader) _branchPicker(),
+              if (!widget.gallery)
+                InventoryHeaderTransition(
+                  collapsed: widget.compactHeader,
+                  child: _branchPicker(),
+                ),
               if (widget.gallery)
                 Wrap(
                   spacing: 8,
@@ -535,7 +628,7 @@ class _AdminCatalogState extends State<AdminCatalog> {
               const SizedBox(height: 10),
               searchField,
               const SizedBox(height: 12),
-              if (alerts != null) alerts,
+              ?alerts,
               categoryAndActions,
               const SizedBox(key: ValueKey('catalog-results'), height: 16),
               if (!widget.gallery && widget.type == 'Beverages' && !_showAddons)
@@ -593,11 +686,12 @@ class _AdminCatalogState extends State<AdminCatalog> {
               else
                 _table(entries),
             ];
-            if (!widget.pinnedControls)
+            if (!widget.pinnedControls) {
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: sections,
               );
+            }
             final split =
                 sections.indexWhere(
                   (section) => section.key == const ValueKey('catalog-results'),
@@ -606,35 +700,80 @@ class _AdminCatalogState extends State<AdminCatalog> {
             return Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                ...sections.take(split),
+                GestureDetector(
+                  behavior: HitTestBehavior.translucent,
+                  onVerticalDragUpdate: _dragInventoryFromControls,
+                  child: Listener(
+                    onPointerSignal: (event) {
+                      if (event is PointerScrollEvent &&
+                          event.scrollDelta.dy.abs() >
+                              event.scrollDelta.dx.abs()) {
+                        GestureBinding.instance.pointerSignalResolver.register(
+                          event,
+                          (_) => _smoothWheel(event),
+                        );
+                      }
+                    },
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: sections.take(split).toList(),
+                    ),
+                  ),
+                ),
                 Expanded(
                   child: NotificationListener<ScrollNotification>(
                     onNotification: (notification) {
-                      if (notification.metrics.axis != Axis.vertical)
+                      if (notification.depth != 0 ||
+                          notification.metrics.axis != Axis.vertical) {
                         return false;
+                      }
+                      if (notification is ScrollStartNotification &&
+                          notification.dragDetails != null) {
+                        _wheelAnimation++;
+                        _wheelTarget = null;
+                      }
                       if (notification is ScrollUpdateNotification &&
                           notification.dragDetails != null) {
-                        if ((notification.scrollDelta ?? 0) > 0)
-                          widget.onHeaderCollapsed?.call(true);
-                        if ((notification.scrollDelta ?? 0) < 0 &&
-                            notification.metrics.pixels <= 0)
-                          widget.onHeaderCollapsed?.call(false);
+                        _updateHeader(
+                          notification.scrollDelta ?? 0,
+                          notification.metrics,
+                        );
                       }
                       if (notification is OverscrollNotification &&
                           notification.dragDetails != null) {
-                        widget.onHeaderCollapsed?.call(
-                          notification.overscroll > 0,
+                        _updateHeader(
+                          notification.overscroll,
+                          notification.metrics,
                         );
                       }
                       return false;
                     },
                     child: SingleChildScrollView(
-                      physics: const AlwaysScrollableScrollPhysics(),
+                      controller: _scrollController,
+                      physics: const BouncingScrollPhysics(
+                        parent: AlwaysScrollableScrollPhysics(),
+                      ),
                       key: const ValueKey('inventory-table-scroll'),
                       padding: const EdgeInsets.only(bottom: 100),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: sections.skip(split).toList(),
+                      child: Builder(
+                        builder: (context) => Listener(
+                          // A short list cannot move, but wheel/trackpad input
+                          // must still be able to collapse or restore the header.
+                          onPointerSignal: (event) {
+                            if (event is PointerScrollEvent &&
+                                event.scrollDelta.dy.abs() >
+                                    event.scrollDelta.dx.abs()) {
+                              // Claim the event before Scrollable handles it,
+                              // so the wheel does not also jump immediately.
+                              GestureBinding.instance.pointerSignalResolver
+                                  .register(event, (_) => _smoothWheel(event));
+                            }
+                          },
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: sections.skip(split).toList(),
+                          ),
+                        ),
                       ),
                     ),
                   ),
@@ -647,7 +786,7 @@ class _AdminCatalogState extends State<AdminCatalog> {
 
   Widget _table(List<AdminCatalogEntry> entries) => LayoutBuilder(
     builder: (context, constraints) {
-      final narrow = constraints.maxWidth < 720;
+      final narrow = constraints.maxWidth < 600;
       final beverages = widget.type == 'Beverages';
       Widget actions(AdminCatalogEntry entry) => Wrap(
         spacing: 2,
@@ -742,7 +881,7 @@ class _AdminCatalogState extends State<AdminCatalog> {
           child: child,
         ),
       );
-      return Container(
+      final table = Container(
         clipBehavior: Clip.antiAlias,
         decoration: BoxDecoration(
           color: Colors.white,
@@ -821,16 +960,28 @@ class _AdminCatalogState extends State<AdminCatalog> {
                             children: [
                               Text(
                                 'Cost: ₱${(num.tryParse('${entry.details['costPrice'] ?? entry.source['costPrice']}') ?? 0).toStringAsFixed(2)}',
+                                style: const TextStyle(fontSize: 12),
                               ),
                               if (beverages)
                                 ...['Small', 'Medium', 'Large'].map(
-                                  (size) =>
-                                      Text('$size: ${_price(entry, size)}'),
+                                  (size) => Text(
+                                    '$size: ${_price(entry, size)}',
+                                    style: const TextStyle(fontSize: 12),
+                                  ),
                                 )
                               else ...[
-                                Text(_price(entry)),
-                                Text('Stock: ${entry.stock ?? 0}'),
-                                Text('Expires: ${catalogExpiryLabel(entry)}'),
+                                Text(
+                                  _price(entry),
+                                  style: const TextStyle(fontSize: 12),
+                                ),
+                                Text(
+                                  'Stock: ${entry.stock ?? 0}',
+                                  style: const TextStyle(fontSize: 12),
+                                ),
+                                Text(
+                                  'Expires: ${catalogExpiryLabel(entry)}',
+                                  style: const TextStyle(fontSize: 12),
+                                ),
                               ],
                             ],
                           ),
@@ -843,61 +994,79 @@ class _AdminCatalogState extends State<AdminCatalog> {
                           ),
                         ],
                       )
-                    : Row(
-                        children: [
-                          cell(
-                            Tooltip(
-                              message: entry.id,
-                              child: Text(
-                                entry.id,
-                                maxLines: 1,
-                                softWrap: false,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                  fontSize: 11,
-                                  color: AppColors.textMuted,
+                    : DefaultTextStyle.merge(
+                        style: const TextStyle(fontSize: 12),
+                        child: Row(
+                          children: [
+                            cell(
+                              Tooltip(
+                                message: entry.id,
+                                child: Text(
+                                  entry.id,
+                                  maxLines: 1,
+                                  softWrap: false,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    fontSize: 11,
+                                    color: AppColors.textMuted,
+                                  ),
                                 ),
                               ),
                             ),
-                          ),
-                          cell(identity(entry), 3),
-                          cell(
-                            Text(
-                              '₱${(num.tryParse('${entry.details['costPrice'] ?? entry.source['costPrice']}') ?? 0).toStringAsFixed(2)}',
+                            cell(identity(entry), 3),
+                            cell(
+                              Text(
+                                '₱${(num.tryParse('${entry.details['costPrice'] ?? entry.source['costPrice']}') ?? 0).toStringAsFixed(2)}',
+                                style: const TextStyle(fontSize: 12),
+                              ),
                             ),
-                          ),
-                          if (beverages)
-                            ...['Small', 'Medium', 'Large'].map(
-                              (size) => cell(
+                            if (beverages)
+                              ...['Small', 'Medium', 'Large'].map(
+                                (size) => cell(
+                                  Text(
+                                    _price(entry, size),
+                                    style: const TextStyle(fontSize: 12),
+                                  ),
+                                ),
+                              )
+                            else ...[
+                              cell(
                                 Text(
-                                  _price(entry, size),
+                                  _price(entry),
                                   style: const TextStyle(fontSize: 12),
                                 ),
                               ),
-                            )
-                          else ...[
-                            cell(
-                              Text(
-                                _price(entry),
-                                style: const TextStyle(fontSize: 12),
+                              cell(
+                                Text(
+                                  catalogExpiryLabel(entry),
+                                  style: const TextStyle(fontSize: 12),
+                                ),
+                                2,
                               ),
-                            ),
-                            cell(
-                              Text(
-                                catalogExpiryLabel(entry),
-                                style: const TextStyle(fontSize: 12),
+                              cell(
+                                Text(
+                                  '${entry.stock ?? 0}',
+                                  style: const TextStyle(fontSize: 12),
+                                ),
                               ),
-                              2,
-                            ),
-                            cell(Text('${entry.stock ?? 0}')),
+                            ],
+                            cell(status(entry)),
+                            cell(actions(entry), 2),
                           ],
-                          cell(status(entry)),
-                          cell(actions(entry), 2),
-                        ],
+                        ),
                       ),
               );
             }),
           ],
+        ),
+      );
+      if (narrow) return table;
+      return SingleChildScrollView(
+        key: const ValueKey('admin-catalog-horizontal-scroll'),
+        scrollDirection: Axis.horizontal,
+        child: SizedBox(
+          width: constraints.maxWidth < 1080 ? 1080 : constraints.maxWidth,
+          child: table,
         ),
       );
     },
@@ -1000,16 +1169,17 @@ class _CatalogPhotosState extends State<_CatalogPhotos> {
   );
   Widget _image(String url) {
     try {
-      if (url.startsWith('data:'))
+      if (url.startsWith('data:')) {
         return Image.memory(
           base64Decode(url.split(',').last),
           fit: BoxFit.cover,
-          errorBuilder: (_, __, ___) => _placeholder(),
+          errorBuilder: (_, _, _) => _placeholder(),
         );
+      }
       return Image.network(
         url,
         fit: BoxFit.cover,
-        errorBuilder: (_, __, ___) => _placeholder(),
+        errorBuilder: (_, _, _) => _placeholder(),
       );
     } catch (_) {
       return _placeholder();

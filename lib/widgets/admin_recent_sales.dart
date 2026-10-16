@@ -16,13 +16,16 @@ String saleStatus(Map sale) {
   if (sale['type'] == 'refund' ||
       sale['fullyRefunded'] == true ||
       '${sale['salesId']}'.toLowerCase().startsWith('r-') ||
-      status.contains('refund'))
+      status.contains('refund')) {
     return 'Refund';
-  if (saleItems(sale).any((item) => saleNumber(item['refunded']) > 0))
+  }
+  if (saleItems(sale).any((item) => saleNumber(item['refunded']) > 0)) {
     return 'Partial refund';
+  }
   if (status.contains('reduc') ||
-      saleItems(sale).any((item) => saleNumber(item['reducedQuantity']) > 0))
+      saleItems(sale).any((item) => saleNumber(item['reducedQuantity']) > 0)) {
     return 'Reduced';
+  }
   return 'Completed';
 }
 
@@ -61,11 +64,12 @@ class _AdminRecentSalesState extends State<AdminRecentSales> {
         .where('timestamp', isLessThan: Timestamp.fromDate(end))
         .snapshots();
     _midnight = Timer(end.difference(now), () {
-      if (mounted)
+      if (mounted) {
         setState(() {
           _page = 0;
           _watchToday();
         });
+      }
     });
   }
 
@@ -103,15 +107,17 @@ class _AdminRecentSalesState extends State<AdminRecentSales> {
           StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
             stream: _sales,
             builder: (context, snapshot) {
-              if (snapshot.hasError)
+              if (snapshot.hasError) {
                 return const Padding(
                   padding: EdgeInsets.all(24),
                   child: Text(
                     'Unable to load recent sales. Please check your connection and try again.',
                   ),
                 );
-              if (!snapshot.hasData)
+              }
+              if (!snapshot.hasData) {
                 return const Center(child: ScreenLoadingIndicator());
+              }
               final branch = BranchSession.instance.branchId;
               final docs =
                   snapshot.data!.docs
@@ -125,7 +131,7 @@ class _AdminRecentSalesState extends State<AdminRecentSales> {
                         a.data()['timestamp'] as Timestamp,
                       ),
                     );
-              if (docs.isEmpty)
+              if (docs.isEmpty) {
                 return const Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -139,6 +145,7 @@ class _AdminRecentSalesState extends State<AdminRecentSales> {
                     ),
                   ],
                 );
+              }
               final pages = (docs.length / 5).ceil();
               final page = _page.clamp(0, pages - 1);
               return Column(
@@ -291,7 +298,7 @@ class _AdminRecentSalesState extends State<AdminRecentSales> {
 }
 
 class ReceiptDetails extends StatelessWidget {
-  const ReceiptDetails({required this.id, required Map<String, dynamic> sale})
+  const ReceiptDetails({super.key, required this.id, required Map<String, dynamic> sale})
     : _sale = sale;
   final String id;
   final Map<String, dynamic> _sale;
@@ -365,8 +372,9 @@ class _ReceiptItemIdState extends State<_ReceiptItemId> {
     final recorded = inventoryDisplayId(item);
     if (recorded != '--' &&
         (item['publicId'] != null ||
-            RegExp(r'^[A-Z]{2,5}-[0-9]+$').hasMatch(recorded)))
+            RegExp(r'^[A-Z]{2,5}-[0-9]+$').hasMatch(recorded))) {
       return recorded;
+    }
     if (recorded == '--') return null;
     for (final collection in ['sales_inventory', 'coffee_products']) {
       final snapshot = await FirebaseFirestore.instance
@@ -388,8 +396,9 @@ class _ReceiptItemIdState extends State<_ReceiptItemId> {
                   (source == doc.id && variant['name'] == item['variant']),
             )
             .toList();
-        if (matches.length == 1)
+        if (matches.length == 1) {
           return inventoryDisplayId(Map<String, dynamic>.from(matches.single));
+        }
       }
     }
     final fallback = inventoryDisplayId(item);

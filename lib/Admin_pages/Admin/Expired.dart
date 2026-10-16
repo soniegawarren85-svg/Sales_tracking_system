@@ -813,7 +813,7 @@ class _ExpiredCardState extends State<_ExpiredCard>
                           child: _statTile(
                             icon: Icons.payments_rounded,
                             label: 'Price',
-                            value: formatMoney(double.tryParse('$price') ?? 0),
+                            value: formatMoney(double.tryParse(price) ?? 0),
                             iconColor: const Color(0xFF2E7D32),
                             bgColor: const Color(0xFFE8F5E9),
                           ),

@@ -53,8 +53,9 @@ class _VoidReasonDialogState extends State<_VoidReasonDialog> {
       ),
       FilledButton(
         onPressed: () {
-          if (_form.currentState!.validate())
+          if (_form.currentState!.validate()) {
             Navigator.pop(context, _reason.text.trim());
+          }
         },
         child: const Text('Void item'),
       ),

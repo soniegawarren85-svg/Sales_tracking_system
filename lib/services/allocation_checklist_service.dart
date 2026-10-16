@@ -32,8 +32,9 @@ class AllocationChecklistService {
     return db.runTransaction((tx) async {
       final ref = db.collection('allocation_checklist').doc(id);
       final data = (await tx.get(ref)).data();
-      if (data == null || !ChecklistStatus.pending(data, admin: admin))
+      if (data == null || !ChecklistStatus.pending(data, admin: admin)) {
         return false;
+      }
       if (!admin && !scopeIds.contains(data['staffId'])) {
         throw StateError('This delivery is outside your assigned branch.');
       }
@@ -95,8 +96,9 @@ class AllocationChecklistService {
       if ((await tx.get(ref)).exists) return false;
       final source = db.collection(sourceCollection).doc(sourceId);
       final data = (await tx.get(source)).data();
-      if (data == null || data['isDeleted'] == true)
+      if (data == null || data['isDeleted'] == true) {
         throw StateError('Source is no longer available.');
+      }
       final fromStock = sourceCollection == 'staff_inventory';
       final owner = fromStock
           ? data['staffId']
@@ -144,10 +146,12 @@ class AllocationChecklistService {
               )
               .toList();
           available = quantity(data['bundleCount']);
-          if (instances.isNotEmpty && eligible.length < available)
+          if (instances.isNotEmpty && eligible.length < available) {
             available = eligible.length;
-          if (count > available)
+          }
+          if (count > available) {
             throw StateError('Only $available bundles remain.');
+          }
           for (final row in eligible.take(count)) {
             row['status'] = 'return_pending';
             row['returnId'] = requestId;
@@ -162,8 +166,9 @@ class AllocationChecklistService {
           if (index < 0) throw StateError('Item is no longer available.');
           item = items[index];
           available = quantity(item['stock'] ?? item['startingStock']);
-          if (count > available)
+          if (count > available) {
             throw StateError('Only $available items remain.');
+          }
           items[index] = {...item, 'stock': available - count};
           changes['items'] = items;
         }
@@ -174,8 +179,9 @@ class AllocationChecklistService {
           }
           final items = rows(data['items']);
           final index = int.tryParse(lineKey) ?? -1;
-          if (index < 0 || index >= items.length)
+          if (index < 0 || index >= items.length) {
             throw StateError('Refund item not found.');
+          }
           item = items[index];
         } else {
           if (data['type'] == 'addon_void') {
@@ -187,8 +193,9 @@ class AllocationChecklistService {
           data['checklistReturnedQuantities'] as Map? ?? {},
         );
         available = quantity(item['quantity']) - quantity(claimed[lineKey]);
-        if (count > available)
+        if (count > available) {
           throw StateError('Only $available unsubmitted items remain.');
+        }
         claimed[lineKey] = quantity(claimed[lineKey]) + count;
         changes['checklistReturnedQuantities'] = claimed;
       }
@@ -238,8 +245,9 @@ class AllocationChecklistService {
     required String actorId,
     required String actorName,
   }) async {
-    if (actorId.isEmpty)
+    if (actorId.isEmpty) {
       throw ArgumentError('Sign in before confirming a return.');
+    }
     return db.runTransaction((tx) async {
       final ref = db.collection('allocation_checklist').doc(id);
       final data = (await tx.get(ref)).data();
@@ -282,11 +290,13 @@ class AllocationChecklistService {
     String reason = '',
   }) async {
     if (actorId.trim().isEmpty) throw ArgumentError('Please sign in again.');
-    if (!accept && reason.trim().isEmpty)
+    if (!accept && reason.trim().isEmpty) {
       throw ArgumentError('A decline reason is required.');
+    }
     final unique = ids.toSet().toList();
-    if (unique.isEmpty || unique.length > 200)
+    if (unique.isEmpty || unique.length > 200) {
       throw ArgumentError('Select 1 to 200 return records.');
+    }
     return db.runTransaction(
       (tx) async {
         final records = await Future.wait(
@@ -318,8 +328,9 @@ class AllocationChecklistService {
             if (!stock.exists) continue;
             final instances = rows(stock.data()?['bundleInstances']);
             for (final instance in instances) {
-              if (acceptedIds.contains(instance['returnId']))
+              if (acceptedIds.contains(instance['returnId'])) {
                 instance['status'] = 'returned';
+              }
             }
             tx.update(stock.reference, {
               'bundleInstances': instances,
@@ -360,14 +371,16 @@ class AllocationChecklistService {
     String actorName = '',
     List<String>? scopeIds,
   }) async {
-    if (!accept && reason.trim().isEmpty)
+    if (!accept && reason.trim().isEmpty) {
       throw ArgumentError('Please enter a decline reason.');
+    }
     return db.runTransaction<bool>((tx) async {
       final ref = db.collection('allocation_checklist').doc(id);
       final snap = await tx.get(ref);
       final pending = snap.data();
-      if (pending == null || !ChecklistStatus.incomingOpen(pending))
+      if (pending == null || !ChecklistStatus.incomingOpen(pending)) {
         return false;
+      }
       if (staffId.isEmpty ||
           (scopeIds != null && !scopeIds.contains(pending['staffId']))) {
         throw StateError('This delivery is outside your assigned branch.');
@@ -383,10 +396,11 @@ class AllocationChecklistService {
       final current = target.data() ?? <String, dynamic>{};
       final bundle = pending['isBundle'] == true;
       final beverage = type(pending) == 'Beverages';
-      if (!accept && !target.exists)
+      if (!accept && !target.exists) {
         throw StateError(
           'Source inventory is missing. Ask the administrator to restore it before declining.',
         );
+      }
       final incoming = rows(pending['items']);
       final payload = Map<String, dynamic>.from(pending)
         ..remove('targetDocId')
@@ -410,12 +424,13 @@ class AllocationChecklistService {
           ...rows(current['bundleInstances']),
           ...rows(pending['bundleInstances']),
         ];
-        if (accept)
+        if (accept) {
           result['assignedStartingStock'] =
               quantity(
                 current['assignedStartingStock'] ?? current['bundleCount'],
               ) +
               quantity(pending['bundleCount']);
+        }
       } else if (!beverage) {
         final items = rows(current['items']);
         for (final item in incoming) {
@@ -460,8 +475,9 @@ class AllocationChecklistService {
         result['updatedAt'] = FieldValue.serverTimestamp();
       }
       // Beverages/add-ons are catalog permissions; no physical stock was reserved.
-      if (accept || !beverage)
+      if (accept || !beverage) {
         tx.set(destination, result, SetOptions(merge: true));
+      }
       tx.update(ref, {
         'status': accept ? ChecklistStatus.received : 'declined',
         if (accept) 'confirmedBy': staffId,

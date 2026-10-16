@@ -156,8 +156,9 @@ class _ChecklistReturnDialogState extends State<ChecklistReturnDialog> {
       for (final id in ids) {
         final data = (await widget.db.collection('branches').doc(id).get())
             .data();
-        if (data != null && data['isDeleted'] != true)
+        if (data != null && data['isDeleted'] != true) {
           branchNames[id] = '${data['name'] ?? data['branchName'] ?? id}';
+        }
       }
       void add(
         String collection,
@@ -193,13 +194,14 @@ class _ChecklistReturnDialogState extends State<ChecklistReturnDialog> {
               ? [saved]
               : AllocationChecklistService.rows(saved['items']);
           for (final candidate in candidates) {
-            if (returnItemName(candidate).toLowerCase() == name.toLowerCase())
+            if (returnItemName(candidate).toLowerCase() == name.toLowerCase()) {
               matches.add({
                 ...candidate,
                 'isBundle': saved['isBundle'],
                 'isCoffee': saved['isCoffee'],
                 'isAddon': saved['isAddon'],
               });
+            }
           }
         }
         final resolved = matches.length == 1 ? matches.single : item;
@@ -311,17 +313,19 @@ class _ChecklistReturnDialogState extends State<ChecklistReturnDialog> {
         branches
           ..clear()
           ..addAll(branchNames);
-        if (branches.isEmpty && ids.isNotEmpty)
+        if (branches.isEmpty && ids.isNotEmpty) {
           branches[ids.first] = 'Assigned inventory';
+        }
         branch = branches.length == 1 ? branches.keys.first : null;
         loading = false;
       });
     } catch (e) {
-      if (mounted)
+      if (mounted) {
         setState(() {
           error = 'Unable to load return items: $e';
           loading = false;
         });
+      }
     }
   }
 
@@ -430,17 +434,19 @@ class _ChecklistReturnDialogState extends State<ChecklistReturnDialog> {
       );
       if (mounted) await load();
     } on TimeoutException {
-      if (mounted)
+      if (mounted) {
         setState(
           () => error =
               'The server has not confirmed this batch yet. Check your connection and Pending Confirmation, or retry the same batch safely. No success is reported until confirmed.',
         );
+      }
     } catch (e) {
-      if (mounted)
+      if (mounted) {
         setState(
           () => error =
               'Return was not confirmed: $e. Retry uses the same batch to prevent duplicates.',
         );
+      }
     } finally {
       if (mounted) setState(() => saving = false);
     }

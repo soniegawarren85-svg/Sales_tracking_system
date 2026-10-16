@@ -85,7 +85,7 @@ class _ProfilePageState extends State<ProfilePage>
     try {
       await StaffLoginSession.close();
     } catch (_) {
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text(
@@ -93,6 +93,7 @@ class _ProfilePageState extends State<ProfilePage>
             ),
           ),
         );
+      }
       return;
     }
     final prefs = await SharedPreferences.getInstance();

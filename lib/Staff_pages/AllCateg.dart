@@ -267,7 +267,7 @@ class _AllCategPageState extends State<AllCategPage>
         : sizes;
 
     final addonByName = <String, Map<String, dynamic>>{};
-    for (final source in [data, if (rootData != null) rootData]) {
+    for (final source in [data, ?rootData]) {
       for (final addon
           in (source['addonOptions'] as List<dynamic>? ?? [])
               .whereType<Map>()) {
@@ -2142,17 +2142,19 @@ class _AllCategPageState extends State<AllCategPage>
                                     DateTime.fromMillisecondsSinceEpoch(0);
                                 return bTime.compareTo(aTime);
                               });
-                        if (snapshot.connectionState == ConnectionState.waiting)
+                        if (snapshot.connectionState == ConnectionState.waiting) {
                           return const Center(
                             child: CircularProgressIndicator(),
                           );
-                        if (docs.isEmpty)
+                        }
+                        if (docs.isEmpty) {
                           return const Center(
                             child: Text(
                               'No voided beverage items yet.',
                               style: TextStyle(color: AppColors.primaryDark),
                             ),
                           );
+                        }
                         return ListView.builder(
                           padding: const EdgeInsets.all(12),
                           itemCount: docs.length,
@@ -4124,7 +4126,7 @@ class _AllCategPageState extends State<AllCategPage>
                 ),
                 _tableCell(bundleName, width: 180, weight: FontWeight.w900),
                 _tableCell(
-                  '${formatMoney(bundlePrice)}',
+                  formatMoney(bundlePrice),
                   width: 100,
                   color: const Color(0xFF2E7D32),
                 ),
@@ -4157,8 +4159,9 @@ class _AllCategPageState extends State<AllCategPage>
     for (final rawAddon in (category['addonOptions'] as List?) ?? const []) {
       if (rawAddon is! Map) continue;
       final addon = Map<String, dynamic>.from(rawAddon);
-      if (addon['isDeleted'] == true || bundleExpired(addon, DateTime.now()))
+      if (addon['isDeleted'] == true || bundleExpired(addon, DateTime.now())) {
         continue;
+      }
       final addonName = addon['name']?.toString().trim().toLowerCase() ?? '';
       if (addonName.isNotEmpty) {
         addonByName.putIfAbsent(addonName, () => addon);
@@ -4233,7 +4236,7 @@ class _AllCategPageState extends State<AllCategPage>
                     final item = itemForSize(size);
                     return item == null
                         ? '--'
-                        : '${formatMoney(_parsePrice(item['price']))}';
+                        : formatMoney(_parsePrice(item['price']));
                   }
 
                   final totalSold = totalSoldFromReceipts < 0
@@ -4947,7 +4950,7 @@ class _AllCategPageState extends State<AllCategPage>
                                           : const Color(0xFFC62828),
                                     ),
                                     _AddonCell(
-                                      '${formatMoney(price)}',
+                                      formatMoney(price),
                                       color: const Color(0xFF2E7D32),
                                     ),
                                   ],
@@ -5131,7 +5134,7 @@ class _AllCategPageState extends State<AllCategPage>
                 weight: FontWeight.w900,
               ),
               _tableCell(
-                '${formatMoney(_parsePrice(item['price']))}',
+                formatMoney(_parsePrice(item['price'])),
                 width: 100,
                 color: const Color(0xFF2E7D32),
               ),
@@ -5212,7 +5215,7 @@ class _AllCategPageState extends State<AllCategPage>
               child: ListView.separated(
                 scrollDirection: Axis.horizontal,
                 itemCount: categoryDocs.length + 1,
-                separatorBuilder: (_, __) => SizedBox(width: compact ? 8 : 10),
+                separatorBuilder: (_, _) => SizedBox(width: compact ? 8 : 10),
                 itemBuilder: (context, index) {
                   if (index == 0) {
                     final selected = _showAllCategoryItems;

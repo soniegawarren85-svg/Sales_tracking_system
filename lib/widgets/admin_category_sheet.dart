@@ -60,11 +60,12 @@ class _AdminCategorySheetState extends State<AdminCategorySheet> {
       setState(() => _saving = false);
       Navigator.pop(context, category);
     } catch (_) {
-      if (mounted)
+      if (mounted) {
         setState(() {
           _saving = false;
           _error = 'Unable to save category. Please try again.';
         });
+      }
     }
   }
 

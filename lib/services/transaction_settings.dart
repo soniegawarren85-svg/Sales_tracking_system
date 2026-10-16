@@ -94,8 +94,9 @@ Map<String, dynamic> selectedDiscount(
     {};
 double discountFraction(Map<String, dynamic> settings, String? id) {
   if (settings['discountsEnabled'] == false ||
-      settings['allowDiscounts'] == false)
+      settings['allowDiscounts'] == false) {
     return 0;
+  }
   return ((num.tryParse(
                 '${selectedDiscount(settings, id)['percent']}',
               )?.toDouble() ??

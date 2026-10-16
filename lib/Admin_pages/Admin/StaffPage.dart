@@ -242,10 +242,12 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
     body: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
       stream: _staffStream,
       builder: (context, snapshot) {
-        if (snapshot.hasError)
+        if (snapshot.hasError) {
           return const Center(child: Text('Unable to load staff.'));
-        if (!snapshot.hasData)
+        }
+        if (!snapshot.hasData) {
           return const Center(child: CircularProgressIndicator());
+        }
         final staff = snapshot.data!.docs
             .map(AdminModel.fromDoc)
             .where((member) => member.isValidStaff)
@@ -676,7 +678,6 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
     required int active,
     required int pending,
     required int deactivated,
-    VoidCallback? onDeactivated,
   }) {
     return Row(
       children: [
@@ -933,8 +934,9 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                                       member,
                                       'accepted',
                                     );
-                                    if (dialogContext.mounted)
+                                    if (dialogContext.mounted) {
                                       Navigator.pop(dialogContext);
+                                    }
                                   },
                                 ),
                               ],
@@ -1021,7 +1023,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
           .doc(admin.id)
           .update({
             'status': newStatus,
-            if (reason != null) 'deactivationReason': reason,
+            'deactivationReason': ?reason,
             if (reason != null) 'deactivatedAt': FieldValue.serverTimestamp(),
           });
       if (!mounted) return;
@@ -2064,7 +2066,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
           .doc(applicant.id)
           .update({
             'status': newStatus,
-            if (reason != null) 'deactivationReason': reason,
+            'deactivationReason': ?reason,
             if (reason != null) 'deactivatedAt': FieldValue.serverTimestamp(),
           });
       if (!mounted) return;
@@ -2206,11 +2208,12 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
           await secondaryApp.delete();
         } catch (_) {}
       }
-      if (mounted)
+      if (mounted) {
         setState(() {
           _isCreatingStaff = false;
           _creating.value = false;
         });
+      }
     }
   }
 

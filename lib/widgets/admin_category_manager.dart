@@ -47,8 +47,9 @@ class _CategoryManagerState extends State<_CategoryManager> {
             ),
             FilledButton(
               onPressed: () {
-                if (edited.trim().isNotEmpty)
+                if (edited.trim().isNotEmpty) {
                   Navigator.pop(context, edited.trim());
+                }
               },
               child: const Text('Save'),
             ),
@@ -70,8 +71,9 @@ class _CategoryManagerState extends State<_CategoryManager> {
                 catalogCategoryKey(d.data()) == key,
           )
           .toList();
-      if (sources.isEmpty)
+      if (sources.isEmpty) {
         throw StateError('This category no longer exists. Reopen the manager.');
+      }
       if (!voidCategory &&
           currentCatalogCategories(all.docs.map((d) => d.data()).toList()).any(
             (data) =>
@@ -103,10 +105,11 @@ class _CategoryManagerState extends State<_CategoryManager> {
           );
         }
       }
-      if (refs.length > 450)
+      if (refs.length > 450) {
         throw StateError(
           'Too many linked records for one change. Contact support.',
         );
+      }
       await db.runTransaction((tx) async {
         final records = <DocumentSnapshot<Map<String, dynamic>>>[];
         for (final ref in refs) {
@@ -128,7 +131,7 @@ class _CategoryManagerState extends State<_CategoryManager> {
           });
         }
       });
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
@@ -136,11 +139,13 @@ class _CategoryManagerState extends State<_CategoryManager> {
             ),
           ),
         );
+      }
     } catch (error) {
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text('$error')));
+      }
     } finally {
       if (mounted) setState(() => busy = false);
     }
@@ -163,10 +168,12 @@ class _CategoryManagerState extends State<_CategoryManager> {
       child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
         stream: db.collection('sales_inventory').snapshots(),
         builder: (context, snapshot) {
-          if (snapshot.hasError)
+          if (snapshot.hasError) {
             return const Text('Unable to load categories.');
-          if (!snapshot.hasData)
+          }
+          if (!snapshot.hasData) {
             return const Center(child: CircularProgressIndicator());
+          }
           final categories = <String, String>{};
           for (final data in currentCatalogCategories(
             snapshot.data!.docs.map((d) => d.data()).toList(),

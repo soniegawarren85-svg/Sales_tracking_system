@@ -40,8 +40,8 @@ class AdminVoidInventory extends StatefulWidget {
 }
 
 class _AdminVoidInventoryState extends State<AdminVoidInventory> {
-  late String? _category = widget.categoryId;
-  late String _type = widget.type;
+  late final String? _category = widget.categoryId;
+  late final String _type = widget.type;
   String _query = '';
   DateTime _day = DateUtils.dateOnly(DateTime.now());
   DateTime? _endDay;
@@ -132,17 +132,19 @@ class _AdminVoidInventoryState extends State<AdminVoidInventory> {
           });
         }
       });
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(const SnackBar(content: Text('Inventory restored.')));
+      }
     } catch (_) {
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Unable to restore inventory. Please try again.'),
           ),
         );
+      }
     } finally {
       if (mounted) setState(() => _restoring.remove(key));
     }
@@ -174,8 +176,9 @@ class _AdminVoidInventoryState extends State<AdminVoidInventory> {
       final reason = '${data['voidReason'] ?? data['reason'] ?? ''}';
       if (!'$name $reason ${data['publicId'] ?? data['id'] ?? ''}'
           .toLowerCase()
-          .contains(_query))
+          .contains(_query)) {
         return;
+      }
       final date = _date(
         widget.expired
             ? data['expirationDate']
@@ -183,18 +186,21 @@ class _AdminVoidInventoryState extends State<AdminVoidInventory> {
       );
       if (date == null ||
           date.isBefore(_day) ||
-          !date.isBefore((_endDay ?? _day).add(const Duration(days: 1))))
+          !date.isBefore((_endDay ?? _day).add(const Duration(days: 1)))) {
         return;
+      }
       records.add((doc: doc, data: data, field: field, parent: parent));
     }
 
     for (final doc in docs) {
       final data = doc.data();
       if (_type != 'Beverages' &&
-          (data['isBundle'] == true) != (_type == 'Bundle'))
+          (data['isBundle'] == true) != (_type == 'Bundle')) {
         continue;
-      if (_type == 'Categories' && _category != null && doc.id != _category)
+      }
+      if (_type == 'Categories' && _category != null && doc.id != _category) {
         continue;
+      }
       if (!widget.expired && data['isDeleted'] == true) {
         if (_type == 'Categories' &&
             (data['items'] as List? ?? []).isNotEmpty) {
@@ -227,11 +233,12 @@ class _AdminVoidInventoryState extends State<AdminVoidInventory> {
                     .whereType<DateTime>()
                     .toList()
                   ..sort();
-            if (dates.isNotEmpty)
+            if (dates.isNotEmpty) {
               item['expirationDate'] = dates.first
                   .toIso8601String()
                   .split('T')
                   .first;
+            }
           }
           if (widget.expired
               ? _expired(item)
@@ -250,11 +257,12 @@ class _AdminVoidInventoryState extends State<AdminVoidInventory> {
                     .whereType<DateTime>()
                     .toList()
                   ..sort();
-            if (dates.isNotEmpty)
+            if (dates.isNotEmpty) {
               effective['expirationDate'] = dates.first
                   .toIso8601String()
                   .split('T')
                   .first;
+            }
           }
           if (_expired(effective)) add(doc, effective, parent: true);
         }
@@ -264,8 +272,9 @@ class _AdminVoidInventoryState extends State<AdminVoidInventory> {
           for (final item in (data[field] as List? ?? []).whereType<Map>()) {
             if (widget.expired
                 ? _expired(item)
-                : field == 'removedItems' || item['isDeleted'] == true)
+                : field == 'removedItems' || item['isDeleted'] == true) {
               add(doc, Map<String, dynamic>.from(item), field: field);
+            }
           }
         }
       }
@@ -363,7 +372,6 @@ class _AdminVoidInventoryState extends State<AdminVoidInventory> {
                     foregroundColor: Colors.black87,
                     shape: const StadiumBorder(),
                   ),
-                  child: const Text('Restore'),
                   onPressed: _restoring.isNotEmpty
                       ? null
                       : () => _restore(
@@ -371,6 +379,7 @@ class _AdminVoidInventoryState extends State<AdminVoidInventory> {
                           record.parent ? null : data,
                           record.field,
                         ),
+                  child: const Text('Restore'),
                 ),
             ];
           }).toList(),
@@ -428,11 +437,12 @@ class _AdminVoidInventoryState extends State<AdminVoidInventory> {
                         firstDate: DateTime(2000),
                         lastDate: DateTime(2100),
                       );
-                      if (dates != null && mounted)
+                      if (dates != null && mounted) {
                         setState(() {
                           _day = dates.start;
                           _endDay = dates.end;
                         });
+                      }
                     },
                   ),
                 ],
@@ -452,20 +462,24 @@ class _AdminVoidInventoryState extends State<AdminVoidInventory> {
                 )
                 .snapshots(),
             builder: (context, snapshot) {
-              if (snapshot.hasError)
+              if (snapshot.hasError) {
                 return const Center(child: Text('Unable to load records.'));
-              if (!snapshot.hasData)
+              }
+              if (!snapshot.hasData) {
                 return const Center(child: CircularProgressIndicator());
+              }
               if (_type != 'Beverages') return _table(snapshot.data!.docs);
               return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
                 stream: _db.collection('coffee_addons').snapshots(),
                 builder: (context, addons) {
-                  if (addons.hasError)
+                  if (addons.hasError) {
                     return const Center(
                       child: Text('Unable to load add-on records.'),
                     );
-                  if (!addons.hasData)
+                  }
+                  if (!addons.hasData) {
                     return const Center(child: CircularProgressIndicator());
+                  }
                   return _table([
                     if (!widget.expired) ...snapshot.data!.docs,
                     ...addons.data!.docs,

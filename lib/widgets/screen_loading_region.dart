@@ -24,8 +24,9 @@ class _ScreenLoadingRegionState extends State<ScreenLoadingRegion> {
   @override
   Widget build(BuildContext context) {
     // A page can also be used outside the dashboard shell.
-    if (context.dependOnInheritedWidgetOfExactType<_LoadingHost>() != null)
+    if (context.dependOnInheritedWidgetOfExactType<_LoadingHost>() != null) {
       return widget.child;
+    }
     final loading = _pending.isNotEmpty;
     return _LoadingHost(
       owner: this,

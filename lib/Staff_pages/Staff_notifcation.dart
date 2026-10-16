@@ -141,7 +141,7 @@ class StaffNotificationPage extends StatelessWidget {
                                 children: [
                                   _InfoChip(
                                     label: 'Sales',
-                                    value: '${formatMoney(totalSales)}',
+                                    value: formatMoney(totalSales),
                                   ),
                                   const SizedBox(width: 8),
                                   _InfoChip(
@@ -151,7 +151,7 @@ class StaffNotificationPage extends StatelessWidget {
                                   const SizedBox(width: 8),
                                   _InfoChip(
                                     label: 'Drawer',
-                                    value: '${formatMoney(cashDrawer)}',
+                                    value: formatMoney(cashDrawer),
                                   ),
                                 ],
                               ),

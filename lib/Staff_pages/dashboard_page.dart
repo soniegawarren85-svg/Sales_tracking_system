@@ -1054,8 +1054,9 @@ class _DashboardPageState extends State<DashboardPage>
                               quantity: qty,
                               reason: reason,
                             );
-                            if (dialogContext.mounted)
+                            if (dialogContext.mounted) {
                               Navigator.pop(dialogContext);
+                            }
                             if (!mounted) return;
                             ScaffoldMessenger.of(context).showSnackBar(
                               const SnackBar(content: Text('Refund recorded')),
@@ -1139,7 +1140,7 @@ class _DashboardPageState extends State<DashboardPage>
           ]).timeout(const Duration(seconds: 15));
           await _loadLocalDashboardCache();
         } catch (_) {
-          if (mounted)
+          if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(
                 content: Text(
@@ -1147,6 +1148,7 @@ class _DashboardPageState extends State<DashboardPage>
                 ),
               ),
             );
+          }
         }
       },
       child: Stack(
@@ -1358,7 +1360,7 @@ class _DashboardPageState extends State<DashboardPage>
                 liveDocs == null ||
                 (liveDocs.isEmpty && _cachedStaffInventoryDocs.isNotEmpty))
             ? _cachedStaffInventoryDocs
-            : liveDocs!;
+            : liveDocs;
         if (docs.isEmpty) {
           return const _EmptyState(
             icon: Icons.inventory_2_outlined,
@@ -1399,7 +1401,7 @@ class _DashboardPageState extends State<DashboardPage>
                     (liveRootDocs.isEmpty &&
                         _cachedSalesInventoryDocs.isNotEmpty))
                 ? _cachedSalesInventoryDocs
-                : liveRootDocs!;
+                : liveRootDocs;
             for (final rootDoc in rootDocs) {
               final rootData = rootDoc.data();
               if (rootData['isDeleted'] == true) continue;
@@ -2402,7 +2404,7 @@ class _ReceiptCard extends StatelessWidget {
                             ),
                           ),
                           Text(
-                            '${formatMoney((price * qty))}',
+                            formatMoney((price * qty)),
                             style: const TextStyle(
                               color: _C.primaryDark,
                               fontWeight: FontWeight.w900,
@@ -2429,11 +2431,11 @@ class _ReceiptCard extends StatelessWidget {
                           : 'Not recorded',
                     ),
                   if (!compact || isRefund)
-                    _ReceiptLine('Customer Paid', '${formatMoney(paid)}'),
+                    _ReceiptLine('Customer Paid', formatMoney(paid)),
                   if (!compact || isRefund)
-                    _ReceiptLine('Change', '${formatMoney(change)}'),
+                    _ReceiptLine('Change', formatMoney(change)),
                   if (subtotal != 0)
-                    _ReceiptLine('Subtotal', '${formatMoney(subtotal)}'),
+                    _ReceiptLine('Subtotal', formatMoney(subtotal)),
                   if (hasDiscount)
                     _ReceiptLine(
                       discountType.isNotEmpty
@@ -2444,7 +2446,7 @@ class _ReceiptCard extends StatelessWidget {
                   if (isRefund &&
                       (data['reason']?.toString().trim().isNotEmpty ?? false))
                     _ReceiptLine('Refund reason', data['reason'].toString()),
-                  _ReceiptLine('Total', '${formatMoney(total)}', strong: true),
+                  _ReceiptLine('Total', formatMoney(total), strong: true),
                 ],
               ),
             ),
@@ -3700,7 +3702,7 @@ class _StaffProfileCardState extends State<_StaffProfileCard> {
                             ),
                             const SizedBox(height: 6),
                             Text(
-                              '${formatMoney(cashDrawerBalance)}',
+                              formatMoney(cashDrawerBalance),
                               style: const TextStyle(
                                 fontSize: 15,
                                 fontWeight: FontWeight.w900,
@@ -3780,7 +3782,7 @@ class _StaffProfileCardState extends State<_StaffProfileCard> {
                           ),
                           const SizedBox(height: 5),
                           Text(
-                            '${formatMoney(cashDrawerBalance)}',
+                            formatMoney(cashDrawerBalance),
                             style: const TextStyle(
                               fontSize: 14,
                               fontWeight: FontWeight.w900,
@@ -4747,7 +4749,7 @@ class _HistoryPaymentChip extends StatelessWidget {
             ),
             const Spacer(),
             Text(
-              '${formatMoney(value)}',
+              formatMoney(value),
               style: TextStyle(
                 color: selected ? const Color(0xFF1B5E20) : color,
                 fontWeight: FontWeight.w900,
@@ -5001,7 +5003,7 @@ class _HistoryEntryCard extends StatelessWidget {
                         ),
                         const Spacer(),
                         Text(
-                          '${formatMoney(totalSoldValue)}',
+                          formatMoney(totalSoldValue),
                           style: const TextStyle(
                             color: Colors.white,
                             fontSize: 16,
@@ -5569,7 +5571,7 @@ class _PerformanceCard extends StatelessWidget {
                             ),
                             const Spacer(),
                             Text(
-                              '${formatMoney(totalSoldValue)}',
+                              formatMoney(totalSoldValue),
                               style: const TextStyle(
                                 color: Colors.white,
                                 fontSize: 18,

@@ -12,11 +12,13 @@ import '../../widgets/admin_category_sheet.dart';
 import '../../widgets/admin_item_editor.dart';
 import '../../widgets/admin_void_inventory.dart';
 import '../../widgets/admin_catalog.dart';
+import '../../widgets/inventory_header_transition.dart';
 import 'CoffeeMenuPage.dart';
 import 'dart:convert';
 import 'dart:async';
 import 'dart:math';
 import 'dart:typed_data';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -167,13 +169,11 @@ class InventoryPage extends StatefulWidget {
 class _InventoryPageState extends State<InventoryPage>
     with SingleTickerProviderStateMixin {
   bool _headerCollapsed = false;
-  Widget _collapsible(Widget child) => AnimatedSize(
-    duration: const Duration(milliseconds: 200),
-    alignment: Alignment.topCenter,
-    child: _headerCollapsed ? const SizedBox.shrink() : child,
-  );
+  Widget _collapsible(Widget child) =>
+      InventoryHeaderTransition(collapsed: _headerCollapsed, child: child);
   String _catalogType = 'Categories';
   bool _addonsTab = false;
+  final _inventoryScrollController = ScrollController();
   Uint8List? selectedImageBytes;
   final picker = ImagePicker();
   final _firestore = FirebaseFirestore.instance;
@@ -198,8 +198,42 @@ class _InventoryPageState extends State<InventoryPage>
   @override
   void dispose() {
     _fabController.dispose();
+    _inventoryScrollController.dispose();
     super.dispose();
   }
+
+  void _scrollInventoryBy(double delta) {
+    if (!_inventoryScrollController.hasClients) return;
+    final position = _inventoryScrollController.position;
+    final target = (position.pixels + delta)
+        .clamp(position.minScrollExtent, position.maxScrollExtent)
+        .toDouble();
+    if (delta > 0 && !_headerCollapsed) {
+      setState(() => _headerCollapsed = true);
+    } else if (delta < 0 &&
+        target <= position.minScrollExtent &&
+        _headerCollapsed) {
+      setState(() => _headerCollapsed = false);
+    }
+    if (target != position.pixels) position.jumpTo(target);
+  }
+
+  void _scrollInventoryFromPage(DragUpdateDetails details) {
+    _scrollInventoryBy(-details.delta.dy);
+  }
+
+  Widget _scrollOnPointerWheel(Widget child) => Listener(
+    onPointerSignal: (event) {
+      if (event is PointerScrollEvent &&
+          event.scrollDelta.dy.abs() > event.scrollDelta.dx.abs()) {
+        GestureBinding.instance.pointerSignalResolver.register(
+          event,
+          (_) => _scrollInventoryBy(event.scrollDelta.dy),
+        );
+      }
+    },
+    child: child,
+  );
 
   String _generateVariantId() {
     final timestamp = DateTime.now().microsecondsSinceEpoch;
@@ -3072,8 +3106,9 @@ class _InventoryPageState extends State<InventoryPage>
       }
       if (mounted) _showSuccessSnack('Item voided.');
     } catch (_) {
-      if (mounted)
+      if (mounted) {
         _showErrorSnack('Unable to void item. Please refresh and try again.');
+      }
     }
   }
 
@@ -3179,154 +3214,157 @@ class _InventoryPageState extends State<InventoryPage>
           : null,
       body: SafeArea(
         child: Column(
-          children: [
-            _collapsible(
-              Container(
-                padding: const EdgeInsets.all(20),
-                decoration: const BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [PinkTheme.primaryDark, PinkTheme.accent],
-                  ),
-                  borderRadius: BorderRadius.vertical(
-                    bottom: Radius.circular(24),
-                  ),
-                ),
-                child: Row(
+            children: [
+              GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onVerticalDragUpdate: _scrollInventoryFromPage,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    if (!widget.embedded)
-                      IconButton(
-                        onPressed: () => Navigator.pop(context),
-                        icon: const Icon(Icons.arrow_back, color: Colors.white),
-                      ),
-                    const Expanded(
-                      child: Text(
-                        'Inventory',
-                        style: TextStyle(
-                          fontSize: 20,
-                          fontWeight: FontWeight.w900,
-                          color: Colors.white,
+                    _scrollOnPointerWheel(
+                      _collapsible(
+                        Container(
+                          padding: const EdgeInsets.all(20),
+                          decoration: const BoxDecoration(
+                            gradient: LinearGradient(
+                              colors: [PinkTheme.primaryDark, PinkTheme.accent],
+                            ),
+                            borderRadius: BorderRadius.vertical(
+                              bottom: Radius.circular(24),
+                            ),
+                          ),
+                          child: Row(
+                            children: [
+                              if (!widget.embedded)
+                                IconButton(
+                                  onPressed: () => Navigator.pop(context),
+                                  icon: const Icon(
+                                    Icons.arrow_back,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                              const Expanded(
+                                child: Text(
+                                  'Inventory',
+                                  style: TextStyle(
+                                    fontSize: 20,
+                                    fontWeight: FontWeight.w900,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                              ),
+                              const AllocationChecklistButton(
+                                scopeIds: [],
+                                isAdmin: true,
+                              ),
+                            ],
+                          ),
                         ),
                       ),
                     ),
-                    const AllocationChecklistButton(
-                      scopeIds: [],
-                      isAdmin: true,
+                    _scrollOnPointerWheel(
+                      _collapsible(
+                        Padding(
+                          padding: const EdgeInsets.all(16),
+                          child: Align(
+                            alignment: Alignment.centerLeft,
+                            child: Wrap(
+                              spacing: 10,
+                              children: ['Categories', 'Bundle', 'Beverages']
+                                  .map(
+                                    (type) => ChoiceChip(
+                                      selectedColor: AppColors.primaryDark,
+                                      checkmarkColor: Colors.white,
+                                      labelStyle: TextStyle(
+                                        color: _catalogType == type
+                                            ? Colors.white
+                                            : AppColors.primaryDark,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                      label: Text(type),
+                                      selected: _catalogType == type,
+                                      onSelected: (_) => setState(
+                                        () => _catalogType = type,
+                                      ),
+                                    ),
+                                  )
+                                  .toList(),
+                            ),
+                          ),
+                        ),
+                      ),
                     ),
                   ],
                 ),
               ),
-            ),
-            _collapsible(
-              Padding(
-                padding: const EdgeInsets.all(16),
-                child: Align(
-                  alignment: Alignment.centerLeft,
-                  child: Wrap(
-                    spacing: 10,
-                    children: ['Categories', 'Bundle', 'Beverages']
-                        .map(
-                          (type) => ChoiceChip(
-                            selectedColor: AppColors.primaryDark,
-                            checkmarkColor: Colors.white,
-                            labelStyle: TextStyle(
-                              color: _catalogType == type
-                                  ? Colors.white
-                                  : AppColors.primaryDark,
-                              fontWeight: FontWeight.w700,
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 4, 20, 0),
+                  child: AdminCatalog(
+                    onBranchChanged: (value) =>
+                        setState(() => _monitorBranch = value),
+                    pinnedControls: true,
+                    compactHeader: _headerCollapsed,
+                    scrollController: _inventoryScrollController,
+                    onHeaderCollapsed: (collapsed) {
+                      if (mounted && collapsed != _headerCollapsed) {
+                        setState(() => _headerCollapsed = collapsed);
+                      }
+                    },
+                    type: _catalogType,
+                    onBeverageTabChanged: (value) =>
+                        setState(() => _addonsTab = value),
+                    onOpen: _openCatalogEntry,
+                    onVoid: _voidCatalogEntry,
+                    onView: _viewBundle,
+                    onCategorySelected: (category) =>
+                        _selectedCategory = category,
+                    actions: Wrap(
+                      alignment: WrapAlignment.end,
+                      children: [
+                        if (_catalogType != 'Beverages' || !_addonsTab)
+                          TextButton.icon(
+                            style: MediaQuery.sizeOf(context).width < 600
+                                ? TextButton.styleFrom(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 8,
+                                    ),
+                                    visualDensity: VisualDensity.compact,
+                                  )
+                                : null,
+                            icon: const Icon(Icons.add),
+                            label: Text(
+                              MediaQuery.sizeOf(context).width < 600
+                                  ? 'Add'
+                                  : _catalogType == 'Categories'
+                                  ? 'Add Category'
+                                  : _catalogType == 'Bundle'
+                                  ? 'Create Bundle'
+                                  : 'Add Beverages',
                             ),
-                            label: Text(type),
-                            selected: _catalogType == type,
-                            onSelected: (_) =>
-                                setState(() => _catalogType = type),
+                            onPressed: _catalogType == 'Categories'
+                                ? _showCategorySheet
+                                : _addCatalogItem,
                           ),
-                        )
-                        .toList(),
-                  ),
-                ),
-              ),
-            ),
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(20, 4, 20, 0),
-                child: AdminCatalog(
-                  onBranchChanged: (value) =>
-                      setState(() => _monitorBranch = value),
-                  pinnedControls: true,
-                  compactHeader: _headerCollapsed,
-                  onHeaderCollapsed: (collapsed) {
-                    if (mounted && collapsed != _headerCollapsed)
-                      setState(() => _headerCollapsed = collapsed);
-                  },
-                  type: _catalogType,
-                  onBeverageTabChanged: (value) =>
-                      setState(() => _addonsTab = value),
-                  onOpen: _openCatalogEntry,
-                  onVoid: _voidCatalogEntry,
-                  onView: _viewBundle,
-                  onCategorySelected: (category) =>
-                      _selectedCategory = category,
-                  actions: Wrap(
-                    alignment: WrapAlignment.end,
-                    children: [
-                      if (_catalogType != 'Beverages' || !_addonsTab)
-                        TextButton.icon(
-                          style: MediaQuery.sizeOf(context).width < 600
-                              ? TextButton.styleFrom(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 8,
-                                  ),
-                                  visualDensity: VisualDensity.compact,
-                                )
-                              : null,
-                          icon: const Icon(Icons.add),
-                          label: Text(
-                            MediaQuery.sizeOf(context).width < 600
-                                ? 'Add'
-                                : _catalogType == 'Categories'
-                                ? 'Add Category'
-                                : _catalogType == 'Bundle'
-                                ? 'Create Bundle'
-                                : 'Add Beverages',
-                          ),
-                          onPressed: _catalogType == 'Categories'
-                              ? _showCategorySheet
-                              : _addCatalogItem,
-                        ),
 
-                      if (_catalogType == 'Beverages' && _addonsTab)
-                        TextButton.icon(
-                          style: MediaQuery.sizeOf(context).width < 600
-                              ? TextButton.styleFrom(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 8,
-                                  ),
-                                  visualDensity: VisualDensity.compact,
-                                )
-                              : null,
-                          onPressed: () => showAdminAddonEditor(context),
-                          icon: const Icon(Icons.add),
-                          label: Text(
-                            MediaQuery.sizeOf(context).width < 600
-                                ? 'Add'
-                                : 'Add add-ons',
+                        if (_catalogType == 'Beverages' && _addonsTab)
+                          TextButton.icon(
+                            style: MediaQuery.sizeOf(context).width < 600
+                                ? TextButton.styleFrom(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 8,
+                                    ),
+                                    visualDensity: VisualDensity.compact,
+                                  )
+                                : null,
+                            onPressed: () => showAdminAddonEditor(context),
+                            icon: const Icon(Icons.add),
+                            label: Text(
+                              MediaQuery.sizeOf(context).width < 600
+                                  ? 'Add'
+                                  : 'Add add-ons',
+                            ),
                           ),
-                        ),
-                      IconButton(
-                        style: MediaQuery.sizeOf(context).width < 600
-                            ? IconButton.styleFrom(
-                                padding: const EdgeInsets.all(6),
-                                minimumSize: const Size(40, 40),
-                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                              )
-                            : null,
-                        tooltip: 'Void records',
-                        icon: const Icon(Icons.block, color: PinkTheme.primary),
-                        onPressed: () => showAdminInventoryRecords(
-                          context,
-                          type: _catalogType,
-                        ),
-                      ),
-                      if (_catalogType != 'Beverages' || _addonsTab)
                         IconButton(
                           style: MediaQuery.sizeOf(context).width < 600
                               ? IconButton.styleFrom(
@@ -3336,39 +3374,59 @@ class _InventoryPageState extends State<InventoryPage>
                                       MaterialTapTargetSize.shrinkWrap,
                                 )
                               : null,
-                          tooltip: 'Expired inventory',
+                          tooltip: 'Void records',
                           icon: const Icon(
-                            Icons.event_busy,
-                            color: Colors.deepOrange,
+                            Icons.block,
+                            color: PinkTheme.primary,
                           ),
                           onPressed: () => showAdminInventoryRecords(
                             context,
                             type: _catalogType,
-                            expired: true,
                           ),
                         ),
-                      if (_catalogType == 'Categories')
-                        IconButton(
-                          style: MediaQuery.sizeOf(context).width < 600
-                              ? IconButton.styleFrom(
-                                  padding: const EdgeInsets.all(6),
-                                  minimumSize: const Size(40, 40),
-                                  tapTargetSize:
-                                      MaterialTapTargetSize.shrinkWrap,
-                                )
-                              : null,
-                          tooltip: 'Manage categories',
-                          icon: const Icon(Icons.edit_outlined),
-                          onPressed: () => showCategoryManager(context),
-                        ),
-                    ],
+                        if (_catalogType != 'Beverages' || _addonsTab)
+                          IconButton(
+                            style: MediaQuery.sizeOf(context).width < 600
+                                ? IconButton.styleFrom(
+                                    padding: const EdgeInsets.all(6),
+                                    minimumSize: const Size(40, 40),
+                                    tapTargetSize:
+                                        MaterialTapTargetSize.shrinkWrap,
+                                  )
+                                : null,
+                            tooltip: 'Expired inventory',
+                            icon: const Icon(
+                              Icons.event_busy,
+                              color: Colors.deepOrange,
+                            ),
+                            onPressed: () => showAdminInventoryRecords(
+                              context,
+                              type: _catalogType,
+                              expired: true,
+                            ),
+                          ),
+                        if (_catalogType == 'Categories')
+                          IconButton(
+                            style: MediaQuery.sizeOf(context).width < 600
+                                ? IconButton.styleFrom(
+                                    padding: const EdgeInsets.all(6),
+                                    minimumSize: const Size(40, 40),
+                                    tapTargetSize:
+                                        MaterialTapTargetSize.shrinkWrap,
+                                  )
+                                : null,
+                            tooltip: 'Manage categories',
+                            icon: const Icon(Icons.edit_outlined),
+                            onPressed: () => showCategoryManager(context),
+                          ),
+                      ],
+                    ),
                   ),
                 ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
-      ),
     );
   }
 
@@ -3423,8 +3481,9 @@ class _InventoryPageState extends State<InventoryPage>
       for (final doc in addons.docs) {
         final data = doc.data();
         if (!catalogItemActive(data, DateTime.now()) ||
-            data['isAvailable'] == false)
+            data['isAvailable'] == false) {
           continue;
+        }
         inventory.add({
           'id': 'addon:${doc.id}',
           'sourceInventoryId': doc.id,
@@ -4406,7 +4465,7 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
 
   @override
   Widget build(BuildContext context) {
-    if (widget.createOnly)
+    if (widget.createOnly) {
       return Scaffold(
         backgroundColor: PinkTheme.scaffoldBg,
         appBar: AppBar(
@@ -4422,6 +4481,7 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
         ),
         body: _buildBuildTab(),
       );
+    }
     final selectedCount = _selectedVariantCount;
     return Scaffold(
       backgroundColor: PinkTheme.scaffoldBg,
@@ -5323,8 +5383,9 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
                         : item['sourceCollection'] !=
                               (_includeAddonTab
                                   ? 'coffee_addons'
-                                  : 'coffee_products'))
+                                  : 'coffee_products')) {
                       return const SizedBox.shrink();
+                    }
                     final itemId = item['id']?.toString() ?? '';
                     final itemName = item['name']?.toString() ?? '';
                     final itemPrice = item['price']?.toString() ?? '0';

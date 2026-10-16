@@ -84,8 +84,9 @@ class _ReportItemHistoryState extends State<ReportItemHistory> {
                                       : _range!.end,
                                 ),
                         );
-                        if (picked != null && mounted)
+                        if (picked != null && mounted) {
                           setState(() => _range = picked);
+                        }
                       },
                     ),
                   ],

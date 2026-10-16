@@ -47,10 +47,12 @@ class CashDrawerService {
     for (final receipt in receipts) {
       final id = '${receipt['salesId'] ?? receipt['_localDocId'] ?? ''}';
       final date = toDate(receipt['timestamp']);
-      if (id.isEmpty || date == null || dayKey(date) != key || !seen.add(id))
+      if (id.isEmpty || date == null || dayKey(date) != key || !seen.add(id)) {
         continue;
-      if (!applied.contains('receipt-$id') && !localApplied.contains(id))
+      }
+      if (!applied.contains('receipt-$id') && !localApplied.contains(id)) {
         continue;
+      }
       final payment = '${receipt['paymentMode'] ?? 'Cash'}'.toLowerCase();
       final delta =
           num.tryParse(
@@ -58,8 +60,9 @@ class CashDrawerService {
           )?.toDouble() ??
           0;
       if (payment == 'cash') cash += delta;
-      if (payment == 'gcash')
+      if (payment == 'gcash') {
         gcash += num.tryParse('${receipt['total'] ?? 0}')?.toDouble() ?? 0;
+      }
     }
     return {
       ...data,
@@ -76,8 +79,9 @@ class CashDrawerService {
     String drawerId,
     Map<String, dynamic> data,
   ) async {
-    if (drawerId.isEmpty || data['drawerDate'] == dayKey(DateTime.now()))
+    if (drawerId.isEmpty || data['drawerDate'] == dayKey(DateTime.now())) {
       return;
+    }
     await ensureToday(FirebaseFirestore.instance, drawerId);
   }
 
@@ -87,8 +91,9 @@ class CashDrawerService {
         .doc(drawerId)
         .get();
     if (!existing.exists ||
-        existing.data()?['drawerDate'] == dayKey(DateTime.now()))
+        existing.data()?['drawerDate'] == dayKey(DateTime.now())) {
       return;
+    }
     final sales = await db
         .collection('completed_sales')
         .where('branchId', isEqualTo: drawerId)

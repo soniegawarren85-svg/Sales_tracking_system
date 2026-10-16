@@ -125,8 +125,9 @@ class ReturnMetadataService {
     if (collection == 'completed_sales') {
       final rows = AllocationChecklistService.rows(source['items']);
       final line = int.tryParse('${record['returnLineKey'] ?? record['line']}');
-      if (line != null && line >= 0 && line < rows.length)
+      if (line != null && line >= 0 && line < rows.length) {
         original.addAll(rows[line]);
+      }
     } else {
       original.addAll(source);
     }
@@ -163,10 +164,11 @@ class ReturnMetadataService {
       entry['publicId'],
     ].any((v) => v != null && identities.contains('$v'));
     var matches = entries.where(identityMatch).toList();
-    if (matches.isEmpty)
+    if (matches.isEmpty) {
       matches = entries
           .where((e) => normalized(returnItemName(e)) == normalized(name))
           .toList();
+    }
     final root =
         allocation['sourceInventoryId'] ?? original['sourceInventoryId'];
     final scoped = matches.where((e) => e['_rootId'] == root).toList();
@@ -206,8 +208,9 @@ class ReturnMetadataService {
       record['staffName'],
       record['submittedByName'],
     ]) {
-      if (id == null || '$id'.isEmpty || '$id' == '${record['branchId']}')
+      if (id == null || '$id'.isEmpty || '$id' == '${record['branchId']}') {
         continue;
+      }
       try {
         staff = await profile('$id');
       } catch (_) {

@@ -131,14 +131,16 @@ class _BranchStaffActivityDialogState extends State<BranchStaffActivityDialog> {
             child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
               stream: sessions,
               builder: (context, snapshot) {
-                if (snapshot.hasError)
+                if (snapshot.hasError) {
                   return const Center(
                     child: Text(
                       'Unable to load session logs. Check connection and access permissions.',
                     ),
                   );
-                if (!snapshot.hasData)
+                }
+                if (!snapshot.hasData) {
                   return const Center(child: CircularProgressIndicator());
+                }
                 final records = snapshot.data!.docs
                     .map((doc) => doc.data())
                     .toList();
@@ -154,9 +156,7 @@ class _BranchStaffActivityDialogState extends State<BranchStaffActivityDialog> {
                               date.year == _date!.year &&
                               date.month == _date!.month &&
                               date.day == _date!.day)) &&
-                      (row.values.join(' ') +
-                              ' ' +
-                              publicItemId((row['staffId'] ?? '').toString()))
+                      ('${row.values.join(' ')} ${publicItemId((row['staffId'] ?? '').toString())}')
                           .toLowerCase()
                           .contains(_search);
                 }).toList();
@@ -181,20 +181,21 @@ class StaffSessionTable extends StatelessWidget {
     );
     if (photo.isEmpty) return fallback;
     try {
-      if (photo.startsWith('data:image/'))
+      if (photo.startsWith('data:image/')) {
         return Image.memory(
           base64Decode(photo.split(',').last),
           width: 36,
           height: 36,
           fit: BoxFit.cover,
-          errorBuilder: (_, __, ___) => fallback,
+          errorBuilder: (_, _, _) => fallback,
         );
+      }
       return Image.network(
         photo,
         width: 36,
         height: 36,
         fit: BoxFit.cover,
-        errorBuilder: (_, __, ___) => fallback,
+        errorBuilder: (_, _, _) => fallback,
       );
     } catch (_) {
       return fallback;
@@ -203,10 +204,11 @@ class StaffSessionTable extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (sessions.isEmpty)
+    if (sessions.isEmpty) {
       return const Center(
         child: Text('No recorded login sessions for this branch.'),
       );
+    }
     String date(dynamic raw) {
       final time = sessionTime(raw)?.toLocal();
       if (time == null) return 'Not recorded';

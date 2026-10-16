@@ -63,8 +63,9 @@ class _BranchAnalyticsBarsState extends State<BranchAnalyticsBars> {
           constraints.maxWidth,
           double.infinity,
         );
-        if (width <= constraints.maxWidth)
+        if (width <= constraints.maxWidth) {
           return _buildPlot(context, ceiling, plotHeight, 28, intervals, step);
+        }
         final first = values.indexWhere((value) => value != 0);
         final focus =
             '${labels.join(',')}|$selectedStatus|$first|${constraints.maxWidth}';

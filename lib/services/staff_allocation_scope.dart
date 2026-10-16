@@ -134,8 +134,9 @@ Stream<StaffAllocationScope> watchStaffAllocationScope(
     savedBranches = prefs!.getStringList('staffBranchIds.$uid') ?? [];
     final savedUid =
         prefs!.getString('lastStaffDocId') ?? prefs!.getString('lastUserId');
-    if (savedBranches.isEmpty && savedUid == uid)
+    if (savedBranches.isEmpty && savedUid == uid) {
       savedBranches = prefs!.getStringList('lastStaffBranchIds') ?? [];
+    }
     profileBranches = (profile['branchIds'] as List? ?? [])
         .map((id) => id.toString())
         .toList();
@@ -151,13 +152,14 @@ Stream<StaffAllocationScope> watchStaffAllocationScope(
             if (stopped) return;
             if (snapshot.exists) {
               profile = snapshot.data()!;
-              if (profile['staffId'] != null)
+              if (profile['staffId'] != null) {
                 unawaited(
                   prefs!.setString(
                     'staffPublicId.$uid',
                     profile['staffId'].toString(),
                   ),
                 );
+              }
               profileBranches = (profile['branchIds'] as List? ?? [])
                   .map((id) => id.toString())
                   .toList();

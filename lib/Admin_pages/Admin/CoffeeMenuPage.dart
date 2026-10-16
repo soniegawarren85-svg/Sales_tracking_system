@@ -86,11 +86,13 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
               .where(FieldPath.documentId, isEqualTo: widget.initialProductId)
               .limit(1)
               .get();
-          if (mounted && result.docs.isNotEmpty)
+          if (mounted && result.docs.isNotEmpty) {
             _showEditProductDialog(result.docs.first);
+          }
         } catch (_) {
-          if (mounted)
+          if (mounted) {
             _showSnack('Unable to open this beverage item.', isError: true);
+          }
         }
       });
     }
@@ -290,8 +292,9 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
     try {
       final imageUrl =
           await (_coffeeUpload ?? _uploadCoffeeImage(_coffeeImageBytes));
-      if (_coffeeImageBytes != null && imageUrl == null)
+      if (_coffeeImageBytes != null && imageUrl == null) {
         throw StateError('Picture could not upload. Please retry.');
+      }
       final publicCoffeeId = await ShortIdService.next('CF');
       final coffeeId = await _firestore.runTransaction<String>((
         transaction,
@@ -950,7 +953,7 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
 
   @override
   Widget build(BuildContext context) {
-    if (widget.createOnly)
+    if (widget.createOnly) {
       return Scaffold(
         backgroundColor: _bg,
         appBar: AppBar(
@@ -974,6 +977,7 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
           children: [_buildProductForm()],
         ),
       );
+    }
     return DefaultTabController(
       length: 3,
       child: Scaffold(
@@ -1263,7 +1267,7 @@ class _ProductCardState extends State<_ProductCard>
                                 textColor: _primaryDeep,
                               ),
                               _MiniTag(
-                                label: '${formatMoney(basePrice)}',
+                                label: formatMoney(basePrice),
                                 color: const Color(0xFFE8F5E9),
                                 textColor: const Color(0xFF2E7D32),
                               ),
@@ -1397,7 +1401,7 @@ class _ProductCardState extends State<_ProductCard>
                                     borderRadius: BorderRadius.circular(20),
                                   ),
                                   child: Text(
-                                    '${formatMoney(total)}',
+                                    formatMoney(total),
                                     style: const TextStyle(
                                       color: Colors.white,
                                       fontWeight: FontWeight.w800,

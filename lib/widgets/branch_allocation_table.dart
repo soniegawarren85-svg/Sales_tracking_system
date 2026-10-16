@@ -151,9 +151,10 @@ class BranchAllocationTable extends StatelessWidget {
         final price = branchSizePrice(row, key);
         return Text(price == null ? '—' : money(price));
       }
-      if (key == 'status' && !inventory)
+      if (key == 'status' && !inventory) {
         return Text('${row['status'] ?? 'Not recorded'}');
-      if (key == 'status')
+      }
+      if (key == 'status') {
         return Row(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -170,7 +171,8 @@ class BranchAllocationTable extends StatelessWidget {
             ),
           ],
         );
-      if (key == 'remaining')
+      }
+      if (key == 'remaining') {
         return Row(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -179,8 +181,10 @@ class BranchAllocationTable extends StatelessWidget {
             Text(qty(row[key])),
           ],
         );
-      if (['starting', 'added', 'remaining', 'sold'].contains(key))
+      }
+      if (['starting', 'added', 'remaining', 'sold'].contains(key)) {
         return Text(qty(row[key]));
+      }
       if ([
         'stockCost',
         'profit',
@@ -189,10 +193,11 @@ class BranchAllocationTable extends StatelessWidget {
         'sales',
         'price',
         'costPrice',
-      ].contains(key))
+      ].contains(key)) {
         return Text(
           money(key == 'stockCost' ? branchStockCost(row) : row[key]),
         );
+      }
       return Text('${row[key] ?? ''}');
     }
 

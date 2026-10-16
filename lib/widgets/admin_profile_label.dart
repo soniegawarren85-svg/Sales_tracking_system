@@ -43,7 +43,7 @@ class AdminProfileLabel extends StatelessWidget {
             image = NetworkImage(photo);
           }
         } catch (_) {}
-        if (greeting)
+        if (greeting) {
           return Text(
             'Welcome, ${firstName.isEmpty ? label.split(' ').first : firstName}!',
             style: const TextStyle(
@@ -52,6 +52,7 @@ class AdminProfileLabel extends StatelessWidget {
               fontWeight: FontWeight.bold,
             ),
           );
+        }
         return Row(
           children: [
             CircleAvatar(

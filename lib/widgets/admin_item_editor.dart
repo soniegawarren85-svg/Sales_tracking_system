@@ -176,8 +176,9 @@ class _ItemEditorState extends State<_ItemEditor> {
       for (final doc in addons.docs) {
         final data = doc.data();
         if (!catalogItemActive(data, DateTime.now()) ||
-            data['isAvailable'] == false)
+            data['isAvailable'] == false) {
           continue;
+        }
         options.add({
           ...data,
           'sourceInventoryId': doc.id,
@@ -213,11 +214,12 @@ class _ItemEditorState extends State<_ItemEditor> {
         }).toList();
       });
     } catch (error) {
-      if (mounted)
+      if (mounted) {
         setState(
           () => _error =
               'Unable to load current ingredients. Reopen the editor to retry.',
         );
+      }
       debugPrint('Load bundle ingredients: $error');
     } finally {
       if (mounted) setState(() => _loadingIngredients = false);
@@ -260,8 +262,9 @@ class _ItemEditorState extends State<_ItemEditor> {
       final url = _photo == null
           ? null
           : await (_upload ?? widget.upload(_photo!));
-      if (_photo != null && (url == null || url.isEmpty))
+      if (_photo != null && (url == null || url.isEmpty)) {
         throw StateError('Image upload failed');
+      }
       final changes = <String, dynamic>{
         'name': _name.text.trim(),
         'costPrice': _type == 'Bundle'
@@ -276,7 +279,7 @@ class _ItemEditorState extends State<_ItemEditor> {
         _type == 'Beverages' ? 'basePrice' : 'price': _type == 'Beverages'
             ? 0
             : num.parse(_price.text.trim()),
-        if (url != null) 'imageUrl': url,
+        'imageUrl': ?url,
         if (_type == 'Categories') ...{
           'stock': int.parse(_stock.text),
           'expirationDate': _expiry.text,
@@ -305,8 +308,9 @@ class _ItemEditorState extends State<_ItemEditor> {
           ? await ShortIdService.next(categoryPrefix('${source['name'] ?? ''}'))
           : null;
       if (_type == 'Bundle' && int.parse(_additionalBundles.text) > 0) {
-        if (_loadingIngredients)
+        if (_loadingIngredients) {
           throw StateError('Wait for ingredients to finish loading.');
+        }
         if (_ingredients.any(
           (item) => !_ingredientOptions.any(
             (option) => _ingredientKey(option) == _ingredientKey(item),
@@ -352,8 +356,9 @@ class _ItemEditorState extends State<_ItemEditor> {
           if (patch.containsKey(key)) key: patch[key],
       };
       bool needsUpdate(Map<String, dynamic> allocation) {
-        if (_type != 'Categories')
+        if (_type != 'Categories') {
           return inventoryChangedFields(allocation, metadata).isNotEmpty;
+        }
         final items = (allocation['items'] as List? ?? [])
             .whereType<Map>()
             .map((i) => Map<String, dynamic>.from(i))
@@ -379,13 +384,15 @@ class _ItemEditorState extends State<_ItemEditor> {
           if (data == null ||
               data['isDeleted'] == true ||
               (target.parent.id == 'allocation_checklist' &&
-                  !ChecklistStatus.incomingOpen(data)))
+                  !ChecklistStatus.incomingOpen(data))) {
             continue;
+          }
           allocations[target] = data;
         }
         final current = snapshot.data();
-        if (current == null || current['isDeleted'] == true)
+        if (current == null || current['isDeleted'] == true) {
           throw StateError('This record is no longer active');
+        }
         if (_type != 'Categories') {
           for (final target in allocations.entries) {
             final update = inventoryChangedFields(target.value, metadata);
@@ -407,8 +414,9 @@ class _ItemEditorState extends State<_ItemEditor> {
           });
         } else {
           final index = catalogItemIndex(items, widget.entry!.details);
-          if (index < 0 || items[index]['isDeleted'] == true)
+          if (index < 0 || items[index]['isDeleted'] == true) {
             throw StateError('Item no longer available');
+          }
           final initialStock = reportValueForSave(
             _data['stock'] ?? _data['startingStock'],
           );
@@ -434,8 +442,9 @@ class _ItemEditorState extends State<_ItemEditor> {
             final match = catalogItemIndex(assigned, widget.entry!.details);
             if (match >= 0) {
               if (assigned[match]['isDeleted'] == true ||
-                  assigned[match]['isVoided'] == true)
+                  assigned[match]['isVoided'] == true) {
                 continue;
+              }
               final update = inventoryChangedFields(assigned[match], metadata);
               if (update.isEmpty) continue;
               assigned[match] = {...assigned[match], ...update};
@@ -474,15 +483,17 @@ class _ItemEditorState extends State<_ItemEditor> {
         border: const OutlineInputBorder(),
       ),
       validator: (value) {
-        if (required && (value == null || value.trim().isEmpty))
+        if (required && (value == null || value.trim().isEmpty)) {
           return 'Enter $label';
+        }
         if (number) {
           final amount = num.tryParse(value ?? '');
           if (amount == null ||
               !amount.isFinite ||
               amount < 0 ||
-              (integer && int.tryParse((value ?? '').trim()) == null))
+              (integer && int.tryParse((value ?? '').trim()) == null)) {
             return 'Enter a valid ${integer ? 'whole number' : 'amount'}';
+          }
         }
         return null;
       },
@@ -570,11 +581,12 @@ class _ItemEditorState extends State<_ItemEditor> {
                               firstDate: DateTime(2000),
                               lastDate: DateTime(2100),
                             );
-                            if (date != null)
+                            if (date != null) {
                               _expiry.text = date
                                   .toIso8601String()
                                   .split('T')
                                   .first;
+                            }
                           },
                   ),
                   const SizedBox(height: 14),
@@ -618,13 +630,14 @@ class _ItemEditorState extends State<_ItemEditor> {
                             );
                             if (file == null) return;
                             final bytes = await file.readAsBytes();
-                            if (mounted)
+                            if (mounted) {
                               setState(() {
                                 _photo = bytes;
                                 _upload = widget
                                     .upload(bytes)
                                     .catchError((_) => null);
                               });
+                            }
                           },
                   ),
                 ),

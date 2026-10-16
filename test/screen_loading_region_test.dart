@@ -13,7 +13,7 @@ void main() {
     Widget section(ValueNotifier<bool> pending, String label) =>
         ValueListenableBuilder<bool>(
           valueListenable: pending,
-          builder: (_, loading, __) =>
+          builder: (_, loading, _) =>
               loading ? const ScreenLoadingIndicator() : Text(label),
         );
     await tester.pumpWidget(
@@ -60,7 +60,7 @@ void main() {
             body: ScreenLoadingRegion(
               child: ValueListenableBuilder<bool>(
                 valueListenable: showPage,
-                builder: (_, show, __) => show
+                builder: (_, show, _) => show
                     ? const ScreenLoadingRegion(
                         child: Column(
                           children: [

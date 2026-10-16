@@ -316,8 +316,9 @@ class _SalesPageState extends State<SalesPage> with TickerProviderStateMixin {
   List<Inventory> _filterEntries(List<Inventory> entries) {
     return entries.where((inv) {
       if (!BranchSession.instance.isMainBranch &&
-          !_branchStaffIds.contains(inv.ownerId))
+          !_branchStaffIds.contains(inv.ownerId)) {
         return false;
+      }
       if (!_isSameDay(inv.timestamp, _selectedDate)) return false;
       return _matchesSearchQuery(inv);
     }).toList();
@@ -603,7 +604,7 @@ class _SalesPageState extends State<SalesPage> with TickerProviderStateMixin {
           ),
           const SizedBox(height: 12),
           Text(
-            "${formatMoney(grandTotal)}",
+            formatMoney(grandTotal),
             style: const TextStyle(
               fontSize: 36,
               fontWeight: FontWeight.w900,
@@ -944,7 +945,7 @@ class _AdminReceiptCard extends StatelessWidget {
                             ),
                           ),
                           Text(
-                            '${formatMoney(lineTotal)}',
+                            formatMoney(lineTotal),
                             style: const TextStyle(
                               color: _C.espresso,
                               fontWeight: FontWeight.w900,
@@ -976,11 +977,11 @@ class _AdminReceiptCard extends StatelessWidget {
                       discountType.isEmpty ? 'Discount ID' : '$discountType ID',
                       discountProofId,
                     ),
-                  _adminReceiptLine('Customer Paid', '${formatMoney(paid)}'),
-                  _adminReceiptLine('Change', '${formatMoney(change)}'),
+                  _adminReceiptLine('Customer Paid', formatMoney(paid)),
+                  _adminReceiptLine('Change', formatMoney(change)),
                   _adminReceiptLine(
                     isRefund ? 'Refund Amount' : 'Total',
-                    '${formatMoney(total)}',
+                    formatMoney(total),
                     strong: true,
                   ),
                 ],
@@ -1313,8 +1314,9 @@ class _SalesCardState extends State<_SalesCard>
                 .toSet();
         if (!branchStaffIds.any(identifiers.contains)) continue;
         final name = branch.data()['name']?.toString().trim() ?? '';
-        if (mounted)
+        if (mounted) {
           setState(() => _branchName = name.isEmpty ? 'Branch' : name);
+        }
         return;
       }
 
@@ -1630,7 +1632,7 @@ class _SalesCardState extends State<_SalesCard>
                           ],
                         ),
                         child: Text(
-                          "${formatMoney(soldValue)}",
+                          formatMoney(soldValue),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
@@ -1893,7 +1895,7 @@ class _SalesCardState extends State<_SalesCard>
                             ],
                           ),
                           Text(
-                            '${formatMoney(filteredTotalLoss)}',
+                            formatMoney(filteredTotalLoss),
                             style: const TextStyle(
                               fontSize: 14,
                               fontWeight: FontWeight.w900,
@@ -2168,7 +2170,7 @@ class _SalesCardState extends State<_SalesCard>
                               ),
                             ),
                             Text(
-                              '${formatMoney(totalRefundAmount)}',
+                              formatMoney(totalRefundAmount),
                               style: const TextStyle(
                                 fontSize: 14,
                                 fontWeight: FontWeight.w900,
@@ -2308,8 +2310,9 @@ class _SalesCardState extends State<_SalesCard>
               .entries
               .where((entry) {
                 final index = entry.key;
-                if (index >= starts.length || index >= rems.length)
+                if (index >= starts.length || index >= rems.length) {
                   return false;
+                }
                 final reduced =
                     int.tryParse(
                       entry.value['reducedQuantity']?.toString() ?? '',
@@ -2423,7 +2426,7 @@ class _SalesCardState extends State<_SalesCard>
                       ),
                     if (quantity > 0) const SizedBox(width: 10),
                     Text(
-                      "${formatMoney(lineTotal)}",
+                      formatMoney(lineTotal),
                       style: const TextStyle(
                         fontSize: 14,
                         fontWeight: FontWeight.w800,

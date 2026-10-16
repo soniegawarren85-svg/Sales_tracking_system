@@ -13,8 +13,9 @@ List<Map<String, dynamic>> messagePreviewContacts(
     if (id == me ||
         account['adminId'] == me ||
         account['isDeleted'] == true ||
-        ['rejected', 'disabled'].contains('${account['status']}'.toLowerCase()))
+        ['rejected', 'disabled'].contains('${account['status']}'.toLowerCase())) {
       continue;
+    }
     final full = '${account['firstName'] ?? ''} ${account['lastName'] ?? ''}'
         .trim();
     contacts[id] = {
@@ -79,10 +80,12 @@ class _AdminMessagePreviewState extends State<AdminMessagePreview> {
             StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
               stream: chats,
               builder: (context, messages) {
-                if (people.hasError || messages.hasError)
+                if (people.hasError || messages.hasError) {
                   return const Center(child: Text('Unable to load contacts.'));
-                if (!people.hasData || !messages.hasData)
+                }
+                if (!people.hasData || !messages.hasData) {
                   return const Center(child: CircularProgressIndicator());
+                }
                 final rows = messagePreviewContacts(
                   widget.adminId,
                   people.data!.docs.map(
@@ -90,8 +93,9 @@ class _AdminMessagePreviewState extends State<AdminMessagePreview> {
                   ),
                   messages.data!.docs.map((doc) => doc.data()),
                 );
-                if (rows.isEmpty)
+                if (rows.isEmpty) {
                   return const Center(child: Text('No available contacts.'));
+                }
                 return ListView.separated(
                   itemCount: rows.length,
                   separatorBuilder: (_, _) => const Divider(height: 1),

@@ -110,12 +110,12 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen>
     await FirebaseFirestore.instance.collection('mail').add({
       'to': [email],
       'message': {
-        'subject': 'Sales Tracker OTP Verification',
+        'subject': 'AngelZ Bite Cupcakes OTP Verification',
         'text':
-            'Your Sales Tracker forgot password OTP is $otp. This code expires in 10 minutes.',
+            'Your AngelZ Bite Cupcakes forgot password OTP is $otp. This code expires in 10 minutes.',
         'html': '''
           <div style="font-family: Arial, sans-serif; color: #2A1010;">
-            <h2 style="color: #C2105C;">Sales Tracker OTP</h2>
+            <h2 style="color: #C2105C;">AngelZ Bite Cupcakes OTP</h2>
             <p>Use this code to verify your forgot password request:</p>
             <div style="font-size: 28px; font-weight: 800; letter-spacing: 4px; color: #E91E63;">
               $otp
@@ -424,10 +424,10 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen>
                 ),
                 const SizedBox(height: 28),
                 const Text(
-                  'Sales Tracker',
+                  'AngelZ Bite Cupcakes',
                   style: TextStyle(
                     color: Colors.white,
-                    fontSize: 44,
+                    fontSize: 36,
                     fontWeight: FontWeight.w900,
                     height: 1.1,
                   ),
@@ -437,7 +437,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen>
                   'Recover your account in a few quick, secure steps.',
                   style: TextStyle(
                     color: Colors.white.withOpacity(.85),
-                    fontSize: 18,
+                    fontSize: 16,
                     height: 1.4,
                   ),
                 ),
@@ -457,7 +457,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen>
                         Text(
                           item[0] as String,
                           style: const TextStyle(
-                              color: Colors.white, fontSize: 16),
+                              color: Colors.white, fontSize: 15),
                         ),
                       ],
                     ),
@@ -511,7 +511,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen>
                     textAlign: TextAlign.center,
                     style: const TextStyle(
                       color: AppColors.primaryDark,
-                      fontSize: 26,
+                      fontSize: 24,
                       fontWeight: FontWeight.w900,
                     ),
                   ),
@@ -525,7 +525,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen>
                     textAlign: TextAlign.center,
                     style: TextStyle(
                       color: Colors.black.withOpacity(.6),
-                      fontSize: 14.5,
+                      fontSize: 13.5,
                       height: 1.45,
                     ),
                   ),
@@ -659,7 +659,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen>
               inputFormatters: [FilteringTextInputFormatter.digitsOnly],
               onSubmitted: (_) => _loading ? null : _verifyOtp(),
               style: const TextStyle(
-                fontSize: 28,
+                fontSize: 24,
                 fontWeight: FontWeight.w800,
                 letterSpacing: 12,
                 color: AppColors.primaryDark,
@@ -799,8 +799,10 @@ class _PrimaryButtonState extends State<_PrimaryButton> {
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(16),
               ),
-              textStyle:
-                  const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+              textStyle: const TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w700,
+              ),
             ),
             child: AnimatedSwitcher(
               duration: const Duration(milliseconds: 250),

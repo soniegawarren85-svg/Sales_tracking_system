@@ -42,8 +42,9 @@ List<Map<String, dynamic>> filterLossRecords(
     final time = record['timestamp'];
     if (time is! DateTime ||
         time.isBefore(period.start) ||
-        !time.isBefore(period.end))
+        !time.isBefore(period.end)) {
       continue;
+    }
     if (date != null && !DateUtils.isSameDay(time, date)) continue;
     final items = (record['items'] as List<dynamic>? ?? [])
         .whereType<Map>()
@@ -183,8 +184,9 @@ class _BranchLossRecordsDialogState extends State<BranchLossRecordsDialog> {
                               const Duration(days: 1),
                             ),
                           );
-                          if (picked != null && mounted)
+                          if (picked != null && mounted) {
                             setState(() => _date = picked);
+                          }
                         },
                       ),
                     ),
@@ -228,10 +230,11 @@ class _BranchLossRecordsDialogState extends State<BranchLossRecordsDialog> {
                     query: _query,
                     category: _category,
                   );
-                  if (records.isEmpty)
+                  if (records.isEmpty) {
                     return const Center(
                       child: Text('No records match these filters.'),
                     );
+                  }
                   return ListView.builder(
                     padding: const EdgeInsets.all(16),
                     itemCount: records.length,

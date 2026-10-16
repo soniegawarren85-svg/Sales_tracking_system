@@ -266,7 +266,7 @@ class SalesReportDashboard extends StatelessWidget {
                   ),
                 ),
               ),
-              if (action != null) action,
+              ?action,
             ],
           ),
           const SizedBox(height: 16),
@@ -370,7 +370,7 @@ class SalesReportDashboard extends StatelessWidget {
     );
     return LayoutBuilder(
       builder: (context, box) {
-        if (box.maxWidth < 950)
+        if (box.maxWidth < 950) {
           return Column(
             children: [
               for (final p in [
@@ -383,6 +383,7 @@ class SalesReportDashboard extends StatelessWidget {
                 Padding(padding: const EdgeInsets.only(bottom: 12), child: p),
             ],
           );
+        }
         return Column(
           children: [
             Row(
@@ -612,17 +613,19 @@ class _TrendPainter extends CustomPainter {
           Paint()..color = _reportColors[j % 5],
         );
       }
-      if (i % math.max(1, (labels.length / 6).ceil()) == 0)
+      if (i % math.max(1, (labels.length / 6).ceil()) == 0) {
         text(c, labels[i], Offset(42 + step * i, size.height - 14));
+      }
       if (line != null) {
         final p = Offset(
           42 + step * (i + .5),
           10 + h * (1 - line![i] / lineMax),
         );
-        if (i == 0)
+        if (i == 0) {
           path.moveTo(p.dx, p.dy);
-        else
+        } else {
           path.lineTo(p.dx, p.dy);
+        }
         c.drawCircle(p, 2.5, Paint()..color = _reportColors[1]);
       }
     }

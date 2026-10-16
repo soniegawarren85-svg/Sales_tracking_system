@@ -70,20 +70,22 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
   @override
   void initState() {
     super.initState();
-    if (widget.reportData == null)
+    if (widget.reportData == null) {
       _liveSubscription = BranchReportData.watch().listen(
         (data) {
-          if (mounted)
+          if (mounted) {
             setState(() {
               _data = Future.value(data);
               _branchName =
                   '${data.rows('branches').where((row) => row['_id'] == widget.branchId).firstOrNull?['name'] ?? _branchName}';
             });
+          }
         },
         onError: (Object error) {
           debugPrint('Report updates: $error');
         },
       );
+    }
     _closingTimer = Timer.periodic(const Duration(minutes: 1), (_) {
       if (mounted) setState(() {});
     });
@@ -526,12 +528,13 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
         if (path != null) await saveBytes(path, bytes);
       }
     } catch (error) {
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Unable to generate report. Please try again.'),
           ),
         );
+      }
     } finally {
       if (mounted) setState(() => _printing = false);
     }
@@ -620,12 +623,13 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
                         firstDate: DateTime(2020),
                         lastDate: DateTime.now(),
                       );
-                      if (picked != null && mounted)
+                      if (picked != null && mounted) {
                         setState(() {
                           _day = picked.start;
                           _customRange = picked;
                           _period = 'Range';
                         });
+                      }
                     },
                   ),
                   filled: true,
@@ -671,7 +675,7 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
               child: FutureBuilder<BranchReportData>(
                 future: _data,
                 builder: (context, snapshot) {
-                  if (snapshot.hasError)
+                  if (snapshot.hasError) {
                     return Center(
                       child: TextButton.icon(
                         onPressed: () =>
@@ -680,13 +684,16 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
                         label: const Text('Unable to load report. Retry'),
                       ),
                     );
-                  if (!snapshot.hasData)
+                  }
+                  if (!snapshot.hasData) {
                     return const Center(child: CircularProgressIndicator());
+                  }
                   final data = snapshot.data!;
                   _allowRefunds = data.refundsEnabled(widget.branchId);
                   if (!_allowRefunds && _status == 'Refund') _status = 'All';
-                  if (!_allowRefunds && _comparison == 'Refund')
+                  if (!_allowRefunds && _comparison == 'Refund') {
                     _comparison = 'Complete';
+                  }
                   return ListView(
                     padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
                     children: [

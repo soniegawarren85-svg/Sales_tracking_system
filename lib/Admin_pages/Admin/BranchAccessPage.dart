@@ -232,7 +232,7 @@ class _BranchAccessPageState extends State<BranchAccessPage> {
                 ),
               ),
               Text(
-                '${formatMoney(total)}',
+                formatMoney(total),
                 style: const TextStyle(
                   color: AppColors.primaryDark,
                   fontSize: 17,
@@ -587,7 +587,7 @@ class _BranchAccessPageState extends State<BranchAccessPage> {
                 child: ListView.separated(
                   shrinkWrap: true,
                   itemCount: history.length,
-                  separatorBuilder: (_, __) => const Divider(height: 1),
+                  separatorBuilder: (_, _) => const Divider(height: 1),
                   itemBuilder: (_, index) {
                     final data = history[index].data();
                     final isVoided = data['isVoided'] == true;
@@ -809,7 +809,7 @@ class _BranchAccessPageState extends State<BranchAccessPage> {
                       const SizedBox(height: 12),
                       ListenableBuilder(
                         listenable: BranchSession.instance,
-                        builder: (_, __) => _BranchCard(
+                        builder: (_, _) => _BranchCard(
                           name: 'Main Branch',
                           staffCount: 0,
                           showStaffCount: false,

@@ -6,8 +6,9 @@ List<Map<String, dynamic>> bundleDrinkServings(Map<String, dynamic> bundle) {
   final result = <Map<String, dynamic>>[];
   for (final part in (bundle['bundleItems'] as List? ?? []).whereType<Map>()) {
     if (part['isCoffee'] != true &&
-        part['sourceCollection'] != 'coffee_products')
+        part['sourceCollection'] != 'coffee_products') {
       continue;
+    }
     final count = int.tryParse('${part['quantity'] ?? 1}') ?? 1;
     for (var i = 0; i < count; i++) {
       result.add({
@@ -65,8 +66,8 @@ Map<String, dynamic> customizeBundle(
   );
   return {
     ...bundle,
-    'id': 'bundle-options:${identity}',
-    'itemId': 'bundle-options:${identity}',
+    'id': 'bundle-options:$identity',
+    'itemId': 'bundle-options:$identity',
     'variant': description,
     'bundleBeverages': drinks,
     'bundleBasePrice': bundle['price'],

@@ -374,7 +374,7 @@ class _AllSalesAnalyticsPageState extends State<AllSalesAnalyticsPage> {
                   crossAxisAlignment: CrossAxisAlignment.end,
                   children: [
                     Text(
-                      '${formatMoney(total)}',
+                      formatMoney(total),
                       style: TextStyle(
                         color: color,
                         fontWeight: FontWeight.w900,
@@ -420,7 +420,7 @@ class _AllSalesAnalyticsPageState extends State<AllSalesAnalyticsPage> {
                         ),
                       ),
                       Text(
-                        '${formatMoney((_money(item['price']) * _money(item['quantity'])))}',
+                        formatMoney((_money(item['price']) * _money(item['quantity']))),
                         style: TextStyle(
                           color: refunded > 0
                               ? Colors.red.shade700
@@ -449,7 +449,7 @@ class _AllSalesAnalyticsPageState extends State<AllSalesAnalyticsPage> {
                         ? 'GCash - $gcashId'
                         : payment,
                   ),
-                  _saleDetail('Customer Paid', '${formatMoney(paid)}'),
+                  _saleDetail('Customer Paid', formatMoney(paid)),
                   if (hasDiscount)
                     _saleDetail(
                       'Discount ($discountType)',
@@ -467,10 +467,10 @@ class _AllSalesAnalyticsPageState extends State<AllSalesAnalyticsPage> {
                       reason,
                       color: Colors.red.shade700,
                     ),
-                  _saleDetail('Change', '${formatMoney(change)}'),
+                  _saleDetail('Change', formatMoney(change)),
                   _saleDetail(
                     isRefund ? 'Refund Amount' : 'Total',
-                    '${formatMoney(total)}',
+                    formatMoney(total),
                     color: color,
                     strong: true,
                   ),
@@ -740,7 +740,7 @@ class _AllSalesAnalyticsPageState extends State<AllSalesAnalyticsPage> {
           ],
         ),
         trailing: Text(
-          '${formatMoney(item.revenue)}',
+          formatMoney(item.revenue),
           style: const TextStyle(
             color: _primary,
             fontWeight: FontWeight.w900,

@@ -7,8 +7,9 @@ bool currentAllocationAvailable(Map row, DateTime now) {
   if (row['isDeleted'] == true ||
       row['isVoided'] == true ||
       row['isAvailable'] == false ||
-      row['available'] == false)
+      row['available'] == false) {
     return false;
+  }
   final expiry = cashRecordDate(row['expirationDate'] ?? row['expiryDate']);
   return expiry == null ||
       now.isBefore(DateTime(expiry.year, expiry.month, expiry.day + 1));
@@ -29,8 +30,9 @@ List<Map<String, dynamic>> currentReportAllocations(
   for (final allocation in data.rows('staff_inventory')) {
     final branchId = '${allocation['branchId'] ?? allocation['staffId']}';
     if (!branches.containsKey(branchId) ||
-        !currentAllocationAvailable(allocation, now))
+        !currentAllocationAvailable(allocation, now)) {
       continue;
+    }
     final source = [
       ...data.rows('sales_inventory'),
       ...data.rows('coffee_products'),
@@ -54,13 +56,15 @@ List<Map<String, dynamic>> currentReportAllocations(
       if (!standalone &&
           (source?['removedItems'] as List? ?? []).whereType<Map>().any(
             (removed) => removed['id'] == item['id'],
-          ))
+          )) {
         continue;
+      }
       final sourceItem = variants
           .where((s) => s['id'] == item['id'])
           .firstOrNull;
-      if (sourceItem != null && !currentAllocationAvailable(sourceItem, now))
+      if (sourceItem != null && !currentAllocationAvailable(sourceItem, now)) {
         continue;
+      }
       final madeToOrder =
           (allocation['isCoffee'] == true || allocation['isAddon'] == true) &&
           item['stock'] == null &&

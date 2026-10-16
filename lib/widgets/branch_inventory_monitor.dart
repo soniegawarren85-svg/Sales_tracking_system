@@ -43,10 +43,12 @@ class _BranchInventoryMonitorState extends State<BranchInventoryMonitor> {
   Widget build(BuildContext context) => StreamBuilder<BranchReportData>(
     stream: _stream,
     builder: (context, snapshot) {
-      if (snapshot.hasError)
+      if (snapshot.hasError) {
         return const Text('Unable to load branch inventory.');
-      if (!snapshot.hasData)
+      }
+      if (!snapshot.hasData) {
         return const Center(child: CircularProgressIndicator());
+      }
       final data = snapshot.data!;
       final all = data.currentInventory(widget.branchId, DateTime.now());
       bool low(Map row) =>

@@ -14,8 +14,9 @@ List<Map<String, dynamic>> bundleBeverageSizes(
 ) {
   if (data['isDeleted'] == true ||
       data['isAvailable'] == false ||
-      bundleExpired(data, DateTime.now()))
+      bundleExpired(data, DateTime.now())) {
     return [];
+  }
   return bundleRows(data['sizes'])
       .where((size) => '${size['name'] ?? ''}'.isNotEmpty)
       .map(
@@ -55,8 +56,9 @@ bool bundleInstanceAvailable(Map instance, Map bundle, {DateTime? now}) {
       ![
         'available',
         '',
-      ].contains('${instance['status'] ?? 'available'}'.toLowerCase()))
+      ].contains('${instance['status'] ?? 'available'}'.toLowerCase())) {
     return false;
+  }
   if (bundleExpired(instance, day)) return false;
   final ownItems = bundleRows(instance['items']);
   // New instances carry their own expiry snapshot. Older ones inherit recipe
@@ -73,15 +75,17 @@ bool bundleInstanceAvailable(Map instance, Map bundle, {DateTime? now}) {
 int availableBundleStock(Map bundle, {DateTime? now}) {
   if (bundle['isDeleted'] == true) return 0;
   final instances = bundleRows(bundle['bundleInstances']);
-  if (instances.isNotEmpty)
+  if (instances.isNotEmpty) {
     return instances
         .where(
           (instance) => bundleInstanceAvailable(instance, bundle, now: now),
         )
         .length;
+  }
   if (bundleExpired(bundle, now ?? DateTime.now()) ||
-      !bundleInstanceAvailable({}, bundle, now: now))
+      !bundleInstanceAvailable({}, bundle, now: now)) {
     return 0;
+  }
   return bundleQuantity(bundle['bundleCount']);
 }
 
@@ -97,8 +101,9 @@ class BundleStockService {
     List<Map<String, dynamic>>? ingredients,
     Map<String, dynamic>? newBundle,
   }) async {
-    if (quantity < 1 || quantity > 100)
+    if (quantity < 1 || quantity > 100) {
       throw ArgumentError('Add between 1 and 100 bundles at a time.');
+    }
 
     final ref = db.collection('sales_inventory').doc(id);
     final batchId = db.collection('sales_inventory').doc().id;
@@ -121,8 +126,9 @@ class BundleStockService {
       if ([
         'coffee_products',
         'coffee_addons',
-      ].contains(ingredient['sourceCollection']))
+      ].contains(ingredient['sourceCollection'])) {
         continue;
+      }
       final sourceId = '${ingredient['sourceInventoryId'] ?? ''}';
       if (sourceId.isNotEmpty) {
         selectedSources.add(sourceId);
@@ -130,11 +136,13 @@ class BundleStockService {
       }
       for (final candidate in candidates) {
         if (candidate.data()['isBundle'] == true ||
-            candidate.data()['isDeleted'] == true)
+            candidate.data()['isDeleted'] == true) {
           continue;
+        }
         if (ingredient['parentName'] != null &&
-            candidate.data()['name'] != ingredient['parentName'])
+            candidate.data()['name'] != ingredient['parentName']) {
           continue;
+        }
         if (bundleRows(candidate.data()['items']).any(
           (item) =>
               '${ingredient['variantId'] ?? ingredient['itemId'] ?? ''}'
@@ -142,19 +150,22 @@ class BundleStockService {
               ? '${item['id']}' ==
                     '${ingredient['variantId'] ?? ingredient['itemId']}'
               : item['name'] == ingredient['name'],
-        ))
+        )) {
           selectedSources.add(candidate.id);
+        }
       }
     }
     final metadataTargets = await bundleMetadataTargets(db, id);
     return db.runTransaction<Map<String, List<dynamic>>>((tx) async {
       final linked = await readBundleMetadataTargets(tx, metadataTargets);
       final snap = await tx.get(ref);
-      if (newBundle != null && snap.exists)
+      if (newBundle != null && snap.exists) {
         throw StateError('Bundle already exists.');
+      }
       final bundle = snap.data() ?? newBundle;
-      if (bundle == null || bundle['isDeleted'] == true)
+      if (bundle == null || bundle['isDeleted'] == true) {
         throw StateError('Bundle no longer available.');
+      }
       final recipe = requested;
       if (recipe.isEmpty) throw StateError('This bundle has no ingredients.');
       final sources = <String, Map<String, dynamic>>{};
@@ -178,8 +189,9 @@ class BundleStockService {
       };
       for (final sourceId in selectedSources) {
         final current = ingredientData['sales_inventory/$sourceId'];
-        if (current != null && current['isDeleted'] != true)
+        if (current != null && current['isDeleted'] != true) {
           sources[sourceId] = current;
+        }
       }
       final itemsBySource = {
         for (final entry in sources.entries)
@@ -197,8 +209,9 @@ class BundleStockService {
         if (data == null ||
             data['isDeleted'] == true ||
             data['isAvailable'] == false ||
-            bundleExpired(data, DateTime.now()))
+            bundleExpired(data, DateTime.now())) {
           throw StateError('Add-on is unavailable.');
+        }
         addons[addonId] = data;
       }
       for (final ingredient in recipe.where(
@@ -237,18 +250,21 @@ class BundleStockService {
                     (ingredient['coffeeSize'] ?? ingredient['variantId']),
               )
               .toList();
-          if (options.length != 1)
+          if (options.length != 1) {
             throw StateError('Selected beverage size is unavailable.');
+          }
           final option = options.single;
           final perBundle = bundleQuantity(ingredient['quantity']);
-          if (perBundle < 1)
+          if (perBundle < 1) {
             throw StateError('Beverage quantity must be positive.');
+          }
           if (option['untrackedStock'] != true) {
             final stock = bundleQuantity(option['stock']);
-            if (stock < perBundle * quantity)
+            if (stock < perBundle * quantity) {
               throw StateError(
                 'Not enough ${coffee['name']} stock for the selected sizes.',
               );
+            }
             coffee['stock'] = stock - perBundle * quantity;
           }
           fresh.add(
@@ -264,8 +280,9 @@ class BundleStockService {
           if (sourceId.isNotEmpty && entry.key != sourceId) continue;
           if (sourceId.isEmpty &&
               ingredient['parentName'] != null &&
-              sources[entry.key]!['name'] != ingredient['parentName'])
+              sources[entry.key]!['name'] != ingredient['parentName']) {
             continue;
+          }
           for (var index = 0; index < entry.value.length; index++) {
             final item = entry.value[index];
             final variantId =
@@ -277,29 +294,33 @@ class BundleStockService {
                     if (item['id'] == null && item['publicId'] == null)
                       item['name'],
                   ].any((value) => '$value' == variantId)
-                : item['name'] == ingredient['name'])
+                : item['name'] == ingredient['name']) {
               matches.add((entry.key, index));
+            }
           }
         }
-        if (matches.length != 1)
+        if (matches.length != 1) {
           throw StateError(
             'Cannot uniquely locate ${ingredient['name']} in inventory.',
           );
+        }
         final match = matches.single;
         final item = itemsBySource[match.$1]![match.$2];
         if (item['isDeleted'] == true ||
             item['isVoided'] == true ||
-            bundleExpired(item, DateTime.now()))
+            bundleExpired(item, DateTime.now())) {
           throw StateError(
             '${item['name']} is expired or voided. Update its inventory first.',
           );
+        }
         final perBundle = bundleQuantity(ingredient['quantity']);
         final needed = perBundle * quantity;
         final stock = bundleQuantity(item['stock'] ?? item['startingStock']);
-        if (perBundle < 1 || stock < needed)
+        if (perBundle < 1 || stock < needed) {
           throw StateError(
             'Not enough ${item['name']}. Need $needed, available $stock.',
           );
+        }
         item['stock'] = stock - needed;
         touched.add(match.$1);
         fresh.add({
@@ -370,10 +391,11 @@ class BundleStockService {
         });
       }
       for (final coffee in coffees.entries) {
-        if (coffee.value['stock'] != null)
+        if (coffee.value['stock'] != null) {
           tx.update(db.collection('coffee_products').doc(coffee.key), {
             'stock': coffee.value['stock'],
           });
+        }
       }
       final saved = <String, dynamic>{
         if (newBundle != null) ...newBundle,

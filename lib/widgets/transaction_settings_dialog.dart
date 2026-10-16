@@ -196,15 +196,17 @@ class _TransactionSettingsDialogState extends State<TransactionSettingsDialog> {
                                   await picked.readAsBytes(),
                                   folder: 'payment_qr',
                                 );
-                                if (url == null)
+                                if (url == null) {
                                   throw StateError('Upload failed');
+                                }
                                 qr = url;
                               } catch (e) {
                                 error = '$e';
                               }
 
-                              if (context.mounted)
+                              if (context.mounted) {
                                 update(() => uploading = false);
+                              }
                             },
                     ),
                   if (widget.kind != 'discounts' && qr.isNotEmpty) ...[
@@ -222,13 +224,13 @@ class _TransactionSettingsDialogState extends State<TransactionSettingsDialog> {
                           ? Image.memory(
                               base64Decode(qr.split(',').last),
                               fit: BoxFit.contain,
-                              errorBuilder: (_, __, ___) =>
+                              errorBuilder: (_, _, _) =>
                                   const Text('Unable to load QR code'),
                             )
                           : Image.network(
                               qr,
                               fit: BoxFit.contain,
-                              errorBuilder: (_, __, ___) =>
+                              errorBuilder: (_, _, _) =>
                                   const Text('Unable to load QR code'),
                             ),
                     ),
@@ -317,7 +319,7 @@ class _TransactionSettingsDialogState extends State<TransactionSettingsDialog> {
     String branchId,
     {bool includeAll = false}
   ) => DropdownButtonFormField<String>(
-    value: branchId,
+    initialValue: branchId,
     decoration: const InputDecoration(
       labelText: 'Branch',
       border: OutlineInputBorder(),
@@ -405,10 +407,12 @@ class _TransactionSettingsDialogState extends State<TransactionSettingsDialog> {
           return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
             stream: reference.snapshots(),
             builder: (context, snapshot) {
-              if (snapshot.hasError)
+              if (snapshot.hasError) {
                 return Text('Unable to load settings: ${snapshot.error}');
-              if (!snapshot.hasData)
+              }
+              if (!snapshot.hasData) {
                 return const Center(child: CircularProgressIndicator());
+              }
               final rawSettings = snapshot.data!.data() ?? {};
               final data = settingsForBranch(rawSettings, branchId);
               if (widget.kind == 'tax') {
@@ -510,7 +514,7 @@ class _TransactionSettingsDialogState extends State<TransactionSettingsDialog> {
                   ),
                 );
               }
-              if (widget.kind == 'permissions')
+              if (widget.kind == 'permissions') {
                 return Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
@@ -550,6 +554,7 @@ class _TransactionSettingsDialogState extends State<TransactionSettingsDialog> {
                     ),
                   ],
                 );
+              }
               final rows = settingRows(data, widget.kind);
               final targetBranches = isAllBranches
                   ? branches.map((branch) => branch.id).toList()
@@ -582,8 +587,9 @@ class _TransactionSettingsDialogState extends State<TransactionSettingsDialog> {
                                     !await confirmSetting(
                                       context,
                                       'Turn off all discounts in the $branchName staff cashier?',
-                                    ))
+                                    )) {
                                   return;
+                                }
                                 await saveBranches(
                                   targetBranches,
                                   {'discountsEnabled': value},
@@ -663,8 +669,9 @@ class _TransactionSettingsDialogState extends State<TransactionSettingsDialog> {
                                                 if (!await confirmSetting(
                                                   context,
                                                   '${voided ? 'Restore' : 'Void'} ${row['name']}?',
-                                                ))
+                                                )) {
                                                   return;
+                                                }
                                                 rows[entry.key] = {
                                                   ...row,
                                                   'isVoided': !voided,

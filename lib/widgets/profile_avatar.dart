@@ -19,13 +19,13 @@ class ProfileAvatar extends StatelessWidget {
         photo = Image.memory(
           base64Decode(url.split(',').last),
           fit: BoxFit.cover,
-          errorBuilder: (_, __, ___) => fallback,
+          errorBuilder: (_, _, _) => fallback,
         );
       } else if (url.isNotEmpty) {
         photo = Image.network(
           url,
           fit: BoxFit.cover,
-          errorBuilder: (_, __, ___) => fallback,
+          errorBuilder: (_, _, _) => fallback,
         );
       }
     } catch (_) {}

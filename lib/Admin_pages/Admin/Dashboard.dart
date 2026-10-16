@@ -73,8 +73,9 @@ class _AdminDashboardState extends State<AdminDashboard>
         .listen(
           (snapshot) {
             for (final doc in snapshot.docs) {
-              if (doc.data()['toastShown'] != true)
+              if (doc.data()['toastShown'] != true) {
                 unawaited(_showAllocationNotice(doc.reference));
+              }
             }
           },
           onError: (Object error) {
@@ -284,7 +285,7 @@ class _AdminDashboardState extends State<AdminDashboard>
           ).timeout(const Duration(seconds: 15));
           if (mounted) setState(() {});
         } catch (_) {
-          if (mounted)
+          if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(
                 content: Text(
@@ -292,6 +293,7 @@ class _AdminDashboardState extends State<AdminDashboard>
                 ),
               ),
             );
+          }
         }
       },
       child: NestedScrollView(

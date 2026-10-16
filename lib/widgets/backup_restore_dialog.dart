@@ -59,11 +59,12 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
                           );
                     if (path == null && !kIsWeb) return;
                     if (path != null) await saveBytes(path, bytes);
-                    if (mounted)
+                    if (mounted) {
                       setState(
                         () => _message =
                             'Backup export finished. Keep the downloaded file safely.',
                       );
+                    }
                   }),
           ),
           OutlinedButton.icon(
@@ -103,11 +104,12 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
                     );
                     if (confirmed != true) return;
                     await DatabaseBackup.restore(records);
-                    if (mounted)
+                    if (mounted) {
                       setState(
                         () => _message =
                             'Restored ${records.length} documents successfully.',
                       );
+                    }
                   }),
           ),
           if (_busy) const LinearProgressIndicator(),

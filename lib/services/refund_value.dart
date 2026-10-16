@@ -22,9 +22,11 @@ Map<String, dynamic> refundValueRecord(Map<String, dynamic> record) {
 
 String? refundQuantityError(String text, int available) {
   final quantity = int.tryParse(text);
-  if (quantity == null || quantity < 1)
+  if (quantity == null || quantity < 1) {
     return 'Enter a whole quantity of at least 1.';
-  if (quantity > available)
+  }
+  if (quantity > available) {
     return 'Only $available sold item(s) are available for refund.';
+  }
   return null;
 }

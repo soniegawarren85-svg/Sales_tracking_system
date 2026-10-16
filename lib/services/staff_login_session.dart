@@ -61,8 +61,9 @@ class StaffLoginSession {
                 ));
       }).toList();
       String? branchId;
-      if (assigned.length == 1)
+      if (assigned.length == 1) {
         branchId = assigned.single['_localDocId']?.toString();
+      }
       if (assigned.length > 1 && context.mounted) {
         branchId = await showDialog<String>(
           context: context,
@@ -118,8 +119,9 @@ class StaffLoginSession {
       unawaited(
         ipFuture
             .then((ip) async {
-              if (ip != null)
+              if (ip != null) {
                 await ref.set({'ipAddress': ip}, SetOptions(merge: true));
+              }
             })
             .catchError((Object error) {
               debugPrint('Session IP: $error');
@@ -127,7 +129,7 @@ class StaffLoginSession {
       );
     } catch (error) {
       debugPrint('Unable to record staff login: $error');
-      if (context.mounted)
+      if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text(
@@ -135,6 +137,7 @@ class StaffLoginSession {
             ),
           ),
         );
+      }
     }
   }
 
@@ -170,10 +173,11 @@ class StaffLoginSession {
       final encoded = prefs.getString(key)!;
       final record = Map<String, dynamic>.from(jsonDecode(encoded) as Map);
       for (final field in ['loginAt', 'logoutAt']) {
-        if (record[field] != null)
+        if (record[field] != null) {
           record[field] = Timestamp.fromDate(
             DateTime.parse(record[field] as String),
           );
+        }
       }
       try {
         await FirebaseFirestore.instance

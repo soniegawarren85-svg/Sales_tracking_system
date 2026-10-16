@@ -9,7 +9,7 @@ class AssignInventoryTile extends StatelessWidget {
   final TextEditingController controller;
   final bool enabled;
 
-  const AssignInventoryTile({
+  const AssignInventoryTile({super.key, 
     required this.title,
     required this.subtitle,
     required this.icon,

@@ -34,26 +34,32 @@ class DatabaseBackup {
   ];
   static dynamic encode(dynamic value) {
     if (value is DateTime) return encode(Timestamp.fromDate(value));
-    if (value is double && !value.isFinite)
+    if (value is double && !value.isFinite) {
       return {'__type': 'double', 'value': value.toString()};
-    if (value is Timestamp)
+    }
+    if (value is Timestamp) {
       return {
         '__type': 'timestamp',
         'seconds': value.seconds,
         'nanoseconds': value.nanoseconds,
       };
-    if (value is GeoPoint)
+    }
+    if (value is GeoPoint) {
       return {
         '__type': 'geopoint',
         'latitude': value.latitude,
         'longitude': value.longitude,
       };
-    if (value is DocumentReference)
+    }
+    if (value is DocumentReference) {
       return {'__type': 'reference', 'path': value.path};
-    if (value is Blob)
+    }
+    if (value is Blob) {
       return {'__type': 'blob', 'data': base64Encode(value.bytes)};
-    if (value is Map)
+    }
+    if (value is Map) {
       return value.map((k, v) => MapEntry(k.toString(), encode(v)));
+    }
     if (value is List) return value.map(encode).toList();
     return value;
   }
@@ -98,8 +104,9 @@ class DatabaseBackup {
             final messages = await doc.reference
                 .collection('items')
                 .get(const GetOptions(source: Source.server));
-            for (final message in messages.docs)
+            for (final message in messages.docs) {
               records[message.reference.path] = encode(message.data());
+            }
           }
         }
       } on FirebaseException catch (error) {
@@ -126,8 +133,9 @@ class DatabaseBackup {
     if (data is! Map ||
         data['format'] != 'sales-tracking-backup' ||
         data['version'] != 1 ||
-        data['documents'] is! Map)
+        data['documents'] is! Map) {
       throw const FormatException('Invalid backup file');
+    }
     final result = <String, Map<String, dynamic>>{};
     for (final entry in (data['documents'] as Map).entries) {
       final path = entry.key.toString();
@@ -138,8 +146,9 @@ class DatabaseBackup {
                   parts[2] == 'items')) ||
           !collections.contains(parts.first) ||
           parts.last.isEmpty ||
-          entry.value is! Map)
+          entry.value is! Map) {
         throw FormatException('Invalid document: $path');
+      }
       result[path] = Map<String, dynamic>.from(decode(entry.value) as Map);
     }
     return result;

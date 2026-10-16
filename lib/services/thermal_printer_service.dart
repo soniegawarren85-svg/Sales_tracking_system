@@ -373,11 +373,22 @@ class ThermalPrinterService {
       bytes.addAll(_receiptRow(generator, discountType, -discount));
     }
     final tax = _number(receipt['tax']);
-    if (tax > 0) {
+    final classification = receipt['taxClassification']?.toString();
+    final isVat =
+        classification == 'vat' ||
+        (classification == null &&
+            (tax > 0 || _number(receipt['taxRate']) > 0));
+    if (isVat) {
       final taxRate = _number(receipt['taxRate']) * 100;
       bytes.addAll(
-        _receiptRow(generator, 'VAT (${taxRate.toStringAsFixed(0)}%)', tax),
+        _receiptRow(
+          generator,
+          taxRate > 0 ? 'VAT (${taxRate.toStringAsFixed(0)}% incl.)' : 'VAT',
+          tax,
+        ),
       );
+    } else {
+      bytes.addAll(_receiptRow(generator, 'Non VAT', 0));
     }
     bytes.addAll(_receiptRow(generator, 'TOTAL', total, bold: true));
     bytes.addAll(generator.text('Payment: ${_ascii(paymentMethod)}'));

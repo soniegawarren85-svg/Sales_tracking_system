@@ -69,8 +69,9 @@ class OfflineAccountSync {
         .listen(
           (snapshot) {
             if (snapshot.metadata.isFromCache ||
-                snapshot.metadata.hasPendingWrites)
+                snapshot.metadata.hasPendingWrites) {
               return;
+            }
             _pending = _pending
                 .then(
                   (_) => LocalDatabaseSyncService().cacheCollectionDocs(

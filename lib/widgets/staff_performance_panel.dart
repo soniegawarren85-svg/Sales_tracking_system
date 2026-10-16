@@ -58,10 +58,12 @@ class _StaffPerformancePanelState extends State<StaffPerformancePanel> {
         builder: (context, branch) => StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
           stream: _staff,
           builder: (context, staff) {
-            if (branch.hasError || staff.hasError)
+            if (branch.hasError || staff.hasError) {
               return const Center(child: Text('Unable to load branch staff.'));
-            if (!branch.hasData || !staff.hasData)
+            }
+            if (!branch.hasData || !staff.hasData) {
               return const Center(child: CircularProgressIndicator());
+            }
             final data = branch.data!.data() ?? {};
             final ids = (data['staffIds'] as List? ?? [])
                 .map((id) => '$id')
@@ -163,12 +165,14 @@ class _StaffPerformancePanelState extends State<StaffPerformancePanel> {
                   child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
                     stream: _sales,
                     builder: (context, snapshot) {
-                      if (snapshot.hasError)
+                      if (snapshot.hasError) {
                         return const Center(
                           child: Text('Unable to load performance.'),
                         );
-                      if (!snapshot.hasData)
+                      }
+                      if (!snapshot.hasData) {
                         return const Center(child: CircularProgressIndicator());
+                      }
                       final sales =
                           snapshot.data!.docs
                               .map((d) => {...d.data(), '_id': d.id})

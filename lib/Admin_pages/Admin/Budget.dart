@@ -1,4 +1,3 @@
-import '../../widgets/branch_sales_summary.dart';
 import '../../widgets/top_edge_refresh.dart';
 import '../../widgets/branch_receipts_dialog.dart';
 import '../../widgets/screen_loading_region.dart';
@@ -271,12 +270,13 @@ class _BudgetPageState extends State<BudgetPage>
               .get(const GetOptions(source: Source.server)),
       ]).timeout(const Duration(seconds: 15));
     } catch (_) {
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Unable to refresh. Please check your connection.'),
           ),
         );
+      }
     }
   }
 
@@ -1880,8 +1880,9 @@ class _BudgetPageState extends State<BudgetPage>
       final addonData = addonSnapshot.data();
       if (addonData == null ||
           addonData['isDeleted'] == true ||
-          bundleExpired(addonData, DateTime.now()))
+          bundleExpired(addonData, DateTime.now())) {
         continue;
+      }
       selectedAddonOptions.add({
         ...addonData,
         'id': addonId,
@@ -1922,8 +1923,9 @@ class _BudgetPageState extends State<BudgetPage>
           final addonData = addonSnapshot.data();
           if (addonData == null ||
               addonData['isDeleted'] == true ||
-              bundleExpired(addonData, DateTime.now()))
+              bundleExpired(addonData, DateTime.now())) {
             continue;
+          }
           options.add({
             ...addonData,
             'id': addonId,
@@ -2015,8 +2017,9 @@ class _BudgetPageState extends State<BudgetPage>
           final qty = selectedForDoc['bundle'] ?? 0;
           if (qty <= 0) continue;
           final currentStock = _parseInt(sourceData['bundleCount']);
-          if (qty > availableBundleStock(sourceData))
+          if (qty > availableBundleStock(sourceData)) {
             throw StateError('Not enough available bundle stock.');
+          }
           if (qty > currentStock) {
             throw Exception(
               'Not enough bundle stock for ${sourceData['name']}',
@@ -2371,14 +2374,16 @@ class _BudgetPageState extends State<BudgetPage>
                   .where('branchId', isEqualTo: branchId)
                   .snapshots(),
               builder: (context, snapshot) {
-                if (snapshot.hasError)
+                if (snapshot.hasError) {
                   return const Center(
                     child: Text('Unable to load sales records.'),
                   );
-                if (!snapshot.hasData)
+                }
+                if (!snapshot.hasData) {
                   return const Center(
                     child: ScreenLoadingIndicator(color: kPrimary),
                   );
+                }
                 final records =
                     snapshot.data!.docs
                         .where(
@@ -2393,14 +2398,15 @@ class _BudgetPageState extends State<BudgetPage>
                           b.data()['timestamp'],
                         ).compareTo(_dateValue(a.data()['timestamp'])),
                       );
-                if (records.isEmpty)
+                if (records.isEmpty) {
                   return const Center(
                     child: Text('No sales records for this date.'),
                   );
+                }
                 return ListView.separated(
                   padding: const EdgeInsets.all(16),
                   itemCount: records.length,
-                  separatorBuilder: (_, __) => const SizedBox(height: 12),
+                  separatorBuilder: (_, _) => const SizedBox(height: 12),
                   itemBuilder: (context, index) => _buildBranchReceiptCard(
                     records[index].data(),
                     records[index].id,
@@ -2854,7 +2860,7 @@ class _BudgetPageState extends State<BudgetPage>
                   Expanded(
                     child: ListView.separated(
                       itemCount: transactions.length,
-                      separatorBuilder: (_, __) => const SizedBox(height: 9),
+                      separatorBuilder: (_, _) => const SizedBox(height: 9),
                       itemBuilder: (context, index) {
                         final tx = Map<String, dynamic>.from(
                           transactions[index] as Map,
@@ -2950,7 +2956,7 @@ class _BudgetPageState extends State<BudgetPage>
                                   ),
                                   const SizedBox(width: 10),
                                   Text(
-                                    '${formatMoney(total)}',
+                                    formatMoney(total),
                                     style: const TextStyle(
                                       fontWeight: FontWeight.w900,
                                       color: kDeep,
@@ -3176,7 +3182,7 @@ class _BudgetPageState extends State<BudgetPage>
                             ),
                             const SizedBox(height: 8),
                             Text(
-                              '${formatMoney((totalSales as num?) ?? 0)}',
+                              formatMoney((totalSales as num?) ?? 0),
                               style: const TextStyle(
                                 fontSize: 18,
                                 fontWeight: FontWeight.w800,
@@ -3213,7 +3219,7 @@ class _BudgetPageState extends State<BudgetPage>
                             ),
                             const SizedBox(height: 8),
                             Text(
-                              '${formatMoney((cashDrawerTotal as num?) ?? 0)}',
+                              formatMoney((cashDrawerTotal as num?) ?? 0),
                               style: const TextStyle(
                                 fontSize: 18,
                                 fontWeight: FontWeight.w800,
@@ -3238,13 +3244,13 @@ class _BudgetPageState extends State<BudgetPage>
                       Expanded(
                         child: _buildRefundSummaryMetric(
                           'Opening Change Fund',
-                          '${formatMoney(openingCashValue)}',
+                          formatMoney(openingCashValue),
                         ),
                       ),
                       Expanded(
                         child: _buildRefundSummaryMetric(
                           'Drawer Gain',
-                          '${formatMoney(drawerGainValue)}',
+                          formatMoney(drawerGainValue),
                         ),
                       ),
                     ],
@@ -3273,7 +3279,7 @@ class _BudgetPageState extends State<BudgetPage>
                             ),
                             const SizedBox(height: 8),
                             Text(
-                              transactionCount?.toString() ?? '0',
+                              transactionCount.toString() ?? '0',
                               style: const TextStyle(
                                 fontSize: 18,
                                 fontWeight: FontWeight.w800,
@@ -3283,7 +3289,7 @@ class _BudgetPageState extends State<BudgetPage>
                           ],
                         ),
                       ),
-                      if (transactions != null && transactions.isNotEmpty)
+                      if (transactions.isNotEmpty)
                         Container(
                           padding: const EdgeInsets.symmetric(
                             horizontal: 10,
@@ -3304,7 +3310,7 @@ class _BudgetPageState extends State<BudgetPage>
                     ],
                   ),
                 ),
-                if (transactions != null && transactions.isNotEmpty) ...[
+                if (transactions.isNotEmpty) ...[
                   const SizedBox(height: 12),
                   SizedBox(
                     width: double.infinity,
@@ -3345,7 +3351,6 @@ class _BudgetPageState extends State<BudgetPage>
                   ),
                 ],
                 if (_showInlineTransactionDetails &&
-                    transactions != null &&
                     transactions.isNotEmpty) ...[
                   ...transactions.map((transaction) {
                     final tx = transaction as Map<String, dynamic>;
@@ -3403,7 +3408,7 @@ class _BudgetPageState extends State<BudgetPage>
                                     ),
                                   ),
                                   Text(
-                                    '${formatMoney(transactionTotal)}',
+                                    formatMoney(transactionTotal),
                                     style: const TextStyle(
                                       fontSize: 11,
                                       fontWeight: FontWeight.w600,
@@ -3518,7 +3523,7 @@ class _BudgetPageState extends State<BudgetPage>
                                       ),
                                     ),
                                     Text(
-                                      '${formatMoney(change)}',
+                                      formatMoney(change),
                                       style: const TextStyle(
                                         fontSize: 11,
                                         fontWeight: FontWeight.w600,
@@ -3664,7 +3669,7 @@ class _BudgetPageState extends State<BudgetPage>
                               Expanded(
                                 child: _buildRefundSummaryMetric(
                                   'Money Deducted',
-                                  '${formatMoney(totalRefundAmount)}',
+                                  formatMoney(totalRefundAmount),
                                 ),
                               ),
                             ],
@@ -4208,7 +4213,7 @@ class _BudgetPageState extends State<BudgetPage>
                                                   CrossAxisAlignment.end,
                                               children: [
                                                 Text(
-                                                  '${formatMoney(amount)}',
+                                                  formatMoney(amount),
                                                   maxLines: 1,
                                                   overflow:
                                                       TextOverflow.ellipsis,
@@ -4847,17 +4852,6 @@ class _BudgetPageState extends State<BudgetPage>
               const SizedBox(height: 12),
               _buildBranchReportSummary(branchId),
               const SizedBox(height: 16),
-              StreamBuilder<BranchReportData>(
-                stream: _reportStream,
-                initialData: _latestReport,
-                builder: (context, snapshot) => snapshot.hasData
-                    ? BranchSalesSummary(
-                        data: snapshot.data!,
-                        branchId: branchId,
-                      )
-                    : const SizedBox.shrink(),
-              ),
-              const SizedBox(height: 16),
               _buildPeriodBranchAnalytics(branchId, branchName),
               const SizedBox(height: 82),
             ],
@@ -4931,7 +4925,7 @@ class _BudgetPageState extends State<BudgetPage>
                                 'Total transactions',
                               ].contains(entry.key)
                               ? entry.value.toStringAsFixed(0)
-                              : '${formatMoney(entry.value)}',
+                              : formatMoney(entry.value),
                           style: const TextStyle(
                             color: kDeep,
                             fontWeight: FontWeight.w800,
@@ -4994,7 +4988,7 @@ class _BudgetPageState extends State<BudgetPage>
       ],
     );
     if (DateUtils.isSameDay(day, DateTime.now())) {
-      return amount('Current Cash Drawer', '${formatMoney(currentCash)}');
+      return amount('Current Cash Drawer', formatMoney(currentCash));
     }
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
       stream: _firestore
@@ -5017,13 +5011,14 @@ class _BudgetPageState extends State<BudgetPage>
             );
         // Each report is a snapshot of the shared branch drawer, not an
         // amount to add across staff. Use the latest closing snapshot.
-        if (reports.isEmpty)
+        if (reports.isEmpty) {
           return HistoricalCashDrawer(branchId: branchId, day: day);
+        }
         final report = reports.first.data();
         final closing = _parsePrice(
           report['closingCash'] ?? report['cashDrawerTotal'],
         );
-        return amount('Cash Drawer', '${formatMoney(closing)}');
+        return amount('Cash Drawer', formatMoney(closing));
       },
     );
   }
@@ -5050,8 +5045,9 @@ class _BudgetPageState extends State<BudgetPage>
         if (soldAt == null ||
             soldAt.year != selectedDay.year ||
             soldAt.month != selectedDay.month ||
-            soldAt.day != selectedDay.day)
+            soldAt.day != selectedDay.day) {
           continue;
+        }
         revenue += _parsePrice(sale['total']);
       }
       return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
@@ -5136,7 +5132,7 @@ class _BudgetPageState extends State<BudgetPage>
                               ),
                             ),
                             Text(
-                              '${formatMoney(revenue)}',
+                              formatMoney(revenue),
                               style: const TextStyle(
                                 color: Colors.white,
                                 fontSize: 25,
@@ -5358,7 +5354,7 @@ class _BudgetPageState extends State<BudgetPage>
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
                   Text(
-                    '${formatMoney(total)}',
+                    formatMoney(total),
                     style: const TextStyle(
                       color: kDeep,
                       fontWeight: FontWeight.w900,
@@ -5428,7 +5424,7 @@ class _BudgetPageState extends State<BudgetPage>
                     ),
                   ),
                   Text(
-                    '${formatMoney(price)}',
+                    formatMoney(price),
                     style: const TextStyle(fontWeight: FontWeight.w700),
                   ),
                 ],
@@ -5485,12 +5481,11 @@ class _BudgetPageState extends State<BudgetPage>
                     '-${formatMoney(discount)}',
                   ),
                 if (paid > 0)
-                  _receiptDetail('Customer paid', '${formatMoney(paid)}'),
-                if (change > 0)
-                  _receiptDetail('Change', '${formatMoney(change)}'),
+                  _receiptDetail('Customer paid', formatMoney(paid)),
+                if (change > 0) _receiptDetail('Change', formatMoney(change)),
                 _receiptDetail(
                   activityStatus == 'Completed' ? 'Total' : 'Loss',
-                  '${formatMoney(total.abs())}',
+                  formatMoney(total.abs()),
                   isTotal: true,
                 ),
               ],
@@ -5742,8 +5737,9 @@ class _BudgetPageState extends State<BudgetPage>
                       final source = sources[data['categoryId']?.toString()];
                       if (savedBranch.isNotEmpty
                           ? savedBranch != branchId
-                          : source == null)
+                          : source == null) {
                         continue;
+                      }
                       final quantity = _parseInt(data['quantity']);
                       if (quantity <= 0) continue;
                       final price = _parsePrice(
@@ -5797,8 +5793,9 @@ class _BudgetPageState extends State<BudgetPage>
     if (type == 'reduce' ||
         type == 'reduced' ||
         status == 'reduce' ||
-        status == 'reduced')
+        status == 'reduced') {
       return 'Reduced';
+    }
     return 'Completed';
   }
 
@@ -5911,8 +5908,9 @@ class _BudgetPageState extends State<BudgetPage>
                 branchId,
               )['allowRefunds'] !=
               false;
-          if (!allowRefunds && _analyticsStatus == 'Refund')
+          if (!allowRefunds && _analyticsStatus == 'Refund') {
             _analyticsStatus = 'All';
+          }
           return _buildPeriodBranchAnalyticsContent(
             branchId,
             branchName,
@@ -6008,8 +6006,9 @@ class _BudgetPageState extends State<BudgetPage>
         final isCompleted = !isRefund && !isReduced;
         if ((_analyticsStatus == 'Refund' && !isRefund) ||
             (_analyticsStatus == 'Reduced' && !isReduced) ||
-            (_analyticsStatus == 'Completed' && !isCompleted))
+            (_analyticsStatus == 'Completed' && !isCompleted)) {
           continue;
+        }
         final raw = data['timestamp'];
         final date = raw is Timestamp
             ? raw.toDate()
@@ -6637,19 +6636,22 @@ class _BudgetPageState extends State<BudgetPage>
               (_allocationSearchQuery.isEmpty ||
                   details.contains(_allocationSearchQuery));
         }).toList();
-        if (rows.isEmpty)
+        if (rows.isEmpty) {
           return const Padding(
             padding: EdgeInsets.all(16),
             child: Text('No items allocated to this branch yet.'),
           );
+        }
         return StreamBuilder<BranchReportData>(
           stream: _reportStream,
           initialData: _latestReport,
           builder: (context, salesSnapshot) {
-            if (salesSnapshot.hasError)
+            if (salesSnapshot.hasError) {
               return const Text('Unable to load branch inventory.');
-            if (!salesSnapshot.hasData)
+            }
+            if (!salesSnapshot.hasData) {
               return const Center(child: ScreenLoadingIndicator());
+            }
             final metrics = salesSnapshot.data!.currentInventory(
               branchId,
               DateTime.now(),
@@ -6951,8 +6953,9 @@ class _BudgetPageState extends State<BudgetPage>
         });
       });
     }
-    if (mounted)
+    if (mounted) {
       _showSnack('${row.name} voided from branch', Colors.green.shade600);
+    }
   }
 
   Widget _buildBranchAllocationPanel({
@@ -7063,7 +7066,7 @@ class _BudgetPageState extends State<BudgetPage>
                       const SizedBox(height: 6),
                       Text(
                         enabled
-                            ? '${formatMoney((_currentAllocations[branchId] ?? 0))}'
+                            ? formatMoney((_currentAllocations[branchId] ?? 0))
                             : 'Not assigned',
                         style: TextStyle(
                           fontSize: 17,
@@ -7130,9 +7133,7 @@ class _BudgetPageState extends State<BudgetPage>
                           ),
                           const SizedBox(height: 6),
                           Text(
-                            enabled
-                                ? '${formatMoney(cashBalance)}'
-                                : 'No drawer',
+                            enabled ? formatMoney(cashBalance) : 'No drawer',
                             style: TextStyle(
                               fontSize: 17,
                               fontWeight: FontWeight.w900,
@@ -7647,7 +7648,7 @@ class _BudgetPageState extends State<BudgetPage>
                               )
                             : ListView.separated(
                                 itemCount: displayedDocs.length,
-                                separatorBuilder: (_, __) =>
+                                separatorBuilder: (_, _) =>
                                     const SizedBox(height: 7),
                                 itemBuilder: (context, index) {
                                   final doc = displayedDocs[index];
@@ -7775,8 +7776,9 @@ class _BudgetPageState extends State<BudgetPage>
                               );
                             }
                             await batch.commit();
-                            if (dialogContext.mounted)
+                            if (dialogContext.mounted) {
                               Navigator.pop(dialogContext);
+                            }
                             if (mounted) {
                               _showSnack(
                                 'Branch staff updated',
@@ -8205,7 +8207,7 @@ class _BudgetPageState extends State<BudgetPage>
                     children: [
                       _buildSummaryCard(
                         label: 'Total Allocated',
-                        value: '${formatMoney(totalAllocated)}',
+                        value: formatMoney(totalAllocated),
                         icon: Icons.account_balance_wallet_rounded,
                         gradientColors: const [
                           Color(0xFF1A8F7A),
@@ -8688,7 +8690,7 @@ class _BudgetPageState extends State<BudgetPage>
                             ),
                             const SizedBox(height: 6),
                             Text(
-                              '${formatMoney((_currentAllocations[staffId] ?? 0))}',
+                              formatMoney((_currentAllocations[staffId] ?? 0)),
                               style: const TextStyle(
                                 fontSize: 18,
                                 fontWeight: FontWeight.w800,
@@ -8770,7 +8772,7 @@ class _BudgetPageState extends State<BudgetPage>
                                 ),
                                 const SizedBox(height: 6),
                                 Text(
-                                  '${formatMoney(cashBalance)}',
+                                  formatMoney(cashBalance),
                                   style: const TextStyle(
                                     fontSize: 18,
                                     fontWeight: FontWeight.w800,

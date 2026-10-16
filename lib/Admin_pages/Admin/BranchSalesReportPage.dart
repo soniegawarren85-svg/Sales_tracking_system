@@ -50,7 +50,7 @@ class _BranchSalesReportPageState extends State<BranchSalesReportPage> {
   String _category = 'All';
   String _paymentFilter = 'All';
   String _query = '';
-  String _activityFilter = 'Sales';
+  final String _activityFilter = 'Sales';
   DateTime _selectedDate = DateTime.now();
   final TextEditingController _searchController = TextEditingController();
 
@@ -907,7 +907,7 @@ class _BranchSalesReportPageState extends State<BranchSalesReportPage> {
                     tween: Tween<double>(begin: 0, end: revenue),
                     duration: const Duration(milliseconds: 800),
                     curve: Curves.easeOutCubic,
-                    builder: (_, value, __) => FittedBox(
+                    builder: (_, value, _) => FittedBox(
                       fit: BoxFit.scaleDown,
                       alignment: Alignment.centerLeft,
                       child: Text(
@@ -1055,7 +1055,7 @@ class _BranchSalesReportPageState extends State<BranchSalesReportPage> {
             tween: Tween<double>(begin: 0, end: drawer),
             duration: const Duration(milliseconds: 700),
             curve: Curves.easeOutCubic,
-            builder: (_, v, __) => Text(
+            builder: (_, v, _) => Text(
               _peso(v),
               style: const TextStyle(
                 color: _C.primary,

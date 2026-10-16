@@ -19,8 +19,9 @@ Future<void> showAdminAddonEditor(
 );
 
 Widget _photo(String url) {
-  if (url.isEmpty)
+  if (url.isEmpty) {
     return const Icon(Icons.extension_outlined, color: AppColors.primaryDark);
+  }
   if (url.startsWith('data:image/')) {
     try {
       return Image.memory(base64Decode(url.split(',').last), fit: BoxFit.cover);
@@ -64,8 +65,9 @@ class _AdminAddonsTableState extends State<AdminAddonsTable> {
         .snapshots(),
     builder: (context, snapshot) {
       if (snapshot.hasError) return const Text('Unable to load add-ons.');
-      if (!snapshot.hasData)
+      if (!snapshot.hasData) {
         return const Center(child: CircularProgressIndicator());
+      }
       final rows = snapshot.data!.docs
           .where(
             (doc) =>
@@ -164,7 +166,7 @@ class _AdminAddonsTableState extends State<AdminAddonsTable> {
                                 'voidReason': reason,
                               });
                             } catch (_) {
-                              if (context.mounted)
+                              if (context.mounted) {
                                 ScaffoldMessenger.of(context).showSnackBar(
                                   const SnackBar(
                                     content: Text(
@@ -172,6 +174,7 @@ class _AdminAddonsTableState extends State<AdminAddonsTable> {
                                     ),
                                   ),
                                 );
+                              }
                             }
                           },
                         ),
@@ -230,10 +233,11 @@ class _AddonEditorState extends State<_AddonEditor> {
     });
     try {
       final url = await upload;
-      if (photo != null && url == null)
+      if (photo != null && url == null) {
         throw StateError(
           'Image upload failed. Please select the picture again.',
         );
+      }
       final ref =
           widget.record?.reference ??
           FirebaseFirestore.instance.collection('coffee_addons').doc();
@@ -245,17 +249,18 @@ class _AddonEditorState extends State<_AddonEditor> {
         'costPrice': num.parse(cost.text),
         'expirationDate': expiry.text,
         'isDeleted': false,
-        if (url != null) 'imageUrl': url,
+        'imageUrl': ?url,
         'updatedAt': Timestamp.now(),
         if (widget.record == null) 'createdAt': Timestamp.now(),
       }, SetOptions(merge: true));
       if (mounted) Navigator.pop(context);
     } catch (_) {
-      if (mounted)
+      if (mounted) {
         setState(
           () => error =
               'Unable to save. Check the picture and connection, then retry.',
         );
+      }
     } finally {
       if (mounted) setState(() => saving = false);
     }
@@ -327,8 +332,9 @@ class _AddonEditorState extends State<_AddonEditor> {
                           firstDate: DateTime(2000),
                           lastDate: DateTime(2100),
                         );
-                        if (date != null)
+                        if (date != null) {
                           expiry.text = date.toIso8601String().split('T').first;
+                        }
                       },
               ),
               ListTile(
@@ -363,10 +369,11 @@ class _AddonEditorState extends State<_AddonEditor> {
                               ).catchError((_) => null);
                             });
                           } catch (_) {
-                            if (mounted)
+                            if (mounted) {
                               setState(
                                 () => error = 'Unable to select picture.',
                               );
+                            }
                           }
                         },
                 ),

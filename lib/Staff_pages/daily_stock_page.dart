@@ -124,7 +124,7 @@ class _DailyStockPageState extends State<DailyStockPage>
   _rootSalesInventoryStream;
   Stream<QuerySnapshot<Map<String, dynamic>>>? _staffInventoryStreamCache;
   StreamSubscription? _pendingOrdersSubscription;
-  Map<String, int> _cart = {};
+  final Map<String, int> _cart = {};
   final Map<String, Map<String, dynamic>> _cartItemLookup = {};
   final Map<String, TextEditingController> _qtyControllers = {};
   List<String> _staffInventoryIds = const [];
@@ -181,15 +181,16 @@ class _DailyStockPageState extends State<DailyStockPage>
     );
     final url = '${method['qrUrl'] ?? ''}';
     if (url.isEmpty) return const Center(child: Text('No QR code uploaded'));
-    if (url.startsWith('data:image/'))
+    if (url.startsWith('data:image/')) {
       return Image.memory(
         base64Decode(url.split(',').last),
         fit: BoxFit.contain,
       );
+    }
     return Image.network(
       url,
       fit: BoxFit.contain,
-      errorBuilder: (_, __, ___) => const Text('Unable to load QR code'),
+      errorBuilder: (_, _, _) => const Text('Unable to load QR code'),
     );
   }
 
@@ -805,7 +806,7 @@ class _DailyStockPageState extends State<DailyStockPage>
 
   String get _discountLabel {
     return _discountRate > 0
-        ? '$_discountName (${(_discountRate * 100).toStringAsFixed(0)}%)'
+        ? '$_discountName discount (${(_discountRate * 100).toStringAsFixed(0)}%)'
         : '';
   }
 
@@ -1057,7 +1058,7 @@ class _DailyStockPageState extends State<DailyStockPage>
     if (docs.isEmpty) return [];
     final Map<String, Map<String, dynamic>> itemMap = {};
     for (final data in docs) {
-      if (data == null || data['isDeleted'] == true) continue;
+      if (data['isDeleted'] == true) continue;
       final name = data['name']?.toString() ?? 'Item';
       final rawSourceId = data['sourceInventoryId']?.toString() ?? '';
       final sourceId = rawSourceId.isNotEmpty
@@ -1316,11 +1317,12 @@ class _DailyStockPageState extends State<DailyStockPage>
       _addSingleItemToTicket(selected, _stockForItem(selected, 0));
     } catch (error) {
       debugPrint('Bundle beverage options: $error');
-      if (mounted)
+      if (mounted) {
         _showStyledSnackBar(
           'Unable to load beverage options. Please try again.',
           isError: true,
         );
+      }
     }
   }
 
@@ -1773,7 +1775,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                                   ),
                                   const SizedBox(height: 4),
                                   Text(
-                                    '${formatMoney(totalPrice)}',
+                                    formatMoney(totalPrice),
                                     style: const TextStyle(
                                       fontSize: 22,
                                       fontWeight: FontWeight.w900,
@@ -2385,7 +2387,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                     child: ListView.separated(
                       shrinkWrap: true,
                       itemCount: bundleInstances.length,
-                      separatorBuilder: (_, __) => const SizedBox(height: 10),
+                      separatorBuilder: (_, _) => const SizedBox(height: 10),
                       itemBuilder: (context, index) {
                         final bundle = bundleInstances[index];
                         final instanceItems =
@@ -2475,7 +2477,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                                         ),
                                       ),
                                       Text(
-                                        '${formatMoney(lineTotal)}',
+                                        formatMoney(lineTotal),
                                         style: const TextStyle(
                                           fontSize: 12,
                                           fontWeight: FontWeight.w700,
@@ -2506,7 +2508,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                         ),
                       ),
                       Text(
-                        '${formatMoney(totalValue)}',
+                        formatMoney(totalValue),
                         style: const TextStyle(
                           fontSize: 14,
                           fontWeight: FontWeight.w700,
@@ -2724,7 +2726,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                           ),
                         ),
                         Text(
-                          '${formatMoney(itemPrice)}',
+                          formatMoney(itemPrice),
                           style: const TextStyle(
                             fontSize: 12,
                             fontWeight: FontWeight.w700,
@@ -2744,7 +2746,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                           ),
                         ),
                         Text(
-                          '${formatMoney(selectedTotal)}',
+                          formatMoney(selectedTotal),
                           style: const TextStyle(
                             fontSize: 14,
                             fontWeight: FontWeight.w700,
@@ -3396,7 +3398,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                             ),
                             const SizedBox(height: 8),
                             Text(
-                              '${formatMoney(_cashDrawer)}',
+                              formatMoney(_cashDrawer),
                               style: const TextStyle(
                                 fontSize: 28,
                                 fontWeight: FontWeight.w800,
@@ -3462,8 +3464,9 @@ class _DailyStockPageState extends State<DailyStockPage>
                         final timestamp = data['timestamp'] as Timestamp?;
                         final docUserId = data['userId'];
 
-                        if (timestamp == null || docUserId != userId)
+                        if (timestamp == null || docUserId != userId) {
                           return false;
+                        }
 
                         final docDate = DateTime(
                           timestamp.toDate().year,
@@ -3560,7 +3563,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                                     ),
                                     Expanded(
                                       child: Text(
-                                        '${formatMoney(total)}',
+                                        formatMoney(total),
                                         style: const TextStyle(
                                           fontSize: 13,
                                           fontWeight: FontWeight.w800,
@@ -3611,7 +3614,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                                               ),
                                             ),
                                             Text(
-                                              '${formatMoney((qty * price))}',
+                                              formatMoney((qty * price)),
                                               style: const TextStyle(
                                                 fontSize: 11,
                                                 fontWeight: FontWeight.w600,
@@ -3625,7 +3628,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                                 const SizedBox(height: 4),
                                 _CompactAmountLine(
                                   label: 'Subtotal:',
-                                  value: '${formatMoney(subtotal)}',
+                                  value: formatMoney(subtotal),
                                 ),
                                 if (discount > 0.01)
                                   _CompactAmountLine(
@@ -3635,11 +3638,11 @@ class _DailyStockPageState extends State<DailyStockPage>
                                   ),
                                 _CompactAmountLine(
                                   label: 'Customer Payment:',
-                                  value: '${formatMoney(paidAmount)}',
+                                  value: formatMoney(paidAmount),
                                 ),
                                 _CompactAmountLine(
                                   label: 'Change:',
-                                  value: '${formatMoney(change)}',
+                                  value: formatMoney(change),
                                   valueColor: const Color(0xFF2E7D32),
                                 ),
                                 Container(
@@ -3665,7 +3668,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                                         ),
                                       ),
                                       Text(
-                                        '${formatMoney(total)}',
+                                        formatMoney(total),
                                         style: const TextStyle(
                                           fontSize: 13,
                                           fontWeight: FontWeight.w800,
@@ -4006,7 +4009,7 @@ class _DailyStockPageState extends State<DailyStockPage>
         .get();
 
     final docsForDay = snapshot.docs.where((doc) {
-      final data = doc.data() as Map<String, dynamic>;
+      final data = doc.data();
       return data['userId'] == user.uid &&
           (data['branchId']?.toString() ?? branchId) == branchId;
     }).toList();
@@ -4019,7 +4022,7 @@ class _DailyStockPageState extends State<DailyStockPage>
     }
 
     final transactions = docsForDay.map((doc) {
-      final data = doc.data() as Map<String, dynamic>;
+      final data = doc.data();
       final timestamp = data['timestamp'] as Timestamp?;
       final items =
           (data['items'] as List<dynamic>?)?.map((itemData) {
@@ -4201,8 +4204,12 @@ class _DailyStockPageState extends State<DailyStockPage>
         });
       }
 
-      while (starting.length < 3) starting.add(0);
-      while (remaining.length < 3) remaining.add(0);
+      while (starting.length < 3) {
+        starting.add(0);
+      }
+      while (remaining.length < 3) {
+        remaining.add(0);
+      }
 
       InventoryService().addRemainingStockForItem(
         itemName: categoryName,
@@ -4288,12 +4295,14 @@ class _DailyStockPageState extends State<DailyStockPage>
   }) async {
     var processingDialogVisible = false;
     try {
-      if (!_settingsReady)
+      if (!_settingsReady) {
         throw StateError('Wait for payment settings to load.');
-      if ((orderTotal - _discountedTotal(orderItems)).abs() > .01)
+      }
+      if ((orderTotal - _discountedTotal(orderItems)).abs() > .01) {
         throw StateError(
           'Discount settings changed. Review the updated total before paying.',
         );
+      }
       final receiptEntries = _validCartEntries(orderItems);
       final receiptItems = receiptEntries.map<Map<String, dynamic>>((entry) {
         final item = _knownOrderItems(orderItems).firstWhere(
@@ -4322,10 +4331,11 @@ class _DailyStockPageState extends State<DailyStockPage>
       final discountType = _discountName;
 
       final drawerId = _drawerIdForOrder(orderItems);
-      if (!_paymentOptions.any((method) => method['name'] == paymentMode))
+      if (!_paymentOptions.any((method) => method['name'] == paymentMode)) {
         throw StateError(
           'Payment method is no longer available. Select another method.',
         );
+      }
       final isCashPayment = paymentMode.toLowerCase() == 'cash';
       final completedSalePayload = {
         'userId': _currentUserId,
@@ -4450,6 +4460,7 @@ class _DailyStockPageState extends State<DailyStockPage>
         subtotal: subtotal,
         discountAmount: discountAmount,
         taxAmount: taxAmount,
+        isVat: receipt['taxClassification'] == 'vat',
         discountType: discountType,
         total: orderTotal,
         paidAmount: paidAmount,
@@ -4587,6 +4598,7 @@ class _DailyStockPageState extends State<DailyStockPage>
     required double subtotal,
     required double discountAmount,
     required double taxAmount,
+    required bool isVat,
     required String discountType,
     required double total,
     required double paidAmount,
@@ -4723,7 +4735,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                                   ),
                                 ),
                                 Text(
-                                  '${formatMoney(lineTotal)}',
+                                  formatMoney(lineTotal),
                                   style: const TextStyle(
                                     color: _AppColors.textMid,
                                     fontSize: 13,
@@ -4737,7 +4749,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                         const Divider(color: _AppColors.divider, height: 22),
                         _SummaryRow(
                           label: 'Subtotal',
-                          value: '${formatMoney(subtotal)}',
+                          value: formatMoney(subtotal),
                         ),
                         if (discountAmount > 0) ...[
                           const SizedBox(height: 6),
@@ -4750,31 +4762,28 @@ class _DailyStockPageState extends State<DailyStockPage>
                         ...[
                           const SizedBox(height: 6),
                           _SummaryRow(
-                            label: 'VAT (12%)',
-                            value: '${formatMoney(taxAmount)}',
+                            label: isVat ? 'VAT (12%, included)' : 'Non VAT',
+                            value: formatMoney(taxAmount),
                           ),
                         ],
                         const SizedBox(height: 6),
-                        _SummaryRow(
-                          label: 'Total',
-                          value: '${formatMoney(total)}',
-                        ),
+                        _SummaryRow(label: 'Total', value: formatMoney(total)),
                         const SizedBox(height: 6),
                         _SummaryRow(
                           label: paymentMode.toLowerCase() == 'cash'
                               ? 'Cash tendered'
                               : 'Amount paid',
-                          value: '${formatMoney(paidAmount)}',
+                          value: formatMoney(paidAmount),
                         ),
                         const SizedBox(height: 6),
                         _SummaryRow(
                           label: 'Net of sales',
-                          value: '${formatMoney((total - taxAmount))}',
+                          value: formatMoney((total - taxAmount)),
                         ),
                         const SizedBox(height: 6),
                         _SummaryRow(
                           label: 'Change',
-                          value: '${formatMoney(change)}',
+                          value: formatMoney(change),
                           valueColor: const Color(0xFF2E7D32),
                         ),
                       ],
@@ -5577,7 +5586,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                                     ),
                                   ),
                                   Text(
-                                    '${formatMoney(lineTotal)}',
+                                    formatMoney(lineTotal),
                                     style: const TextStyle(
                                       fontSize: 12,
                                       fontWeight: FontWeight.w600,
@@ -5650,7 +5659,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                             ),
                           ),
                           Text(
-                            '${formatMoney(paidAmount)}',
+                            formatMoney(paidAmount),
                             style: const TextStyle(
                               fontSize: 11,
                               fontWeight: FontWeight.w600,
@@ -5715,7 +5724,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                               ),
                             ),
                             Text(
-                              '${formatMoney(total)}',
+                              formatMoney(total),
                               style: const TextStyle(
                                 fontSize: 13,
                                 fontWeight: FontWeight.w800,
@@ -5738,7 +5747,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                             ),
                           ),
                           Text(
-                            '${formatMoney(change)}',
+                            formatMoney(change),
                             style: const TextStyle(
                               fontSize: 11,
                               fontWeight: FontWeight.w700,
@@ -6032,7 +6041,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                                         receiptRef = doc.reference;
                                       });
                                     } catch (e) {
-                                      if (mounted)
+                                      if (mounted) {
                                         _showStyledSnackBar(
                                           e.toString().replaceFirst(
                                             'Exception: ',
@@ -6040,9 +6049,11 @@ class _DailyStockPageState extends State<DailyStockPage>
                                           ),
                                           isError: true,
                                         );
+                                      }
                                     } finally {
-                                      if (context.mounted)
+                                      if (context.mounted) {
                                         setDialogState(() => searching = false);
+                                      }
                                     }
                                   },
                             child: searching
@@ -6097,7 +6108,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                             subtitle: Text(
                               '$kind • $qty x ${formatMoney((refundLine / qty))} after discount',
                             ),
-                            trailing: Text('${formatMoney(refundLine)}'),
+                            trailing: Text(formatMoney(refundLine)),
                           );
                         })),
                     const SizedBox(height: 10),
@@ -6189,13 +6200,15 @@ class _DailyStockPageState extends State<DailyStockPage>
                                 }
                                 _showStyledSnackBar('Refund recorded');
                               } catch (e) {
-                                if (mounted)
+                                if (mounted) {
                                   _showStyledSnackBar(
                                     'Refund failed: $e',
                                     isError: true,
                                   );
-                                if (context.mounted)
+                                }
+                                if (context.mounted) {
                                   setDialogState(() => saving = false);
+                                }
                               }
                             },
                       icon: saving
@@ -6485,7 +6498,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                       ),
                       const SizedBox(height: 14),
                       DropdownButtonFormField<String>(
-                        value: source,
+                        initialValue: source,
                         isExpanded: true,
                         decoration: _refundInputDecoration(
                           'Refund source',
@@ -6532,7 +6545,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                       const SizedBox(height: 12),
                       if (isCategory || isCoffee)
                         DropdownButtonFormField<String>(
-                          value: isCoffee
+                          initialValue: isCoffee
                               ? selectedCoffeeKey
                               : selectedCategoryKey,
                           isExpanded: true,
@@ -6568,7 +6581,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                         )
                       else
                         DropdownButtonFormField<int>(
-                          value: selectedBundleIndex,
+                          initialValue: selectedBundleIndex,
                           isExpanded: true,
                           decoration: _refundInputDecoration(
                             'Bundle item',
@@ -7267,7 +7280,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                                   ),
                                 ),
                                 Text(
-                                  '${formatMoney(lineTotal)}',
+                                  formatMoney(lineTotal),
                                   style: const TextStyle(
                                     color: _AppColors.textMid,
                                     fontSize: 13,
@@ -7278,10 +7291,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                           );
                         }),
                         const Divider(color: _AppColors.divider, height: 24),
-                        _OrderRow(
-                          label: 'Subtotal',
-                          value: '${formatMoney(total)}',
-                        ),
+                        _OrderRow(label: 'Subtotal', value: formatMoney(total)),
                         if (hasDiscount) ...[
                           const SizedBox(height: 6),
                           _OrderRow(
@@ -7321,7 +7331,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                                 ),
                               ),
                               Text(
-                                '${formatMoney(_discountedTotal(orderItems))}',
+                                formatMoney(_discountedTotal(orderItems)),
                                 style: const TextStyle(
                                   fontSize: 18,
                                   fontWeight: FontWeight.w900,
@@ -7474,16 +7484,20 @@ class _DailyStockPageState extends State<DailyStockPage>
       builder: (dialogContext) {
         return ValueListenableBuilder<int>(
           valueListenable: _settingsRevision,
-          builder: (_, __, ___) => StatefulBuilder(
+          builder: (_, _, _) => StatefulBuilder(
             builder: (context, setState) {
               if (!_paymentOptions.any(
                 (method) => method['name'] == paymentMode,
-              ))
+              )) {
                 paymentMode = 'Cash';
+              }
               final hasDiscount = _seniorDiscount || _pwdDiscount;
-              final totalDue = _discountedTotal(orderItems);
-              if (!paidManuallyEdited)
+              final totalDue = double.parse(
+                _discountedTotal(orderItems).toStringAsFixed(2),
+              );
+              if (!paidManuallyEdited) {
                 paymentController.text = totalDue.toStringAsFixed(2);
+              }
               paidAmount =
                   double.tryParse(
                     paymentController.text.trim().replaceAll(
@@ -7615,7 +7629,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                                         ),
                                       ),
                                       Text(
-                                        '${formatMoney(lineTotal)}',
+                                        formatMoney(lineTotal),
                                         style: const TextStyle(
                                           color: _AppColors.textMid,
                                           fontSize: 13,
@@ -7632,9 +7646,9 @@ class _DailyStockPageState extends State<DailyStockPage>
                               // Totals
                               _OrderRow(
                                 label: 'Subtotal',
-                                value: '${formatMoney(_cartTotal(orderItems))}',
+                                value: formatMoney(_cartTotal(orderItems)),
                               ),
-                              if (hasDiscount && !isDiscountExpanded) ...[
+                              if (hasDiscount) ...[
                                 const SizedBox(height: 6),
                                 _OrderRow(
                                   label: _discountLabel,
@@ -7644,12 +7658,14 @@ class _DailyStockPageState extends State<DailyStockPage>
                                 ),
                                 const SizedBox(height: 14),
                               ],
-                              if (_taxValue(orderItems) > 0)
-                                _OrderRow(
-                                  label: 'VAT (12%)',
-                                  value:
-                                      '${formatMoney(_taxValue(orderItems))}',
-                                ),
+                              _OrderRow(
+                                label:
+                                    _transactionSettings['taxClassification'] ==
+                                        'vat'
+                                    ? 'VAT (12%, included)'
+                                    : 'Non VAT',
+                                value: formatMoney(_taxValue(orderItems)),
+                              ),
                               const SizedBox(height: 8),
                               Container(
                                 margin: const EdgeInsets.only(top: 2),
@@ -7683,7 +7699,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                                       ),
                                     ),
                                     Text(
-                                      '${formatMoney(totalDue)}',
+                                      formatMoney(totalDue),
                                       style: const TextStyle(
                                         fontSize: 18,
                                         fontWeight: FontWeight.w900,
@@ -7695,7 +7711,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                               ),
                               const SizedBox(height: 18),
                               DropdownButtonFormField<String>(
-                                value: paymentMode,
+                                initialValue: paymentMode,
                                 decoration: InputDecoration(
                                   labelText: 'Mode of Payment',
                                   prefixIcon: const Icon(
@@ -7823,8 +7839,9 @@ class _DailyStockPageState extends State<DailyStockPage>
                                               onChanged: (value) =>
                                                   setState(() {
                                                     _seniorDiscount = value;
-                                                    if (value)
+                                                    if (value) {
                                                       _pwdDiscount = false;
+                                                    }
                                                     if (!paidManuallyEdited) {
                                                       paymentController.text =
                                                           _discountedTotal(
@@ -7843,8 +7860,9 @@ class _DailyStockPageState extends State<DailyStockPage>
                                               onChanged: (value) =>
                                                   setState(() {
                                                     _pwdDiscount = value;
-                                                    if (value)
+                                                    if (value) {
                                                       _seniorDiscount = false;
+                                                    }
                                                     if (!paidManuallyEdited) {
                                                       paymentController.text =
                                                           _discountedTotal(
@@ -7902,7 +7920,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                                       ),
                                     ),
                                     Text(
-                                      '${formatMoney((change >= 0 ? change : 0))}',
+                                      formatMoney((change >= 0 ? change : 0)),
                                       style: TextStyle(
                                         fontWeight: FontWeight.w800,
                                         fontSize: 16,
@@ -8406,7 +8424,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      _cashDrawer > 0 ? '${formatMoney(_cashDrawer)}' : '₱0.00',
+                      _cashDrawer > 0 ? formatMoney(_cashDrawer) : '₱0.00',
                       style: TextStyle(
                         color: _AppColors.primaryDark,
                         fontSize: _cashDrawer > 0 ? 24 : 18,
@@ -9125,9 +9143,12 @@ class _DailyStockPageState extends State<DailyStockPage>
         return Align(
           alignment: Alignment.centerRight,
           child: FractionallySizedBox(
-            widthFactor: MediaQuery.sizeOf(context).shortestSide < 600
-                ? 1
-                : 0.48,
+            widthFactor:
+                MediaQuery.sizeOf(drawerContext).shortestSide >= 600 ||
+                    MediaQuery.orientationOf(drawerContext) ==
+                        Orientation.landscape
+                ? 0.5
+                : 1,
             heightFactor: 1,
             child: Material(
               color: AppColors.surface,
@@ -9498,7 +9519,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                 ),
               ),
               Text(
-                '${formatMoney(total)}',
+                formatMoney(total),
                 style: TextStyle(
                   color: hasItems ? _AppColors.primary : _AppColors.textSoft,
                   fontSize: 16,
@@ -9570,8 +9591,10 @@ class _DailyStockPageState extends State<DailyStockPage>
         _buildOrderControlExpansionTile(orderItems),
         const SizedBox(height: 14),
         _buildDiscountExpansionTile(orderItems: orderItems),
-        const SizedBox(height: 14),
-        _buildAdvancedOptionsExpansionTile(),
+        if (MediaQuery.sizeOf(context).shortestSide >= 600) ...[
+          const SizedBox(height: 14),
+          _buildAdvancedOptionsExpansionTile(),
+        ],
       ],
     );
   }
@@ -10133,7 +10156,7 @@ class _DailyStockPageState extends State<DailyStockPage>
         image = Image.memory(
           base64Decode(trimmed.substring(commaIndex + 1)),
           fit: BoxFit.cover,
-          errorBuilder: (_, __, ___) => fallback,
+          errorBuilder: (_, _, _) => fallback,
         );
       } catch (_) {
         return fallback;
@@ -10142,7 +10165,7 @@ class _DailyStockPageState extends State<DailyStockPage>
       image = Image.network(
         trimmed,
         fit: BoxFit.cover,
-        errorBuilder: (_, __, ___) => fallback,
+        errorBuilder: (_, _, _) => fallback,
         loadingBuilder: (context, child, progress) {
           if (progress == null) return child;
           return fallback;
@@ -10219,7 +10242,7 @@ class _DailyStockPageState extends State<DailyStockPage>
               physics: const BouncingScrollPhysics(),
               padding: EdgeInsets.zero,
               itemCount: entries.length,
-              separatorBuilder: (_, __) => const SizedBox(width: 10),
+              separatorBuilder: (_, _) => const SizedBox(width: 10),
               itemBuilder: (context, idx) {
                 final groupKey = entries[idx].key;
                 final variants = entries[idx].value;
@@ -10385,7 +10408,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                               runSpacing: 6,
                               children: [
                                 _MiniTag(
-                                  label: '${formatMoney(price)}',
+                                  label: formatMoney(price),
                                   bgColor: const Color(0xFFE8F5E9),
                                   textColor: const Color(0xFF2E7D32),
                                 ),
@@ -10552,7 +10575,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                                 runSpacing: 6,
                                 children: [
                                   _MiniTag(
-                                    label: '${formatMoney(price)}',
+                                    label: formatMoney(price),
                                     bgColor: const Color(0xFFE8F5E9),
                                     textColor: const Color(0xFF2E7D32),
                                   ),
@@ -10770,7 +10793,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                             runSpacing: 6,
                             children: [
                               _MiniTag(
-                                label: '${formatMoney(price)}',
+                                label: formatMoney(price),
                                 bgColor: const Color(0xFFE8F5E9),
                                 textColor: const Color(0xFF2E7D32),
                               ),
@@ -10974,7 +10997,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                               runSpacing: 6,
                               children: [
                                 _MiniTag(
-                                  label: '${formatMoney(basePrice)}',
+                                  label: formatMoney(basePrice),
                                   bgColor: const Color(0xFFE8F5E9),
                                   textColor: const Color(0xFF2E7D32),
                                 ),
@@ -11034,7 +11057,7 @@ class _DailyStockPageState extends State<DailyStockPage>
     final originalPrice = originalPrices.isEmpty
         ? 0.0
         : originalPrices.reduce(min);
-    final priceLabel = '${formatMoney(originalPrice)}';
+    final priceLabel = formatMoney(originalPrice);
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -11260,7 +11283,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                             Row(
                               children: [
                                 _MiniTag(
-                                  label: '${formatMoney(price)}',
+                                  label: formatMoney(price),
                                   bgColor: const Color(0xFFE8F5E9),
                                   textColor: const Color(0xFF2E7D32),
                                 ),
@@ -11729,7 +11752,7 @@ class _DailyStockPageState extends State<DailyStockPage>
               children: [
                 _SummaryRow(
                   label: 'Subtotal',
-                  value: '${formatMoney(_cartTotal(orderItems))}',
+                  value: formatMoney(_cartTotal(orderItems)),
                 ),
                 if (_seniorDiscount || _pwdDiscount) ...[
                   const SizedBox(height: 6),
@@ -11761,7 +11784,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                         ),
                       ),
                       Text(
-                        '${formatMoney(_discountedTotal(orderItems))}',
+                        formatMoney(_discountedTotal(orderItems)),
                         style: const TextStyle(
                           color: _AppColors.primary,
                           fontSize: 19,
@@ -12009,7 +12032,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                                 ),
                               ),
                               Text(
-                                '${formatMoney(subtotal)}',
+                                formatMoney(subtotal),
                                 style: const TextStyle(
                                   fontWeight: FontWeight.w700,
                                   color: _AppColors.textMid,
@@ -12033,7 +12056,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                 const SizedBox(height: 8),
                 _SummaryRow(
                   label: 'Subtotal',
-                  value: '${formatMoney(_cartTotal(orderItems))}',
+                  value: formatMoney(_cartTotal(orderItems)),
                 ),
                 if (_seniorDiscount || _pwdDiscount) ...[
                   const SizedBox(height: 6),
@@ -12067,7 +12090,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                         ),
                       ),
                       Text(
-                        '${formatMoney(_discountedTotal(orderItems))}',
+                        formatMoney(_discountedTotal(orderItems)),
                         style: const TextStyle(
                           fontSize: 20,
                           fontWeight: FontWeight.w900,
@@ -12259,7 +12282,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                           borderRadius: BorderRadius.circular(20),
                         ),
                         child: Text(
-                          '${formatMoney(_discountedTotal(orderItems))}',
+                          formatMoney(_discountedTotal(orderItems)),
                           style: const TextStyle(
                             fontSize: 12,
                             fontWeight: FontWeight.w700,
@@ -12284,8 +12307,9 @@ class _DailyStockPageState extends State<DailyStockPage>
     required ValueChanged<bool> onChanged,
     required IconData icon,
   }) {
-    if (!_discountsAllowed || title.startsWith('PWD'))
+    if (!_discountsAllowed || title.startsWith('PWD')) {
       return const SizedBox.shrink();
+    }
     return StatefulBuilder(
       builder: (context, refresh) => Column(
         children: _discountOptions
@@ -12568,7 +12592,7 @@ class _SalesProcessLoadingSkeleton extends StatelessWidget {
               crossAxisSpacing: 12,
               childAspectRatio: .9,
             ),
-            itemBuilder: (_, __) => Container(
+            itemBuilder: (_, _) => Container(
               decoration: BoxDecoration(
                 color: Colors.white,
                 borderRadius: BorderRadius.circular(20),

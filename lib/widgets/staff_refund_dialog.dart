@@ -12,8 +12,9 @@ String staffRefundItemLabel(Map item) {
     for (final part in '${raw ?? ''}'.split('/')) {
       final value = part.trim();
       if (value.isNotEmpty &&
-          !parts.any((p) => p.toLowerCase() == value.toLowerCase()))
+          !parts.any((p) => p.toLowerCase() == value.toLowerCase())) {
         parts.add(value);
+      }
     }
   }
   return parts.join(' / ');
@@ -25,8 +26,9 @@ Map<String, dynamic> refundReceiptDisplayData(
 ) {
   receipt = refundValueRecord(receipt);
   if ('${receipt['type']}'.toLowerCase() != 'refund' &&
-      '${receipt['status']}'.toLowerCase() != 'refund')
+      '${receipt['status']}'.toLowerCase() != 'refund') {
     return receipt;
+  }
   final originalId = receipt['originalSalesId'];
   if (originalId == null) return receipt;
   for (final sale in sales) {
@@ -319,12 +321,13 @@ class _StaffRefundDialogState extends State<_StaffRefundDialog> {
         snapshot.docs.map((d) => {...d.data(), '_localDocId': d.id}),
       );
       final records = await _service.getCachedCollection('completed_sales');
-      if (mounted && !_saving)
+      if (mounted && !_saving) {
         setState(
           () => _records = records
               .where((r) => r['userId'] == widget.uid)
               .toList(),
         );
+      }
     } catch (_) {
       /* Cached receipts remain usable offline. */
     }
@@ -380,8 +383,9 @@ class _StaffRefundDialogState extends State<_StaffRefundDialog> {
           if (refund['originalSalesId'] != sale['salesId']) continue;
           for (final returned
               in (refund['items'] as List? ?? []).whereType<Map>()) {
-            if (returned['originalItemIndex'] == i)
+            if (returned['originalItemIndex'] == i) {
               refunded += _num(returned['quantity']).toInt();
+            }
           }
         }
         final available = _num(item['quantity']).toInt() - refunded;
@@ -725,12 +729,13 @@ class _StaffRefundDialogState extends State<_StaffRefundDialog> {
       }
     } catch (e) {
       final saved = await _service.getCachedCollection('completed_sales');
-      if (mounted)
+      if (mounted) {
         setState(() {
           _records = saved.where((row) => row['userId'] == widget.uid).toList();
           _error = 'Unable to save refund: $e';
           _saving = false;
         });
+      }
     }
   }
 
@@ -927,7 +932,7 @@ class _StaffRefundDialogState extends State<_StaffRefundDialog> {
               if (_loading) const LinearProgressIndicator(),
               if (!byReceipt) ...[
                 DropdownButtonFormField<String>(
-                  value: _source,
+                  initialValue: _source,
                   isExpanded: true,
                   decoration: const InputDecoration(labelText: 'Source'),
                   items: ['Categories', 'Bundle', 'Beverages']
@@ -944,7 +949,7 @@ class _StaffRefundDialogState extends State<_StaffRefundDialog> {
                 if (showItemSelector) ...[
                   const SizedBox(height: 12),
                   DropdownButtonFormField<String>(
-                    value: _selected,
+                    initialValue: _selected,
                     isExpanded: true,
                     decoration: InputDecoration(
                       labelText: switch (_source) {
@@ -1017,7 +1022,7 @@ class _StaffRefundDialogState extends State<_StaffRefundDialog> {
               ],
               const SizedBox(height: 12),
               DropdownButtonFormField<String>(
-                value: _refundMethod,
+                initialValue: _refundMethod,
                 isExpanded: true,
                 decoration: const InputDecoration(
                   labelText: 'Refund method',
@@ -1039,7 +1044,7 @@ class _StaffRefundDialogState extends State<_StaffRefundDialog> {
               ),
               const SizedBox(height: 12),
               DropdownButtonFormField<String>(
-                value: _selectedReason,
+                initialValue: _selectedReason,
                 isExpanded: true,
                 decoration: const InputDecoration(
                   labelText: 'Reason',

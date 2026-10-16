@@ -20,7 +20,7 @@ void main() {
     await db.collection('coffee_products').doc('latte').set({
       'name': 'Latte',
       'basePrice': 100,
-      if (drinkStock != null) 'stock': drinkStock,
+      'stock': ?drinkStock,
       'sizes': [
         {'name': 'Small', 'priceDelta': 10},
         {'name': 'Large', 'priceDelta': 30},

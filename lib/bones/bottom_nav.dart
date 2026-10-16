@@ -58,8 +58,9 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
         .listen(
           (snapshot) {
             for (final doc in snapshot.docs) {
-              if (doc.id == ownId)
+              if (doc.id == ownId) {
                 ownLogin = sessionTime(doc.data()['loginAt']);
+              }
             }
             if (ownLogin == null || !mounted) return;
             for (final doc in snapshot.docs) {
@@ -68,8 +69,9 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
                   login == null ||
                   login.isBefore(ownLogin!) ||
                   doc.data()['logoutAt'] != null ||
-                  !seen.add(doc.id))
+                  !seen.add(doc.id)) {
                 continue;
+              }
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(
                   duration: const Duration(seconds: 12),

@@ -39,12 +39,14 @@ double calculatedDailyCash(
           'voided',
           'cancelled',
           'canceled',
-        ].contains('${sale['status']}'.toLowerCase()))
+        ].contains('${sale['status']}'.toLowerCase())) {
       continue;
+    }
     if ('${sale['paymentMode'] ?? sale['paymentMethod'] ?? 'Cash'}'
             .toLowerCase() !=
-        'cash')
+        'cash') {
       continue;
+    }
     cash += number(sale['cashDrawerDelta'] ?? sale['total']);
   }
   return cash;

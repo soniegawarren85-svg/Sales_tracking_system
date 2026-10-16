@@ -31,8 +31,9 @@ Map<String, double> branchDayTotals(
       : number(settings.last['amount']);
   for (final row in eligible) {
     if (row['type'] != 'set_daily_cash_drawer' &&
-        DateUtils.isSameDay(cashRecordDate(row['createdAt']), day))
+        DateUtils.isSameDay(cashRecordDate(row['createdAt']), day)) {
       opening += number(row['amount']);
+    }
   }
   var revenue = 0.0;
   var refunds = 0.0;
@@ -46,8 +47,9 @@ Map<String, double> branchDayTotals(
           'voided',
           'cancelled',
           'canceled',
-        ].contains('${row['status']}'.toLowerCase()))
+        ].contains('${row['status']}'.toLowerCase())) {
       continue;
+    }
     final total = number(row['total']);
     final isRefund =
         total < 0 ||
@@ -162,9 +164,10 @@ class _BranchDailySummaryState extends State<BranchDailySummary> {
     future: totals,
     builder: (context, snapshot) {
       if (snapshot.hasError) return const Text('Unable to load daily summary.');
-      if (!snapshot.hasData)
+      if (!snapshot.hasData) {
         return const Center(child: ScreenLoadingIndicator());
-      if (widget.compact)
+      }
+      if (widget.compact) {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.end,
           children: [
@@ -179,6 +182,7 @@ class _BranchDailySummaryState extends State<BranchDailySummary> {
             ),
           ],
         );
+      }
       return Column(
         mainAxisSize: MainAxisSize.min,
         children: [

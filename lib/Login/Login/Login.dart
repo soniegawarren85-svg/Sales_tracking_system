@@ -209,7 +209,7 @@ class _LoginScreenState extends State<LoginScreen>
     await prefs.setString('offlineLogin.publicId', publicId);
     await prefs.setString('offlineLogin.firstName', firstName);
     await prefs.setString(
-      'offlineAccount.' + _normalizeUsername(username),
+      'offlineAccount.${_normalizeUsername(username)}',
       jsonEncode({
         'passwordHash': _offlinePasswordHash(
           _normalizeUsername(username),
@@ -240,7 +240,7 @@ class _LoginScreenState extends State<LoginScreen>
         (account[role == 'admin' ? 'adminId' : 'staffId'] ?? username)
             .toString();
     final normalizedId = _normalizeUsername(publicId);
-    final saved = prefs.getString('offlineAccount.' + normalizedId);
+    final saved = prefs.getString('offlineAccount.$normalizedId');
     final remembered = saved == null
         ? null
         : Map<String, dynamic>.from(jsonDecode(saved));
@@ -256,8 +256,9 @@ class _LoginScreenState extends State<LoginScreen>
             _isEmergencyAdminLogin(username, password));
     if (!offlineStoredPasswordMatches(account, password) &&
         !matchesRemembered &&
-        !legacyAdmin)
+        !legacyAdmin) {
       return false;
+    }
     final userId = account['_localDocId'].toString();
     final isAdmin = role == 'admin';
     await prefs.setString('lastRole', role);
@@ -269,8 +270,9 @@ class _LoginScreenState extends State<LoginScreen>
     if (!isAdmin) {
       try {
         final uid = userId;
-        if (mounted)
+        if (mounted) {
           await StaffLoginSession.start(context, uid, account, offline: true);
+        }
       } catch (_) {
         _showMessage(
           'Offline login opened; session details are unavailable.',
@@ -324,8 +326,9 @@ class _LoginScreenState extends State<LoginScreen>
             debugPrint('Login status queued: $error');
           }),
     );
-    if (!isAdmin && mounted)
+    if (!isAdmin && mounted) {
       await StaffLoginSession.start(context, accountDoc.id, data);
+    }
     _showMessage(
       'Welcome, ${_welcomeName(data, isAdmin ? 'Admin' : 'Staff')}!',
     );
@@ -752,11 +755,12 @@ class _LoginScreenState extends State<LoginScreen>
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString('lastRole', isAdmin ? 'admin' : 'staff');
         await prefs.setString('lastUserId', uid);
-        if (isAdmin)
+        if (isAdmin) {
           await prefs.setString(
             'adminId',
             (data['adminId'] ?? data['staffId'] ?? username).toString(),
           );
+        }
         final publicId = (data[isAdmin ? 'adminId' : 'staffId'] ?? username)
             .toString();
         await _rememberOfflineAccount(
@@ -775,8 +779,9 @@ class _LoginScreenState extends State<LoginScreen>
                 debugPrint('Login status queued: $error');
               }),
         );
-        if (!isAdmin && mounted)
+        if (!isAdmin && mounted) {
           await StaffLoginSession.start(context, uid, data);
+        }
         _showMessage(
           'Welcome, ${_welcomeName(data, isAdmin ? 'Admin' : 'Staff')}!',
         );

@@ -78,10 +78,11 @@ class _AdminSalesOverviewState extends State<AdminSalesOverview> {
       query = query
           .where('timestamp', isGreaterThanOrEqualTo: Timestamp.fromDate(_day))
           .where('timestamp', isLessThan: Timestamp.fromDate(end));
-      if (widget.selectedDate == null)
+      if (widget.selectedDate == null) {
         _midnight = Timer(end.difference(now), () {
           if (mounted) setState(_watchSales);
         });
+      }
     }
     _sales = query.snapshots();
   }
@@ -90,8 +91,9 @@ class _AdminSalesOverviewState extends State<AdminSalesOverview> {
   void didUpdateWidget(covariant AdminSalesOverview oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.todayOnly != widget.todayOnly ||
-        oldWidget.selectedDate != widget.selectedDate)
+        oldWidget.selectedDate != widget.selectedDate) {
       _watchSales();
+    }
   }
 
   @override
@@ -106,10 +108,12 @@ class _AdminSalesOverviewState extends State<AdminSalesOverview> {
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
       stream: FirebaseFirestore.instance.collection('branches').snapshots(),
       builder: (context, snapshot) {
-        if (snapshot.hasError)
+        if (snapshot.hasError) {
           return const Text('Unable to load branch totals.');
-        if (!snapshot.hasData)
+        }
+        if (!snapshot.hasData) {
           return const Center(child: ScreenLoadingIndicator());
+        }
         return _totals(
           snapshot.data!.docs
               .where((doc) => doc.data()['isVoided'] != true)
@@ -124,8 +128,9 @@ class _AdminSalesOverviewState extends State<AdminSalesOverview> {
     stream: _reports,
     builder: (context, snapshot) {
       if (snapshot.hasError) return const Text('Unable to load sales totals.');
-      if (!snapshot.hasData)
+      if (!snapshot.hasData) {
         return const Center(child: ScreenLoadingIndicator());
+      }
       return _totalsContent(branchIds, snapshot.data);
     },
   );
@@ -137,8 +142,9 @@ class _AdminSalesOverviewState extends State<AdminSalesOverview> {
     stream: _sales,
     builder: (context, snapshot) {
       if (snapshot.hasError) return const Text('Unable to load sales totals.');
-      if (!snapshot.hasData)
+      if (!snapshot.hasData) {
         return const Center(child: ScreenLoadingIndicator());
+      }
       final records = snapshot.data!.docs.map((doc) => doc.data());
       final sales =
           completedReceipts(
@@ -308,10 +314,12 @@ class _AdminBranchRankingState extends State<AdminBranchRanking> {
                     .where('timestamp', isLessThan: Timestamp.fromDate(_end))
                     .snapshots(),
                 builder: (context, snapshot) {
-                  if (snapshot.hasError || branches.hasError)
+                  if (snapshot.hasError || branches.hasError) {
                     return const Text('Unable to load branch report.');
-                  if (!snapshot.hasData || !branches.hasData)
+                  }
+                  if (!snapshot.hasData || !branches.hasData) {
                     return const Center(child: ScreenLoadingIndicator());
+                  }
                   final names = {
                     for (final doc in branches.data!.docs)
                       doc.id: '${doc.data()['name'] ?? 'Branch'}',
@@ -334,11 +342,12 @@ class _AdminBranchRankingState extends State<AdminBranchRanking> {
                   }
                   final ranked = totals.keys.toList()
                     ..sort((a, b) => totals[b]!.compareTo(totals[a]!));
-                  if (ranked.isEmpty)
+                  if (ranked.isEmpty) {
                     return const Padding(
                       padding: EdgeInsets.all(24),
                       child: Text('No branch sales for this period.'),
                     );
+                  }
                   final max = totals[ranked.first]!;
                   return Column(
                     children: ranked.map((id) {
@@ -403,8 +412,9 @@ class _AdminBranchRankingState extends State<AdminBranchRanking> {
 (DateTime, DateTime) branchReportRange(DateTime anchor, String period) {
   final day = DateTime(anchor.year, anchor.month, anchor.day);
   if (period == 'Year') return (DateTime(day.year), DateTime(day.year + 1));
-  if (period == 'Month')
+  if (period == 'Month') {
     return (DateTime(day.year, day.month), DateTime(day.year, day.month + 1));
+  }
   if (period == 'Week') {
     final start = DateTime(
       day.year,

@@ -67,6 +67,57 @@ void main() {
     },
   );
 
+  for (final classification in ['nonVat', 'vat']) {
+    test(
+      'printed $classification receipt shows tax and discount breakdown',
+      () async {
+        String printed = '';
+        printer.status.value = const ThermalPrinterStatus(
+          address: 'saved-printer',
+          isConnected: true,
+        );
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(channel, (call) async {
+              if (call.method == 'writeBytes') {
+                printed = latin1.decode(
+                  List<int>.from(call.arguments['bytes']),
+                );
+              }
+              return true;
+            });
+        await printer.printReceipt({
+          'salesId': 'S-discounted',
+          'items': [
+            {'name': 'Cookie', 'quantity': 1, 'price': 99},
+          ],
+          'subtotal': 99,
+          'discount': 9.9,
+          'discountType': 'Senior',
+          'total': 89.1,
+          'taxClassification': classification,
+          'tax': classification == 'vat' ? 9.55 : 0,
+          'taxRate': classification == 'vat' ? .12 : 0,
+          'paidAmount': 89.1,
+          'change': 0,
+          'paymentMode': 'Cash',
+        });
+        expect(printed, contains('Subtotal'));
+        expect(printed, contains('Senior'));
+        expect(printed, contains('-9.90'));
+        expect(printed, contains('PHP 89.10'));
+        if (classification == 'vat') {
+          expect(printed, contains('VAT (12% incl.)'));
+          expect(printed, contains('PHP 9.55'));
+          expect(printed, isNot(contains('Non VAT')));
+        } else {
+          expect(printed, contains('Non VAT'));
+          expect(printed, isNot(contains('VAT (12%')));
+          expect(printed, contains('PHP 0.00'));
+        }
+      },
+    );
+  }
+
   test('missing saved printer fails without discovery or a write', () async {
     final calls = <String>[];
     printer.status.value = const ThermalPrinterStatus();

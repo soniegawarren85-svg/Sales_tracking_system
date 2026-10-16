@@ -22,8 +22,9 @@ Future<List<DocumentReference<Map<String, dynamic>>>> bundleMetadataTargets(
         final data = doc.data();
         if (data['isDeleted'] == true || data['isVoided'] == true) return false;
         if (doc.reference.parent.id == 'allocation_checklist' &&
-            !ChecklistStatus.incomingOpen(data))
+            !ChecklistStatus.incomingOpen(data)) {
           return false;
+        }
         return needsUpdate?.call(data) ?? true;
       })
       .map((doc) => doc.reference)
@@ -38,11 +39,13 @@ Future<List<DocumentReference<Map<String, dynamic>>>> readBundleMetadataTargets(
   for (final snapshot in await Future.wait(references.map(tx.get))) {
     final ref = snapshot.reference;
     final data = snapshot.data();
-    if (data == null || data['isDeleted'] == true || data['isBundle'] != true)
+    if (data == null || data['isDeleted'] == true || data['isBundle'] != true) {
       continue;
+    }
     if (ref.parent.id == 'allocation_checklist' &&
-        !ChecklistStatus.incomingOpen(data))
+        !ChecklistStatus.incomingOpen(data)) {
       continue;
+    }
     targets.add(ref);
   }
   return targets;
@@ -73,8 +76,9 @@ Future<void> updateBundleMetadata(
   final source = db.collection('sales_inventory').doc(id);
   await db.runTransaction((tx) async {
     final central = await tx.get(source);
-    if (!central.exists || central.data()?['isDeleted'] == true)
+    if (!central.exists || central.data()?['isDeleted'] == true) {
       throw StateError('Bundle is no longer available.');
+    }
     final targets = await readBundleMetadataTargets(tx, references);
     tx.update(source, {...changes, 'updatedAt': FieldValue.serverTimestamp()});
     writeBundleMetadata(tx, targets, changes);

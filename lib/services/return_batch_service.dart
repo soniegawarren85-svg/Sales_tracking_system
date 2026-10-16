@@ -97,10 +97,11 @@ class ReturnBatchService {
           }
           return 0;
         }
-        if (existing.any((doc) => doc.exists))
+        if (existing.any((doc) => doc.exists)) {
           throw StateError(
             'Incomplete batch record. Refresh the checklist before retrying.',
           );
+        }
         final sourcePaths = items
             .map((item) => '${item['collection']}/${item['id']}')
             .toSet();
@@ -130,10 +131,11 @@ class ReturnBatchService {
         for (final selected in items) {
           final path = '${selected['collection']}/${selected['id']}';
           final data = sourceData[path];
-          if (data == null || data['isDeleted'] == true)
+          if (data == null || data['isDeleted'] == true) {
             throw StateError(
               'A selected source is no longer available. Refresh the list.',
             );
+          }
           final owner = data['userId'] ?? data['staffId'];
           if (owner != actorId &&
               !scopeIds.contains(owner) &&
@@ -155,16 +157,19 @@ class ReturnBatchService {
             if (![
               'refund',
               'refunded',
-            ].contains('${data['type'] ?? data['status']}'.toLowerCase()))
+            ].contains('${data['type'] ?? data['status']}'.toLowerCase())) {
               throw StateError('Select a recorded refund.');
+            }
             final lines = AllocationChecklistService.rows(data['items']);
             final index = int.tryParse('${selected['line']}') ?? -1;
-            if (index < 0 || index >= lines.length)
+            if (index < 0 || index >= lines.length) {
               throw StateError('Refund item no longer exists.');
+            }
             item = lines[index];
           } else {
-            if (data['type'] == 'addon_void' || selected['line'] != 'item')
+            if (data['type'] == 'addon_void' || selected['line'] != 'item') {
               throw StateError('Select a recorded physical reduction.');
+            }
             item = data;
           }
           final claimed = claims.putIfAbsent(
@@ -180,10 +185,11 @@ class ReturnBatchService {
           final available =
               AllocationChecklistService.quantity(item['quantity']) -
               AllocationChecklistService.quantity(claimed[line]);
-          if (count > available)
+          if (count > available) {
             throw StateError(
               '${returnItemName(item)} has only $available unsubmitted items. Refresh the list.',
             );
+          }
           claimed[line] =
               AllocationChecklistService.quantity(claimed[line]) + count;
           final sourceType = '${data['type'] ?? ''}';

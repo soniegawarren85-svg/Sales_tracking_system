@@ -37,20 +37,22 @@ class _DailySalesReportState extends State<DailySalesReport> {
       firstDate: DateTime(2020),
       lastDate: DateTime.now(),
     );
-    if (selected != null && mounted)
+    if (selected != null && mounted) {
       setState(() {
         customRange = selected;
         period = 'Custom';
       });
+    }
   }
 
   bool printing = false;
   (DateTime, DateTime) get range {
-    if (period == 'Custom' && customRange != null)
+    if (period == 'Custom' && customRange != null) {
       return (
         customRange!.start,
         customRange!.end.add(const Duration(days: 1)),
       );
+    }
     switch (period) {
       case 'Week':
         final start = day.subtract(Duration(days: day.weekday - 1));
@@ -163,10 +165,11 @@ class _DailySalesReportState extends State<DailySalesReport> {
         },
       );
     } catch (e) {
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text('Unable to print: $e')));
+      }
     } finally {
       if (mounted) setState(() => printing = false);
     }
@@ -185,12 +188,14 @@ class _DailySalesReportState extends State<DailySalesReport> {
     body: StreamBuilder<BranchReportData>(
       stream: source,
       builder: (context, snapshot) {
-        if (snapshot.hasError)
+        if (snapshot.hasError) {
           return Center(
             child: Text('Unable to load reports: ${snapshot.error}'),
           );
-        if (!snapshot.hasData)
+        }
+        if (!snapshot.hasData) {
           return const Center(child: CircularProgressIndicator());
+        }
         final data = snapshot.data!;
         final start = range.$1, end = range.$2;
         final sales = data
@@ -525,7 +530,7 @@ class _DailySalesReportState extends State<DailySalesReport> {
                                           '${sale['salesId'] ?? sale['_id']}',
                                         ),
                                         Text(
-                                          '${reportDateLabel(sale['timestamp'])}',
+                                          reportDateLabel(sale['timestamp']),
                                         ),
                                         Text(
                                           branches['${sale['branchId']}'] ??
@@ -666,10 +671,11 @@ class _DailySalesReportState extends State<DailySalesReport> {
                                             type: FileType.custom,
                                             allowedExtensions: ['csv'],
                                           );
-                                    if (path != null)
+                                    if (path != null) {
                                       await saveBytes(path, bytes);
+                                    }
                                   } catch (_) {
-                                    if (mounted)
+                                    if (mounted) {
                                       ScaffoldMessenger.of(
                                         context,
                                       ).showSnackBar(
@@ -679,9 +685,11 @@ class _DailySalesReportState extends State<DailySalesReport> {
                                           ),
                                         ),
                                       );
+                                    }
                                   } finally {
-                                    if (mounted)
+                                    if (mounted) {
                                       setState(() => printing = false);
+                                    }
                                   }
                                 },
                           icon: const Icon(Icons.download_outlined),

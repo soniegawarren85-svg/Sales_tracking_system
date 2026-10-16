@@ -27,17 +27,20 @@ class AdminStaffBranches extends StatelessWidget {
           StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
             stream: db.collection('staff_requests').snapshots(),
             builder: (context, staff) {
-              if (branches.hasError || staff.hasError)
+              if (branches.hasError || staff.hasError) {
                 return const Text('Unable to load branch staff.');
-              if (!branches.hasData || !staff.hasData)
+              }
+              if (!branches.hasData || !staff.hasData) {
                 return const Center(child: CircularProgressIndicator());
+              }
               final docs = branches.data!.docs
                   .where((doc) => doc.data()['isVoided'] != true)
                   .toList();
-              if (docs.isEmpty)
+              if (docs.isEmpty) {
                 return const Text(
                   'Create a branch in Allocation to assign staff.',
                 );
+              }
               return LayoutBuilder(
                 builder: (context, constraints) {
                   final columns = constraints.maxWidth >= 720 ? 2 : 1;
@@ -205,15 +208,17 @@ class _BranchStaffSheetState extends State<_BranchStaffSheet> {
         final data = member.data();
         if (branch.data() == null ||
             branch.data()!['isVoided'] == true ||
-            data == null)
+            data == null) {
           throw StateError('Branch or staff is no longer available.');
+        }
         final branchIds = (data['branchIds'] as List? ?? [])
             .map((value) => '$value')
             .toList();
         if (assign &&
             (data['status'] != 'accepted' ||
-                branchIds.any((id) => id != widget.branch.id)))
+                branchIds.any((id) => id != widget.branch.id))) {
           throw StateError('Staff is inactive or assigned to another branch.');
+        }
         final ids = (branch.data()!['staffIds'] as List? ?? [])
             .map((value) => '$value')
             .toList();
@@ -245,11 +250,12 @@ class _BranchStaffSheetState extends State<_BranchStaffSheet> {
         });
       });
     } catch (_) {
-      if (mounted)
+      if (mounted) {
         setState(
           () => _error =
               'Unable to update assignment. The staff may be inactive or assigned elsewhere.',
         );
+      }
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -263,12 +269,14 @@ class _BranchStaffSheetState extends State<_BranchStaffSheet> {
             StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
               stream: widget.firestore.collection('staff_requests').snapshots(),
               builder: (context, snapshot) {
-                if (snapshot.hasError || branch.hasError)
+                if (snapshot.hasError || branch.hasError) {
                   return const Center(
                     child: Text('Unable to load staff assignments.'),
                   );
-                if (!snapshot.hasData || !branch.hasData)
+                }
+                if (!snapshot.hasData || !branch.hasData) {
                   return const Center(child: CircularProgressIndicator());
+                }
                 final ids = (branch.data!.data()?['staffIds'] as List? ?? [])
                     .map((id) => '$id')
                     .toSet();
