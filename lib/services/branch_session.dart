@@ -39,4 +39,11 @@ class BranchSession extends ChangeNotifier {
     _loaded = true;
     notifyListeners();
   }
+
+  Future<void> setAssignedBranch({
+    required String branchId,
+    required String branchName,
+  }) async {
+    await switchTo(branchId: branchId, branchName: branchName);
+  }
 }

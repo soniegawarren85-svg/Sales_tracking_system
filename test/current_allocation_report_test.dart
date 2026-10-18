@@ -121,6 +121,139 @@ void main() {
     expect(data.totals('b', day, end)['Total cost'], 0);
   });
 
+  test(
+    'current bundle report shows one live row and current starting count',
+    () {
+      final day = DateUtils.dateOnly(DateTime.now());
+      final end = day.add(const Duration(days: 1));
+      final data = BranchReportData({
+        'sales_inventory': [
+          {
+            '_id': 'bundle-source',
+            'isBundle': true,
+            'publicId': 'BND-001',
+            'name': 'Bundle Cakes',
+            'price': 200,
+            'items': <Map<String, dynamic>>[],
+          },
+        ],
+        'staff_inventory': [
+          for (final entry in [
+            ('old-version', 3, 2),
+            ('returned-version', 0, 5),
+            ('current-version', 6, 1),
+          ])
+            {
+              '_id': entry.$1,
+              'staffId': 'b',
+              'sourceInventoryId': 'bundle-source',
+              'isBundle': true,
+              'bundleId': 'BND-001',
+              'publicId': 'BND-001',
+              'name': 'Bundle Cakes',
+              'price': entry.$1 == 'current-version' ? 200 : 350,
+              'bundleCount': entry.$2,
+              'assignedStartingStock': entry.$2 + entry.$3,
+              'assignedAt': day,
+              'bundleInstances': [
+                for (var index = 0; index < entry.$2; index++)
+                  {
+                    'id': '${entry.$1}-$index',
+                    'number': index + 1,
+                    'status': 'available',
+                    'assignedAt': day,
+                    'items': <Map<String, dynamic>>[],
+                  },
+                for (var index = 0; index < entry.$3; index++)
+                  {
+                    'id': '${entry.$1}-returned-$index',
+                    'number': entry.$2 + index + 1,
+                    'status': 'returned',
+                    'assignedAt': day,
+                    'items': <Map<String, dynamic>>[],
+                  },
+              ],
+            },
+        ],
+      });
+
+      final rows = data.currentAllocatedItems('b', day, end, now: day);
+
+      expect(rows, hasLength(1));
+      expect(rows.single['id'], 'BND-001');
+      expect(rows.single['remaining'], 9);
+      expect(rows.single['starting'], 9);
+      expect(rows.single['price'], 200);
+    },
+  );
+
+  test('unbundled stock is aggregated with its unbundle history', () {
+    final data = BranchReportData({
+      'sales_inventory': [
+        {
+          '_id': 'category-source',
+          'items': [
+            {
+              'id': 'CA-001',
+              'publicId': 'CA-001',
+              'name': 'Cake',
+              'stock': 0,
+              'price': 100,
+            },
+          ],
+        },
+      ],
+      'staff_inventory': [
+        {
+          '_id': 'original-allocation',
+          'staffId': 'b',
+          'sourceInventoryId': 'category-source',
+          'assignedAt': day,
+          'items': [
+            {
+              'id': 'CA-001',
+              'publicId': 'CA-001',
+              'name': 'Cake',
+              'stock': 0,
+              'assignedStartingStock': 5,
+              'price': 100,
+            },
+          ],
+        },
+        for (var index = 0; index < 2; index++)
+          {
+            '_id': 'unbundle-$index',
+            'staffId': 'b',
+            'sourceInventoryId': 'category-source',
+            'origin': 'unbundle',
+            'assignedAt': day,
+            'items': [
+              {
+                'id': 'CA-001',
+                'publicId': 'CA-001',
+                'name': 'Cake',
+                'stock': 2,
+                'startingStock': 2,
+                'assignedStartingStock': 2,
+                'price': 100,
+              },
+            ],
+          },
+      ],
+    });
+
+    final rows = data.currentInventory('b', day);
+    final history = data.items('b', day, end);
+
+    expect(rows, hasLength(1));
+    expect(rows.single['id'], 'CA-001');
+    expect(rows.single['remaining'], 4);
+    final events = history.single['history'] as List<Map<String, dynamic>>;
+    final unbundles = events.where((event) => event['activity'] == 'Unbundle');
+    expect(unbundles, hasLength(2));
+    expect(unbundles.map((event) => event['qty']), everyElement(2));
+  });
+
   test('branch table cost is cost price multiplied by sold quantity', () {
     expect(
       branchStockCost({

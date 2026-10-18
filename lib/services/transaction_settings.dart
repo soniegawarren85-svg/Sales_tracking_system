@@ -9,10 +9,17 @@ const defaultPayments = [
   {'id': 'gcash', 'name': 'GCash'},
 ];
 const staffPermissions = {
+  'allowReturns': 'Submit returns',
+  'allowChecklist': 'Use allocation checklist',
   'allowRefunds': 'Process refunds',
   'allowHoldOrders': 'Hold and resume orders',
-  'allowReceiptHistory': 'View receipt history',
   'allowDiscounts': 'Apply discounts',
+};
+const adminPermissions = {
+  'adminAllowInventoryEdits': 'Edit inventory',
+  'adminAllowStaffManagement': 'Create and manage staff',
+  'adminAllowChecklist': 'Receive allocations from Super Admin',
+  'adminAllowReturns': 'Submit returns to Super Admin',
 };
 const allBranchesSelection = '__all_branches__';
 const _branchScopedKeys = [
@@ -25,6 +32,15 @@ const _branchScopedKeys = [
   'allowHoldOrders',
   'allowReceiptHistory',
   'allowDiscounts',
+  'allowReturns',
+  'allowChecklist',
+  'adminAllowInventoryEdits',
+  'adminAllowChecklist',
+  'adminAllowReturns',
+  'adminAllowStaffManagement',
+  'adminAllowAllocations',
+  'adminAllowReturnApproval',
+  'adminAllowReconciliationApproval',
 ];
 DocumentReference<Map<String, dynamic>> get transactionSettings =>
     FirebaseFirestore.instance.collection('admin_settings').doc('transactions');

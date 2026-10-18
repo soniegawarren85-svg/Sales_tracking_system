@@ -1,4 +1,7 @@
 import 'bundle_metadata_service.dart';
+import 'dart:convert';
+
+import 'package:crypto/crypto.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 List<Map<String, dynamic>> bundleRows(dynamic value) =>
@@ -7,6 +10,48 @@ List<Map<String, dynamic>> bundleRows(dynamic value) =>
         .map((row) => Map<String, dynamic>.from(row))
         .toList();
 int bundleQuantity(dynamic value) => num.tryParse('$value')?.toInt() ?? 0;
+
+bool inventoryLowStock(dynamic quantity, {required String type}) {
+  final stock = num.tryParse('$quantity');
+  return stock != null && stock <= (type.toLowerCase() == 'bundle' ? 20 : 50);
+}
+
+String bundleInventoryGroupKey(Map data) {
+  for (final field in [
+    'bundleId',
+    'publicId',
+    'sourceInventoryId',
+  ]) {
+    final value = '${data[field] ?? ''}'.trim().toLowerCase();
+    if (value.isNotEmpty) return value;
+  }
+  return '${data['name'] ?? ''}'.trim().toLowerCase();
+}
+
+String bundleAllocationVersionKey(Map data) {
+  final ingredients =
+      bundleRows(data['items'])
+          .map(
+            (item) => <String, dynamic>{
+              'sourceCollection': item['sourceCollection'] ?? 'sales_inventory',
+              'sourceInventoryId': item['sourceInventoryId'] ?? '',
+              'variantId': item['variantId'] ?? '',
+              'itemId': item['itemId'] ?? '',
+              'id': item['id'] ?? '',
+              'name': item['name'] ?? '',
+              'quantity': num.tryParse('${item['quantity']}') ?? 0,
+            },
+          )
+          .toList()
+        ..sort((a, b) => jsonEncode(a).compareTo(jsonEncode(b)));
+  final signature = jsonEncode({
+    'name': data['name'] ?? '',
+    'price': num.tryParse('${data['price']}') ?? 0,
+    'costPrice': num.tryParse('${data['costPrice']}') ?? 0,
+    'items': ingredients,
+  });
+  return sha256.convert(utf8.encode(signature)).toString();
+}
 
 List<Map<String, dynamic>> bundleBeverageSizes(
   String id,
@@ -87,6 +132,48 @@ int availableBundleStock(Map bundle, {DateTime? now}) {
     return 0;
   }
   return bundleQuantity(bundle['bundleCount']);
+}
+
+String bundleExpirationDateLabel(Map bundle, {DateTime? now}) {
+  final day = now ?? DateTime.now();
+  final instances = bundleRows(bundle['bundleInstances']);
+  final batches = instances.isEmpty
+      ? bundleQuantity(bundle['bundleCount']) > 0 &&
+                bundleInstanceAvailable({}, bundle, now: day)
+            ? [
+                <String, dynamic>{'items': bundleRows(bundle['items'])},
+              ]
+            : <Map<String, dynamic>>[]
+      : instances
+            .where(
+              (instance) => bundleInstanceAvailable(instance, bundle, now: day),
+            )
+            .toList();
+  final dates = <DateTime>[];
+
+  void addDate(dynamic value) {
+    final date = value is Timestamp
+        ? value.toDate()
+        : value is DateTime
+        ? value
+        : DateTime.tryParse('$value');
+    if (date != null) dates.add(DateTime(date.year, date.month, date.day));
+  }
+
+  for (final instance in batches) {
+    addDate(instance['expirationDate']);
+    var items = bundleRows(instance['items']);
+    if (items.isEmpty) items = bundleRows(bundle['items']);
+    for (final item in items) {
+      addDate(item['expirationDate']);
+    }
+  }
+  if (dates.isEmpty) return '--';
+  dates.sort();
+  final date = dates.first;
+  return '${date.year.toString().padLeft(4, '0')}-'
+      '${date.month.toString().padLeft(2, '0')}-'
+      '${date.day.toString().padLeft(2, '0')}';
 }
 
 class BundleStockService {
@@ -379,6 +466,10 @@ class BundleStockService {
         instances.add({
           'id': '${bundle['bundleId'] ?? id}-$batchId-$i',
           'number': offset + i + 1,
+          'batchId': batchId,
+          'price': changes['price'] ?? bundle['price'],
+          'costPrice': changes['costPrice'] ?? bundle['costPrice'],
+          'createdAt': Timestamp.now(),
           'status': 'available',
           'expirationDate': expiry,
           'items': fresh,
@@ -400,13 +491,15 @@ class BundleStockService {
       final saved = <String, dynamic>{
         if (newBundle != null) ...newBundle,
         ...changes,
-        'costPrice': fresh.fold<double>(
-          0,
-          (sum, item) =>
-              sum +
-              (num.tryParse('${item['costPrice']}')?.toDouble() ?? 0) *
-                  bundleQuantity(item['quantity']),
-        ),
+        'costPrice':
+            changes['costPrice'] ??
+            fresh.fold<double>(
+              0,
+              (sum, item) =>
+                  sum +
+                  (num.tryParse('${item['costPrice']}')?.toDouble() ?? 0) *
+                      bundleQuantity(item['quantity']),
+            ),
         'bundleCount': bundleQuantity(bundle['bundleCount']) + quantity,
         'bundleInstances': instances,
         'items': fresh.map((item) => {...item}..remove('remaining')).toList(),

@@ -47,6 +47,10 @@ class _AdminDashboardState extends State<AdminDashboard>
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _allocationNotices;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _checklistUpdates;
   int _pendingReturnCount = 0;
+  bool _branchContextReady = false;
+  String? _branchContextError;
+  String? _assignedBranchId;
+  String? _assignedBranchName;
 
   static const String kShopLogoAsset = 'Assets/Image/ob.jpg';
   final _navItems = const [
@@ -82,35 +86,13 @@ class _AdminDashboardState extends State<AdminDashboard>
             debugPrint('Allocation notifications: $error');
           },
         );
-    _checklistUpdates = FirebaseFirestore.instance
-        .collection('allocation_checklist')
-        .snapshots()
-        .listen(
-          (snapshot) {
-            final returns = <String>{};
-            for (final doc in snapshot.docs) {
-              final data = doc.data();
-              if (!ChecklistStatus.returnOpen(data)) continue;
-              final batchId = data['batchId']?.toString().trim() ?? '';
-              returns.add(
-                batchId.isEmpty ? 'return:${doc.id}' : 'return:$batchId',
-              );
-            }
-            if (mounted) {
-              setState(() => _pendingReturnCount = returns.length);
-            }
-          },
-          onError: (Object error) {
-            debugPrint('Checklist navigation badges: $error');
-          },
-        );
     ShortIdService.refresh().catchError((Object error) {
       debugPrint('Short ID update deferred: $error');
     });
     print('✅ AdminDashboard initialized');
     print('📦 Current entries: ${InventoryService().entries.length}');
     ExpiryNotificationService().checkAndNotifyExpiringItems();
-    BranchSession.instance.load();
+    _loadAssignedBranch();
     BranchSession.instance.addListener(_onBranchChanged);
 
     _entranceController = AnimationController(
@@ -129,6 +111,104 @@ class _AdminDashboardState extends State<AdminDashboard>
           ),
         );
     _entranceController.forward();
+  }
+
+  void _watchBranchChecklist() {
+    _checklistUpdates?.cancel();
+    _pendingReturnCount = 0;
+    if (_assignedBranchId == null) return;
+    _checklistUpdates = FirebaseFirestore.instance
+        .collection('allocation_checklist')
+        .where('staffId', isEqualTo: _assignedBranchId)
+        .snapshots()
+        .listen(
+          (snapshot) {
+            final returns = <String>{};
+            for (final doc in snapshot.docs) {
+              final data = doc.data();
+              if (data['isDeleted'] == true ||
+                  !ChecklistStatus.incomingOpen(data))
+                continue;
+              final batchId =
+                  (data['deliveryId'] ??
+                          data['batchId'] ??
+                          data['allocationId'])
+                      ?.toString()
+                      .trim() ??
+                  '';
+              returns.add(
+                batchId.isEmpty ? 'return:${doc.id}' : 'return:$batchId',
+              );
+            }
+            if (mounted) {
+              setState(() => _pendingReturnCount = returns.length);
+            }
+          },
+          onError: (Object error) {
+            debugPrint('Checklist navigation badges: $error');
+          },
+        );
+  }
+
+  Future<void> _loadAssignedBranch() async {
+    try {
+      await BranchSession.instance.load();
+      final prefs = await SharedPreferences.getInstance();
+      final userId = prefs.getString('lastUserId')?.trim() ?? '';
+      if (userId.isEmpty) {
+        throw StateError('The admin session could not be identified.');
+      }
+      final profile = await FirebaseFirestore.instance
+          .collection('staff_requests')
+          .doc(userId)
+          .get();
+      final data = profile.data();
+      if (data == null) {
+        throw StateError('The admin profile could not be found.');
+      }
+      final assignedIds = (data['branchIds'] as List? ?? [])
+          .map((value) => '$value'.trim())
+          .where((value) => value.isNotEmpty)
+          .toList();
+      final branchId =
+          assignedIds.firstOrNull ?? data['branchId']?.toString().trim();
+      if (branchId == null || branchId.isEmpty) {
+        throw StateError(
+          'No branch is assigned to this admin account. Ask the Super Admin to assign a branch.',
+        );
+      }
+      final branch = await FirebaseFirestore.instance
+          .collection('branches')
+          .doc(branchId)
+          .get();
+      final branchData = branch.data();
+      if (branchData == null || branchData['isVoided'] == true) {
+        throw StateError('The assigned branch is unavailable.');
+      }
+      final branchName = branchData['name']?.toString().trim();
+      if (branchName == null || branchName.isEmpty) {
+        throw StateError('The assigned branch has no name.');
+      }
+      await BranchSession.instance.setAssignedBranch(
+        branchId: branchId,
+        branchName: branchName,
+      );
+      if (!mounted) return;
+      setState(() {
+        _assignedBranchId = branchId;
+        _watchBranchChecklist();
+        _assignedBranchName = branchName;
+        _branchContextReady = true;
+        _branchContextError = null;
+      });
+    } catch (error) {
+      debugPrint('Unable to load assigned admin branch: $error');
+      if (!mounted) return;
+      setState(() {
+        _branchContextReady = true;
+        _branchContextError = error.toString().replaceFirst('Bad state: ', '');
+      });
+    }
   }
 
   Future<void> _showAllocationNotice(
@@ -204,6 +284,38 @@ class _AdminDashboardState extends State<AdminDashboard>
 
   @override
   Widget build(BuildContext context) {
+    if (!_branchContextReady) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+    if (_branchContextError != null) {
+      return Scaffold(
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.store_mall_directory_outlined, size: 40),
+                const SizedBox(height: 12),
+                Text(_branchContextError!, textAlign: TextAlign.center),
+                const SizedBox(height: 16),
+                OutlinedButton.icon(
+                  onPressed: () {
+                    setState(() {
+                      _branchContextReady = false;
+                      _branchContextError = null;
+                    });
+                    _loadAssignedBranch();
+                  },
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('Reload assignment'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
     return Scaffold(
       resizeToAvoidBottomInset: false,
       backgroundColor: kCreamWhite,
@@ -250,11 +362,18 @@ class _AdminDashboardState extends State<AdminDashboard>
         return const BudgetPage();
       case 2:
         // Inventory is part of the main admin navigation.
-        return const InventoryPage(embedded: true);
+        return InventoryPage(
+          embedded: true,
+          branchId: _assignedBranchId,
+          branchName: _assignedBranchName,
+        );
       case 3:
         return const StaffPage();
       case 4:
-        return const ReportsPage();
+        return ReportsPage(
+          branchId: _assignedBranchId,
+          branchName: _assignedBranchName,
+        );
       case 5:
         return const SettingsPage();
       default:
@@ -325,10 +444,14 @@ class _AdminDashboardState extends State<AdminDashboard>
                 children: [
                   _buildStatsCard(),
                   const SizedBox(height: 16),
-                  const AdminSalesOverview(todayOnly: true),
+                  AdminSalesOverview(
+                    todayOnly: true,
+                    branchId: _assignedBranchId,
+                  ),
                   const SizedBox(height: 20),
                   AdminRecentSales(
-                    key: ValueKey(BranchSession.instance.branchId),
+                    key: ValueKey(_assignedBranchId),
+                    branchId: _assignedBranchId,
                   ),
                   const SizedBox(height: 24),
                 ],
@@ -346,7 +469,7 @@ class _AdminDashboardState extends State<AdminDashboard>
   SliverAppBar _buildSliverAppBar({required bool showFullHeader}) {
     return SliverAppBar(
       expandedHeight: showFullHeader
-          ? (MediaQuery.sizeOf(context).width < 600 ? 252.0 : 232.0)
+          ? (MediaQuery.sizeOf(context).width < 600 ? 280.0 : 260.0)
           : 80.0,
       pinned: true,
       clipBehavior: Clip.antiAlias,
@@ -494,6 +617,29 @@ class _AdminDashboardState extends State<AdminDashboard>
                 'Manage your products, sales, and inventory all in one place.',
                 style: TextStyle(color: Colors.white70),
               ),
+              const SizedBox(height: 10),
+              if (_assignedBranchName != null)
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 6,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.16),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(
+                      color: Colors.white.withValues(alpha: 0.28),
+                    ),
+                  ),
+                  child: Text(
+                    'Branch: $_assignedBranchName',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
               const SizedBox(height: 14),
               Container(
                 padding: const EdgeInsets.symmetric(

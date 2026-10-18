@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 import 'account_username.dart';
+import 'login_validation.dart';
 import 'local_database_sync_service.dart';
 
 bool offlineUsernameMatches(Map<String, dynamic> account, String username) =>
@@ -26,6 +27,7 @@ bool offlineAccountAllowed(Map<String, dynamic> account) {
   final role = '${account['role'] ?? 'staff'}'.trim().toLowerCase();
   final status = '${account['status'] ?? ''}'.trim().toLowerCase();
   return (account['_localDocId']?.toString().isNotEmpty ?? false) &&
+      loginAccountStatusError(account) == null &&
       (role == 'admin' || role == 'staff') &&
       (status == 'accepted' || (role == 'admin' && status.isEmpty)) &&
       account['isVoided'] != true;

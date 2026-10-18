@@ -38,8 +38,9 @@ String _date(BuildContext context, dynamic value) {
 }
 
 class AdminRecentSales extends StatefulWidget {
-  const AdminRecentSales({super.key, this.firestore});
+  const AdminRecentSales({super.key, this.firestore, this.branchId});
   final FirebaseFirestore? firestore;
+  final String? branchId;
   @override
   State<AdminRecentSales> createState() => _AdminRecentSalesState();
 }
@@ -118,7 +119,8 @@ class _AdminRecentSalesState extends State<AdminRecentSales> {
               if (!snapshot.hasData) {
                 return const Center(child: ScreenLoadingIndicator());
               }
-              final branch = BranchSession.instance.branchId;
+              final branch =
+                  widget.branchId ?? BranchSession.instance.branchId;
               final docs =
                   snapshot.data!.docs
                       .where(

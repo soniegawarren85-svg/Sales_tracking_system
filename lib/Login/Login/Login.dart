@@ -1,8 +1,12 @@
+import '../../services/account_password_service.dart';
 import 'dart:async';
+import '../../services/super_admin.dart';
+import '../../Super_admin_pages/Dashboard.dart';
 import '../../services/local_database_sync_service.dart';
 import '../../services/offline_login.dart';
 import 'package:sales_tracking/theme/app_colors.dart';
 import '../../services/account_username.dart';
+import '../../services/admin_login_accounts.dart';
 import '../../services/login_validation.dart';
 import 'package:sales_tracking/services/staff_login_session.dart';
 import 'dart:convert';
@@ -33,9 +37,6 @@ class _LoginScreenState extends State<LoginScreen>
   static const String _adminPassword = 'jss19_13';
   static const String _legacyAdminAuthPassword = 'admin@1234';
   static const String _currentAdminAuthPassword = 'admin19@13';
-  static const String _emergencyAdminId = 'ADM-0001';
-  static const String _emergencyAdminPassword = 'admin@123';
-
   final TextEditingController _usernameController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
   bool _obscurePassword = true;
@@ -140,10 +141,16 @@ class _LoginScreenState extends State<LoginScreen>
   String _normalizeUsername(String username) =>
       normalizeAccountUsername(username);
 
-  List<String> _authPasswordCandidates(String username, String password) {
+  List<String> _authPasswordCandidates(
+    String username,
+    String password, {
+    required bool allowLegacyAdminPasswords,
+  }) {
     final candidates = <String>[password];
 
-    if (username.startsWith('ADM-') && _isAcceptedAdminPassword(password)) {
+    if (allowLegacyAdminPasswords &&
+        username.startsWith('ADM-') &&
+        _isAcceptedAdminPassword(password)) {
       candidates.add(_legacyAdminAuthPassword);
       candidates.add(_adminPassword);
       candidates.add(_currentAdminAuthPassword);
@@ -161,11 +168,6 @@ class _LoginScreenState extends State<LoginScreen>
     return password == _adminPassword ||
         password == _legacyAdminAuthPassword ||
         password == _currentAdminAuthPassword;
-  }
-
-  bool _isEmergencyAdminLogin(String username, String password) {
-    return _normalizeUsername(username) == _emergencyAdminId &&
-        password == _emergencyAdminPassword;
   }
 
   bool _storedPasswordMatches(Map<String, dynamic> data, String password) {
@@ -225,9 +227,15 @@ class _LoginScreenState extends State<LoginScreen>
     final accounts = await LocalDatabaseSyncService().getCachedCollection(
       'staff_requests',
     );
-    final account = accounts
+    final accountCandidates = accounts
         .where((row) => offlineAccountMatchesLogin(row, username))
-        .firstOrNull;
+        .toList();
+    final selectedCandidates = preferSuperAdminCreatedAdmins(
+      accountCandidates,
+      dataOf: (account) => account,
+      username: username,
+    );
+    final account = selectedCandidates.firstOrNull;
     if (account == null) return false;
     final statusError = loginAccountStatusError(account);
     if (statusError != null) {
@@ -235,6 +243,7 @@ class _LoginScreenState extends State<LoginScreen>
       return true;
     }
     if (!offlineAccountAllowed(account)) return false;
+    if (account['role'] == 'admin') return false;
     final role = '${account['role'] ?? 'staff'}'.trim().toLowerCase();
     final publicId =
         (account[role == 'admin' ? 'adminId' : 'staffId'] ?? username)
@@ -251,9 +260,9 @@ class _LoginScreenState extends State<LoginScreen>
             _offlinePasswordHash(normalizedId, password);
     final legacyAdmin =
         account['role'] == 'admin' &&
+        !isSuperAdminCreatedAdmin(account) &&
         account['credentialsChangedAt'] == null &&
-        (_isAcceptedAdminPassword(password) ||
-            _isEmergencyAdminLogin(username, password));
+        _isAcceptedAdminPassword(password);
     if (!offlineStoredPasswordMatches(account, password) &&
         !matchesRemembered &&
         !legacyAdmin) {
@@ -342,21 +351,6 @@ class _LoginScreenState extends State<LoginScreen>
     });
   }
 
-  Future<void> _signInEmergencyAdmin(Map<String, dynamic> data) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('adminId', _emergencyAdminId);
-    await prefs.setString('lastRole', 'admin');
-    await prefs.setString('lastUserId', 'emergency-admin');
-    final name = _welcomeName(data, '');
-    _showMessage(name.isEmpty ? 'Welcome!' : 'Welcome, $name!');
-    Future.microtask(() {
-      if (!mounted) return;
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => const AdminDashboard()),
-      );
-    });
-  }
-
   List<QueryDocumentSnapshot<Map<String, dynamic>>> _prioritizeAccountDocs(
     Iterable<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
     String username,
@@ -386,7 +380,21 @@ class _LoginScreenState extends State<LoginScreen>
           storedUsername == normalized;
     }).toList();
 
+    final preferredMatches = preferSuperAdminCreatedAdmins(
+      matches,
+      dataOf: (doc) => doc.data(),
+      username: username,
+    );
+    matches
+      ..clear()
+      ..addAll(preferredMatches);
     matches.sort((a, b) {
+      final aCreatedBySuperAdmin = isSuperAdminCreatedAdmin(a.data());
+      final bCreatedBySuperAdmin = isSuperAdminCreatedAdmin(b.data());
+      if (aCreatedBySuperAdmin != bCreatedBySuperAdmin) {
+        return aCreatedBySuperAdmin ? -1 : 1;
+      }
+
       final aData = a.data();
       final bData = b.data();
       final aAccepted =
@@ -451,45 +459,7 @@ class _LoginScreenState extends State<LoginScreen>
       }
     }
 
-    final prioritized = _prioritizeAccountDocs(matches, normalized, idField);
-    if (prioritized.isNotEmpty || !normalized.startsWith('ADM-')) {
-      return prioritized;
-    }
-
-    final adminFallback = await FirebaseFirestore.instance
-        .collection('staff_requests')
-        .get(const GetOptions(source: Source.server));
-    final adminDocs = adminFallback.docs.where((doc) {
-      final data = doc.data();
-      final role = (data['role'] ?? '').toString().trim().toLowerCase();
-      final firstName = (data['firstName'] ?? '').toString().toLowerCase();
-      final lastName = (data['lastName'] ?? '').toString().toLowerCase();
-      final hasCultQwertyName =
-          firstName.contains('cult') && lastName.contains('qwerty');
-      return role == 'admin' || hasCultQwertyName;
-    }).toList();
-
-    adminDocs.sort((a, b) {
-      final aData = a.data();
-      final bData = b.data();
-      final aName = '${aData['firstName'] ?? ''} ${aData['lastName'] ?? ''}'
-          .toLowerCase();
-      final bName = '${bData['firstName'] ?? ''} ${bData['lastName'] ?? ''}'
-          .toLowerCase();
-      final aIsTarget = aName.contains('cult') && aName.contains('qwerty');
-      final bIsTarget = bName.contains('cult') && bName.contains('qwerty');
-      if (aIsTarget != bIsTarget) return aIsTarget ? -1 : 1;
-
-      final aAccepted =
-          (aData['status'] ?? '').toString().trim().toLowerCase() == 'accepted';
-      final bAccepted =
-          (bData['status'] ?? '').toString().trim().toLowerCase() == 'accepted';
-      if (aAccepted != bAccepted) return aAccepted ? -1 : 1;
-
-      return a.id.compareTo(b.id);
-    });
-
-    return adminDocs;
+    return _prioritizeAccountDocs(matches, normalized, idField);
   }
 
   Future<List<QueryDocumentSnapshot<Map<String, dynamic>>>>
@@ -541,6 +511,21 @@ class _LoginScreenState extends State<LoginScreen>
 
     setState(() => _isLoading = true);
     try {
+      if (SuperAdmin.matchesId(username)) {
+        if (!await SuperAdmin.verifyPassword(password)) {
+          _showMessage(invalidLoginCredentialsMessage(), isError: true);
+          return;
+        }
+        await FirebaseAuth.instance.signOut();
+        final prefs = await SharedPreferences.getInstance();
+        await SuperAdmin.startSession(prefs);
+        if (!mounted) return;
+        _showMessage('Welcome super admin');
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (_) => const SuperAdminDashboard()),
+        );
+        return;
+      }
       accountDocs =
           await (isAccountId
                   ? _findAccountsByUsername(username)
@@ -554,25 +539,28 @@ class _LoginScreenState extends State<LoginScreen>
         _showMessage(unavailableMessage, isError: true);
         return;
       }
-      if (isAccountId &&
-          _isEmergencyAdminLogin(username, password) &&
-          !accountDocs.any(
-            (doc) => doc.data()['credentialsChangedAt'] != null,
-          )) {
-        await _signInEmergencyAdmin(
-          accountDocs.isEmpty ? {} : accountDocs.first.data(),
-        );
-        return;
-      }
       if (accountDocs.isEmpty) {
         _showMessage(invalidLoginCredentialsMessage(), isError: true);
         return;
       }
 
+      // A changed password is authoritative; never retry legacy/default secrets.
+      for (final doc in accountDocs) {
+        if (doc.data()['passwordCredential'] == null) continue;
+        if (!await matchesAccountPassword(doc.data(), password)) {
+          _showMessage(invalidLoginCredentialsMessage(), isError: true);
+          return;
+        }
+        if (doc.data()['passwordAuthMode'] == 'firestore') {
+          await _signInWithFirestoreAccount(doc);
+          return;
+        }
+      }
       // Special handling for admin accounts with valid admin password
       if (isAccountId &&
           username.startsWith('ADM-') &&
           _isAcceptedAdminPassword(password) &&
+          !accountDocs.any((doc) => isSuperAdminCreatedAdmin(doc.data())) &&
           !accountDocs.any(
             (doc) => doc.data()['credentialsChangedAt'] != null,
           )) {
@@ -665,7 +653,13 @@ class _LoginScreenState extends State<LoginScreen>
         for (final authPassword
             in accountData['credentialsChangedAt'] != null
                 ? [password]
-                : _authPasswordCandidates(username, password)) {
+                : _authPasswordCandidates(
+                    username,
+                    password,
+                    allowLegacyAdminPasswords: !isSuperAdminCreatedAdmin(
+                      accountData,
+                    ),
+                  )) {
           try {
             credential = await FirebaseAuth.instance
                 .signInWithEmailAndPassword(

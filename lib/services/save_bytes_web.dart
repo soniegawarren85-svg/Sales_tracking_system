@@ -1,3 +1,4 @@
+import 'activity_log.dart';
 // ignore_for_file: deprecated_member_use, avoid_web_libraries_in_flutter
 import 'dart:html' as html;
 import 'dart:typed_data';
@@ -12,4 +13,5 @@ Future<void> saveBytes(String path, Uint8List bytes) async {
   anchor.remove();
   await Future<void>.delayed(const Duration(seconds: 1));
   html.Url.revokeObjectUrl(url);
+  await ActivityLog.record('file_exported', 'Saved / downloaded report file', details: {'filename': path});
 }

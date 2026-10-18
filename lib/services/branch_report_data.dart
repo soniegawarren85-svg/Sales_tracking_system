@@ -220,24 +220,22 @@ class BranchReportData {
       : reportValue(row['quantity']) *
             reportValue(row['unitPrice'] ?? row['bundlePrice']);
 
-  double profitForSales(Iterable<Map<String, dynamic>> selected) =>
-      selected.where(validReportSale).fold<double>(0, (sum, sale) {
-        final refund = reportRefund(sale);
-        final cost = (sale['items'] as List? ?? [])
-            .whereType<Map>()
-            .fold<double>(
-              0,
-              (sum, item) =>
-                  sum +
-                  reportValue(item['quantity']).abs() *
-                      reportValue(resolveItem(item)['costPrice']),
-            );
-        return sum +
-            (refund
-                ? -reportValue(sale['total']).abs()
-                : reportValue(sale['total'])) -
-            (!refund || sale['refundMethod'] == 'inventory' ? cost : 0);
-      });
+  double profitForSales(
+    Iterable<Map<String, dynamic>> selected,
+  ) => selected.where(validReportSale).fold<double>(0, (sum, sale) {
+    final refund = reportRefund(sale);
+    final cost = (sale['items'] as List? ?? []).whereType<Map>().fold<double>(
+      0,
+      (sum, item) =>
+          sum +
+          reportValue(item['quantity']).abs() * reportValue(item['costPrice']),
+    );
+    return sum +
+        (refund
+            ? -reportValue(sale['total']).abs()
+            : reportValue(sale['total'])) -
+        (!refund || sale['refundMethod'] == 'inventory' ? cost : 0);
+  });
 
   double profitForItems(Iterable<Map<String, dynamic>> selected) => selected
       .fold<double>(0, (total, item) => total + reportValue(item['profit']));
@@ -518,7 +516,6 @@ class BranchReportData {
       // Allocations with a missing/deleted source must not resurrect old catalog items.
       if (sourceId.isNotEmpty && (source == null || !usable(source))) continue;
       if (allocation['isBundle'] == true &&
-          reportValue(allocation['bundleCount']) > 0 &&
           availableBundleStock(allocation, now: start) == 0) {
         continue;
       }
@@ -544,22 +541,42 @@ class BranchReportData {
           if (currentVariant == null || !usable(currentVariant)) continue;
         }
         final catalogItem = currentVariant ?? source;
-        final resolved = resolveItem({
+        final resolvedItem = resolveItem({
           ...variant,
+          'sourceInventoryId': sourceId,
           if (catalogItem != null) ...{
-            'name': catalogItem['name'],
-            'costPrice': catalogItem['costPrice'] ?? variant['costPrice'],
-            'price': catalogItem['price'],
+            'costPrice': variant['costPrice'] ?? catalogItem['costPrice'],
+            'price': variant['price'] ?? catalogItem['price'],
             if (catalogItem['imageUrl'] != null)
               'imageUrl': catalogItem['imageUrl'],
           },
         }, sourceId);
+        final resolved = {
+          ...resolvedItem,
+          if (variant['branchNameOverride'] != null)
+            'name': variant['branchNameOverride'],
+          if (variant['branchPriceOverride'] != null)
+            'price': variant['branchPriceOverride'],
+          'sourceInventoryId': sourceId,
+        };
         final id = inventoryDisplayId(resolved);
         final previous = active[id];
         active[id] = {
           ...resolved,
           'id': id,
+          if (allocation['isBundle'] == true && source != null) ...{
+            'name': resolved['name'] ?? source['name'],
+            'price': resolved['price'] ?? source['price'],
+            'costPrice': source['costPrice'] ?? resolved['costPrice'],
+          },
           'costRecorded': resolved['costPrice'] != null,
+          'allocationId': allocation['_id'],
+          'allocationItemId':
+              allocation['isBundle'] == true ||
+                  allocation['isCoffee'] == true ||
+                  allocation['isAddon'] == true
+              ? null
+              : variant['id'] ?? variant['itemId'],
           'remaining':
               reportValue(previous?['remaining']) +
               (allocation['isBundle'] == true
@@ -612,6 +629,7 @@ class BranchReportData {
           'sizeSales',
         ])
           if (period.containsKey(key)) key: period[key],
+        if (current['type'] == 'Bundle') 'starting': current['remaining'],
       };
       final cost = reportValue(current['costPrice']);
       if (reportValue(row['sold']) == 0) {
@@ -796,7 +814,9 @@ class BranchReportData {
         )) {
           final stock =
               variant['stock'] ??
-              variant['bundleCount'] ??
+              (row['isBundle'] == true
+                  ? availableBundleStock(row, now: start)
+                  : variant['bundleCount']) ??
               variant['startingStock'];
           if (stock != null) {
             item['remaining'] =
@@ -819,6 +839,20 @@ class BranchReportData {
                     variant['bundleCount'] ??
                     variant['stock'],
               );
+          if (row['origin'] == 'unbundle') {
+            final unbundledQuantity = reportValue(
+              variant['assignedStartingStock'] ??
+                  variant['startingStock'] ??
+                  variant['stock'],
+            );
+            if (unbundledQuantity > 0) {
+              (item['history'] as List).add({
+                'time': at,
+                'activity': 'Unbundle',
+                'qty': unbundledQuantity,
+              });
+            }
+          }
         }
       }
     }
@@ -836,7 +870,11 @@ class BranchReportData {
               : 'Sold',
           'qty': refund && sale['refundMethod'] != 'inventory' ? 0.0 : -qty,
         });
-        if (!reportInRange(sale['timestamp'] ?? sale['createdAt'], start, end)) {
+        if (!reportInRange(
+          sale['timestamp'] ?? sale['createdAt'],
+          start,
+          end,
+        )) {
           continue;
         }
         item['relevant'] = true;
@@ -881,14 +919,14 @@ class BranchReportData {
         if (refund && sale['refundMethod'] == 'inventory') {
           item['totalCost'] =
               reportValue(item['totalCost']) +
-              qty * reportValue(raw['costPrice'] ?? item['costPrice']);
+              qty * reportValue(raw['costPrice']);
         }
         item[field] =
             reportValue(item[field]) + reportValue(raw['quantity']).abs();
         if (field == 'sold') {
           item['totalCost'] =
               reportValue(item['totalCost']) +
-              qty * reportValue(raw['costPrice'] ?? item['costPrice']);
+              qty * reportValue(raw['costPrice']);
           item['sales'] =
               reportValue(item['sales']) +
               reportValue(raw['quantity']).abs() *
@@ -1022,7 +1060,10 @@ class BranchReportData {
         item['relevant'] = true;
       }
       if (hasStockEvidence &&
-          reportValue(item['remaining']) <= 50 &&
+          inventoryLowStock(
+            item['remaining'],
+            type: '${item['type'] ?? 'Categories'}',
+          ) &&
           item['status'] == 'Available') {
         item['status'] = 'Low stock';
       }

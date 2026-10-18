@@ -1,8 +1,13 @@
+import 'branch_inventory_edit_dialog.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import '../services/bundle_stock_service.dart';
+import '../services/branch_inventory_editor.dart';
+import '../services/branch_permissions.dart';
 import '../services/branch_report_data.dart';
 import 'historical_cash_drawer.dart';
 import 'branch_allocation_table.dart';
+import 'inventory_batches.dart';
 
 bool inventoryNearExpiry(dynamic value, [DateTime? now]) {
   final expiry = cashRecordDate(value);
@@ -52,8 +57,10 @@ class _BranchInventoryMonitorState extends State<BranchInventoryMonitor> {
       final data = snapshot.data!;
       final all = data.currentInventory(widget.branchId, DateTime.now());
       bool low(Map row) =>
-          row['remaining'] != null &&
-          reportValue(row['remaining']) <= 50 &&
+          inventoryLowStock(
+            row['remaining'],
+            type: '${row['type'] ?? 'Categories'}',
+          ) &&
           row['type'] != 'Beverages';
       final rows = all
           .where(
@@ -64,46 +71,136 @@ class _BranchInventoryMonitorState extends State<BranchInventoryMonitor> {
                     .contains(widget.query.trim().toLowerCase()),
           )
           .toList();
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          if (inventoryAlertSearch(widget.query))
-            Wrap(
-              spacing: 12,
-              children: [
-                Chip(
-                  avatar: const Icon(Icons.warning_amber, color: Colors.orange),
-                  label: Text('Low stock: ${rows.where(low).length}'),
-                ),
-                Chip(
-                  avatar: const Icon(
-                    Icons.event_busy,
-                    color: Colors.deepOrange,
-                  ),
-                  label: Text(
-                    'Near expiry: ${rows.where((r) => inventoryNearExpiry(r['expirationDate'])).length}',
-                  ),
-                ),
-              ],
-            ),
-          BranchAllocationTable(
-            rows: rows,
-            beverages: widget.type == 'Beverages',
-            inventory: true,
-            actions: (row) => IconButton(
-              tooltip: 'View history',
-              icon: const Icon(Icons.history),
-              onPressed: () =>
-                  showBranchItemHistory(context, data, widget.branchId, row),
-            ),
+      return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+        stream: (widget.firestore ?? FirebaseFirestore.instance)
+            .collection('admin_settings')
+            .doc('transactions')
+            .snapshots(),
+        builder: (context, _) => FutureBuilder<bool>(
+          future: BranchPermissions.allowed(
+            'adminAllowInventoryEdits',
+            database: widget.firestore,
+            branchId: widget.branchId,
           ),
-          if (rows.isEmpty)
-            const Padding(
-              padding: EdgeInsets.all(24),
-              child: Text('No matching branch inventory.'),
-            ),
-        ],
+          builder: (context, permission) => _buildInventory(
+            context,
+            data,
+            rows,
+            canEdit: permission.data == true,
+          ),
+        ),
       );
     },
   );
+
+  Widget _buildInventory(
+    BuildContext context,
+    BranchReportData data,
+    List<Map<String, dynamic>> rows, {
+    required bool canEdit,
+  }) {
+    bool low(Map row) =>
+        inventoryLowStock(
+          row['remaining'],
+          type: '${row['type'] ?? 'Categories'}',
+        ) &&
+        row['type'] != 'Beverages';
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (inventoryAlertSearch(widget.query))
+          Wrap(
+            spacing: 12,
+            children: [
+              Chip(
+                avatar: const Icon(Icons.warning_amber, color: Colors.orange),
+                label: Text('Low stock: ${rows.where(low).length}'),
+              ),
+              Chip(
+                avatar: const Icon(Icons.event_busy, color: Colors.deepOrange),
+                label: Text(
+                  'Near expiry: ${rows.where((r) => inventoryNearExpiry(r['expirationDate'])).length}',
+                ),
+              ),
+            ],
+          ),
+        BranchAllocationTable(
+          rows: rows,
+          beverages: widget.type == 'Beverages',
+          inventory: true,
+          actions: (row) => Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if ('${row['allocationId'] ?? ''}'.isNotEmpty)
+                IconButton(
+                  tooltip: 'View batches',
+                  icon: const Icon(Icons.layers_outlined),
+                  onPressed: () => showInventoryBatches(
+                    context,
+                    allocationId: '${row['allocationId']}',
+                    scopeIds: [widget.branchId],
+                    itemId: row['allocationItemId']?.toString(),
+                    database: widget.firestore,
+                  ),
+                ),
+              IconButton(
+                tooltip: 'View history',
+                icon: const Icon(Icons.history),
+                onPressed: () =>
+                    showBranchItemHistory(context, data, widget.branchId, row),
+              ),
+              if (canEdit)
+                IconButton(
+                  tooltip: 'Edit branch inventory',
+                  icon: const Icon(Icons.edit_outlined),
+                  onPressed: () => _editInventoryItem(context, row),
+                ),
+            ],
+          ),
+        ),
+        if (rows.isEmpty)
+          const Padding(
+            padding: EdgeInsets.all(24),
+            child: Text('No matching branch inventory.'),
+          ),
+      ],
+    );
+  }
+
+  Future<void> _editInventoryItem(
+    BuildContext context,
+    Map<String, dynamic> item,
+  ) async {
+    final result = await showDialog<BranchInventoryEdit>(
+      context: context,
+      builder: (_) => BranchInventoryEditDialog(item: item),
+    );
+    if (result == null || !context.mounted) return;
+    try {
+      await BranchPermissions.require(
+        'adminAllowInventoryEdits',
+        database: widget.firestore,
+        branchId: widget.branchId,
+      );
+      await updateBranchInventoryItem(
+        firestore: widget.firestore ?? FirebaseFirestore.instance,
+        branchId: widget.branchId,
+        item: item,
+        name: result.name,
+        price: result.price,
+        stock: result.stock,
+      );
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Branch inventory updated.')),
+        );
+      }
+    } catch (error) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Unable to update branch inventory: $error')),
+        );
+      }
+    }
+  }
 }

@@ -1,3 +1,4 @@
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:fake_cloud_firestore/fake_cloud_firestore.dart';
 import 'package:flutter/material.dart';
@@ -7,6 +8,8 @@ import 'package:sales_tracking/services/allocation_checklist_service.dart';
 import 'package:sales_tracking/widgets/return_batch_cards.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+  setUp(() => SharedPreferences.setMockInitialValues({}));
   late FakeFirebaseFirestore db;
   late ReturnBatchService service;
   List<Map<String, dynamic>> selection() => [

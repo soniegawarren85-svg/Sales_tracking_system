@@ -109,7 +109,98 @@ void main() {
     },
   );
   testWidgets(
-    'metadata save preserves concurrent stock and updates allocation cost',
+    'bundle editor uses the current recipe and recalculates stale bundle cost',
+    (tester) async {
+      final db = FakeFirebaseFirestore();
+      await db.collection('sales_inventory').doc('cat').set({
+        'name': 'Cookies',
+        'items': [
+          {
+            'id': 'v',
+            'publicId': 'CO-001',
+            'name': 'Cookie',
+            'stock': 100,
+            'price': 350,
+            'costPrice': 150,
+            'expirationDate': '2099-12-31',
+          },
+        ],
+      });
+      final currentBundle = <String, dynamic>{
+        'id': 'bundle',
+        'name': 'Cookie Bundle',
+        'price': 500,
+        'costPrice': 3000,
+        'isBundle': true,
+        'items': [
+          {
+            'sourceInventoryId': 'cat',
+            'variantId': 'v',
+            'name': 'Cookie',
+            'quantity': 2,
+          },
+        ],
+      };
+      await db.collection('sales_inventory').doc('bundle').set(currentBundle);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Builder(
+            builder: (context) => Scaffold(
+              body: TextButton(
+                onPressed: () => showAdminItemEditor(
+                  context,
+                  entry: AdminCatalogEntry(
+                    id: 'BND-001',
+                    name: 'Cookie Bundle',
+                    type: 'Bundle',
+                    source: {
+                      ...currentBundle,
+                      'items': [
+                        {
+                          'sourceInventoryId': 'cat',
+                          'variantId': 'v',
+                          'name': 'Cookie',
+                          'quantity': 20,
+                        },
+                      ],
+                    },
+                    details: currentBundle,
+                    images: [],
+                  ),
+                  firestore: db,
+                  upload: (_) async => null,
+                ),
+                child: const Text('Edit'),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.text('Edit'));
+      await tester.pumpAndSettle();
+      expect(
+        find.byWidgetPredicate(
+          (widget) => widget is TextFormField && widget.initialValue == '2',
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.byWidgetPredicate(
+          (widget) =>
+              widget is TextFormField && widget.controller?.text == '300.00',
+        ),
+        findsOneWidget,
+      );
+      await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+      await tester.pumpAndSettle();
+      final saved = (await db.doc('sales_inventory/bundle').get()).data()!;
+      expect((saved['items'] as List).single['quantity'], 2);
+      expect(saved['costPrice'], 300);
+      expect(tester.takeException(), isNull);
+    },
+  );
+  testWidgets(
+    'metadata save preserves concurrent stock and allocation snapshots',
     (tester) async {
       final db = FakeFirebaseFirestore();
       final item = <String, dynamic>{
@@ -182,7 +273,7 @@ void main() {
           ((await db.doc('staff_inventory/a').get()).data()!['items'] as List)
               .single;
       expect(allocation['stock'], 10);
-      expect(allocation['costPrice'], 30);
+      expect(allocation['costPrice'], 25);
       expect(find.text('Edit'), findsOneWidget);
       expect(tester.takeException(), isNull);
     },
@@ -233,10 +324,7 @@ void main() {
         'cat',
         needsUpdate: (data) => data['costPrice'] != 50,
       );
-      expect(targets.map((r) => r.path).toSet(), {
-        'staff_inventory/active',
-        'allocation_checklist/pending',
-      });
+      expect(targets, isEmpty);
     },
   );
   test('only changed fields are included in inventory updates', () {

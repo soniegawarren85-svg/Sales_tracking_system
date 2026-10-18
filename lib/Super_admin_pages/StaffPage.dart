@@ -1,0 +1,3658 @@
+import '../services/activity_log.dart';
+import '../services/super_admin.dart';
+import '../widgets/profile_avatar.dart';
+import '../widgets/staff_deactivation_dialog.dart';
+import '../widgets/inventory_records_table.dart';
+import 'package:sales_tracking/theme/app_colors.dart';
+import '../services/public_item_id.dart';
+import '../widgets/admin_staff_branches.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:flutter/material.dart';
+
+String nextStaffPublicId({
+  required String role,
+  required Iterable<Map<String, dynamic>> accounts,
+  required int counter,
+}) {
+  final isAdmin = role == 'admin';
+  final prefix = isAdmin ? 'ADM' : 'STF';
+  var highest = counter;
+
+  for (final account in accounts) {
+    final accountRole = '${account['role'] ?? ''}'.trim().toLowerCase();
+    final rawId = isAdmin
+        ? (account['adminId'] ?? account['username'])
+        : (account['staffId'] ?? account['username']);
+    if (accountRole != role && !(isAdmin && accountRole.isEmpty)) continue;
+
+    final id = '${rawId ?? ''}'.trim().toUpperCase();
+    if (!id.startsWith('$prefix-')) continue;
+    final number = int.tryParse(id.substring(prefix.length + 1));
+    if (number != null && number > highest) highest = number;
+  }
+
+  return '$prefix-${(highest + 1).toString().padLeft(3, '0')}';
+}
+
+String? validateStaffName(
+  String? value, {
+  String label = 'Name',
+  bool isRequired = true,
+}) {
+  final name = value?.trim() ?? '';
+  if (name.isEmpty) return isRequired ? '$label is required.' : null;
+  if (!RegExp(r'^[A-Za-z]+(?: [A-Za-z]+)*$').hasMatch(name)) {
+    return 'Use letters only; numbers and special characters are not allowed.';
+  }
+  return null;
+}
+
+String? validateStaffAge(String? value) {
+  final age = int.tryParse(value?.trim() ?? '');
+  if (age == null || age < 20 || age > 50) {
+    return 'Enter a valid age from 20 to 50.';
+  }
+  return null;
+}
+
+String? validateStaffPhone(String? value) {
+  if (!RegExp(r'^09\d{9}$').hasMatch(value?.trim() ?? '')) {
+    return 'Phone must start with 09 and contain 11 digits.';
+  }
+  return null;
+}
+
+String? validateStaffEmail(String? value) {
+  if (!RegExp(
+    r'^[\w\-.]+@([\w-]+\.)+[\w-]{2,}$',
+  ).hasMatch(value?.trim() ?? '')) {
+    return 'Enter a valid email address.';
+  }
+  return null;
+}
+
+String? validateStaffPassword(String? value) {
+  final password = (value ?? '').trim();
+  final hasNumber = RegExp(r'\d').hasMatch(password);
+  final hasUppercase = RegExp(r'[A-Z]').hasMatch(password);
+  final hasSpecialCharacter = RegExp(r'[^A-Za-z0-9\s]').hasMatch(password);
+  if (password.length < 7 ||
+      !hasNumber ||
+      (!hasUppercase && !hasSpecialCharacter)) {
+    return 'Use at least 7 characters, a number, and an uppercase letter or special character.';
+  }
+  return null;
+}
+
+String? validateStaffPasswordConfirmation(String? value, String password) {
+  if ((value ?? '').isEmpty) return 'Confirm Password is required.';
+  if ((value ?? '').trim() != password.trim()) return 'Passwords do not match.';
+  return null;
+}
+
+class StaffPage extends StatefulWidget {
+  const StaffPage({super.key});
+
+  @override
+  State<StaffPage> createState() => _StaffPageState();
+}
+
+class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
+  late TabController _tabController;
+  late AnimationController _headerAnimController;
+  late AnimationController _buttonAnimController;
+  late AnimationController _adminPanelController;
+  late Animation<double> _headerFade;
+  late Animation<Offset> _headerSlide;
+  late Animation<double> _buttonScale;
+  late Animation<double> _buttonFade;
+  late Animation<Offset> _adminPanelSlide;
+  late Animation<double> _adminPanelFade;
+
+  String _createRole = 'staff';
+  String _roleFilter = 'all';
+  bool _showAdminPanel = false;
+  bool _isCreatingStaff = false;
+  final _creating = ValueNotifier(false);
+  BuildContext? _createSheetContext;
+  final _createStaffFormKey = GlobalKey<FormState>();
+  final _firstNameController = TextEditingController();
+  final _middleNameController = TextEditingController();
+  final _lastNameController = TextEditingController();
+  final _ageController = TextEditingController();
+  final _phoneController = TextEditingController();
+  final _addressController = TextEditingController();
+  final _emailController = TextEditingController();
+  final _passwordController = TextEditingController();
+  final _confirmPasswordController = TextEditingController();
+  final _confirmPasswordFieldKey = GlobalKey<FormFieldState<String>>();
+
+  // ─── STREAMS ──────────────────────────────────────────────
+  Stream<QuerySnapshot<Map<String, dynamic>>> get _staffStream =>
+      FirebaseFirestore.instance.collection('staff_requests').snapshots();
+
+  @override
+  void initState() {
+    super.initState();
+    _tabController = TabController(length: 2, vsync: this);
+    _tabController.addListener(_handleStaffTabChanged);
+
+    // Header animation
+    _headerAnimController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 700),
+    );
+    _headerFade = CurvedAnimation(
+      parent: _headerAnimController,
+      curve: Curves.easeOut,
+    );
+    _headerSlide =
+        Tween<Offset>(begin: const Offset(0, -0.18), end: Offset.zero).animate(
+          CurvedAnimation(
+            parent: _headerAnimController,
+            curve: Curves.easeOutCubic,
+          ),
+        );
+
+    // Button animation
+    _buttonAnimController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 600),
+    );
+    _buttonScale = Tween<double>(begin: 0.85, end: 1.0).animate(
+      CurvedAnimation(parent: _buttonAnimController, curve: Curves.elasticOut),
+    );
+    _buttonFade = CurvedAnimation(
+      parent: _buttonAnimController,
+      curve: Curves.easeOut,
+    );
+
+    // Admin panel slide animation
+    _adminPanelController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 420),
+    );
+    _adminPanelSlide =
+        Tween<Offset>(begin: const Offset(1.0, 0.0), end: Offset.zero).animate(
+          CurvedAnimation(
+            parent: _adminPanelController,
+            curve: Curves.easeOutCubic,
+          ),
+        );
+    _adminPanelFade = CurvedAnimation(
+      parent: _adminPanelController,
+      curve: Curves.easeOut,
+    );
+
+    _headerAnimController.forward();
+    Future.delayed(const Duration(milliseconds: 300), () {
+      if (mounted) _buttonAnimController.forward();
+    });
+  }
+
+  @override
+  void dispose() {
+    _tabController.removeListener(_handleStaffTabChanged);
+    _tabController.dispose();
+    _creating.dispose();
+    _firstNameController.dispose();
+    _middleNameController.dispose();
+    _lastNameController.dispose();
+    _ageController.dispose();
+    _phoneController.dispose();
+    _addressController.dispose();
+    _emailController.dispose();
+    _passwordController.dispose();
+    _confirmPasswordController.dispose();
+    _headerAnimController.dispose();
+    _buttonAnimController.dispose();
+    _adminPanelController.dispose();
+    super.dispose();
+  }
+
+  void _handleStaffTabChanged() {
+    if (!_tabController.indexIsChanging && mounted) {
+      setState(() {});
+    }
+  }
+
+  void _toggleAdminPanel() {
+    setState(() {
+      _showAdminPanel = !_showAdminPanel;
+    });
+    if (_showAdminPanel) {
+      _adminPanelController.forward();
+    } else {
+      _adminPanelController.reverse();
+    }
+  }
+
+  Future<void> _showCreateStaffSheet() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      showDragHandle: true,
+      builder: (sheetContext) {
+        _createSheetContext = sheetContext;
+        return ValueListenableBuilder<bool>(
+          valueListenable: _creating,
+          builder: (context, creating, _) => SizedBox(
+            height: MediaQuery.sizeOf(context).height * .7,
+            child: SingleChildScrollView(
+              padding: EdgeInsets.fromLTRB(
+                16,
+                0,
+                16,
+                MediaQuery.viewInsetsOf(context).bottom + 24,
+              ),
+              child: _buildCreateStaffForm(),
+            ),
+          ),
+        );
+      },
+    );
+    _createSheetContext = null;
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    backgroundColor: AppColors.surfaceTint,
+    floatingActionButton: FloatingActionButton(
+      tooltip: 'Create staff account',
+      shape: const CircleBorder(),
+      backgroundColor: AppColors.primary,
+      foregroundColor: Colors.white,
+      onPressed: _showCreateStaffSheet,
+      child: const Icon(Icons.add),
+    ),
+    body: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: _staffStream,
+      builder: (context, snapshot) {
+        if (snapshot.hasError) {
+          return const Center(child: Text('Unable to load staff.'));
+        }
+        if (!snapshot.hasData) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        final staff = snapshot.data!.docs
+            .map(AdminModel.fromDoc)
+            .where(
+              (member) =>
+                  (member.isValidStaff || member.isValidAdmin) &&
+                  (_roleFilter == 'all' || member.role == _roleFilter),
+            )
+            .toList();
+        final accepted = staff
+            .where((member) => member.status == 'accepted')
+            .toList();
+        final deactivated = staff
+            .where((member) => member.status == 'deactivated')
+            .toList();
+        final inactive = accepted
+            .where((member) => member.isInactiveByLogin)
+            .length;
+        return CustomScrollView(
+          slivers: [
+            SliverAppBar(
+              pinned: true,
+              automaticallyImplyLeading: false,
+              expandedHeight: 125,
+              backgroundColor: AppColors.primaryDeep,
+              foregroundColor: Colors.white,
+              flexibleSpace: LayoutBuilder(
+                builder: (context, constraints) {
+                  final opacity = ((constraints.maxHeight - 85) / 40).clamp(
+                    0.0,
+                    1.0,
+                  );
+                  return FlexibleSpaceBar(
+                    background: Padding(
+                      padding: const EdgeInsets.fromLTRB(22, 32, 22, 16),
+                      child: Opacity(
+                        opacity: opacity,
+                        child: const Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisAlignment: MainAxisAlignment.end,
+                          children: [
+                            Text(
+                              'Staff Section',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 24,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            SizedBox(height: 4),
+                            Text(
+                              'Manage staff accounts',
+                              style: TextStyle(
+                                color: Colors.white70,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+            SliverList(
+              delegate: SliverChildListDelegate([
+                Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: _buildStatsRow(
+                    total: accepted.length,
+                    active: accepted.length - inactive,
+                    pending: deactivated.length,
+                    deactivated: inactive,
+                  ),
+                ),
+
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: _buildDeactivatedStaffButton(deactivated),
+                ),
+                const Padding(
+                  padding: EdgeInsets.all(16),
+                  child: AdminStaffBranches(includeAdmins: true),
+                ),
+
+                const Padding(
+                  padding: EdgeInsets.all(16),
+                  child: Text(
+                    'Staff Accounts',
+                    style: TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.bold,
+                      color: AppColors.primaryDark,
+                    ),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: DropdownButtonFormField<String>(
+                    initialValue: _roleFilter,
+                    decoration: const InputDecoration(
+                      labelText: 'Account role',
+                    ),
+                    items: const [
+                      DropdownMenuItem(
+                        value: 'all',
+                        child: Text('All accounts'),
+                      ),
+                      DropdownMenuItem(value: 'admin', child: Text('Admin')),
+                      DropdownMenuItem(value: 'staff', child: Text('Cashier')),
+                    ],
+                    onChanged: (value) => setState(() => _roleFilter = value!),
+                  ),
+                ),
+                if (accepted.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.all(24),
+                    child: Text(
+                      'No active staff accounts. Tap + to create one.',
+                    ),
+                  ),
+                ...accepted.asMap().entries.map(
+                  (entry) => Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 6,
+                    ),
+                    child: _AnimatedAdminCard(
+                      index: entry.key,
+                      admin: entry.value,
+                      isInactiveByLogin: entry.value.isInactiveByLogin,
+                      onDeactivate: () =>
+                          _updateAdminStatus(entry.value, 'deactivated'),
+                      onActivate: () =>
+                          _updateAdminStatus(entry.value, 'accepted'),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 100),
+              ]),
+            ),
+          ],
+        );
+      },
+    ),
+  );
+
+  Widget _buildAdminPanel(BuildContext context) {
+    return Container(
+      color: const Color(0xFFF5F0FF),
+      child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+        stream: _staffStream,
+        builder: (context, snapshot) {
+          final docs = snapshot.data?.docs ?? [];
+          final staff = docs
+              .map((d) => AdminModel.fromDoc(d))
+              .where(
+                (member) =>
+                    (member.isValidStaff || member.isValidAdmin) &&
+                    (_roleFilter == 'all' || member.role == _roleFilter),
+              )
+              .toList();
+          final visibleStaff = staff
+              .where((member) => member.status == 'accepted')
+              .toList();
+          final deactivatedStaff = staff
+              .where((member) => member.status == 'deactivated')
+              .toList();
+
+          final totalStaff = visibleStaff.length;
+          final activeStaff = visibleStaff
+              .where((a) => a.status == 'accepted' && !a.isInactiveByLogin)
+              .length;
+          const pendingStaff = 0;
+          final inactiveStaff = visibleStaff
+              .where((a) => a.status == 'accepted' && a.isInactiveByLogin)
+              .length;
+
+          return Stack(
+            children: [
+              // Purple blobs background
+              Positioned(
+                top: -80,
+                right: -60,
+                child: Container(
+                  width: 260,
+                  height: 260,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: AppColors.primaryDark.withOpacity(0.07),
+                  ),
+                ),
+              ),
+              Positioned(
+                bottom: 100,
+                left: -70,
+                child: Container(
+                  width: 200,
+                  height: 200,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: AppColors.primary.withOpacity(0.06),
+                  ),
+                ),
+              ),
+
+              Column(
+                children: [
+                  _buildAdminHeader(context),
+                  const SizedBox(height: 18),
+
+                  // Stats row
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: _buildStatsRow(
+                      total: totalStaff,
+                      active: activeStaff,
+                      pending: pendingStaff,
+                      deactivated: inactiveStaff,
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: _buildDeactivatedStaffButton(deactivatedStaff),
+                  ),
+                  const SizedBox(height: 18),
+
+                  // Section label
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 4,
+                          height: 18,
+                          decoration: BoxDecoration(
+                            gradient: const LinearGradient(
+                              colors: [
+                                AppColors.primaryDark,
+                                AppColors.primary,
+                              ],
+                              begin: Alignment.topCenter,
+                              end: Alignment.bottomCenter,
+                            ),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        const Text(
+                          'All Staff',
+                          style: TextStyle(
+                            color: AppColors.primaryDeep,
+                            fontWeight: FontWeight.w800,
+                            fontSize: 16,
+                            letterSpacing: 0.2,
+                          ),
+                        ),
+                        const Spacer(),
+                        if (snapshot.connectionState == ConnectionState.waiting)
+                          const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: AppColors.primaryDark,
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+
+                  // Admin list
+                  Expanded(
+                    child:
+                        visibleStaff.isEmpty &&
+                            snapshot.connectionState != ConnectionState.waiting
+                        ? _buildAdminEmptyState()
+                        : ListView.builder(
+                            padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
+                            itemCount: visibleStaff.length,
+                            itemBuilder: (context, index) {
+                              return _AnimatedAdminCard(
+                                index: index,
+                                admin: visibleStaff[index],
+                                isInactiveByLogin:
+                                    visibleStaff[index].isInactiveByLogin,
+                                onDeactivate: () => _updateAdminStatus(
+                                  visibleStaff[index],
+                                  'deactivated',
+                                ),
+                                onActivate: () => _updateAdminStatus(
+                                  visibleStaff[index],
+                                  'accepted',
+                                ),
+                              );
+                            },
+                          ),
+                  ),
+                ],
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildAdminHeader(BuildContext context) {
+    final topPadding = MediaQuery.of(context).padding.top;
+
+    return Container(
+      width: double.infinity,
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          colors: [AppColors.primaryDark, AppColors.primary, AppColors.primary],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: const BorderRadius.only(
+          bottomLeft: Radius.circular(36),
+          bottomRight: Radius.circular(36),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.primaryDark.withOpacity(0.38),
+            blurRadius: 28,
+            offset: const Offset(0, 14),
+          ),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: const BorderRadius.only(
+          bottomLeft: Radius.circular(36),
+          bottomRight: Radius.circular(36),
+        ),
+        child: Stack(
+          children: [
+            Positioned(
+              top: -30,
+              right: -30,
+              child: Container(
+                width: 190,
+                height: 190,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: Colors.white.withOpacity(0.09),
+                ),
+              ),
+            ),
+            Positioned(
+              bottom: -40,
+              right: 70,
+              child: Container(
+                width: 140,
+                height: 140,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: Colors.white.withOpacity(0.06),
+                ),
+              ),
+            ),
+            Positioned(
+              bottom: 18,
+              left: -35,
+              child: Container(
+                width: 120,
+                height: 120,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: Colors.white.withOpacity(0.06),
+                ),
+              ),
+            ),
+            Padding(
+              padding: EdgeInsets.fromLTRB(22, topPadding + 16, 22, 30),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Back button — closes admin panel
+                  GestureDetector(
+                    onTap: _toggleAdminPanel,
+                    child: Container(
+                      width: 40,
+                      height: 40,
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.18),
+                        borderRadius: BorderRadius.circular(13),
+                        border: Border.all(
+                          color: Colors.white.withOpacity(0.30),
+                          width: 1,
+                        ),
+                      ),
+                      child: const Icon(
+                        Icons.arrow_back_ios_new_rounded,
+                        color: Colors.white,
+                        size: 17,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 26),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 5,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.18),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: const Text(
+                      'STAFF ACCESS',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 2.0,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  const Text(
+                    'Staff Management',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 20,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: 0.3,
+                      height: 1.1,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Monitor active and inactive staff accounts',
+                    style: TextStyle(
+                      color: Colors.white.withOpacity(0.78),
+                      fontSize: 14,
+                      fontWeight: FontWeight.w400,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStatsRow({
+    required int total,
+    required int active,
+    required int pending,
+    required int deactivated,
+  }) {
+    return Row(
+      children: [
+        _buildStatCard(
+          label: 'Total',
+          count: total,
+          colors: [AppColors.primaryDeep, AppColors.primaryDark],
+          icon: Icons.groups_rounded,
+        ),
+        const SizedBox(width: 10),
+        _buildStatCard(
+          label: 'Active',
+          count: active,
+          colors: [AppColors.primaryDeep, AppColors.primaryDark],
+          icon: Icons.verified_user_rounded,
+        ),
+        const SizedBox(width: 10),
+        _buildStatCard(
+          label: 'Deactivated',
+          count: pending,
+          colors: [AppColors.primaryDeep, AppColors.primaryDark],
+          icon: Icons.pending_rounded,
+        ),
+        const SizedBox(width: 10),
+        _buildStatCard(
+          label: 'Inactive',
+          count: deactivated,
+          colors: [AppColors.primaryDeep, AppColors.primaryDark],
+          icon: Icons.block_rounded,
+        ),
+      ],
+    );
+  }
+
+  Widget _buildStatCard({
+    required String label,
+    required int count,
+    required List<Color> colors,
+    required IconData icon,
+    VoidCallback? onTap,
+  }) {
+    return Expanded(
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(18),
+        child: _AnimatedCountCard(
+          label: label,
+          count: count,
+          colors: colors,
+          icon: icon,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDeactivatedStaffButton(List<AdminModel> deactivatedStaff) {
+    return InkWell(
+      onTap: () => _showDeactivatedStaffSheet(deactivatedStaff),
+      borderRadius: BorderRadius.circular(18),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: AppColors.blush, width: 1.2),
+          boxShadow: [
+            BoxShadow(
+              color: AppColors.primaryDark.withOpacity(0.08),
+              blurRadius: 14,
+              offset: const Offset(0, 6),
+            ),
+          ],
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 38,
+              height: 38,
+              decoration: BoxDecoration(
+                color: AppColors.surfaceTint,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Icon(
+                Icons.restore_rounded,
+                color: AppColors.accent,
+                size: 20,
+              ),
+            ),
+            const SizedBox(width: 12),
+            const Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Deactivated Staff',
+                    style: TextStyle(
+                      color: AppColors.primaryDeep,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  SizedBox(height: 2),
+                  Text(
+                    'View and restore deactivated staff',
+                    style: TextStyle(
+                      color: Colors.grey,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              decoration: BoxDecoration(
+                color: AppColors.surfaceTint,
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Text(
+                '${deactivatedStaff.length}',
+                style: const TextStyle(
+                  color: AppColors.accent,
+                  fontWeight: FontWeight.w900,
+                  fontSize: 13,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showDeactivatedStaffSheet(List<AdminModel> staff) {
+    showDialog<void>(
+      context: context,
+      builder: (dialogContext) => Dialog(
+        insetPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 20),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        child: SizedBox(
+          width: 1000,
+          height: MediaQuery.sizeOf(context).height * .75,
+          child: Column(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(20),
+                decoration: const BoxDecoration(
+                  color: AppColors.primaryDark,
+                  borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+                ),
+                child: Row(
+                  children: [
+                    const Expanded(
+                      child: Text(
+                        'Deactivated staff',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 17,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: () => Navigator.pop(dialogContext),
+                      icon: const Icon(Icons.close, color: Colors.white),
+                    ),
+                  ],
+                ),
+              ),
+              Expanded(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.all(20),
+                  child: InventoryRecordsTable(
+                    headings: const ['Staff ID', 'Staff', 'Reason', 'Actions'],
+                    flex: const {0: 1, 1: 2, 2: 3, 3: 2},
+                    rows: staff
+                        .map(
+                          (member) => <Widget>[
+                            Text(publicItemId(member.publicId)),
+                            Text(
+                              '${member.firstName} ${member.lastName}',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            Text(
+                              '${member.details['deactivationReason'] ?? 'Not recorded'}',
+                            ),
+                            Wrap(
+                              children: [
+                                IconButton(
+                                  tooltip: 'View info',
+                                  icon: const Icon(Icons.info_outline),
+                                  onPressed: () => showDialog<void>(
+                                    context: context,
+                                    builder: (context) => AlertDialog(
+                                      title: Text(
+                                        '${member.firstName} ${member.lastName}',
+                                      ),
+                                      content: SizedBox(
+                                        width: 480,
+                                        child: SingleChildScrollView(
+                                          child: Column(
+                                            mainAxisSize: MainAxisSize.min,
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              for (final key in [
+                                                'staffId',
+                                                'firstName',
+                                                'middleName',
+                                                'lastName',
+                                                'email',
+                                                'age',
+                                                'gender',
+                                                'phone',
+                                                'contactNumber',
+                                                'address',
+                                                'role',
+                                                'status',
+                                                'deactivationReason',
+                                              ])
+                                                if (member.details[key] != null)
+                                                  Padding(
+                                                    padding:
+                                                        const EdgeInsets.symmetric(
+                                                          vertical: 5,
+                                                        ),
+                                                    child: Text(
+                                                      '$key: ${member.details[key]}',
+                                                    ),
+                                                  ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                      actions: [
+                                        TextButton(
+                                          onPressed: () =>
+                                              Navigator.pop(context),
+                                          child: const Text('Close'),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                                IconButton(
+                                  tooltip: 'Restore',
+                                  icon: const Icon(Icons.restore),
+                                  onPressed: () async {
+                                    await _updateAdminStatus(
+                                      member,
+                                      'accepted',
+                                    );
+                                    if (dialogContext.mounted) {
+                                      Navigator.pop(dialogContext);
+                                    }
+                                  },
+                                ),
+                              ],
+                            ),
+                          ],
+                        )
+                        .toList(),
+                  ),
+                ),
+              ),
+              if (staff.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.all(20),
+                  child: Text('No deactivated staff.'),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAdminEmptyState() {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Container(
+            width: 120,
+            height: 120,
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: [
+                  AppColors.primaryDark.withOpacity(0.10),
+                  AppColors.primary.withOpacity(0.15),
+                ],
+              ),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              Icons.groups_2_outlined,
+              size: 55,
+              color: AppColors.primaryDark.withOpacity(0.45),
+            ),
+          ),
+          const SizedBox(height: 22),
+          const Text(
+            'No Staff Found',
+            style: TextStyle(
+              fontSize: 20,
+              fontWeight: FontWeight.w800,
+              color: AppColors.primaryDeep,
+            ),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            'Staff members\nwill be listed here.',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 14,
+              color: Colors.grey.shade500,
+              height: 1.6,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _updateAdminStatus(AdminModel admin, String newStatus) async {
+    String? reason;
+    if (newStatus == 'deactivated') {
+      reason = await showDialog<String>(
+        context: context,
+        builder: (_) => StaffDeactivationDialog(
+          name: '${admin.firstName} ${admin.lastName}',
+        ),
+      );
+      if (reason == null) return;
+    }
+    try {
+      await FirebaseFirestore.instance
+          .collection('staff_requests')
+          .doc(admin.id)
+          .update({
+            'status': newStatus,
+            'deactivationReason': ?reason,
+            if (reason != null) 'deactivatedAt': FieldValue.serverTimestamp(),
+          });
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            newStatus == 'accepted' ? 'Staff activated.' : 'Staff deactivated.',
+          ),
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: AppColors.primaryDark,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Failed to update staff status.'),
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: AppColors.primaryDark,
+        ),
+      );
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // ─── STAFF PAGE WIDGETS ─────────────────────────────────
+  // ═══════════════════════════════════════════════════════════
+
+  Widget _buildStaffManagementButton(BuildContext context) {
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: _staffStream,
+      builder: (context, snapshot) {
+        final staffCount =
+            snapshot.data?.docs
+                .map((d) => AdminModel.fromDoc(d))
+                .where(
+                  (member) =>
+                      member.isValidStaff && member.status == 'accepted',
+                )
+                .length ??
+            0;
+
+        return GestureDetector(
+          onTap: _toggleAdminPanel,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                colors: [
+                  AppColors.primaryDark,
+                  AppColors.primary,
+                  AppColors.accent,
+                ],
+                begin: Alignment.centerLeft,
+                end: Alignment.centerRight,
+              ),
+              borderRadius: BorderRadius.circular(20),
+              boxShadow: [
+                BoxShadow(
+                  color: AppColors.primary.withOpacity(0.30),
+                  blurRadius: 20,
+                  offset: const Offset(0, 8),
+                ),
+              ],
+            ),
+            child: Row(
+              children: [
+                Container(
+                  width: 46,
+                  height: 46,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.20),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(
+                      color: Colors.white.withOpacity(0.30),
+                      width: 1,
+                    ),
+                  ),
+                  child: const Icon(
+                    Icons.groups_2_rounded,
+                    color: Colors.white,
+                    size: 22,
+                  ),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Staff Management',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w800,
+                          fontSize: 20,
+                          letterSpacing: 0.2,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        'View active and inactive staff accounts',
+                        style: TextStyle(
+                          color: Colors.white.withOpacity(0.75),
+                          fontSize: 12,
+                          fontWeight: FontWeight.w400,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 5,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.22),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(
+                          color: Colors.white.withOpacity(0.35),
+                          width: 1,
+                        ),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Container(
+                            width: 7,
+                            height: 7,
+                            decoration: const BoxDecoration(
+                              color: Color(0xFF69FF97),
+                              shape: BoxShape.circle,
+                            ),
+                          ),
+                          const SizedBox(width: 5),
+                          Text(
+                            '$staffCount',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w800,
+                              fontSize: 13,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    AnimatedRotation(
+                      turns: _showAdminPanel ? 0.5 : 0.0,
+                      duration: const Duration(milliseconds: 300),
+                      child: const Icon(
+                        Icons.arrow_forward_ios_rounded,
+                        color: Colors.white,
+                        size: 13,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildHeader(BuildContext context) {
+    final topPadding = MediaQuery.of(context).padding.top;
+
+    return Container(
+      width: double.infinity,
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          colors: [
+            AppColors.primaryDeep,
+            AppColors.primaryDark,
+            AppColors.primaryDark,
+          ],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: const BorderRadius.only(
+          bottomLeft: Radius.circular(36),
+          bottomRight: Radius.circular(36),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.primary.withOpacity(0.35),
+            blurRadius: 28,
+            offset: const Offset(0, 14),
+          ),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: const BorderRadius.only(
+          bottomLeft: Radius.circular(36),
+          bottomRight: Radius.circular(36),
+        ),
+        child: Stack(
+          children: [
+            Positioned(
+              top: -30,
+              right: -30,
+              child: Container(
+                width: 180,
+                height: 180,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: Colors.white.withOpacity(0.10),
+                ),
+              ),
+            ),
+            Positioned(
+              bottom: -40,
+              right: 60,
+              child: Container(
+                width: 130,
+                height: 130,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: Colors.white.withOpacity(0.07),
+                ),
+              ),
+            ),
+            Positioned(
+              bottom: 15,
+              left: -35,
+              child: Container(
+                width: 110,
+                height: 110,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: Colors.white.withOpacity(0.06),
+                ),
+              ),
+            ),
+            Padding(
+              padding: EdgeInsets.fromLTRB(22, topPadding + 16, 22, 30),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 5,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.20),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: const Text(
+                      'MANAGEMENT',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 2.0,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  const Text(
+                    'Staff Section',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 20,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: 0.3,
+                      height: 1.1,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Create and manage staff accounts',
+                    style: TextStyle(
+                      color: Colors.white.withOpacity(0.80),
+                      fontSize: 14,
+                      fontWeight: FontWeight.w400,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTabBar({required int pendingCount}) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Container(
+        height: 48,
+        decoration: BoxDecoration(
+          color: AppColors.rose.withOpacity(0.10),
+          borderRadius: BorderRadius.circular(15),
+        ),
+        child: TabBar(
+          controller: _tabController,
+          indicator: BoxDecoration(
+            gradient: const LinearGradient(
+              colors: [Color(0xFFFF5F96), AppColors.primary],
+            ),
+            borderRadius: BorderRadius.circular(13),
+            boxShadow: [
+              BoxShadow(
+                color: AppColors.primary.withOpacity(0.30),
+                blurRadius: 10,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          indicatorSize: TabBarIndicatorSize.tab,
+          dividerColor: Colors.transparent,
+          labelColor: Colors.white,
+          unselectedLabelColor: AppColors.accent,
+          labelStyle: const TextStyle(
+            fontWeight: FontWeight.w700,
+            fontSize: 13,
+          ),
+          unselectedLabelStyle: const TextStyle(
+            fontWeight: FontWeight.w600,
+            fontSize: 13,
+          ),
+          onTap: (_) => setState(() {}),
+          tabs: [
+            Tab(
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(Icons.person_add_alt_1_rounded, size: 16),
+                  const SizedBox(width: 6),
+                  const Text('Create'),
+                ],
+              ),
+            ),
+            Tab(
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(Icons.people_alt_rounded, size: 16),
+                  const SizedBox(width: 6),
+                  const Text('Staff Accounts'),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPendingTab(List<StaffApplicant> pending) {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+      child: _buildCreateStaffForm(),
+    );
+  }
+
+  Widget _buildCreateStaffForm() {
+    return AutofillGroup(
+      child: Form(
+        key: _createStaffFormKey,
+        autovalidateMode: AutovalidateMode.disabled,
+        child: Container(
+          padding: const EdgeInsets.all(18),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(22),
+            boxShadow: [
+              BoxShadow(
+                color: AppColors.brand.withOpacity(0.08),
+                blurRadius: 18,
+                offset: const Offset(0, 7),
+              ),
+            ],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Staff Create Account',
+                style: TextStyle(
+                  color: AppColors.text,
+                  fontWeight: FontWeight.w900,
+                  fontSize: 20,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'Fill up the staff information and create the account directly.',
+                style: TextStyle(color: Colors.grey.shade600, fontSize: 13),
+              ),
+              const SizedBox(height: 18),
+              DropdownButtonFormField<String>(
+                initialValue: _createRole,
+                decoration: const InputDecoration(labelText: 'Select role'),
+                items: const [
+                  DropdownMenuItem(value: 'admin', child: Text('Admin')),
+                  DropdownMenuItem(value: 'staff', child: Text('Cashier')),
+                ],
+                onChanged: (value) => _createRole = value!,
+              ),
+              const SizedBox(height: 12),
+              const Text(
+                'Assign this account to a branch before it can log in.',
+              ),
+              _buildCreateField(
+                _firstNameController,
+                'First Name',
+                validator: (value) =>
+                    validateStaffName(value, label: 'First Name'),
+              ),
+              _buildCreateField(
+                _middleNameController,
+                'Middle Name',
+                requiredField: false,
+                validator: (value) => validateStaffName(
+                  value,
+                  label: 'Middle Name',
+                  isRequired: false,
+                ),
+              ),
+              _buildCreateField(
+                _lastNameController,
+                'Last Name',
+                validator: (value) =>
+                    validateStaffName(value, label: 'Last Name'),
+              ),
+              _buildCreateField(
+                _ageController,
+                'Age',
+                keyboardType: TextInputType.number,
+                validator: validateStaffAge,
+              ),
+              _buildCreateField(
+                _phoneController,
+                'Phone Number',
+                keyboardType: TextInputType.phone,
+                validator: validateStaffPhone,
+              ),
+              _buildCreateField(
+                _addressController,
+                'Address',
+                requiredField: false,
+                maxLines: 2,
+              ),
+              _buildCreateField(
+                _emailController,
+                'Email',
+                keyboardType: TextInputType.emailAddress,
+                validator: validateStaffEmail,
+              ),
+              _buildCreateField(
+                _passwordController,
+                'Password',
+                obscureText: true,
+                autofillHints: const [AutofillHints.newPassword],
+                validator: validateStaffPassword,
+                onChanged: (_) {
+                  if (_confirmPasswordFieldKey
+                          .currentState
+                          ?.hasInteractedByUser ==
+                      true) {
+                    _confirmPasswordFieldKey.currentState?.validate();
+                  }
+                },
+              ),
+              _buildCreateField(
+                _confirmPasswordController,
+                'Confirm Password',
+                obscureText: true,
+                fieldKey: _confirmPasswordFieldKey,
+                autofillHints: const [AutofillHints.newPassword],
+                validator: (value) => validateStaffPasswordConfirmation(
+                  value,
+                  _passwordController.text,
+                ),
+              ),
+              const SizedBox(height: 12),
+              SizedBox(
+                width: double.infinity,
+                height: 52,
+                child: ElevatedButton.icon(
+                  onPressed: _isCreatingStaff ? null : _createStaffAccount,
+                  icon: _isCreatingStaff
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : const Icon(Icons.person_add_alt_1_rounded),
+                  label: Text(
+                    _isCreatingStaff ? 'Creating...' : 'Create Account',
+                    style: const TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primary,
+                    foregroundColor: Colors.white,
+                    elevation: 0,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCreateField(
+    TextEditingController controller,
+    String label, {
+    bool requiredField = true,
+    bool obscureText = false,
+    int maxLines = 1,
+    TextInputType keyboardType = TextInputType.text,
+    String? Function(String?)? validator,
+    Key? fieldKey,
+    List<String>? autofillHints,
+    ValueChanged<String>? onChanged,
+  }) {
+    final effectiveMaxLines = obscureText ? 1 : maxLines;
+    final effectiveKeyboardType =
+        effectiveMaxLines > 1 && keyboardType == TextInputType.text
+        ? TextInputType.multiline
+        : keyboardType;
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: TextFormField(
+        key: fieldKey ?? PageStorageKey<String>('staff_create_field_$label'),
+        controller: controller,
+        obscureText: obscureText,
+        maxLines: effectiveMaxLines,
+        keyboardType: effectiveKeyboardType,
+        autofillHints: autofillHints,
+        autovalidateMode: AutovalidateMode.onUserInteraction,
+        onChanged: onChanged,
+        textInputAction: effectiveMaxLines > 1
+            ? TextInputAction.newline
+            : TextInputAction.next,
+        validator:
+            validator ??
+            (value) {
+              if (requiredField && (value?.trim().isEmpty ?? true)) {
+                return '$label is required.';
+              }
+              return null;
+            },
+        decoration: InputDecoration(
+          labelText: label,
+          filled: true,
+          fillColor: const Color(0xFFFFF8FA),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(16),
+            borderSide: const BorderSide(color: AppColors.blush),
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(16),
+            borderSide: const BorderSide(color: AppColors.blush),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(16),
+            borderSide: const BorderSide(color: AppColors.primary, width: 1.5),
+          ),
+          errorBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(16),
+            borderSide: const BorderSide(color: Colors.red, width: 1.5),
+          ),
+          focusedErrorBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(16),
+            borderSide: const BorderSide(color: Colors.red, width: 1.5),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAcceptedTab(List<StaffApplicant> accepted) {
+    if (accepted.isEmpty) {
+      return _buildEmptyState(
+        icon: Icons.people_outline_rounded,
+        title: 'No Staff Accounts',
+        subtitle: 'Created staff accounts\nwill be shown here.',
+      );
+    }
+    final screenWidth = MediaQuery.of(context).size.width;
+    final isCompact = screenWidth < 650;
+
+    return GridView.builder(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+      itemCount: accepted.length,
+      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: isCompact ? 1 : 2,
+        mainAxisSpacing: 14,
+        crossAxisSpacing: isCompact ? 0 : 14,
+        childAspectRatio: isCompact ? 1.05 : 0.88,
+      ),
+      itemBuilder: (context, index) {
+        return _AnimatedListItem(
+          index: index,
+          child: _buildAcceptedCard(accepted[index], index),
+        );
+      },
+    );
+  }
+
+  Widget _buildEmptyState({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+  }) {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Container(
+            width: 120,
+            height: 120,
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: [
+                  AppColors.rose.withOpacity(0.12),
+                  const Color(0xFFFFCDD2).withOpacity(0.22),
+                ],
+              ),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              icon,
+              size: 52,
+              color: AppColors.rose.withOpacity(0.50),
+            ),
+          ),
+          const SizedBox(height: 22),
+          Text(
+            title,
+            style: const TextStyle(
+              fontSize: 20,
+              fontWeight: FontWeight.w800,
+              color: Color(0xFF5D3A3A),
+            ),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            subtitle,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 14,
+              color: Colors.grey.shade500,
+              height: 1.6,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildApplicantCard(StaffApplicant applicant, int index) {
+    final List<List<Color>> gradients = [
+      [AppColors.primaryDeep, AppColors.primaryDark],
+      [AppColors.primaryDeep, AppColors.primaryDark],
+      [AppColors.primaryDeep, AppColors.primaryDark],
+      [AppColors.primaryDeep, AppColors.primaryDark],
+    ];
+    final gradient = gradients[index % gradients.length];
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(22),
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.brand.withOpacity(0.07),
+            blurRadius: 16,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: Column(
+        children: [
+          Container(
+            height: 5,
+            decoration: BoxDecoration(
+              gradient: LinearGradient(colors: gradient),
+              borderRadius: const BorderRadius.only(
+                topLeft: Radius.circular(22),
+                topRight: Radius.circular(22),
+              ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(
+              children: [
+                Container(
+                  width: 54,
+                  height: 54,
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: gradient,
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                    shape: BoxShape.circle,
+                    boxShadow: [
+                      BoxShadow(
+                        color: gradient[0].withOpacity(0.35),
+                        blurRadius: 10,
+                        offset: const Offset(0, 4),
+                      ),
+                    ],
+                  ),
+                  child: Center(
+                    child: Text(
+                      applicant.initials,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w900,
+                        fontSize: 18,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '${applicant.firstName} ${applicant.lastName}',
+                        style: const TextStyle(
+                          color: AppColors.text,
+                          fontWeight: FontWeight.w800,
+                          fontSize: 15,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        applicant.role.isEmpty
+                            ? 'No role specified'
+                            : applicant.role,
+                        style: TextStyle(
+                          color: Colors.grey.shade500,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                      const SizedBox(height: 5),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 3,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.orange.shade50,
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(
+                            color: Colors.orange.shade200,
+                            width: 1,
+                          ),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              width: 6,
+                              height: 6,
+                              decoration: BoxDecoration(
+                                color: Colors.orange.shade400,
+                                shape: BoxShape.circle,
+                              ),
+                            ),
+                            const SizedBox(width: 5),
+                            Text(
+                              'Waiting for approval',
+                              style: TextStyle(
+                                color: Colors.orange.shade700,
+                                fontSize: 10,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+            child: Row(
+              children: [
+                Expanded(
+                  child: GestureDetector(
+                    onTap: () async =>
+                        await _updateApplicantStatus(applicant, 'rejected'),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(vertical: 11),
+                      decoration: BoxDecoration(
+                        color: AppColors.surfaceTint,
+                        borderRadius: BorderRadius.circular(13),
+                        border: Border.all(color: Colors.red.shade100),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(
+                            Icons.close_rounded,
+                            color: Colors.red.shade400,
+                            size: 16,
+                          ),
+                          const SizedBox(width: 5),
+                          Text(
+                            'Decline',
+                            style: TextStyle(
+                              color: Colors.red.shade400,
+                              fontWeight: FontWeight.w700,
+                              fontSize: 13,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: GestureDetector(
+                    onTap: () async {
+                      await _updateApplicantStatus(applicant, 'accepted');
+                      _tabController.animateTo(1);
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(vertical: 11),
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(colors: gradient),
+                        borderRadius: BorderRadius.circular(13),
+                        boxShadow: [
+                          BoxShadow(
+                            color: gradient[0].withOpacity(0.35),
+                            blurRadius: 10,
+                            offset: const Offset(0, 4),
+                          ),
+                        ],
+                      ),
+                      child: const Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(
+                            Icons.check_rounded,
+                            color: Colors.white,
+                            size: 16,
+                          ),
+                          SizedBox(width: 5),
+                          Text(
+                            'Accept',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w700,
+                              fontSize: 13,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAcceptedCard(StaffApplicant applicant, int index) {
+    final List<List<Color>> gradients = [
+      [AppColors.primaryDeep, AppColors.primaryDark],
+      [AppColors.primaryDeep, AppColors.primaryDark],
+      [AppColors.primaryDeep, AppColors.primaryDark],
+      [AppColors.primaryDeep, AppColors.primaryDark],
+    ];
+    final gradient = gradients[index % gradients.length];
+
+    return GestureDetector(
+      onTap: () => _showStaffDetails(applicant, index),
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(22),
+          boxShadow: [
+            BoxShadow(
+              color: AppColors.brand.withOpacity(0.08),
+              blurRadius: 18,
+              offset: const Offset(0, 7),
+            ),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Container(
+              height: 6,
+              decoration: BoxDecoration(
+                gradient: LinearGradient(colors: gradient),
+                borderRadius: const BorderRadius.only(
+                  topLeft: Radius.circular(22),
+                  topRight: Radius.circular(22),
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Container(
+              width: 62,
+              height: 62,
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: gradient,
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+                shape: BoxShape.circle,
+                boxShadow: [
+                  BoxShadow(
+                    color: gradient[0].withOpacity(0.40),
+                    blurRadius: 12,
+                    offset: const Offset(0, 5),
+                  ),
+                ],
+              ),
+              child: Center(
+                child: Text(
+                  applicant.initials,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w900,
+                    fontSize: 20,
+                    letterSpacing: 1,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+              child: Text(
+                '${applicant.firstName} ${applicant.middleName.isNotEmpty ? '${applicant.middleName} ' : ''}${applicant.lastName}',
+                textAlign: TextAlign.center,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: AppColors.text,
+                  fontWeight: FontWeight.w800,
+                  fontSize: 14,
+                  height: 1.3,
+                ),
+              ),
+            ),
+            const SizedBox(height: 4),
+            if (applicant.staffId.isNotEmpty)
+              Text(
+                'ID: ${publicItemId(applicant.staffId)}',
+                style: const TextStyle(color: Color(0xFF7A6D6D), fontSize: 11),
+              ),
+            const SizedBox(height: 5),
+            if (applicant.role.isNotEmpty)
+              Container(
+                margin: const EdgeInsets.symmetric(horizontal: 12),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 3,
+                ),
+                decoration: BoxDecoration(
+                  color: gradient[0].withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text(
+                  applicant.role,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: gradient[1],
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            const Spacer(),
+            Container(
+              margin: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [
+                    gradient[0].withOpacity(0.10),
+                    gradient[1].withOpacity(0.15),
+                  ],
+                ),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    Icons.remove_red_eye_outlined,
+                    size: 13,
+                    color: gradient[1],
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    'View Profile',
+                    style: TextStyle(
+                      color: gradient[1],
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _updateApplicantStatus(
+    StaffApplicant applicant,
+    String newStatus,
+  ) async {
+    String? reason;
+    if (newStatus == 'deactivated') {
+      reason = await showDialog<String>(
+        context: context,
+        builder: (_) => StaffDeactivationDialog(
+          name: '${applicant.firstName} ${applicant.lastName}',
+        ),
+      );
+      if (reason == null) return;
+    }
+    try {
+      await FirebaseFirestore.instance
+          .collection('staff_requests')
+          .doc(applicant.id)
+          .update({
+            'status': newStatus,
+            'deactivationReason': ?reason,
+            if (reason != null) 'deactivatedAt': FieldValue.serverTimestamp(),
+          });
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            newStatus == 'accepted'
+                ? 'Applicant accepted.'
+                : newStatus == 'deactivated'
+                ? 'Applicant deactivated.'
+                : 'Applicant declined.',
+          ),
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: AppColors.primary,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Unable to update applicant status.'),
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: AppColors.primaryDark,
+        ),
+      );
+    }
+  }
+
+  String _pad(int value, [int width = 3]) =>
+      value.toString().padLeft(width, '0');
+
+  Future<String> _generateStaffId(String role) async {
+    final isAdmin = role == 'admin';
+    final prefix = isAdmin ? 'ADM' : 'STF';
+    final existingAccounts = await FirebaseFirestore.instance
+        .collection('staff_requests')
+        .get();
+    final accountData = existingAccounts.docs.map((doc) => doc.data()).toList();
+    final counterDocRef = FirebaseFirestore.instance
+        .collection('counters')
+        .doc(isAdmin ? 'admin' : 'staff');
+    final count = await FirebaseFirestore.instance.runTransaction<int>((
+      transaction,
+    ) async {
+      final snapshot = await transaction.get(counterDocRef);
+      final current = snapshot.data()?['count'] as int? ?? 0;
+      final nextId = nextStaffPublicId(
+        role: role,
+        accounts: accountData,
+        counter: current,
+      );
+      final nextCount = int.parse(nextId.substring(prefix.length + 1));
+      transaction.set(counterDocRef, {
+        'count': nextCount,
+        'lastUpdated': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+      return nextCount;
+    });
+    return '$prefix-${_pad(count)}';
+  }
+
+  Future<void> _createStaffAccount() async {
+    if (!mounted || _isCreatingStaff) return;
+    if (!(_createStaffFormKey.currentState?.validate() ?? false)) return;
+    final role = _createRole;
+    final password = _passwordController.text.trim();
+    final confirmPassword = _confirmPasswordController.text.trim();
+    if (password != confirmPassword) {
+      _showStaffCreateSnack('Passwords do not match.', isError: true);
+      return;
+    }
+
+    FocusScope.of(context).unfocus();
+    setState(() {
+      _isCreatingStaff = true;
+      _creating.value = true;
+    });
+    FirebaseApp? secondaryApp;
+    UserCredential? createdCredential;
+    try {
+      final staffId = await _generateStaffId(role);
+      secondaryApp = await Firebase.initializeApp(
+        name: 'staffCreate${DateTime.now().microsecondsSinceEpoch}',
+        options: Firebase.app().options,
+      );
+      final secondaryAuth = FirebaseAuth.instanceFor(app: secondaryApp);
+      createdCredential = await secondaryAuth.createUserWithEmailAndPassword(
+        email: _emailController.text.trim(),
+        password: password,
+      );
+      final uid = createdCredential.user?.uid;
+      if (uid == null) throw Exception('Unable to create auth account.');
+
+      await FirebaseFirestore.instance
+          .collection('staff_requests')
+          .doc(uid)
+          .set({
+            'email': _emailController.text.trim(),
+            'role': role,
+            'createdByRole': 'super_admin',
+            'requiresBranchAssignment': true,
+            'branchIds': <String>[],
+            'firstName': _firstNameController.text.trim(),
+            'middleName': _middleNameController.text.trim(),
+            'lastName': _lastNameController.text.trim(),
+            'age': int.tryParse(_ageController.text.trim()) ?? 0,
+            'phone': _phoneController.text.trim(),
+            'address': _addressController.text.trim(),
+            'status': 'accepted',
+            'uid': uid,
+            'userId': uid,
+            if (role == 'staff') 'staffId': staffId,
+            if (role == 'admin') 'adminId': staffId,
+            'username': staffId,
+            'loginPassword': password,
+            'mustChangePassword': false,
+            'createdBy': SuperAdmin.id,
+            'createdAt': FieldValue.serverTimestamp(),
+          });
+
+      await ActivityLog.record(
+        'account_created',
+        'Created ${role == 'admin' ? 'admin' : 'cashier'} account $staffId',
+        details: {
+          'accountId': uid,
+          'username': staffId,
+          'role': role,
+          'name': [
+            _firstNameController.text.trim(),
+            _middleNameController.text.trim(),
+            _lastNameController.text.trim(),
+          ].where((part) => part.isNotEmpty).join(' '),
+          'email': _emailController.text.trim(),
+          'branchAssignment': 'Not assigned yet',
+          'status': 'Active',
+        },
+      );
+      await secondaryAuth.signOut();
+      if (!mounted) return;
+      _clearCreateStaffForm();
+      setState(() {
+        _isCreatingStaff = false;
+        _creating.value = false;
+      });
+      if (!mounted) return;
+      if (_createSheetContext?.mounted == true) {
+        Navigator.pop(_createSheetContext!);
+      }
+      _showStaffCreateSnack('Staff account created: $staffId');
+    } on FirebaseAuthException catch (e) {
+      if (createdCredential?.user != null) {
+        try {
+          await createdCredential!.user!.delete();
+        } catch (_) {}
+      }
+      final message = e.code == 'email-already-in-use'
+          ? 'This email is already registered.'
+          : e.message ?? 'Unable to create staff account.';
+      _showStaffCreateSnack(message, isError: true);
+    } catch (e) {
+      _showStaffCreateSnack(
+        'Unable to create staff account: $e',
+        isError: true,
+      );
+    } finally {
+      if (secondaryApp != null) {
+        try {
+          await secondaryApp.delete();
+        } catch (_) {}
+      }
+      if (mounted) {
+        setState(() {
+          _isCreatingStaff = false;
+          _creating.value = false;
+        });
+      }
+    }
+  }
+
+  void _clearCreateStaffForm() {
+    _firstNameController.clear();
+    _middleNameController.clear();
+    _lastNameController.clear();
+    _ageController.clear();
+    _phoneController.clear();
+    _addressController.clear();
+    _emailController.clear();
+    _passwordController.clear();
+    _confirmPasswordController.clear();
+  }
+
+  void _showStaffCreateSnack(String message, {bool isError = false}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: isError
+            ? AppColors.primaryDark
+            : const Color(0xFF4A7C59),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      ),
+    );
+  }
+
+  void _showStaffDetails(StaffApplicant applicant, int index) {
+    final List<List<Color>> gradients = [
+      [AppColors.primaryDeep, AppColors.primaryDark],
+      [AppColors.primaryDeep, AppColors.primaryDark],
+      [AppColors.primaryDeep, AppColors.primaryDark],
+      [AppColors.primaryDeep, AppColors.primaryDark],
+    ];
+    final gradient = gradients[index % gradients.length];
+
+    showGeneralDialog(
+      context: context,
+      barrierColor: Colors.black.withOpacity(0.50),
+      barrierDismissible: true,
+      barrierLabel: '',
+      transitionDuration: const Duration(milliseconds: 350),
+      pageBuilder: (_, _, _) => const SizedBox.shrink(),
+      transitionBuilder: (context, animation, _, _) {
+        final curved = CurvedAnimation(
+          parent: animation,
+          curve: Curves.easeOutBack,
+        );
+        return ScaleTransition(
+          scale: Tween<double>(begin: 0.88, end: 1.0).animate(curved),
+          child: FadeTransition(
+            opacity: animation,
+            child: Dialog(
+              backgroundColor: Colors.transparent,
+              insetPadding: const EdgeInsets.symmetric(
+                horizontal: 20,
+                vertical: 40,
+              ),
+              child: Container(
+                constraints: BoxConstraints(
+                  maxHeight: MediaQuery.of(context).size.height * 0.85,
+                ),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFF8FA),
+                  borderRadius: BorderRadius.circular(30),
+                  boxShadow: [
+                    BoxShadow(
+                      color: AppColors.brand.withOpacity(0.18),
+                      blurRadius: 35,
+                      offset: const Offset(0, 12),
+                    ),
+                  ],
+                ),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(30),
+                  child: SingleChildScrollView(
+                    physics: const BouncingScrollPhysics(),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.fromLTRB(20, 30, 20, 26),
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(colors: gradient),
+                          ),
+                          child: Column(
+                            children: [
+                              Container(
+                                width: 84,
+                                height: 84,
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withOpacity(0.22),
+                                  shape: BoxShape.circle,
+                                  border: Border.all(
+                                    color: Colors.white.withOpacity(0.5),
+                                    width: 2.5,
+                                  ),
+                                ),
+                                child: Center(
+                                  child: Text(
+                                    applicant.initials,
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 30,
+                                      fontWeight: FontWeight.w900,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(height: 12),
+                              Text(
+                                [
+                                  applicant.firstName,
+                                  applicant.middleName,
+                                  applicant.lastName,
+                                ].where((s) => s.isNotEmpty).join(' '),
+                                textAlign: TextAlign.center,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 19,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                              if (applicant.role.isNotEmpty) ...[
+                                const SizedBox(height: 8),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 14,
+                                    vertical: 5,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white.withOpacity(0.22),
+                                    borderRadius: BorderRadius.circular(20),
+                                  ),
+                                  child: Text(
+                                    applicant.role,
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.all(20),
+                          child: Column(
+                            children: [
+                              _buildDetailRow(
+                                icon: Icons.badge_outlined,
+                                label: applicant.role.toLowerCase() == 'admin'
+                                    ? 'Admin ID'
+                                    : 'Staff ID',
+                                value: applicant.staffId.isEmpty
+                                    ? 'N/A'
+                                    : publicItemId(applicant.staffId),
+                                gradient: gradient,
+                              ),
+                              _buildDetailRow(
+                                icon: Icons.cake_outlined,
+                                label: 'Age',
+                                value: applicant.age.isEmpty
+                                    ? 'N/A'
+                                    : applicant.age,
+                                gradient: gradient,
+                              ),
+                              _buildDetailRow(
+                                icon: Icons.phone_outlined,
+                                label: 'Phone',
+                                value: applicant.phone.isEmpty
+                                    ? 'N/A'
+                                    : applicant.phone,
+                                gradient: gradient,
+                              ),
+                              _buildDetailRow(
+                                icon: Icons.mail_outline_rounded,
+                                label: 'Email',
+                                value: applicant.email.isEmpty
+                                    ? 'N/A'
+                                    : applicant.email,
+                                gradient: gradient,
+                              ),
+                              _buildDetailRow(
+                                icon: Icons.location_on_outlined,
+                                label: 'Address',
+                                value: applicant.address.isEmpty
+                                    ? 'N/A'
+                                    : applicant.address,
+                                gradient: gradient,
+                              ),
+                              const SizedBox(height: 8),
+                              if (applicant.isAccepted)
+                                GestureDetector(
+                                  onTap: () async {
+                                    Navigator.pop(context);
+                                    await _updateApplicantStatus(
+                                      applicant,
+                                      'deactivated',
+                                    );
+                                  },
+                                  child: Container(
+                                    width: double.infinity,
+                                    padding: const EdgeInsets.symmetric(
+                                      vertical: 14,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: AppColors.primaryDark,
+                                      borderRadius: BorderRadius.circular(16),
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: const Color(
+                                            0xFF963B58,
+                                          ).withOpacity(0.30),
+                                          blurRadius: 12,
+                                          offset: const Offset(0, 5),
+                                        ),
+                                      ],
+                                    ),
+                                    child: const Center(
+                                      child: Text(
+                                        'Deactivate Staff',
+                                        style: TextStyle(
+                                          color: Colors.white,
+                                          fontWeight: FontWeight.w700,
+                                          fontSize: 15,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              const SizedBox(height: 8),
+                              GestureDetector(
+                                onTap: () => Navigator.pop(context),
+                                child: Container(
+                                  width: double.infinity,
+                                  padding: const EdgeInsets.symmetric(
+                                    vertical: 14,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    gradient: LinearGradient(colors: gradient),
+                                    borderRadius: BorderRadius.circular(16),
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: gradient[0].withOpacity(0.40),
+                                        blurRadius: 12,
+                                        offset: const Offset(0, 5),
+                                      ),
+                                    ],
+                                  ),
+                                  child: const Center(
+                                    child: Text(
+                                      'Close',
+                                      style: TextStyle(
+                                        color: Colors.white,
+                                        fontWeight: FontWeight.w700,
+                                        fontSize: 15,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildDetailRow({
+    required IconData icon,
+    required String label,
+    required String value,
+    required List<Color> gradient,
+  }) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(15),
+        border: Border.all(color: AppColors.rose.withOpacity(0.15)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 38,
+            height: 38,
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: [
+                  gradient[0].withOpacity(0.14),
+                  gradient[1].withOpacity(0.20),
+                ],
+              ),
+              borderRadius: BorderRadius.circular(11),
+            ),
+            child: Icon(icon, color: gradient[1], size: 18),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label,
+                  style: TextStyle(
+                    color: Colors.grey.shade500,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  value,
+                  style: const TextStyle(
+                    color: AppColors.text,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ─── ANIMATED LIST ITEM ───────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════
+class _AnimatedListItem extends StatefulWidget {
+  final Widget child;
+  final int index;
+
+  const _AnimatedListItem({required this.child, required this.index});
+
+  @override
+  State<_AnimatedListItem> createState() => _AnimatedListItemState();
+}
+
+class _AnimatedListItemState extends State<_AnimatedListItem>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _ctrl;
+  late Animation<double> _fade;
+  late Animation<Offset> _slide;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 450),
+    );
+    _fade = CurvedAnimation(parent: _ctrl, curve: Curves.easeOut);
+    _slide = Tween<Offset>(
+      begin: const Offset(0, 0.15),
+      end: Offset.zero,
+    ).animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOutCubic));
+
+    Future.delayed(Duration(milliseconds: 60 * widget.index), () {
+      if (mounted) _ctrl.forward();
+    });
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FadeTransition(
+      opacity: _fade,
+      child: SlideTransition(position: _slide, child: widget.child),
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ─── ANIMATED COUNT CARD ──────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════
+class _AnimatedCountCard extends StatefulWidget {
+  final String label;
+  final int count;
+  final List<Color> colors;
+  final IconData icon;
+
+  const _AnimatedCountCard({
+    required this.label,
+    required this.count,
+    required this.colors,
+    required this.icon,
+  });
+
+  @override
+  State<_AnimatedCountCard> createState() => _AnimatedCountCardState();
+}
+
+class _AnimatedCountCardState extends State<_AnimatedCountCard>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _ctrl;
+  late Animation<int> _countAnim;
+  late Animation<double> _scaleAnim;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 900),
+    );
+    _countAnim = IntTween(
+      begin: 0,
+      end: widget.count,
+    ).animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOutCubic));
+    _scaleAnim = Tween<double>(
+      begin: 0.75,
+      end: 1.0,
+    ).animate(CurvedAnimation(parent: _ctrl, curve: Curves.elasticOut));
+
+    Future.delayed(const Duration(milliseconds: 200), () {
+      if (mounted) _ctrl.forward();
+    });
+  }
+
+  @override
+  void didUpdateWidget(_AnimatedCountCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.count != widget.count) {
+      _countAnim = IntTween(
+        begin: oldWidget.count,
+        end: widget.count,
+      ).animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOutCubic));
+      _ctrl
+        ..reset()
+        ..forward();
+    }
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ScaleTransition(
+      scale: _scaleAnim,
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 10),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            colors: widget.colors,
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+          borderRadius: BorderRadius.circular(18),
+          boxShadow: [
+            BoxShadow(
+              color: widget.colors[0].withOpacity(0.28),
+              blurRadius: 14,
+              offset: const Offset(0, 6),
+            ),
+          ],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.20),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Icon(widget.icon, color: Colors.white, size: 18),
+            ),
+            const SizedBox(height: 8),
+            AnimatedBuilder(
+              animation: _countAnim,
+              builder: (_, _) => Text(
+                '${_countAnim.value}',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w900,
+                  fontSize: 22,
+                  height: 1.0,
+                ),
+              ),
+            ),
+            const SizedBox(height: 3),
+            FittedBox(
+              child: Text(
+                widget.label,
+                style: TextStyle(
+                  color: Colors.white.withOpacity(0.82),
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: 0.3,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ─── ANIMATED ADMIN CARD ──────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════
+class _AnimatedAdminCard extends StatefulWidget {
+  final int index;
+  final AdminModel admin;
+  final bool isInactiveByLogin;
+  final VoidCallback onDeactivate;
+  final VoidCallback onActivate;
+
+  const _AnimatedAdminCard({
+    required this.index,
+    required this.admin,
+    this.isInactiveByLogin = false,
+    required this.onDeactivate,
+    required this.onActivate,
+  });
+
+  @override
+  State<_AnimatedAdminCard> createState() => _AnimatedAdminCardState();
+}
+
+class _AnimatedAdminCardState extends State<_AnimatedAdminCard>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _ctrl;
+  late Animation<double> _fade;
+  late Animation<Offset> _slide;
+  bool _expanded = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 450),
+    );
+    _fade = CurvedAnimation(parent: _ctrl, curve: Curves.easeOut);
+    _slide = Tween<Offset>(
+      begin: const Offset(0, 0.14),
+      end: Offset.zero,
+    ).animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOutCubic));
+
+    Future.delayed(Duration(milliseconds: 80 * widget.index), () {
+      if (mounted) _ctrl.forward();
+    });
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final List<List<Color>> gradients = [
+      [AppColors.primaryDeep, AppColors.primaryDark],
+      [AppColors.primaryDeep, AppColors.primaryDark],
+      [AppColors.primaryDeep, AppColors.primaryDark],
+      [AppColors.primaryDeep, AppColors.primaryDark],
+    ];
+    final gradient = gradients[widget.index % gradients.length];
+
+    final isActive =
+        widget.admin.status == 'accepted' && !widget.isInactiveByLogin;
+    final isPending = widget.admin.status == 'pending';
+
+    final Color statusColor = isActive
+        ? AppColors.primaryDark
+        : isPending
+        ? AppColors.primaryDark
+        : AppColors.accent;
+    final String statusLabel = isActive
+        ? 'Active'
+        : isPending
+        ? 'Pending'
+        : 'Inactive';
+    final IconData statusIcon = isActive
+        ? Icons.verified_rounded
+        : isPending
+        ? Icons.pending_rounded
+        : Icons.block_rounded;
+
+    return FadeTransition(
+      opacity: _fade,
+      child: SlideTransition(
+        position: _slide,
+        child: GestureDetector(
+          onTap: () => setState(() => _expanded = !_expanded),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 300),
+            curve: Curves.easeInOut,
+            margin: const EdgeInsets.only(bottom: 12),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(22),
+              boxShadow: [
+                BoxShadow(
+                  color: gradient[0].withOpacity(0.10),
+                  blurRadius: 16,
+                  offset: const Offset(0, 6),
+                ),
+              ],
+            ),
+            child: Column(
+              children: [
+                // Gradient top accent bar
+                Container(
+                  height: 5,
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(colors: gradient),
+                    borderRadius: const BorderRadius.only(
+                      topLeft: Radius.circular(22),
+                      topRight: Radius.circular(22),
+                    ),
+                  ),
+                ),
+
+                Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Row(
+                    children: [
+                      // Avatar
+                      Container(
+                        width: 54,
+                        height: 54,
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            colors: gradient,
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                          ),
+                          shape: BoxShape.circle,
+                          boxShadow: [
+                            BoxShadow(
+                              color: gradient[0].withOpacity(0.35),
+                              blurRadius: 10,
+                              offset: const Offset(0, 4),
+                            ),
+                          ],
+                        ),
+                        child: ProfileAvatar(
+                          data: widget.admin.details,
+                          radius: 27,
+                        ),
+                      ),
+                      const SizedBox(width: 14),
+
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              '${widget.admin.firstName} ${widget.admin.lastName}',
+                              style: const TextStyle(
+                                color: AppColors.primaryDeep,
+                                fontWeight: FontWeight.w800,
+                                fontSize: 15,
+                              ),
+                            ),
+                            const SizedBox(height: 3),
+                            if (widget.admin.email.isNotEmpty)
+                              Text(
+                                widget.admin.email,
+                                style: TextStyle(
+                                  color: Colors.grey.shade500,
+                                  fontSize: 12,
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            const SizedBox(height: 5),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 3,
+                              ),
+                              decoration: BoxDecoration(
+                                color: statusColor.withOpacity(0.10),
+                                borderRadius: BorderRadius.circular(20),
+                                border: Border.all(
+                                  color: statusColor.withOpacity(0.30),
+                                  width: 1,
+                                ),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                    statusIcon,
+                                    size: 11,
+                                    color: statusColor,
+                                  ),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    statusLabel,
+                                    style: TextStyle(
+                                      color: statusColor,
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+
+                      if (widget.admin.status == 'accepted')
+                        FilledButton(
+                          style: FilledButton.styleFrom(
+                            backgroundColor: AppColors.primaryDeep,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                          ),
+                          onPressed: widget.onDeactivate,
+                          child: const Text('Deactivate'),
+                        ),
+                      // Expand chevron
+                      AnimatedRotation(
+                        turns: _expanded ? 0.5 : 0.0,
+                        duration: const Duration(milliseconds: 300),
+                        child: Icon(
+                          Icons.keyboard_arrow_down_rounded,
+                          color: gradient[0],
+                          size: 22,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
+                // Expandable details section
+                AnimatedCrossFade(
+                  duration: const Duration(milliseconds: 300),
+                  crossFadeState: _expanded
+                      ? CrossFadeState.showSecond
+                      : CrossFadeState.showFirst,
+                  firstChild: const SizedBox.shrink(),
+                  secondChild: Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                    child: Column(
+                      children: [
+                        Container(
+                          height: 1,
+                          color: gradient[0].withOpacity(0.10),
+                          margin: const EdgeInsets.only(bottom: 14),
+                        ),
+                        ...<String, String>{
+                          'Full name': [
+                            widget.admin.firstName,
+                            '${widget.admin.details['middleName'] ?? ''}',
+                            widget.admin.lastName,
+                          ].where((value) => value.trim().isNotEmpty).join(' '),
+                          widget.admin.role.toLowerCase() == 'admin'
+                              ? 'Admin ID'
+                              : 'Staff ID': publicItemId(
+                            widget.admin.publicId,
+                          ),
+                          'Age':
+                              '${widget.admin.details['age'] ?? 'Not provided'}',
+                          'Email': widget.admin.email,
+                          'Phone': widget.admin.phone,
+                          'Address': widget.admin.address,
+                          'Role': widget.admin.role.toLowerCase() == 'staff'
+                              ? 'Cashier'
+                              : widget.admin.role,
+                          'Account status': widget.admin.status == 'accepted'
+                              ? 'Active account'
+                              : widget.admin.status,
+                          'Created': _staffDate(
+                            widget.admin.details['createdAt'],
+                          ),
+                        }.entries.map(
+                          (detail) => _buildDetailTile(
+                            icon: Icons.info_outline,
+                            label: detail.key,
+                            value: detail.value.trim().isEmpty
+                                ? 'Not provided'
+                                : detail.value,
+                            color: gradient[0],
+                          ),
+                        ),
+                        StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                          stream: FirebaseFirestore.instance
+                              .collection('branches')
+                              .snapshots(),
+                          builder: (context, snapshot) {
+                            final ids = [
+                              widget.admin.id,
+                              widget.admin.details['uid'],
+                              widget.admin.details['userId'],
+                            ].whereType<String>().toSet();
+                            final branches = snapshot.data?.docs
+                                .where(
+                                  (doc) =>
+                                      doc.data()['isVoided'] != true &&
+                                      (doc.data()['staffIds'] as List? ?? [])
+                                          .any(ids.contains),
+                                )
+                                .map(
+                                  (doc) => '${doc.data()['name'] ?? 'Branch'}',
+                                )
+                                .join(', ');
+                            return _buildDetailTile(
+                              icon: Icons.store_outlined,
+                              label: 'Assigned branches',
+                              value: snapshot.hasError
+                                  ? 'Unable to load'
+                                  : !snapshot.hasData
+                                  ? 'Loading...'
+                                  : branches == null || branches.isEmpty
+                                  ? 'Unassigned'
+                                  : branches,
+                              color: gradient[0],
+                            );
+                          },
+                        ),
+                        const SizedBox(height: 6),
+
+                        // Action buttons
+                        if (widget.admin.status == 'deactivated')
+                          GestureDetector(
+                            onTap: widget.onActivate,
+                            child: Container(
+                              width: double.infinity,
+                              padding: const EdgeInsets.symmetric(vertical: 11),
+                              decoration: BoxDecoration(
+                                gradient: const LinearGradient(
+                                  colors: [
+                                    AppColors.primaryDark,
+                                    AppColors.accent,
+                                  ],
+                                ),
+                                borderRadius: BorderRadius.circular(13),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: const Color(
+                                      0xFFAD1457,
+                                    ).withOpacity(0.30),
+                                    blurRadius: 8,
+                                    offset: const Offset(0, 3),
+                                  ),
+                                ],
+                              ),
+                              child: const Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(
+                                    Icons.check_circle_outline,
+                                    color: Colors.white,
+                                    size: 15,
+                                  ),
+                                  SizedBox(width: 5),
+                                  Text(
+                                    'Activate Staff',
+                                    style: TextStyle(
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.w700,
+                                      fontSize: 13,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDetailTile({
+    required IconData icon,
+    required String label,
+    required String value,
+    required Color color,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        children: [
+          Container(
+            width: 34,
+            height: 34,
+            decoration: BoxDecoration(
+              color: color.withOpacity(0.10),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(icon, color: color, size: 17),
+          ),
+          const SizedBox(width: 11),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label,
+                  style: TextStyle(
+                    color: Colors.grey.shade500,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                Text(
+                  value,
+                  style: const TextStyle(
+                    color: AppColors.primaryDeep,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ─── MODELS ───────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════
+class _StaffSectionHeaderDelegate extends SliverPersistentHeaderDelegate {
+  final double topPadding;
+  final double minExtentHeight;
+  final double maxExtentHeight;
+  final VoidCallback onBack;
+
+  const _StaffSectionHeaderDelegate({
+    required this.topPadding,
+    required this.minExtentHeight,
+    required this.maxExtentHeight,
+    required this.onBack,
+  });
+
+  @override
+  double get minExtent => minExtentHeight;
+
+  @override
+  double get maxExtent => maxExtentHeight;
+
+  @override
+  Widget build(
+    BuildContext context,
+    double shrinkOffset,
+    bool overlapsContent,
+  ) {
+    final progress = (shrinkOffset / (maxExtent - minExtent))
+        .clamp(0.0, 1.0)
+        .toDouble();
+    final expandedOpacity = (1.0 - progress).clamp(0.0, 1.0).toDouble();
+    final radius = 36.0 - (18.0 * progress);
+
+    return Container(
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          colors: [
+            AppColors.primaryDeep,
+            AppColors.primaryDark,
+            AppColors.primaryDark,
+          ],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.only(
+          bottomLeft: Radius.circular(radius),
+          bottomRight: Radius.circular(radius),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.primary.withOpacity(0.22),
+            blurRadius: 22,
+            offset: const Offset(0, 10),
+          ),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.only(
+          bottomLeft: Radius.circular(radius),
+          bottomRight: Radius.circular(radius),
+        ),
+        child: Stack(
+          children: [
+            Positioned(
+              top: -35,
+              right: -28,
+              child: Container(
+                width: 180,
+                height: 180,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: Colors.white.withOpacity(0.10 * expandedOpacity),
+                ),
+              ),
+            ),
+            Positioned(
+              bottom: -45,
+              right: 62,
+              child: Container(
+                width: 125,
+                height: 125,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: Colors.white.withOpacity(0.07 * expandedOpacity),
+                ),
+              ),
+            ),
+            Padding(
+              padding: EdgeInsets.fromLTRB(18, topPadding + 10, 18, 12),
+              child: Row(
+                children: [
+                  GestureDetector(
+                    onTap: onBack,
+                    child: Container(
+                      width: 42,
+                      height: 42,
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.20),
+                        borderRadius: BorderRadius.circular(13),
+                        border: Border.all(
+                          color: Colors.white.withOpacity(0.35),
+                          width: 1,
+                        ),
+                      ),
+                      child: const Icon(
+                        Icons.arrow_back_ios_new_rounded,
+                        color: Colors.white,
+                        size: 17,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Stack(
+                      alignment: Alignment.centerLeft,
+                      children: [
+                        Opacity(
+                          opacity: progress,
+                          child: const Text(
+                            'Staff Section',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 20,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                        ),
+                        Opacity(
+                          opacity: expandedOpacity,
+                          child: Transform.translate(
+                            offset: Offset(0, 32 * progress),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 12,
+                                    vertical: 5,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white.withOpacity(0.20),
+                                    borderRadius: BorderRadius.circular(20),
+                                  ),
+                                  child: const Text(
+                                    'MANAGEMENT',
+                                    style: TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.w700,
+                                      letterSpacing: 2.0,
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(height: 10),
+                                const Text(
+                                  'Staff Section',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 32,
+                                    fontWeight: FontWeight.w900,
+                                    height: 1.05,
+                                  ),
+                                ),
+                                const SizedBox(height: 7),
+                                Text(
+                                  'Create and manage staff accounts',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    color: Colors.white.withOpacity(0.82),
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w400,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  @override
+  bool shouldRebuild(covariant _StaffSectionHeaderDelegate oldDelegate) {
+    return topPadding != oldDelegate.topPadding ||
+        minExtentHeight != oldDelegate.minExtentHeight ||
+        maxExtentHeight != oldDelegate.maxExtentHeight ||
+        onBack != oldDelegate.onBack;
+  }
+}
+
+class _StaffTabHeaderDelegate extends SliverPersistentHeaderDelegate {
+  final Widget child;
+
+  const _StaffTabHeaderDelegate({required this.child});
+
+  @override
+  double get minExtent => 58;
+
+  @override
+  double get maxExtent => 58;
+
+  @override
+  Widget build(
+    BuildContext context,
+    double shrinkOffset,
+    bool overlapsContent,
+  ) {
+    return Container(
+      color: AppColors.surface,
+      alignment: Alignment.center,
+      child: child,
+    );
+  }
+
+  @override
+  bool shouldRebuild(covariant _StaffTabHeaderDelegate oldDelegate) {
+    return child != oldDelegate.child;
+  }
+}
+
+class StaffApplicant {
+  final String id;
+  final String role;
+  final String firstName;
+  final String middleName;
+  final String lastName;
+  final String staffId;
+  final String age;
+  final String phone;
+  final String email;
+  final String address;
+  final String status;
+
+  StaffApplicant({
+    required this.id,
+    required this.role,
+    required this.firstName,
+    required this.middleName,
+    required this.lastName,
+    required this.staffId,
+    required this.age,
+    required this.phone,
+    required this.email,
+    required this.address,
+    required this.status,
+  });
+
+  factory StaffApplicant.fromDoc(
+    QueryDocumentSnapshot<Map<String, dynamic>> doc,
+  ) {
+    final data = doc.data();
+    return StaffApplicant(
+      id: doc.id,
+      role: data['role'] as String? ?? '',
+      firstName: data['firstName'] as String? ?? '',
+      middleName: data['middleName'] as String? ?? '',
+      lastName: data['lastName'] as String? ?? '',
+      staffId:
+          data['staffId'] as String? ??
+          data['adminId'] as String? ??
+          data['username'] as String? ??
+          '',
+      age: data['age']?.toString() ?? '',
+      phone: data['phone'] as String? ?? '',
+      email: data['email'] as String? ?? '',
+      address: data['address'] as String? ?? '',
+      status: data['status'] as String? ?? 'pending',
+    );
+  }
+
+  bool get isAccepted => status == 'accepted';
+
+  String get initials {
+    String i = '';
+    if (firstName.isNotEmpty) i += firstName[0];
+    if (lastName.isNotEmpty) i += lastName[0];
+    return i.toUpperCase();
+  }
+}
+
+class AdminModel {
+  final Map<String, dynamic> details;
+  final String id;
+  final String firstName;
+  final String lastName;
+  final String email;
+  final String phone;
+  final String staffId;
+  final String adminId;
+  final String address;
+  final String status;
+  final String role;
+  final DateTime? lastLoginAt;
+
+  AdminModel({
+    this.details = const {},
+    required this.id,
+    required this.firstName,
+    required this.lastName,
+    required this.email,
+    required this.phone,
+    required this.staffId,
+    required this.adminId,
+    required this.address,
+    required this.status,
+    required this.role,
+    required this.lastLoginAt,
+  });
+
+  factory AdminModel.fromDoc(QueryDocumentSnapshot<Map<String, dynamic>> doc) {
+    final data = doc.data();
+    return AdminModel(
+      details: data,
+      id: doc.id,
+      firstName: data['firstName'] as String? ?? '',
+      lastName: data['lastName'] as String? ?? '',
+      email: data['email'] as String? ?? '',
+      phone: data['phone'] as String? ?? '',
+      staffId: data['staffId'] as String? ?? '',
+      adminId: data['adminId'] as String? ?? '',
+      address: data['address'] as String? ?? '',
+      status: data['status'] as String? ?? 'pending',
+      role: data['role'] as String? ?? '',
+      lastLoginAt: (data['lastLoginAt'] as Timestamp?)?.toDate(),
+    );
+  }
+
+  bool get isValidAdmin =>
+      role.toLowerCase().trim() == 'admin' && adminId.isNotEmpty;
+
+  bool get isValidStaff =>
+      role.toLowerCase().trim() == 'staff' && staffId.isNotEmpty;
+
+  String get publicId => role.toLowerCase().trim() == 'admin'
+      ? adminId.isNotEmpty
+            ? adminId
+            : staffId
+      : staffId;
+
+  bool get isInactiveByLogin {
+    if (status != 'accepted' || lastLoginAt == null) return false;
+    return DateTime.now().difference(lastLoginAt!).inDays >= 3;
+  }
+
+  String get initials {
+    String i = '';
+    if (firstName.isNotEmpty) i += firstName[0];
+    if (lastName.isNotEmpty) i += lastName[0];
+    return i.toUpperCase();
+  }
+}
+
+String _staffDate(dynamic value) {
+  final date = value is Timestamp
+      ? value.toDate()
+      : DateTime.tryParse('$value');
+  if (date == null) return 'Not recorded';
+  return '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')} ${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')}';
+}

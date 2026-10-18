@@ -92,9 +92,11 @@ class SalesReportMetrics extends StatelessWidget {
                                       ),
                                     ),
                                     const SizedBox(height: 5),
-                                    const Text(
-                                      'View details',
-                                      style: TextStyle(
+                                    Text(
+                                      entry.key == 'Items allocated'
+                                          ? 'View allocated'
+                                          : 'View details',
+                                      style: const TextStyle(
                                         fontSize: 11,
                                         color: AppColors.textMuted,
                                       ),
@@ -137,15 +139,17 @@ class SalesReportDashboard extends StatelessWidget {
     required this.start,
     required this.end,
     required this.period,
+    this.branchId,
   });
   final BranchReportData data;
   final DateTime start, end;
   final String period;
+  final String? branchId;
 
   @override
   Widget build(BuildContext context) {
     final sales = data
-        .sales(null, start, end)
+        .sales(branchId, start, end)
         .where(
           (s) =>
               !reportRefund(s) &&
@@ -155,7 +159,8 @@ class SalesReportDashboard extends StatelessWidget {
         .toList();
     final branches = {
       for (final b in data.rows('branches'))
-        '${b['_id']}': '${b['name'] ?? b['branchName'] ?? b['_id']}',
+        if (branchId == null || b['_id'] == branchId)
+          '${b['_id']}': '${b['name'] ?? b['branchName'] ?? b['_id']}',
     };
     final byBranch = <String, double>{}, payments = <String, double>{};
     final ranked = <String, Map<String, dynamic>>{};
@@ -186,7 +191,7 @@ class SalesReportDashboard extends StatelessWidget {
       ..sort(
         (a, b) => reportValue(b['sold']).compareTo(reportValue(a['sold'])),
       );
-    final hours = data.hours(null, start);
+    final hours = data.hours(branchId, start);
     final count = period == 'Day'
         ? hours.length
         : period == 'Year'
@@ -335,7 +340,7 @@ class SalesReportDashboard extends StatelessWidget {
         legends: const ['Sales', 'Transactions'],
       ),
     );
-    final branchPanel = panel('Sales by Branch', ReportDonut(values: byBranch));
+    final branchPanel = panel('Sales by branch', ReportDonut(values: byBranch));
     final paymentPanel = panel('Payment Method', ReportDonut(values: payments));
     final best = panel(
       'Top Selling Items',
@@ -375,12 +380,35 @@ class SalesReportDashboard extends StatelessWidget {
             children: [
               for (final p in [
                 overview,
-                branchPanel,
+                if (branchId == null) branchPanel,
                 paymentPanel,
                 best,
                 trend,
               ])
                 Padding(padding: const EdgeInsets.only(bottom: 12), child: p),
+            ],
+          );
+        }
+        if (branchId != null) {
+          return Column(
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(flex: 3, child: overview),
+                  const SizedBox(width: 12),
+                  Expanded(flex: 2, child: paymentPanel),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(flex: 3, child: best),
+                  const SizedBox(width: 12),
+                  Expanded(flex: 4, child: trend),
+                ],
+              ),
             ],
           );
         }

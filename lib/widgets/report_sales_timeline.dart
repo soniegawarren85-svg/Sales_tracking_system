@@ -10,10 +10,12 @@ class ReportSalesTimeline extends StatefulWidget {
     required this.start,
     required this.end,
     required this.period,
+    this.branchId,
   });
   final BranchReportData data;
   final DateTime start, end;
   final String period;
+  final String? branchId;
   @override
   State<ReportSalesTimeline> createState() => _ReportSalesTimelineState();
 }
@@ -21,10 +23,23 @@ class ReportSalesTimeline extends StatefulWidget {
 class _ReportSalesTimelineState extends State<ReportSalesTimeline> {
   String? branch;
   String status = 'All';
+
+  @override
+  void initState() {
+    super.initState();
+    branch = widget.branchId;
+  }
+
   @override
   Widget build(BuildContext context) {
-    final branches = widget.data.rows('branches');
-    if (!branches.any((b) => b['_id'] == branch)) branch = null;
+    final branches = widget.data.rows('branches').where(
+      (row) => widget.branchId == null || row['_id'] == widget.branchId,
+    ).toList();
+    if (widget.branchId != null) {
+      branch = widget.branchId;
+    } else if (!branches.any((b) => b['_id'] == branch)) {
+      branch = null;
+    }
     final allowRefunds = branch == null
         ? branches.any((b) => widget.data.refundsEnabled('${b['_id']}'))
         : widget.data.refundsEnabled(branch);
@@ -113,21 +128,33 @@ class _ReportSalesTimelineState extends State<ReportSalesTimeline> {
               ),
             ),
             const SizedBox(height: 16),
-            DropdownButton<String>(
-              isExpanded: true,
-              value: branch ?? '',
-              items: [
-                const DropdownMenuItem(value: '', child: Text('All branches')),
-                ...branches.map(
-                  (b) => DropdownMenuItem(
-                    value: '${b['_id']}',
-                    child: Text('${b['name']}'),
+            if (widget.branchId == null)
+              DropdownButton<String>(
+                isExpanded: true,
+                value: branch ?? '',
+                items: [
+                  const DropdownMenuItem(
+                    value: '',
+                    child: Text('All branches'),
                   ),
+                  ...branches.map(
+                    (b) => DropdownMenuItem(
+                      value: '${b['_id']}',
+                      child: Text('${b['name']}'),
+                    ),
+                  ),
+                ],
+                onChanged: (value) =>
+                    setState(() => branch = value == '' ? null : value),
+              )
+            else
+              Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: Text(
+                  '${branches.firstOrNull?['name'] ?? 'Assigned branch'}',
+                  style: const TextStyle(fontWeight: FontWeight.w600),
                 ),
-              ],
-              onChanged: (value) =>
-                  setState(() => branch = value == '' ? null : value),
-            ),
+              ),
             Wrap(
               spacing: 8,
               children:

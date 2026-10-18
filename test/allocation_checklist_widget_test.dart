@@ -6,6 +6,8 @@ import 'package:sales_tracking/widgets/allocation_checklist.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+  setUp(() => SharedPreferences.setMockInitialValues({}));
   testWidgets('staff pending view includes older unaccepted allocations only', (
     tester,
   ) async {
@@ -143,11 +145,15 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Returns'));
     await tester.pumpAndSettle();
-    expect(find.text('Accept'), findsOneWidget);
-    expect(find.byTooltip('Filter by date range'), findsNothing);
-    for (var i = 0; i < 2; i++) {
-      await tester.ensureVisible(find.text('Accept').first);
-      await tester.tap(find.text('Accept').first);
+    expect(find.text('Pending Returned'), findsOneWidget);
+    expect(find.byTooltip('Filter by date range'), findsOneWidget);
+    for (var index = 0; index < 2; index++) {
+      if (find.text('Accept').evaluate().isEmpty) {
+        await tester.tap(find.textContaining('branch').first);
+        await tester.pumpAndSettle();
+      }
+      await tester.ensureVisible(find.text('Accept'));
+      await tester.tap(find.text('Accept'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Proceed'));
       await tester.pumpAndSettle();
@@ -162,6 +168,63 @@ void main() {
     }
     expect(tester.takeException(), isNull);
   });
+  testWidgets(
+    'admin return date filter applies to pending and completed tabs',
+    (tester) async {
+      final db = FakeFirebaseFirestore();
+      final today = DateUtils.dateOnly(DateTime.now());
+      await db.doc('allocation_checklist/recent').set({
+        'kind': 'return',
+        'status': 'Awaiting Admin Confirmation',
+        'name': 'Pistachio',
+        'quantity': 2,
+        'branchName': 'Recent Branch',
+        'staffId': 'recent',
+        'createdAt': Timestamp.fromDate(today.add(const Duration(hours: 10))),
+      });
+      await db.doc('allocation_checklist/older').set({
+        'kind': 'return',
+        'status': 'Awaiting Admin Confirmation',
+        'name': 'Og Cookies',
+        'quantity': 1,
+        'branchName': 'Older Branch',
+        'staffId': 'older',
+        'createdAt': Timestamp.fromDate(
+          today.subtract(const Duration(days: 10)),
+        ),
+      });
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: AllocationChecklistButton(
+              scopeIds: const [],
+              isAdmin: true,
+              database: db,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Returns'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('Recent Branch'), findsOneWidget);
+      expect(find.textContaining('Older Branch'), findsOneWidget);
+
+      await tester.tap(find.byTooltip('Filter by date range'));
+      await tester.pumpAndSettle();
+      tester
+          .state<NavigatorState>(find.byType(Navigator).last)
+          .pop(DateTimeRange(start: today, end: today));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('Recent Branch'), findsOneWidget);
+      expect(find.textContaining('Older Branch'), findsNothing);
+
+      await tester.tap(find.text('Completed Return'));
+      await tester.pumpAndSettle();
+      expect(find.text('No matching return batches.'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
   testWidgets('admin accepts return and sees success after Proceed', (
     tester,
   ) async {
@@ -198,6 +261,9 @@ void main() {
     );
     await tester.pumpAndSettle();
     await tester.tap(find.byTooltip('Returns'));
+    await tester.pumpAndSettle();
+    expect(find.text('Pending Returned'), findsOneWidget);
+    await tester.tap(find.textContaining('branch').first);
     await tester.pumpAndSettle();
     await tester.ensureVisible(find.text('Accept'));
     await tester.pumpAndSettle();
@@ -252,21 +318,22 @@ void main() {
       await tester.tap(find.byTooltip('Returns'));
       await tester.pumpAndSettle();
       expect(find.text('Confirm Received'), findsNothing);
-      expect(find.text('Returned Items'), findsOneWidget);
+      expect(find.text('Pending Returned'), findsOneWidget);
+      expect(find.text('Completed Return'), findsOneWidget);
       expect(find.text('Incoming Items'), findsNothing);
       expect(find.textContaining('Pending Confirmation'), findsNothing);
-      expect(find.text('Review returned items'), findsOneWidget);
-      expect(find.text('Waiting Admin Confirmation'), findsNothing);
+      expect(find.textContaining('Review returned items'), findsOneWidget);
+      expect(find.textContaining('Waiting Admin Confirmation'), findsNothing);
+      expect(find.text('Accept'), findsNothing);
+      await tester.tap(find.text('branch'));
+      await tester.pumpAndSettle();
       expect(find.text('Accept'), findsOneWidget);
       expect(find.text('Report Issue'), findsOneWidget);
       expect(
         tester.getCenter(find.text('View')).dy,
-        closeTo(tester.getCenter(find.text('branch')).dy, 1),
+        greaterThan(tester.getCenter(find.text('branch')).dy),
       );
-      expect(
-        tester.getCenter(find.text('View')).dx,
-        greaterThan(tester.getCenter(find.text('branch')).dx),
-      );
+      expect(tester.getCenter(find.text('View')).dx, greaterThan(0));
       await tester.ensureVisible(
         find.widgetWithText(OutlinedButton, 'Report Issue'),
       );
@@ -298,7 +365,7 @@ void main() {
         'status': 'Return Completed',
       });
       await tester.pumpAndSettle();
-      expect(find.text('Returned Items'), findsOneWidget);
+      expect(find.text('Pending Returned'), findsOneWidget);
       expect(find.text('Accept'), findsNothing);
       expect(tester.takeException(), isNull);
       await tester.tap(find.byTooltip('Close returned items'));

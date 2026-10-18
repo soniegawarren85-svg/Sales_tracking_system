@@ -1,8 +1,10 @@
-import 'package:crypto/crypto.dart';
+import '../../widgets/admin_change_password_dialog.dart';
 import '../../widgets/transaction_settings_dialog.dart';
 import '../../services/catalog_image_service.dart';
 import '../../services/profile_field_validation.dart';
+import '../../services/admin_profile_identity.dart';
 import 'package:sales_tracking/theme/app_colors.dart';
+import '../../services/branch_session.dart';
 import '../../services/public_item_id.dart';
 import 'dart:convert';
 import '../../widgets/backup_restore_dialog.dart';
@@ -41,13 +43,16 @@ class _SettingsPageState extends State<SettingsPage> {
   Future<void> _loadAdminId() async {
     final prefs = await SharedPreferences.getInstance();
     final savedAdminId = prefs.getString('adminId')?.trim() ?? 'ADM-001';
+    final profileId = await resolveAdminProfileIdentity(
+      FirebaseFirestore.instance,
+      prefs,
+      authUserId: FirebaseAuth.instance.currentUser?.uid,
+    );
     if (!mounted) return;
     setState(() {
       _profileReady = true;
       _adminId = savedAdminId;
-      _profileId = prefs.getString('lastUserId') == 'emergency-admin'
-          ? savedAdminId
-          : FirebaseAuth.instance.currentUser?.uid ?? savedAdminId;
+      _profileId = profileId;
     });
   }
 
@@ -140,13 +145,12 @@ class _SettingsPageState extends State<SettingsPage> {
                       right: 24,
                       child:
                           StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-                            stream: FirebaseFirestore.instance
-                                .collection('staff_requests')
-                                .doc(
-                                  FirebaseAuth.instance.currentUser?.uid ??
-                                      _adminId,
-                                )
-                                .snapshots(),
+                            stream: _profileId.isEmpty
+                                ? null
+                                : FirebaseFirestore.instance
+                                      .collection('staff_requests')
+                                      .doc(_profileId)
+                                      .snapshots(),
                             builder: (context, snapshot) {
                               final data = snapshot.data?.data();
                               final fullName = _getFullName(data);
@@ -304,6 +308,15 @@ class _SettingsPageState extends State<SettingsPage> {
 
                   const SizedBox(height: 6),
 
+                  _settingItem(
+                    icon: Icons.lock_rounded,
+                    title: "Change Password",
+                    subtitle: "Update your credentials",
+                    iconColor: const Color(0xFF8E24AA),
+                    iconBg: const Color(0xFFF3E5F5),
+                    onTap: () => _showChangePassword(context),
+                  ),
+
                   _sectionLabel("Transaction settings"),
                   _settingItem(
                     icon: Icons.discount_rounded,
@@ -313,8 +326,10 @@ class _SettingsPageState extends State<SettingsPage> {
                     iconBg: const Color(0xFFFFF8E1),
                     onTap: () => showDialog(
                       context: context,
-                      builder: (_) =>
-                          const TransactionSettingsDialog(kind: 'discounts'),
+                      builder: (_) => TransactionSettingsDialog(
+                        kind: 'discounts',
+                        branchId: BranchSession.instance.branchId,
+                      ),
                     ),
                   ),
                   _settingItem(
@@ -325,8 +340,10 @@ class _SettingsPageState extends State<SettingsPage> {
                     iconBg: const Color(0xFFE8EAF6),
                     onTap: () => showDialog(
                       context: context,
-                      builder: (_) =>
-                          const TransactionSettingsDialog(kind: 'payments'),
+                      builder: (_) => TransactionSettingsDialog(
+                        kind: 'payments',
+                        branchId: BranchSession.instance.branchId,
+                      ),
                     ),
                   ),
                   _settingItem(
@@ -337,8 +354,10 @@ class _SettingsPageState extends State<SettingsPage> {
                     iconBg: const Color(0xFFE0F2F1),
                     onTap: () => showDialog(
                       context: context,
-                      builder: (_) =>
-                          const TransactionSettingsDialog(kind: 'tax'),
+                      builder: (_) => TransactionSettingsDialog(
+                        kind: 'tax',
+                        branchId: BranchSession.instance.branchId,
+                      ),
                     ),
                   ),
 
@@ -353,8 +372,10 @@ class _SettingsPageState extends State<SettingsPage> {
                     iconBg: const Color(0xFFE0F2F1),
                     onTap: () => showDialog(
                       context: context,
-                      builder: (_) =>
-                          const TransactionSettingsDialog(kind: 'permissions'),
+                      builder: (_) => TransactionSettingsDialog(
+                        kind: 'permissions',
+                        branchId: BranchSession.instance.branchId,
+                      ),
                     ),
                   ),
 
@@ -383,14 +404,6 @@ class _SettingsPageState extends State<SettingsPage> {
                       'About App',
                       'Track sales and inventory across branches, allocate cash and products, manage staff and beverage bundles, monitor expiry, and review branch reports.',
                     ),
-                  ),
-                  _settingItem(
-                    icon: Icons.lock_rounded,
-                    title: "Change Password",
-                    subtitle: "Update your credentials",
-                    iconColor: const Color(0xFF8E24AA),
-                    iconBg: const Color(0xFFF3E5F5),
-                    onTap: () => _showChangePassword(context),
                   ),
 
                   const SizedBox(height: 28),
@@ -574,7 +587,7 @@ class _SettingsPageState extends State<SettingsPage> {
         .doc(uid)
         .get();
     data = {...data, ...?snapshot.data()};
-      if (!mounted) return;
+    if (!mounted) return;
 
     final authUser = FirebaseAuth.instance.currentUser;
     final currentUser = authUser?.uid == _profileId ? authUser : null;
@@ -786,100 +799,15 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   Future<void> _showChangePassword(BuildContext context) async {
-    final current = TextEditingController();
-    final next = TextEditingController();
-    final confirm = TextEditingController();
-    await showDialog(
+    final changed = await showDialog<bool>(
       context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Change Password'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: current,
-              obscureText: true,
-              decoration: const InputDecoration(labelText: 'Current password'),
-            ),
-            TextField(
-              controller: next,
-              obscureText: true,
-              decoration: const InputDecoration(labelText: 'New password'),
-            ),
-            TextField(
-              controller: confirm,
-              obscureText: true,
-              decoration: const InputDecoration(labelText: 'Confirm password'),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () async {
-              final user = FirebaseAuth.instance.currentUser;
-              if (next.text.length < 6 || next.text != confirm.text) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Check the new password.')),
-                );
-                return;
-              }
-              if (user?.email == null || user?.uid != _profileId) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('This admin account has no Firebase email.'),
-                  ),
-                );
-                return;
-              }
-              try {
-                final credential = EmailAuthProvider.credential(
-                  email: user!.email!,
-                  password: current.text,
-                );
-                await user.reauthenticateWithCredential(credential);
-                await user.updatePassword(next.text);
-                final prefs = await SharedPreferences.getInstance();
-                final adminId = prefs.getString('adminId') ?? 'ADM-001';
-                await FirebaseFirestore.instance
-                    .collection('staff_requests')
-                    .doc(user.uid)
-                    .set({
-                      'credentialsChangedAt': FieldValue.serverTimestamp(),
-                      'adminId': adminId,
-                      'role': 'admin',
-                      'authEmail': user.email,
-                    }, SetOptions(merge: true));
-                final username = prefs.getString('offlineLogin.username');
-                if (username != null) {
-                  await prefs.setString(
-                    'offlineLogin.passwordHash',
-                    sha256
-                        .convert(utf8.encode('$username:${next.text}'))
-                        .toString(),
-                  );
-                }
-                if (context.mounted) Navigator.pop(context);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Password updated.')),
-                );
-              } catch (e) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('Unable to update password: $e')),
-                );
-              }
-            },
-            child: const Text('Save'),
-          ),
-        ],
-      ),
+      builder: (_) => const AdminChangePasswordDialog(),
     );
-    current.dispose();
-    next.dispose();
-    confirm.dispose();
+    if (changed == true && context.mounted) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Password updated.')));
+    }
   }
 
   static void _showNotificationSettings(BuildContext context) {

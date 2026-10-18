@@ -1099,14 +1099,6 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
         Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            if (items.any((item) => item['costRecorded'] == false))
-              const Padding(
-                padding: EdgeInsets.only(bottom: 12),
-                child: Text(
-                  'Some items have no recorded cost price. Set their costs in Inventory to complete the profit calculation.',
-                  style: TextStyle(color: Colors.deepOrange),
-                ),
-              ),
             Wrap(
               spacing: 10,
               children: ['Categories', 'Bundle', 'Beverages']

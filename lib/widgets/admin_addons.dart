@@ -227,6 +227,10 @@ class _AddonEditorState extends State<_AddonEditor> {
 
   Future<void> save() async {
     if (saving || !form.currentState!.validate()) return;
+    if (num.parse(price.text) < num.parse(cost.text)) {
+      setState(() => error = 'Selling price cannot be lower than cost price.');
+      return;
+    }
     setState(() {
       saving = true;
       error = null;

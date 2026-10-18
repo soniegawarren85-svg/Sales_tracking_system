@@ -1,0 +1,1183 @@
+import '../widgets/screen_loading_region.dart';
+import 'package:sales_tracking/widgets/top_edge_refresh.dart';
+import '../widgets/admin_message_preview.dart';
+import 'super_admin_identity.dart';
+import 'dart:async';
+import 'package:sales_tracking/theme/app_colors.dart';
+import '../services/short_id_service.dart';
+import '../Login/Login/Login.dart';
+import '../widgets/admin_sales_overview.dart';
+import '../widgets/activity_feed.dart';
+import 'dashboard_totals.dart';
+import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import '../services/inventory_service.dart';
+import '../services/expiry_notification_service.dart';
+import '../services/branch_session.dart';
+import '../services/checklist_status.dart';
+
+import 'InventoryPage.dart';
+import 'Message.dart';
+import 'Budget.dart';
+import 'SettingsPage.dart';
+import 'StaffPage.dart';
+import 'Reports.dart';
+
+// Raspberry accents with quiet, cool neutral surfaces.
+const kPrimaryBrown = AppColors.primary;
+const kLightBrown = AppColors.rose;
+const kAccentBrown = AppColors.blush;
+const kCreamWhite = AppColors.background;
+const kDeepBrown = AppColors.primaryDark;
+const kSurfaceDark = AppColors.primaryDeep;
+
+class SuperAdminDashboard extends StatefulWidget {
+  const SuperAdminDashboard({super.key});
+
+  @override
+  State<SuperAdminDashboard> createState() => _SuperAdminDashboardState();
+}
+
+class _SuperAdminDashboardState extends State<SuperAdminDashboard>
+    with TickerProviderStateMixin {
+  int _selectedIndex = 0;
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _allocationNotices;
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _checklistUpdates;
+  int _pendingReturnCount = 0;
+
+  static const String kShopLogoAsset = 'Assets/Image/ob.jpg';
+  final _navItems = const [
+    _NavItem(icon: Icons.dashboard_rounded, label: 'Dashboard'),
+    _NavItem(icon: Icons.storefront_rounded, label: 'Branch Sales'),
+    _NavItem(icon: Icons.inventory_2_rounded, label: 'Inventory'),
+    _NavItem(icon: Icons.people_rounded, label: 'Staff'),
+    _NavItem(icon: Icons.bar_chart_rounded, label: 'Reports'),
+    _NavItem(icon: Icons.settings_rounded, label: 'Settings'),
+  ];
+
+  // ── Entrance animation controller for the home page content ──────────────
+  late final AnimationController _entranceController;
+  late final Animation<double> _fadeIn;
+  late final Animation<Offset> _slideUp;
+
+  @override
+  void initState() {
+    super.initState();
+    _allocationNotices = FirebaseFirestore.instance
+        .collection('admin_notifications')
+        .where('type', isEqualTo: 'allocation_declined')
+        .snapshots()
+        .listen(
+          (snapshot) {
+            for (final doc in snapshot.docs) {
+              if (doc.data()['toastShown'] != true) {
+                unawaited(_showAllocationNotice(doc.reference));
+              }
+            }
+          },
+          onError: (Object error) {
+            debugPrint('Allocation notifications: $error');
+          },
+        );
+    _checklistUpdates = FirebaseFirestore.instance
+        .collection('allocation_checklist')
+        .snapshots()
+        .listen(
+          (snapshot) {
+            final returns = <String>{};
+            for (final doc in snapshot.docs) {
+              final data = doc.data();
+              if (!ChecklistStatus.returnOpen(data)) continue;
+              final batchId = data['batchId']?.toString().trim() ?? '';
+              returns.add(
+                batchId.isEmpty ? 'return:${doc.id}' : 'return:$batchId',
+              );
+            }
+            if (mounted) {
+              setState(() => _pendingReturnCount = returns.length);
+            }
+          },
+          onError: (Object error) {
+            debugPrint('Checklist navigation badges: $error');
+          },
+        );
+    ShortIdService.refresh().catchError((Object error) {
+      debugPrint('Short ID update deferred: $error');
+    });
+    print('✅ SuperAdminDashboard initialized');
+    print('📦 Current entries: ${InventoryService().entries.length}');
+    ExpiryNotificationService().checkAndNotifyExpiringItems();
+    BranchSession.instance.load();
+    BranchSession.instance.addListener(_onBranchChanged);
+
+    _entranceController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 650),
+    );
+    _fadeIn = CurvedAnimation(
+      parent: _entranceController,
+      curve: Curves.easeOut,
+    );
+    _slideUp = Tween<Offset>(begin: const Offset(0, 0.06), end: Offset.zero)
+        .animate(
+          CurvedAnimation(
+            parent: _entranceController,
+            curve: Curves.easeOutCubic,
+          ),
+        );
+    _entranceController.forward();
+  }
+
+  Future<void> _showAllocationNotice(
+    DocumentReference<Map<String, dynamic>> ref,
+  ) async {
+    if (!mounted) return;
+    try {
+      final message = await FirebaseFirestore.instance.runTransaction<String?>((
+        tx,
+      ) async {
+        final data = (await tx.get(ref)).data();
+        if (data == null || data['toastShown'] == true) return null;
+        tx.update(ref, {
+          'toastShown': true,
+          'toastShownAt': FieldValue.serverTimestamp(),
+        });
+        return data['message']?.toString();
+      });
+      if (message != null && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(message),
+            duration: const Duration(seconds: 8),
+            backgroundColor: AppColors.primary,
+          ),
+        );
+      }
+    } catch (error) {
+      debugPrint('Allocation notice deferred: $error');
+    }
+  }
+
+  void _onBranchChanged() {
+    if (mounted) {
+      setState(() => _selectedIndex = 0);
+      _entranceController
+        ..reset()
+        ..forward();
+    }
+  }
+
+  @override
+  void dispose() {
+    _allocationNotices?.cancel();
+    _checklistUpdates?.cancel();
+    BranchSession.instance.removeListener(_onBranchChanged);
+    _entranceController.dispose();
+    super.dispose();
+  }
+
+  bool _isExpired(String? expirationDateString) {
+    if (expirationDateString == null || expirationDateString.trim().isEmpty) {
+      return false;
+    }
+
+    final expirationDate = DateTime.tryParse(expirationDateString);
+    if (expirationDate == null) {
+      return false;
+    }
+
+    final now = DateTime.now();
+    return expirationDate.isBefore(now) || expirationDate.isAtSameMomentAs(now);
+  }
+
+  List<Map<String, dynamic>> _activeItemVariants(
+    List<Map<String, dynamic>> items,
+  ) {
+    return items.where((item) {
+      if (item['isDeleted'] == true) return false;
+      return !_isExpired(item['expirationDate']?.toString());
+    }).toList();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      resizeToAvoidBottomInset: false,
+      backgroundColor: kCreamWhite,
+      body: SafeArea(
+        child: Row(
+          children: [
+            if (MediaQuery.sizeOf(context).width >= 600) _buildSidebar(),
+            Expanded(
+              child: ScreenLoadingRegion(
+                child: AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 320),
+                  switchInCurve: Curves.easeOut,
+                  switchOutCurve: Curves.easeIn,
+                  transitionBuilder: (child, animation) => FadeTransition(
+                    opacity: animation,
+                    child: SlideTransition(
+                      position: Tween<Offset>(
+                        begin: const Offset(0, 0.02),
+                        end: Offset.zero,
+                      ).animate(animation),
+                      child: child,
+                    ),
+                  ),
+                  child: KeyedSubtree(
+                    key: ValueKey(_selectedIndex),
+                    child: _buildBody(),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+      bottomNavigationBar: MediaQuery.sizeOf(context).width >= 600
+          ? null
+          : _buildBottomNavigationBar(),
+    );
+  }
+
+  Widget _buildBody() {
+    switch (_selectedIndex) {
+      case 1:
+        // Budget page displays without the admin collapsible header
+        return const BudgetPage();
+      case 2:
+        // Inventory is part of the main admin navigation.
+        return const InventoryPage(embedded: true);
+      case 3:
+        return const StaffPage();
+      case 4:
+        return const ReportsPage();
+      case 5:
+        return const SuperAdminSettingsPage();
+      default:
+        return _buildHomePage();
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  //  HOME PAGE  –  NestedScrollView + SliverAppBar (collapsing header)
+  // ══════════════════════════════════════════════════════════════════════════
+  Widget _buildHomePage() {
+    return TopEdgeRefresh(
+      notificationPredicate: (notification) =>
+          notification.depth == 0 && notification.metrics.axis == Axis.vertical,
+      onRefresh: () async {
+        try {
+          await Future.wait(
+            [
+              'completed_sales',
+              'sales_inventory',
+              'coffee_products',
+              'staff_requests',
+            ].map(
+              (name) => FirebaseFirestore.instance
+                  .collection(name)
+                  .get(const GetOptions(source: Source.server)),
+            ),
+          ).timeout(const Duration(seconds: 15));
+          if (mounted) setState(() {});
+        } catch (_) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text(
+                  'Unable to refresh. Please check your connection.',
+                ),
+              ),
+            );
+          }
+        }
+      },
+      child: NestedScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        headerSliverBuilder: (context, innerBoxScrolled) => [
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+            sliver: _buildSliverAppBar(showFullHeader: true),
+          ),
+        ],
+        body: _buildHomeBody(),
+      ),
+    );
+  }
+
+  Widget _buildHomeBody() {
+    return SingleChildScrollView(
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 1120),
+          child: FadeTransition(
+            opacity: _fadeIn,
+            child: SlideTransition(
+              position: _slideUp,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _buildStatsCard(),
+                  const SizedBox(height: 16),
+                  const AdminSalesOverview(todayOnly: true),
+                  const SizedBox(height: 20),
+                  const SuperAdminTotals(),
+                  const SizedBox(height: 20),
+                  SizedBox(
+                    width: double.infinity,
+                    child: Card(
+                      margin: EdgeInsets.zero,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(18),
+                        side: const BorderSide(color: AppColors.blush),
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'Recent Activities',
+                              style: TextStyle(
+                                fontSize: 19,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            const SizedBox(height: 12),
+                            const ActivityFeed(compact: true, cardRows: true),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  //  SLIVER APP BAR  –  Collapsing header with real image + admin badge
+  // ══════════════════════════════════════════════════════════════════════════
+  SliverAppBar _buildSliverAppBar({required bool showFullHeader}) {
+    return SliverAppBar(
+      expandedHeight: showFullHeader
+          ? (MediaQuery.sizeOf(context).width < 600 ? 252.0 : 232.0)
+          : 80.0,
+      pinned: true,
+      clipBehavior: Clip.antiAlias,
+      stretch: true,
+      elevation: 0,
+      backgroundColor: AppColors.primaryDeep,
+      title: Row(
+        children: [
+          _buildShopLogoMini(),
+          const SizedBox(width: 10),
+          const Text(
+            "Angel'z Bites",
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 20,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.2,
+            ),
+          ),
+        ],
+      ),
+      automaticallyImplyLeading: false,
+
+      // ── Collapsed bar: show the sticky shop name in the toolbar
+      centerTitle: false,
+
+      actions: [
+        FutureBuilder<SharedPreferences>(
+          future: SharedPreferences.getInstance(),
+          builder: (context, prefsSnapshot) {
+            final prefs = prefsSnapshot.data;
+            final adminMessageId =
+                prefs?.getString('superAdminId') ??
+                FirebaseAuth.instance.currentUser?.uid ??
+                'Spr-001';
+            return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+              stream: FirebaseFirestore.instance
+                  .collection('messages')
+                  .where('participantIds', arrayContains: adminMessageId)
+                  .snapshots(),
+              builder: (context, snapshot) {
+                var unreadCount = 0;
+                for (final doc
+                    in snapshot.data?.docs ??
+                        <QueryDocumentSnapshot<Map<String, dynamic>>>[]) {
+                  final unreadBy = doc.data()['unreadBy'];
+                  if (unreadBy is Map) {
+                    final value = unreadBy[adminMessageId];
+                    unreadCount += value is num
+                        ? value.toInt()
+                        : int.tryParse(value?.toString() ?? '') ?? 0;
+                  }
+                }
+                return _buildIconButton(
+                  Icons.mail_outline_rounded,
+                  () => _showMessagesPreview(adminMessageId),
+                  badgeCount: unreadCount,
+                  iconSize: 22,
+                  padding: const EdgeInsets.all(10),
+                );
+              },
+            );
+          },
+        ),
+        const SizedBox(width: 8),
+      ],
+
+      // ── Expanded / full header ────────────────────────────────────────
+      flexibleSpace: FlexibleSpaceBar(
+        collapseMode: CollapseMode.parallax,
+        stretchModes: const [StretchMode.zoomBackground],
+        background: _buildExpandedHeader(),
+      ),
+
+      // ── Smooth curved bottom shape ────────────────────────────────────
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.all(Radius.circular(28)),
+      ),
+    );
+  }
+
+  // ── Mini shop logo (visible when collapsed) ───────────────────────────────
+  Widget _buildShopLogoMini() {
+    return Container(
+      width: 36,
+      height: 36,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        border: Border.all(color: Colors.white, width: 2),
+        boxShadow: const [
+          BoxShadow(color: Colors.black26, blurRadius: 6, offset: Offset(0, 3)),
+        ],
+      ),
+      child: ClipOval(
+        child: Image.asset(
+          kShopLogoAsset,
+          fit: BoxFit.cover,
+          errorBuilder: (_, _, _) => Container(
+            color: Colors.white,
+            child: const Icon(Icons.cake_rounded, color: kLightBrown, size: 20),
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ── Full expanded header content ─────────────────────────────────────────
+  Widget _buildExpandedHeader() => ClipRRect(
+    borderRadius: const BorderRadius.all(Radius.circular(28)),
+    child: Stack(
+      fit: StackFit.expand,
+      children: [
+        Image.asset('Assets/Image/Final_bg.jpg', fit: BoxFit.cover),
+        // Deeper, more refined gradient (adds a near-black plum layer for contrast)
+        const DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.bottomLeft,
+              end: Alignment.topRight,
+              colors: [Color(0xF270132E), Color(0xE694163A), Color(0xCC70132E)],
+            ),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(22, 74, 22, 20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              TweenAnimationBuilder<double>(
+                tween: Tween(begin: 0, end: 1),
+                duration: const Duration(milliseconds: 500),
+                curve: Curves.easeOut,
+                builder: (context, value, child) => Opacity(
+                  opacity: value,
+                  child: Transform.translate(
+                    offset: Offset(0, (1 - value) * 10),
+                    child: child,
+                  ),
+                ),
+                child: const SuperAdminIdentity(greeting: true),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'Manage your products, sales, and inventory all in one place.',
+                style: TextStyle(color: Colors.white70),
+              ),
+              const SizedBox(height: 14),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 10,
+                ),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(12),
+                  boxShadow: const [
+                    BoxShadow(
+                      color: Colors.black26,
+                      blurRadius: 8,
+                      offset: Offset(0, 3),
+                    ),
+                  ],
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(
+                      Icons.calendar_today_outlined,
+                      size: 17,
+                      color: kDeepBrown,
+                    ),
+                    const SizedBox(width: 8),
+                    Flexible(
+                      child: Text(
+                        MaterialLocalizations.of(
+                          context,
+                        ).formatFullDate(DateTime.now()),
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: kDeepBrown,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    ),
+  );
+
+  Future<void> _logout() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: Colors.white,
+        surfaceTintColor: Colors.transparent,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        icon: const CircleAvatar(
+          radius: 28,
+          backgroundColor: AppColors.blush,
+          child: Icon(Icons.logout_rounded, color: AppColors.primary),
+        ),
+        title: const Text(
+          'Log out?',
+          style: TextStyle(fontWeight: FontWeight.w700),
+        ),
+        content: const Text('Are you sure you want to log out?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Logout'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    final prefs = await SharedPreferences.getInstance();
+    for (final key in ['lastRole', 'lastUserId', 'superAdminId']) {
+      await prefs.remove(key);
+    }
+    await FirebaseAuth.instance.signOut();
+    if (!mounted) return;
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const LoginScreen()),
+      (_) => false,
+    );
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  //  SIDEBAR  –  raspberry surface with hover + selection animation
+  // ══════════════════════════════════════════════════════════════════════════
+  void _showMessagesPreview(String adminId) {
+    void open(String? contact) {
+      Navigator.pop(context);
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => MessagePage(initialContactId: contact),
+        ),
+      );
+    }
+
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      showDragHandle: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (_) => SizedBox(
+        height: MediaQuery.sizeOf(context).height * .5,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(24, 0, 24, 16),
+          child: Column(
+            children: [
+              const Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'Messages',
+                  style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+                ),
+              ),
+              Expanded(
+                child: AdminMessagePreview(adminId: adminId, onOpen: open),
+              ),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton(
+                  onPressed: () => open(null),
+                  child: const Text('View all messages'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSidebar() => Container(
+    width: 192,
+    decoration: const BoxDecoration(
+      color: kSurfaceDark,
+      boxShadow: [
+        BoxShadow(
+          color: Color(0x14000000),
+          blurRadius: 12,
+          offset: Offset(3, 0),
+        ),
+      ],
+    ),
+    child: Column(
+      children: [
+        const SizedBox(height: 24),
+        _buildShopLogoMini(),
+        const SizedBox(height: 10),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          child: Column(
+            children: [
+              Text(
+                "Angel'Z Bites",
+                textAlign: TextAlign.center,
+                style: GoogleFonts.satisfy(
+                  color: Colors.white,
+                  fontSize: 24,
+                  fontWeight: FontWeight.w400,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'CUPCAKES',
+                style: GoogleFonts.dmSans(
+                  color: AppColors.blush,
+                  fontSize: 9,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: 3.5,
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 28),
+        Expanded(
+          child: ListView(
+            children: List.generate(
+              _navItems.length,
+              (index) => Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 3,
+                ),
+                child: _SidebarTile(
+                  item: _navItems[index],
+                  selected: _selectedIndex == index,
+                  badgeCount: _navigationBadgeCount(index),
+                  onTap: () => setState(() => _selectedIndex = index),
+                ),
+              ),
+            ),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const SizedBox(height: 48, child: SuperAdminIdentity()),
+              const SizedBox(height: 10),
+              FilledButton.icon(
+                onPressed: _logout,
+                style: FilledButton.styleFrom(
+                  backgroundColor: const Color(0xFFB42335),
+                  foregroundColor: Colors.white,
+                  minimumSize: const Size.fromHeight(42),
+                  side: const BorderSide(color: Color(0xFFE28B98)),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  textStyle: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                icon: const Icon(Icons.logout_rounded, size: 16),
+                label: const Text('Logout'),
+              ),
+            ],
+          ),
+        ),
+      ],
+    ),
+  );
+
+  // ══════════════════════════════════════════════════════════════════════════
+  //  STATS CARD  –  animated count-up numbers
+  // ══════════════════════════════════════════════════════════════════════════
+  Widget _buildStatsCard() {
+    final activeBranchId = BranchSession.instance.branchId;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return StreamBuilder<QuerySnapshot>(
+          stream: FirebaseFirestore.instance
+              .collection('sales_inventory')
+              .snapshots(),
+          builder: (context, salesSnapshot) {
+            int totalStock = 0;
+            int totalItems = 0;
+            if (salesSnapshot.hasData) {
+              final activeSalesDocs = salesSnapshot.data!.docs.where((doc) {
+                final data = doc.data() as Map<String, dynamic>;
+                if (data['isDeleted'] == true) return false;
+                if (data['isBundle'] == true) {
+                  return true;
+                }
+                final items =
+                    (data['items'] as List?)?.cast<Map<String, dynamic>>() ??
+                    [];
+                final activeItems = _activeItemVariants(items);
+                return activeItems.isNotEmpty;
+              }).toList();
+
+              for (var doc in activeSalesDocs) {
+                final data = doc.data() as Map<String, dynamic>;
+                if (data['isBundle'] == true) {
+                  totalStock += 1;
+                  continue;
+                }
+                final items =
+                    (data['items'] as List?)?.cast<Map<String, dynamic>>() ??
+                    [];
+                final activeItems = _activeItemVariants(items);
+                totalItems += activeItems.length;
+              }
+            }
+
+            return StreamBuilder<QuerySnapshot>(
+              stream: activeBranchId == null
+                  ? FirebaseFirestore.instance
+                        .collection('staff_requests')
+                        .snapshots()
+                  : FirebaseFirestore.instance
+                        .collection('staff_requests')
+                        .where('branchIds', arrayContains: activeBranchId)
+                        .snapshots(),
+              builder: (context, staffSnapshot) {
+                final staffCount = staffSnapshot.hasData
+                    ? staffSnapshot.data!.docs.where((doc) {
+                        final data = doc.data() as Map<String, dynamic>;
+                        final role = (data['role'] as String?)
+                            ?.trim()
+                            .toLowerCase();
+                        return data['status'] == 'accepted' && role != 'admin';
+                      }).length
+                    : 0;
+
+                return Container(
+                  padding: EdgeInsets.symmetric(
+                    vertical: MediaQuery.of(context).size.width >= 600
+                        ? 12
+                        : 18,
+                    horizontal: 12,
+                  ),
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(
+                      colors: [AppColors.primaryDeep, AppColors.primaryDark],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                    borderRadius: BorderRadius.circular(22),
+                    boxShadow: [
+                      BoxShadow(
+                        color: kPrimaryBrown.withOpacity(0.32),
+                        blurRadius: 16,
+                        offset: const Offset(0, 8),
+                      ),
+                    ],
+                  ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: _buildStatItem(
+                          Icons.point_of_sale_rounded,
+                          totalItems,
+                          'Items',
+                        ),
+                      ),
+                      _buildStatDivider(),
+                      Expanded(
+                        child: _buildStatItem(
+                          Icons.inventory_2_rounded,
+                          totalStock,
+                          'Bundles',
+                        ),
+                      ),
+                      _buildStatDivider(),
+                      Expanded(
+                        child:
+                            StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                              stream: FirebaseFirestore.instance
+                                  .collection('coffee_products')
+                                  .snapshots(),
+                              builder: (context, coffee) => _buildStatItem(
+                                Icons.coffee_rounded,
+                                coffee.hasData
+                                    ? coffee.data!.docs
+                                          .where(
+                                            (doc) =>
+                                                doc.data()['isDeleted'] != true,
+                                          )
+                                          .length
+                                    : null,
+                                'Beverages',
+                              ),
+                            ),
+                      ),
+                      _buildStatDivider(),
+                      Expanded(
+                        child: _buildStatItem(
+                          Icons.people_alt_rounded,
+                          staffCount,
+                          'Staff',
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            );
+          },
+        );
+      },
+    );
+  }
+
+  /// Animated count-up stat item. Pass `null` for value while data is loading
+  /// to show an "—" placeholder instead of animating from zero.
+  Widget _buildStatItem(IconData icon, int? value, String label) {
+    return Column(
+      children: [
+        TweenAnimationBuilder<double>(
+          tween: Tween(begin: 0.8, end: 1),
+          duration: const Duration(milliseconds: 400),
+          curve: Curves.easeOutBack,
+          builder: (context, scale, child) =>
+              Transform.scale(scale: scale, child: child),
+          child: Container(
+            padding: const EdgeInsets.all(9),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.18),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Icon(icon, color: Colors.white, size: 20),
+          ),
+        ),
+        const SizedBox(height: 8),
+        value == null
+            ? const Text(
+                '—',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 24,
+                  fontWeight: FontWeight.w900,
+                  height: 1,
+                ),
+              )
+            : TweenAnimationBuilder<int>(
+                tween: IntTween(begin: 0, end: value),
+                duration: const Duration(milliseconds: 700),
+                curve: Curves.easeOutCubic,
+                builder: (context, animatedValue, _) => Text(
+                  '$animatedValue',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 24,
+                    fontWeight: FontWeight.w900,
+                    height: 1,
+                  ),
+                ),
+              ),
+        const SizedBox(height: 3),
+        Text(
+          label,
+          style: const TextStyle(
+            color: Colors.white70,
+            fontSize: 12,
+            fontWeight: FontWeight.w500,
+            letterSpacing: 0.5,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildStatDivider() {
+    return Container(
+      height: 48,
+      width: 1,
+      color: Colors.white.withOpacity(0.25),
+    );
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  //  QUICK ACTIONS GRID
+  // ══════════════════════════════════════════════════════════════════════════
+  Widget _buildIconButton(
+    IconData icon,
+    VoidCallback onTap, {
+    int badgeCount = 0,
+    double iconSize = 19,
+    EdgeInsets? padding,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+      child: Center(
+        child: Badge(
+          isLabelVisible: badgeCount > 0,
+          label: Text(badgeCount > 99 ? '99+' : '$badgeCount'),
+          child: IconButton.filled(
+            tooltip: 'Messages',
+            onPressed: onTap,
+            style: IconButton.styleFrom(
+              backgroundColor: Colors.white,
+              foregroundColor: kDeepBrown,
+              fixedSize: const Size(36, 36),
+              minimumSize: const Size(36, 36),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              padding: EdgeInsets.zero,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(14),
+              ),
+            ),
+            icon: Icon(icon, size: 20),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildBottomNavigationBar() => Container(
+    decoration: const BoxDecoration(
+      color: Colors.white,
+      boxShadow: [
+        BoxShadow(color: Colors.black12, blurRadius: 10, offset: Offset(0, -2)),
+      ],
+    ),
+    child: SafeArea(
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            minWidth: MediaQuery.sizeOf(context).width,
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceAround,
+            children: List.generate(
+              _navItems.length,
+              (index) => _buildNavItem(_navItems[index], index),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+
+  Widget _buildNavItem(_NavItem item, int index) {
+    final selected = _selectedIndex == index;
+    return GestureDetector(
+      onTap: () => setState(() => _selectedIndex = index),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeInOut,
+        padding: EdgeInsets.symmetric(
+          horizontal: MediaQuery.of(context).size.width >= 600 ? 12 : 18,
+          vertical: MediaQuery.of(context).size.width >= 600 ? 5 : 8,
+        ),
+        decoration: BoxDecoration(
+          color: selected
+              ? kPrimaryBrown.withOpacity(0.12)
+              : Colors.transparent,
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            AnimatedSwitcher(
+              duration: const Duration(milliseconds: 200),
+              transitionBuilder: (child, animation) => ScaleTransition(
+                scale: animation,
+                child: FadeTransition(opacity: animation, child: child),
+              ),
+              child: Badge(
+                isLabelVisible: _navigationBadgeCount(index) > 0,
+                label: Text(
+                  _navigationBadgeCount(index) > 99
+                      ? '99+'
+                      : '${_navigationBadgeCount(index)}',
+                ),
+                child: Icon(
+                  item.icon,
+                  key: ValueKey(selected),
+                  size: MediaQuery.of(context).size.width >= 600 ? 21 : 24,
+                  color: selected ? kPrimaryBrown : Colors.grey[400],
+                ),
+              ),
+            ),
+            SizedBox(height: MediaQuery.of(context).size.width >= 600 ? 2 : 4),
+            AnimatedDefaultTextStyle(
+              duration: const Duration(milliseconds: 200),
+              style: TextStyle(
+                fontSize: MediaQuery.of(context).size.width >= 600 ? 10 : 11,
+                color: selected ? kPrimaryBrown : Colors.grey[500],
+                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                letterSpacing: 0.2,
+              ),
+              child: Text(item.label),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  int _navigationBadgeCount(int index) => switch (index) {
+    2 => _pendingReturnCount,
+    _ => 0,
+  };
+}
+
+// ─── Sidebar tile with hover + selection animation ─────────────────────────
+class _SidebarTile extends StatefulWidget {
+  final _NavItem item;
+  final bool selected;
+  final int badgeCount;
+  final VoidCallback onTap;
+
+  const _SidebarTile({
+    required this.item,
+    required this.selected,
+    required this.badgeCount,
+    required this.onTap,
+  });
+
+  @override
+  State<_SidebarTile> createState() => _SidebarTileState();
+}
+
+class _SidebarTileState extends State<_SidebarTile> {
+  bool _hovering = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final bg = widget.selected
+        ? Colors.white.withValues(alpha: 0.16)
+        : (_hovering
+              ? Colors.white.withValues(alpha: 0.08)
+              : Colors.transparent);
+
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovering = true),
+      onExit: (_) => setState(() => _hovering = false),
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOut,
+          decoration: BoxDecoration(
+            color: bg,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+          child: Row(
+            children: [
+              AnimatedScale(
+                scale: widget.selected ? 1.08 : 1.0,
+                duration: const Duration(milliseconds: 180),
+                child: Badge(
+                  isLabelVisible: widget.badgeCount > 0,
+                  label: Text(
+                    widget.badgeCount > 99 ? '99+' : '${widget.badgeCount}',
+                  ),
+                  child: Icon(
+                    widget.item.icon,
+                    size: 18,
+                    color: widget.selected ? Colors.white : AppColors.blush,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  widget.item.label,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: widget.selected ? Colors.white : AppColors.blush,
+                    fontWeight: widget.selected
+                        ? FontWeight.w700
+                        : FontWeight.w400,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ─── Data Models ──────────────────────────────────────────────────────────────
+
+class _NavItem {
+  final IconData icon;
+  final String label;
+  const _NavItem({required this.icon, required this.label});
+}

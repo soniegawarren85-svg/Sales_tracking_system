@@ -1,3 +1,5 @@
+import 'branch_permissions.dart';
+import 'inventory_reconciliation_service.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'checklist_status.dart';
 
@@ -76,7 +78,13 @@ class AllocationChecklistService {
     required List<String> scopeIds,
     required String branchId,
     required String branchName,
+    List<String>? instanceIds,
   }) async {
+    await BranchPermissions.require(
+      'allowReturns',
+      database: db,
+      branchId: branchId,
+    );
     if (requestId.isEmpty ||
         actorId.isEmpty ||
         count <= 0 ||
@@ -136,11 +144,13 @@ class AllocationChecklistService {
         }
         if (data['isBundle'] == true) {
           item = data;
-          final instances = rows(data['bundleInstances']);
+          final instances = reconciliationInstances(data, sourceId);
           final eligible = instances
               .where(
                 (row) =>
                     (row['status'] ?? 'available') == 'available' &&
+                    (instanceIds == null ||
+                        instanceIds.contains('${row['id']}')) &&
                     row['isDeleted'] != true &&
                     row['isVoided'] != true,
               )
@@ -245,6 +255,7 @@ class AllocationChecklistService {
     required String actorId,
     required String actorName,
   }) async {
+    await BranchPermissions.require('adminAllowReturnApproval', database: db);
     if (actorId.isEmpty) {
       throw ArgumentError('Sign in before confirming a return.');
     }
@@ -269,6 +280,23 @@ class AllocationChecklistService {
           });
         }
       }
+      tx.set(db.collection('activity_logs').doc('return_$id'), {
+        'action': 'return_approved',
+        'description': 'Approved inventory return',
+        'actorId': actorId,
+        'actorName': actorName,
+        'actorPublicId': actorId,
+        'actorRole': actorId == 'Spr-001' ? 'super_admin' : 'admin',
+        'branchIds': [data['branchId'] ?? data['staffId']],
+        'details': {
+          'item': data['name'] ?? data['itemName'] ?? 'Inventory item',
+          'quantity': data['quantity'] ?? data['returnQuantity'] ?? 1,
+          'returnId': id,
+          'reason': data['returnReason'] ?? data['reason'] ?? '',
+          'branch': data['branchName'] ?? data['staffName'] ?? '',
+        },
+        'createdAt': FieldValue.serverTimestamp(),
+      });
       tx.update(ref, {
         'status': ChecklistStatus.completed,
         'confirmedBy': actorId,
@@ -289,6 +317,7 @@ class AllocationChecklistService {
     required String actorName,
     String reason = '',
   }) async {
+    await BranchPermissions.require('adminAllowReturnApproval', database: db);
     if (actorId.trim().isEmpty) throw ArgumentError('Please sign in again.');
     if (!accept && reason.trim().isEmpty) {
       throw ArgumentError('A decline reason is required.');
@@ -339,6 +368,34 @@ class AllocationChecklistService {
           }
         }
         for (final doc in pending) {
+          tx.set(db.collection('activity_logs').doc('return_${doc.id}'), {
+            'action': accept ? 'return_approved' : 'return_rejected',
+            'description': accept
+                ? 'Approved inventory return'
+                : 'Rejected inventory return',
+            'actorId': actorId,
+            'actorName': actorName,
+            'actorRole': 'admin',
+            'actorPublicId': actorId,
+            'branchIds': [doc.data()?['branchId'] ?? doc.data()?['staffId']],
+            'details': {
+              'item':
+                  doc.data()?['name'] ??
+                  doc.data()?['itemName'] ??
+                  'Inventory item',
+              'quantity':
+                  doc.data()?['quantity'] ??
+                  doc.data()?['returnQuantity'] ??
+                  1,
+              'returnId': doc.id,
+              'reason': accept
+                  ? (doc.data()?['returnReason'] ?? '')
+                  : reason.trim(),
+              'branch':
+                  doc.data()?['branchName'] ?? doc.data()?['staffName'] ?? '',
+            },
+            'createdAt': FieldValue.serverTimestamp(),
+          });
           tx.update(doc.reference, {
             'status': accept
                 ? ChecklistStatus.completed
@@ -369,8 +426,11 @@ class AllocationChecklistService {
     required String staffId,
     String reason = '',
     String actorName = '',
+    String actorPublicId = '',
+    String actorRole = '',
     List<String>? scopeIds,
   }) async {
+    await BranchPermissions.require('allowChecklist', database: db);
     if (!accept && reason.trim().isEmpty) {
       throw ArgumentError('Please enter a decline reason.');
     }
@@ -418,11 +478,19 @@ class AllocationChecklistService {
         'updatedAt': FieldValue.serverTimestamp(),
       };
       if (bundle) {
+        final instances = rows(pending['bundleInstances'])
+            .map(
+              (instance) => {
+                ...instance,
+                'batchId': instance['batchId'] ?? pending['deliveryId'] ?? id,
+              },
+            )
+            .toList();
         result['bundleCount'] =
             quantity(current['bundleCount']) + quantity(pending['bundleCount']);
         result['bundleInstances'] = [
           ...rows(current['bundleInstances']),
-          ...rows(pending['bundleInstances']),
+          ...instances,
         ];
         if (accept) {
           result['assignedStartingStock'] =
@@ -482,6 +550,10 @@ class AllocationChecklistService {
         'status': accept ? ChecklistStatus.received : 'declined',
         if (accept) 'confirmedBy': staffId,
         if (accept) 'confirmedByName': actorName,
+        if (accept && actorPublicId.isNotEmpty)
+          'confirmedByPublicId': actorPublicId,
+        if (accept && actorRole.isNotEmpty)
+          'confirmedByRole': actorRole == 'staff' ? 'Cashier' : 'Admin',
         if (accept) 'confirmedAt': FieldValue.serverTimestamp(),
         'reason': reason.trim(),
         'decidedBy': staffId,

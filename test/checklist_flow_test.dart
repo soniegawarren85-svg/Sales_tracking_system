@@ -1,3 +1,4 @@
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:fake_cloud_firestore/fake_cloud_firestore.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -5,6 +6,8 @@ import 'package:sales_tracking/services/allocation_checklist_service.dart';
 import 'package:sales_tracking/services/checklist_status.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+  setUp(() => SharedPreferences.setMockInitialValues({}));
   late FakeFirebaseFirestore db;
   late AllocationChecklistService service;
   setUp(() async {

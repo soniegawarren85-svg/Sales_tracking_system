@@ -1,5 +1,7 @@
+import '../widgets/inventory_batches.dart';
 import '../services/bundle_stock_service.dart';
 import '../widgets/allocation_checklist.dart';
+import '../widgets/staff_inventory_history.dart';
 import 'package:sales_tracking/theme/app_colors.dart';
 import '../services/inventory_display_ids.dart';
 import '../services/public_item_id.dart';
@@ -190,9 +192,11 @@ class _AllCategPageState extends State<AllCategPage>
     return 0;
   }
 
-  Color _stockColor(int stock) {
+  Color _stockColor(int stock, {String type = 'Categories'}) {
     if (stock == 0) return const Color(0xFFE53935);
-    if (stock <= 5) return const Color(0xFFF57C00);
+    if (inventoryLowStock(stock, type: type)) {
+      return const Color(0xFFF57C00);
+    }
     return const Color(0xFF2E7D32);
   }
 
@@ -375,29 +379,65 @@ class _AllCategPageState extends State<AllCategPage>
   int _bundleStockForData(Map<String, dynamic> data) =>
       availableBundleStock(data);
 
-  String _bundleExpirationDate(Map<String, dynamic> bundleData) {
-    final dates = <String>[];
-    void collectItems(dynamic rawItems) {
-      if (rawItems is! List) return;
-      for (final raw in rawItems) {
-        if (raw is! Map) continue;
-        final date = raw['expirationDate']?.toString().trim() ?? '';
-        if (date.isNotEmpty) dates.add(date);
+  List<Map<String, dynamic>> _groupBundleAllocations(
+    Iterable<Map<String, dynamic>> records,
+  ) {
+    final groups = <String, Map<String, dynamic>>{};
+    for (final record in records) {
+      final allocationId = '${record['sourceDocId'] ?? record['id'] ?? ''}';
+      final key = bundleInventoryGroupKey(record);
+      final group = groups.putIfAbsent(key, () {
+        return {
+          ...record,
+          'bundleCount': 0,
+          'assignedStartingStock': 0,
+          'bundleInstances': <Map<String, dynamic>>[],
+        };
+      });
+      final count = _parseInt(record['bundleCount']);
+      final instances = _bundleInstancesFromData(record).map((instance) {
+        return {
+          ...instance,
+          'batchId': instance['batchId'] ?? allocationId,
+          'assignedAt': instance['assignedAt'] ?? record['assignedAt'],
+        };
+      }).toList();
+      group['bundleCount'] = _parseInt(group['bundleCount']) + count;
+      group['assignedStartingStock'] =
+          _parseInt(group['assignedStartingStock']) +
+          _parseInt(record['assignedStartingStock'], fallback: count);
+      (group['bundleInstances'] as List<Map<String, dynamic>>).addAll(
+        instances,
+      );
+      final assignedAt = record['assignedAt'] ?? record['allocatedAt'];
+      final groupAssignedAt = group['assignedAt'] ?? group['allocatedAt'];
+      DateTime toDate(dynamic value) {
+        if (value is Timestamp) return value.toDate();
+        if (value is DateTime) return value;
+        return DateTime.tryParse('$value') ?? DateTime(1970);
+      }
+
+      if (toDate(assignedAt).isAfter(toDate(groupAssignedAt))) {
+        for (final field in [
+          'name',
+          'price',
+          'costPrice',
+          'imageUrl',
+          'bundleId',
+          'publicId',
+          'assignedAt',
+          'allocatedAt',
+          'sourceDocId',
+        ]) {
+          if (record.containsKey(field)) group[field] = record[field];
+        }
       }
     }
+    return groups.values.toList();
+  }
 
-    collectItems(bundleData['items']);
-    for (final instance in _bundleInstancesFromData(bundleData)) {
-      collectItems(instance['items']);
-    }
-    if (dates.isEmpty) return '--';
-    dates.sort((a, b) {
-      final first = DateTime.tryParse(a);
-      final second = DateTime.tryParse(b);
-      if (first == null || second == null) return a.compareTo(b);
-      return first.compareTo(second);
-    });
-    return dates.first;
+  String _bundleExpirationDate(Map<String, dynamic> bundleData) {
+    return bundleExpirationDateLabel(bundleData);
   }
 
   bool _hasExpiredBundleItem(Map<String, dynamic> data) =>
@@ -980,6 +1020,22 @@ class _AllCategPageState extends State<AllCategPage>
     ];
     return months[month.clamp(1, 12)];
   }
+
+  Future<void> _showStaffActivityHistory({
+    required String kind,
+    required String categoryName,
+    String? categoryId,
+    Set<String> itemIds = const {},
+    Set<String> itemNames = const {},
+  }) => showStaffInventoryHistory(
+    context,
+    staffId: FirebaseAuth.instance.currentUser?.uid ?? '',
+    kind: kind,
+    categoryId: categoryId ?? '',
+    categoryName: categoryName,
+    itemIds: itemIds,
+    itemNames: itemNames,
+  );
 
   Future<void> _showStockAdjustmentHistory({
     required String categoryName,
@@ -2142,7 +2198,8 @@ class _AllCategPageState extends State<AllCategPage>
                                     DateTime.fromMillisecondsSinceEpoch(0);
                                 return bTime.compareTo(aTime);
                               });
-                        if (snapshot.connectionState == ConnectionState.waiting) {
+                        if (snapshot.connectionState ==
+                            ConnectionState.waiting) {
                           return const Center(
                             child: CircularProgressIndicator(),
                           );
@@ -4060,10 +4117,11 @@ class _AllCategPageState extends State<AllCategPage>
     required bool enabled,
     required VoidCallback onPressed,
     String label = 'Reduce',
+    Widget? icon,
   }) {
     return ElevatedButton.icon(
       onPressed: enabled ? onPressed : null,
-      icon: const Icon(Icons.remove_circle_outline_rounded, size: 16),
+      icon: icon ?? const Icon(Icons.remove_circle_outline_rounded, size: 16),
       label: Text(enabled ? label : 'Unavailable'),
       style: ElevatedButton.styleFrom(
         backgroundColor: AppColors.primaryDark,
@@ -4076,6 +4134,18 @@ class _AllCategPageState extends State<AllCategPage>
       ),
     );
   }
+
+  Widget _batchButton(Map<String, dynamic> record, {String? itemId}) =>
+      IconButton(
+        tooltip: 'View batches',
+        icon: const Icon(Icons.layers_outlined),
+        onPressed: () => showInventoryBatches(
+          context,
+          allocationId: '${record['sourceDocId'] ?? ''}',
+          scopeIds: _staffInventoryIds,
+          itemId: itemId,
+        ),
+      );
 
   Widget _buildBundleList(List<Map<String, dynamic>> bundleDocs) {
     if (bundleDocs.isEmpty) {
@@ -4097,7 +4167,27 @@ class _AllCategPageState extends State<AllCategPage>
               ? () => _showBundleItemsDialog(bundleDocs.first)
               : null,
           onHistory: bundleDocs.length == 1
-              ? () => _showBundleReductionHistory(bundleDocs.first)
+              ? () {
+                  final bundle = bundleDocs.first;
+                  final bundleName = bundle['name']?.toString() ?? 'Bundle';
+                  _showStaffActivityHistory(
+                    kind: 'bundle',
+                    categoryName: bundleName,
+                    categoryId: bundle['sourceDocId']?.toString(),
+                    itemIds: {
+                      for (final key in [
+                        'sourceDocId',
+                        'itemId',
+                        'id',
+                        'publicId',
+                      ])
+                        if (bundle[key]?.toString().trim().isNotEmpty == true)
+                          bundle[key].toString().trim(),
+                      _displayItemId(bundle),
+                    },
+                    itemNames: {bundleName},
+                  );
+                }
               : null,
           columns: [
             _tableColumn('ID'),
@@ -4133,13 +4223,33 @@ class _AllCategPageState extends State<AllCategPage>
                 _tableCell(
                   '$bundleStock',
                   width: 70,
-                  color: _stockColor(bundleStock),
+                  color: _stockColor(bundleStock, type: 'Bundle'),
                 ),
                 _tableCell(bundleExpirationDate, width: 120),
                 DataCell(
-                  _tableReduceButton(
-                    enabled: bundleStock > 0,
-                    onPressed: () => _showBundleReductionDialog(bundle),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      _batchButton(bundle),
+                      _tableReduceButton(
+                        enabled: bundleStock > 0,
+                        onPressed: () => _showBundleReductionDialog(bundle),
+                        icon: const Stack(
+                          alignment: Alignment.center,
+                          children: [
+                            Icon(Icons.remove_circle_rounded, size: 18),
+                            Positioned(
+                              right: -3,
+                              bottom: -4,
+                              child: Icon(
+                                Icons.arrow_downward_rounded,
+                                size: 11,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ],
@@ -4207,7 +4317,40 @@ class _AllCategPageState extends State<AllCategPage>
             onAddons: addonDocs.isEmpty
                 ? null
                 : () => _showCoffeeAddonsDialog(addonDocs, category),
-            onHistory: () => _showCoffeeVoidHistory(category),
+            onHistory: () {
+              final coffeeName =
+                  category['categoryName']?.toString() ?? 'Beverages';
+              final items =
+                  (category['items'] as List?)?.whereType<Map>() ?? const [];
+              _showStaffActivityHistory(
+                kind: 'beverages',
+                categoryName: coffeeName,
+                categoryId:
+                    category['sourceDocId']?.toString() ??
+                    category['coffeeId']?.toString(),
+                itemIds: {
+                  for (final key in ['sourceDocId', 'coffeeId', 'itemId', 'id'])
+                    if (category[key]?.toString().trim().isNotEmpty == true)
+                      category[key].toString().trim(),
+                  for (final item in items)
+                    for (final key in [
+                      'sourceDocId',
+                      'coffeeId',
+                      'itemId',
+                      'id',
+                      'publicId',
+                    ])
+                      if (item[key]?.toString().trim().isNotEmpty == true)
+                        item[key].toString().trim(),
+                },
+                itemNames: {
+                  coffeeName,
+                  for (final item in items)
+                    if (item['name']?.toString().trim().isNotEmpty == true)
+                      item['name'].toString().trim(),
+                },
+              );
+            },
             compact: true,
             columns: [
               _tableColumn('ID'),
@@ -5088,18 +5231,26 @@ class _AllCategPageState extends State<AllCategPage>
       child: _tableBlock(
         title: categoryName,
         subtitle: 'Available items: ${items.length}',
-        onHistory: () => _showStockAdjustmentHistory(
-          categoryName: categoryName,
-          categoryId:
-              category['categoryId']?.toString() ??
-              (items.isNotEmpty
-                  ? items.first['sourceDocId']?.toString()
-                  : null),
-          itemIds: {
-            for (final item in items)
-              '${item['name']?.toString().toLowerCase() ?? ''}|${item['variant']?.toString().toLowerCase() ?? ''}':
-                  _displayItemId(item),
-          },
+        onHistory: () => _showStaffActivityHistory(
+        kind: 'categories',
+        categoryName: categoryName,
+        categoryId:
+            category['categoryId']?.toString() ??
+            (items.isNotEmpty
+                ? items.first['sourceDocId']?.toString()
+                : null),
+        itemIds: {
+          for (final item in items)
+            for (final key in ['itemId', 'id', 'publicId', 'sourceDocId'])
+              if (item[key]?.toString().trim().isNotEmpty == true)
+                item[key].toString().trim(),
+            for (final item in items) _displayItemId(item),
+        },
+        itemNames: {
+          for (final item in items)
+            if (item['name']?.toString().trim().isNotEmpty == true)
+              item['name'].toString().trim(),
+        },
         ),
         columns: [
           _tableColumn('ID'),
@@ -5150,19 +5301,28 @@ class _AllCategPageState extends State<AllCategPage>
                 width: 120,
               ),
               DataCell(
-                _tableReduceButton(
-                  enabled: itemStock > 0,
-                  onPressed: () {
-                    _showStockAdjustmentDialog(
-                      categoryName: categoryName,
-                      sourceDocId:
-                          item['sourceDocId']?.toString() ??
-                          category['categoryId']?.toString() ??
-                          '',
-                      item: item,
-                      currentStock: itemStock,
-                    );
-                  },
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _batchButton(
+                      item,
+                      itemId: '${item['id'] ?? item['itemId']}',
+                    ),
+                    _tableReduceButton(
+                      enabled: itemStock > 0,
+                      onPressed: () {
+                        _showStockAdjustmentDialog(
+                          categoryName: categoryName,
+                          sourceDocId:
+                              item['sourceDocId']?.toString() ??
+                              category['categoryId']?.toString() ??
+                              '',
+                          item: item,
+                          currentStock: itemStock,
+                        );
+                      },
+                    ),
+                  ],
                 ),
               ),
             ],
@@ -5624,6 +5784,10 @@ class _AllCategPageState extends State<AllCategPage>
                             ),
                           ),
                           const SizedBox(width: 10),
+                          _batchButton(
+                            item,
+                            itemId: '${item['id'] ?? item['itemId']}',
+                          ),
                           ElevatedButton.icon(
                             onPressed: itemStock > 0
                                 ? () {
@@ -5884,7 +6048,7 @@ class _AllCategPageState extends State<AllCategPage>
                 }
 
                 String itemKey(Map<String, dynamic> item) =>
-                    '${item['name'] ?? ''}|${item['price'] ?? ''}'
+                    '${item['id'] ?? item['variantId'] ?? item['name'] ?? ''}'
                         .toLowerCase();
 
                 final visibleDocs = <Map<String, dynamic>>[];
@@ -6033,7 +6197,12 @@ class _AllCategPageState extends State<AllCategPage>
                         ? data['sourceInventoryId']
                         : data['sourceDocId'],
                     'imageUrl': data['imageUrl'],
-                    'items': itemRecords,
+                    'items': [
+                      ...aggregateCategoryAllocationItems([
+                        ...?groupedCategories[categoryKey]?['items'] as List?,
+                        ...itemRecords,
+                      ]),
+                    ],
                     'addonOptions': data['addonOptions'] ?? const [],
                     'isCoffee': data['isCoffee'] == true,
                     'sourceDocId': data['sourceDocId'],
@@ -6051,9 +6220,9 @@ class _AllCategPageState extends State<AllCategPage>
                 final coffeeDocs = allCategoryDocs
                     .where((data) => data['isCoffee'] == true)
                     .toList();
-                final bundleDocs = visibleDocs
-                    .where((data) => data['isBundle'] == true)
-                    .toList();
+                final bundleDocs = _groupBundleAllocations(
+                  visibleDocs.where((data) => data['isBundle'] == true),
+                );
                 final addonByName = <String, Map<String, dynamic>>{};
                 for (final data in visibleDocs) {
                   if (data['isAddon'] == true) {

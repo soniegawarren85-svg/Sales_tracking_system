@@ -242,4 +242,39 @@ void main() {
     expect(data['bundleCount'], 7);
     expect((data['bundleInstances'] as List).length, 2);
   });
+
+  test(
+    'accepting another bundle delivery merges its instances into one row',
+    () async {
+      final db = await fixture(bundle: true);
+      await db.collection('staff_inventory').doc('branch_source').set({
+        'staffId': 'branch',
+        'sourceInventoryId': 'source',
+        'isBundle': true,
+        'bundleCount': 5,
+        'bundleInstances': [
+          for (var i = 1; i <= 5; i++)
+            {'id': 'existing-$i', 'status': 'available'},
+        ],
+      });
+
+      await AllocationChecklistService(db).decide(
+        'delivery',
+        accept: true,
+        staffId: 'staff',
+        scopeIds: ['branch'],
+      );
+
+      final rows = (await db.collection('staff_inventory').get()).docs;
+      final allocated = rows.single.data();
+      expect(allocated['bundleCount'], 7);
+      expect((allocated['bundleInstances'] as List), hasLength(7));
+      expect(
+        (allocated['bundleInstances'] as List).where(
+          (instance) => instance['batchId'] == 'delivery',
+        ),
+        hasLength(2),
+      );
+    },
+  );
 }

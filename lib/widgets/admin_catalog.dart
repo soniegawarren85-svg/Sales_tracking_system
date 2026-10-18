@@ -137,6 +137,9 @@ class AdminCatalogEntry {
   final bool available;
 }
 
+bool catalogLowStock(AdminCatalogEntry entry) =>
+    inventoryLowStock(entry.stock, type: entry.type);
+
 List<AdminCatalogEntry> adminCatalogEntries(
   List<Map<String, dynamic>> products,
   List<Map<String, dynamic>> coffees, {
@@ -262,10 +265,14 @@ class AdminCatalog extends StatefulWidget {
     this.firestore,
     this.onBranchChanged,
     this.scrollController,
+    this.lockedBranchId,
+    this.lockedBranchName,
   });
   final FirebaseFirestore? firestore;
   final ValueChanged<String>? onBranchChanged;
   final ScrollController? scrollController;
+  final String? lockedBranchId;
+  final String? lockedBranchName;
   final ValueChanged<Map<String, dynamic>?>? onCategorySelected;
   final Widget? actions;
   final ValueChanged<bool>? onBeverageTabChanged;
@@ -358,6 +365,7 @@ class _AdminCatalogState extends State<AdminCatalog> {
   @override
   void initState() {
     super.initState();
+    _branch = widget.lockedBranchId ?? '';
     if (widget.firestore == null) {
       ShortIdService.refresh().catchError((Object _) {});
     }
@@ -399,7 +407,7 @@ class _AdminCatalogState extends State<AdminCatalog> {
       );
     },
   );
-  bool _low(AdminCatalogEntry e) => e.stock != null && e.stock! <= 50;
+  bool _low(AdminCatalogEntry e) => catalogLowStock(e);
   bool _near(AdminCatalogEntry e) => catalogExpiryLabel(
     e,
   ).split('\n').any((date) => inventoryNearExpiry(date));
@@ -604,10 +612,20 @@ class _AdminCatalogState extends State<AdminCatalog> {
                   )
                 : null;
             final sections = <Widget>[
-              if (!widget.gallery)
+              if (!widget.gallery && widget.lockedBranchId == null)
                 InventoryHeaderTransition(
                   collapsed: widget.compactHeader,
                   child: _branchPicker(),
+                ),
+              if (!widget.gallery && widget.lockedBranchId != null)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Chip(
+                    avatar: const Icon(Icons.storefront_rounded, size: 18),
+                    label: Text(
+                      'Branch: ${widget.lockedBranchName ?? widget.lockedBranchId}',
+                    ),
+                  ),
                 ),
               if (widget.gallery)
                 Wrap(

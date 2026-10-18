@@ -159,9 +159,17 @@ class _AutoImageCarouselState extends State<_AutoImageCarousel> {
 }
 
 class InventoryPage extends StatefulWidget {
-  const InventoryPage({super.key, this.embedded = false, this.initialEntry});
+  const InventoryPage({
+    super.key,
+    this.embedded = false,
+    this.initialEntry,
+    this.branchId,
+    this.branchName,
+  });
   final bool embedded;
   final AdminCatalogEntry? initialEntry;
+  final String? branchId;
+  final String? branchName;
   @override
   State<InventoryPage> createState() => _InventoryPageState();
 }
@@ -182,6 +190,7 @@ class _InventoryPageState extends State<InventoryPage>
   @override
   void initState() {
     super.initState();
+    _monitorBranch = widget.branchId ?? '';
     _fabController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 300),
@@ -200,6 +209,14 @@ class _InventoryPageState extends State<InventoryPage>
     _fabController.dispose();
     _inventoryScrollController.dispose();
     super.dispose();
+  }
+
+  @override
+  void didUpdateWidget(covariant InventoryPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.branchId != oldWidget.branchId) {
+      _monitorBranch = widget.branchId ?? '';
+    }
   }
 
   void _scrollInventoryBy(double delta) {
@@ -3214,61 +3231,63 @@ class _InventoryPageState extends State<InventoryPage>
           : null,
       body: SafeArea(
         child: Column(
-            children: [
-              GestureDetector(
-                behavior: HitTestBehavior.translucent,
-                onVerticalDragUpdate: _scrollInventoryFromPage,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    _scrollOnPointerWheel(
-                      _collapsible(
-                        Container(
-                          padding: const EdgeInsets.all(20),
-                          decoration: const BoxDecoration(
-                            gradient: LinearGradient(
-                              colors: [PinkTheme.primaryDark, PinkTheme.accent],
-                            ),
-                            borderRadius: BorderRadius.vertical(
-                              bottom: Radius.circular(24),
-                            ),
+          children: [
+            GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onVerticalDragUpdate: _scrollInventoryFromPage,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _scrollOnPointerWheel(
+                    _collapsible(
+                      Container(
+                        padding: const EdgeInsets.all(20),
+                        decoration: const BoxDecoration(
+                          gradient: LinearGradient(
+                            colors: [PinkTheme.primaryDark, PinkTheme.accent],
                           ),
-                          child: Row(
-                            children: [
-                              if (!widget.embedded)
-                                IconButton(
-                                  onPressed: () => Navigator.pop(context),
-                                  icon: const Icon(
-                                    Icons.arrow_back,
-                                    color: Colors.white,
-                                  ),
-                                ),
-                              const Expanded(
-                                child: Text(
-                                  'Inventory',
-                                  style: TextStyle(
-                                    fontSize: 20,
-                                    fontWeight: FontWeight.w900,
-                                    color: Colors.white,
-                                  ),
+                          borderRadius: BorderRadius.vertical(
+                            bottom: Radius.circular(24),
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            if (!widget.embedded)
+                              IconButton(
+                                onPressed: () => Navigator.pop(context),
+                                icon: const Icon(
+                                  Icons.arrow_back,
+                                  color: Colors.white,
                                 ),
                               ),
-                              const AllocationChecklistButton(
-                                scopeIds: [],
-                                isAdmin: true,
+                            const Expanded(
+                              child: Text(
+                                'Inventory',
+                                style: TextStyle(
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.w900,
+                                  color: Colors.white,
+                                ),
                               ),
-                            ],
-                          ),
+                            ),
+                            AllocationChecklistButton(
+                              key: ValueKey(_monitorBranch),
+                              scopeIds: [_monitorBranch],
+                            ),
+                          ],
                         ),
                       ),
                     ),
-                    _scrollOnPointerWheel(
-                      _collapsible(
-                        Padding(
-                          padding: const EdgeInsets.all(16),
-                          child: Align(
-                            alignment: Alignment.centerLeft,
-                            child: Wrap(
+                  ),
+                  _scrollOnPointerWheel(
+                    _collapsible(
+                      Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Align(
+                          alignment: Alignment.centerLeft,
+                          child: SingleChildScrollView(
+                            scrollDirection: Axis.horizontal,
+                            child: Row(
                               spacing: 10,
                               children: ['Categories', 'Bundle', 'Beverages']
                                   .map(
@@ -3283,9 +3302,8 @@ class _InventoryPageState extends State<InventoryPage>
                                       ),
                                       label: Text(type),
                                       selected: _catalogType == type,
-                                      onSelected: (_) => setState(
-                                        () => _catalogType = type,
-                                      ),
+                                      onSelected: (_) =>
+                                          setState(() => _catalogType = type),
                                     ),
                                   )
                                   .toList(),
@@ -3294,77 +3312,96 @@ class _InventoryPageState extends State<InventoryPage>
                         ),
                       ),
                     ),
-                  ],
-                ),
+                  ),
+                ],
               ),
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 4, 20, 0),
-                  child: AdminCatalog(
-                    onBranchChanged: (value) =>
-                        setState(() => _monitorBranch = value),
-                    pinnedControls: true,
-                    compactHeader: _headerCollapsed,
-                    scrollController: _inventoryScrollController,
-                    onHeaderCollapsed: (collapsed) {
-                      if (mounted && collapsed != _headerCollapsed) {
-                        setState(() => _headerCollapsed = collapsed);
-                      }
-                    },
-                    type: _catalogType,
-                    onBeverageTabChanged: (value) =>
-                        setState(() => _addonsTab = value),
-                    onOpen: _openCatalogEntry,
-                    onVoid: _voidCatalogEntry,
-                    onView: _viewBundle,
-                    onCategorySelected: (category) =>
-                        _selectedCategory = category,
-                    actions: Wrap(
-                      alignment: WrapAlignment.end,
-                      children: [
-                        if (_catalogType != 'Beverages' || !_addonsTab)
-                          TextButton.icon(
-                            style: MediaQuery.sizeOf(context).width < 600
-                                ? TextButton.styleFrom(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 8,
-                                    ),
-                                    visualDensity: VisualDensity.compact,
-                                  )
-                                : null,
-                            icon: const Icon(Icons.add),
-                            label: Text(
-                              MediaQuery.sizeOf(context).width < 600
-                                  ? 'Add'
-                                  : _catalogType == 'Categories'
-                                  ? 'Add Category'
-                                  : _catalogType == 'Bundle'
-                                  ? 'Create Bundle'
-                                  : 'Add Beverages',
-                            ),
-                            onPressed: _catalogType == 'Categories'
-                                ? _showCategorySheet
-                                : _addCatalogItem,
+            ),
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(20, 4, 20, 0),
+                child: AdminCatalog(
+                  onBranchChanged: (value) =>
+                      setState(() => _monitorBranch = value),
+                  pinnedControls: true,
+                  compactHeader: _headerCollapsed,
+                  scrollController: _inventoryScrollController,
+                  onHeaderCollapsed: (collapsed) {
+                    if (mounted && collapsed != _headerCollapsed) {
+                      setState(() => _headerCollapsed = collapsed);
+                    }
+                  },
+                  type: _catalogType,
+                  lockedBranchId: widget.branchId,
+                  lockedBranchName: widget.branchName,
+                  onBeverageTabChanged: (value) =>
+                      setState(() => _addonsTab = value),
+                  onOpen: _openCatalogEntry,
+                  onVoid: _voidCatalogEntry,
+                  onView: _viewBundle,
+                  onCategorySelected: (category) =>
+                      _selectedCategory = category,
+                  actions: Wrap(
+                    alignment: WrapAlignment.end,
+                    children: [
+                      if (_catalogType != 'Beverages' || !_addonsTab)
+                        TextButton.icon(
+                          style: MediaQuery.sizeOf(context).width < 600
+                              ? TextButton.styleFrom(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 8,
+                                  ),
+                                  visualDensity: VisualDensity.compact,
+                                )
+                              : null,
+                          icon: const Icon(Icons.add),
+                          label: Text(
+                            MediaQuery.sizeOf(context).width < 600
+                                ? 'Add'
+                                : _catalogType == 'Categories'
+                                ? 'Add Category'
+                                : _catalogType == 'Bundle'
+                                ? 'Create Bundle'
+                                : 'Add Beverages',
                           ),
+                          onPressed: _catalogType == 'Categories'
+                              ? _showCategorySheet
+                              : _addCatalogItem,
+                        ),
 
-                        if (_catalogType == 'Beverages' && _addonsTab)
-                          TextButton.icon(
-                            style: MediaQuery.sizeOf(context).width < 600
-                                ? TextButton.styleFrom(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 8,
-                                    ),
-                                    visualDensity: VisualDensity.compact,
-                                  )
-                                : null,
-                            onPressed: () => showAdminAddonEditor(context),
-                            icon: const Icon(Icons.add),
-                            label: Text(
-                              MediaQuery.sizeOf(context).width < 600
-                                  ? 'Add'
-                                  : 'Add add-ons',
-                            ),
+                      if (_catalogType == 'Beverages' && _addonsTab)
+                        TextButton.icon(
+                          style: MediaQuery.sizeOf(context).width < 600
+                              ? TextButton.styleFrom(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 8,
+                                  ),
+                                  visualDensity: VisualDensity.compact,
+                                )
+                              : null,
+                          onPressed: () => showAdminAddonEditor(context),
+                          icon: const Icon(Icons.add),
+                          label: Text(
+                            MediaQuery.sizeOf(context).width < 600
+                                ? 'Add'
+                                : 'Add add-ons',
                           ),
+                        ),
+                      IconButton(
+                        style: MediaQuery.sizeOf(context).width < 600
+                            ? IconButton.styleFrom(
+                                padding: const EdgeInsets.all(6),
+                                minimumSize: const Size(40, 40),
+                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              )
+                            : null,
+                        tooltip: 'Void records',
+                        icon: const Icon(Icons.block, color: PinkTheme.primary),
+                        onPressed: () => showAdminInventoryRecords(
+                          context,
+                          type: _catalogType,
+                        ),
+                      ),
+                      if (_catalogType != 'Beverages' || _addonsTab)
                         IconButton(
                           style: MediaQuery.sizeOf(context).width < 600
                               ? IconButton.styleFrom(
@@ -3374,59 +3411,39 @@ class _InventoryPageState extends State<InventoryPage>
                                       MaterialTapTargetSize.shrinkWrap,
                                 )
                               : null,
-                          tooltip: 'Void records',
+                          tooltip: 'Expired inventory',
                           icon: const Icon(
-                            Icons.block,
-                            color: PinkTheme.primary,
+                            Icons.event_busy,
+                            color: Colors.deepOrange,
                           ),
                           onPressed: () => showAdminInventoryRecords(
                             context,
                             type: _catalogType,
+                            expired: true,
                           ),
                         ),
-                        if (_catalogType != 'Beverages' || _addonsTab)
-                          IconButton(
-                            style: MediaQuery.sizeOf(context).width < 600
-                                ? IconButton.styleFrom(
-                                    padding: const EdgeInsets.all(6),
-                                    minimumSize: const Size(40, 40),
-                                    tapTargetSize:
-                                        MaterialTapTargetSize.shrinkWrap,
-                                  )
-                                : null,
-                            tooltip: 'Expired inventory',
-                            icon: const Icon(
-                              Icons.event_busy,
-                              color: Colors.deepOrange,
-                            ),
-                            onPressed: () => showAdminInventoryRecords(
-                              context,
-                              type: _catalogType,
-                              expired: true,
-                            ),
-                          ),
-                        if (_catalogType == 'Categories')
-                          IconButton(
-                            style: MediaQuery.sizeOf(context).width < 600
-                                ? IconButton.styleFrom(
-                                    padding: const EdgeInsets.all(6),
-                                    minimumSize: const Size(40, 40),
-                                    tapTargetSize:
-                                        MaterialTapTargetSize.shrinkWrap,
-                                  )
-                                : null,
-                            tooltip: 'Manage categories',
-                            icon: const Icon(Icons.edit_outlined),
-                            onPressed: () => showCategoryManager(context),
-                          ),
-                      ],
-                    ),
+                      if (_catalogType == 'Categories')
+                        IconButton(
+                          style: MediaQuery.sizeOf(context).width < 600
+                              ? IconButton.styleFrom(
+                                  padding: const EdgeInsets.all(6),
+                                  minimumSize: const Size(40, 40),
+                                  tapTargetSize:
+                                      MaterialTapTargetSize.shrinkWrap,
+                                )
+                              : null,
+                          tooltip: 'Manage categories',
+                          icon: const Icon(Icons.edit_outlined),
+                          onPressed: () => showCategoryManager(context),
+                        ),
+                    ],
                   ),
                 ),
               ),
-            ],
-          ),
+            ),
+          ],
         ),
+      ),
     );
   }
 

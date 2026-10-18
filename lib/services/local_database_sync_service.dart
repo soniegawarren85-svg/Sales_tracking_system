@@ -137,12 +137,13 @@ class LocalDatabaseSyncService {
               .whereType<Map>()
               .map((item) => Map<String, dynamic>.from(item))
               .toList();
+          final stockLines = expandSaleStockLines(lines);
           records = records
               .map(
                 (record) => applySaleStock(
                   record,
                   '${receipt['salesId']}',
-                  lines
+                  stockLines
                       .where(
                         (line) =>
                             line['staffInventoryDocId'] ==
@@ -784,10 +785,11 @@ class LocalDatabaseSyncService {
     try {
       final ref = _firestore.collection('completed_sales').doc(docId);
       if (payload['stockSyncRequired'] == true) {
-        final lines = (payload['items'] as List? ?? [])
+        final receiptLines = (payload['items'] as List? ?? [])
             .whereType<Map>()
             .map((item) => Map<String, dynamic>.from(item))
             .toList();
+        final lines = expandSaleStockLines(receiptLines);
         final ids = lines
             .map((line) => '${line['staffInventoryDocId'] ?? ''}')
             .where((id) => id.isNotEmpty)

@@ -6,6 +6,7 @@ import '../services/checklist_status.dart';
 import '../theme/app_colors.dart';
 import 'checklist_return_dialog.dart';
 import 'return_batch_cards.dart';
+import 'branch_permission_gate.dart';
 
 class AllocationChecklistButton extends StatelessWidget {
   final List<String> scopeIds;
@@ -79,9 +80,17 @@ class AllocationChecklistButton extends StatelessWidget {
           direction: Axis.horizontal,
           mainAxisSize: MainAxisSize.min,
           children: [
-            button(returns: false),
+            BranchPermissionGate(
+              permission: 'allowChecklist',
+              database: db,
+              child: button(returns: false),
+            ),
             const SizedBox(width: 8),
-            button(returns: true),
+            BranchPermissionGate(
+              permission: 'allowReturns',
+              database: db,
+              child: button(returns: true),
+            ),
           ],
         );
       },
@@ -319,7 +328,9 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
         );
         if (!confirmed || !mounted) return;
       }
-      final actor = await resolveSessionActor(widget.db, admin: widget.admin);
+      final actor = widget.admin
+          ? await resolveSessionActor(widget.db, admin: true)
+          : await resolveBranchInventoryActor(widget.db);
       final name = actor.name;
       final service = AllocationChecklistService(widget.db);
       final changed = report
@@ -338,6 +349,8 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
               accept: true,
               staffId: actor.id,
               actorName: name,
+              actorPublicId: actor.publicId,
+              actorRole: actor.role,
               scopeIds: widget.ids,
             );
       if (!mounted) return;
@@ -531,31 +544,68 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
     clipBehavior: Clip.antiAlias,
     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
     child: SizedBox(
-      width: 600,
-      height: 640,
+      width: MediaQuery.sizeOf(context).width > 784
+          ? 760
+          : MediaQuery.sizeOf(context).width - 24,
+      height: MediaQuery.sizeOf(context).height > 784
+          ? 760
+          : MediaQuery.sizeOf(context).height - 24,
       child: Column(
         children: [
           Container(
-            color: AppColors.primaryDeep,
-            padding: const EdgeInsets.all(16),
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(
+                colors: [AppColors.primaryDeep, AppColors.primaryDark],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+            ),
+            padding: const EdgeInsets.fromLTRB(20, 16, 12, 16),
             child: Row(
               children: [
-                const Icon(Icons.checklist_rounded, color: Colors.white),
+                Container(
+                  width: 42,
+                  height: 42,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.16),
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: Icon(
+                    widget.returnsOnly && widget.admin
+                        ? Icons.assignment_return_rounded
+                        : Icons.checklist_rounded,
+                    color: Colors.white,
+                  ),
+                ),
                 const SizedBox(width: 12),
                 Expanded(
-                  child: Text(
-                    widget.pendingOnly
-                        ? widget.returnsOnly
-                              ? 'Pending returns'
-                              : 'Pending items'
-                        : widget.returnsOnly
-                        ? 'Returns'
-                        : 'Checklist',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 22,
-                      fontWeight: FontWeight.bold,
-                    ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        widget.pendingOnly
+                            ? widget.returnsOnly
+                                  ? 'Pending returns'
+                                  : 'Pending items'
+                            : widget.returnsOnly
+                            ? 'Returns'
+                            : 'Checklist',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 21,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      if (widget.admin && widget.returnsOnly)
+                        const Text(
+                          'Review and confirm returned inventory',
+                          style: TextStyle(
+                            color: Color(0xFFF9DCE5),
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                    ],
                   ),
                 ),
                 IconButton(
@@ -567,22 +617,41 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
             ),
           ),
           Padding(
-            padding: const EdgeInsets.all(12),
+            padding: const EdgeInsets.fromLTRB(14, 14, 14, 10),
             child: TextField(
               onChanged: (value) =>
                   setState(() => search = value.trim().toLowerCase()),
               decoration: InputDecoration(
-                prefixIcon: const Icon(Icons.search),
+                prefixIcon: const Icon(
+                  Icons.search_rounded,
+                  color: AppColors.primaryDark,
+                ),
                 hintText: 'Search',
                 suffixIcon:
                     (widget.pendingOnly ||
-                        tab != (widget.returnsOnly && !widget.admin ? 2 : 1))
+                        (!(widget.returnsOnly && widget.admin) &&
+                            tab !=
+                                (widget.returnsOnly && !widget.admin ? 2 : 1)))
                     ? null
                     : IconButton(
                         tooltip: 'Filter by date range',
                         onPressed: pickDay,
-                        icon: const Icon(Icons.calendar_today_outlined),
+                        icon: const Icon(
+                          Icons.calendar_month_rounded,
+                          color: AppColors.primaryDark,
+                        ),
                       ),
+                filled: true,
+                fillColor: AppColors.surfaceTint,
+                contentPadding: const EdgeInsets.symmetric(vertical: 13),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(15),
+                  borderSide: const BorderSide(color: AppColors.border),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(15),
+                  borderSide: const BorderSide(color: AppColors.border),
+                ),
               ),
             ),
           ),
@@ -633,7 +702,11 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
                                 ChecklistStatus.completed
                           : ChecklistStatus.label(d) ==
                                 ChecklistStatus.received;
-                      if (filterDate &&
+                      final shouldFilterDate =
+                          widget.returnsOnly && widget.admin
+                          ? selectedEnd != null
+                          : filterDate;
+                      if (shouldFilterDate &&
                           (at == null ||
                               at.toLocal().isBefore(selectedDay) ||
                               !at.toLocal().isBefore(
@@ -699,14 +772,36 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
                         ),
                       ),
                     if (!widget.pendingOnly &&
-                        tab == (widget.returnsOnly && !widget.admin ? 2 : 1))
+                        selectedEnd != null &&
+                        (widget.returnsOnly && widget.admin ||
+                            tab ==
+                                (widget.returnsOnly && !widget.admin ? 2 : 1)))
                       Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 12),
                         child: Text(
                           '${MaterialLocalizations.of(context).formatMediumDate(selectedDay)} – ${MaterialLocalizations.of(context).formatMediumDate(selectedEnd ?? selectedDay)}',
                         ),
                       ),
-                    if (!widget.pendingOnly)
+                    if (!widget.pendingOnly &&
+                        widget.admin &&
+                        widget.returnsOnly)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 14),
+                        child: Container(
+                          padding: const EdgeInsets.all(4),
+                          decoration: BoxDecoration(
+                            color: AppColors.surfaceTint,
+                            borderRadius: BorderRadius.circular(15),
+                          ),
+                          child: Row(
+                            children: [
+                              _returnTab('Pending Returned', 0),
+                              _returnTab('Completed Return', 1),
+                            ],
+                          ),
+                        ),
+                      )
+                    else if (!widget.pendingOnly)
                       SingleChildScrollView(
                         scrollDirection: Axis.horizontal,
                         padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -714,7 +809,7 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
                           children: [
                             for (final entry in [
                               if (widget.admin) ...[
-                                'Returned Items',
+                                'Pending Returned',
                                 'Completed Return',
                               ] else if (widget.returnsOnly) ...[
                                 'Return Items',
@@ -804,6 +899,29 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
             ),
           ),
         ],
+      ),
+    ),
+  );
+
+  Widget _returnTab(String label, int index) => Expanded(
+    child: Material(
+      color: tab == index ? AppColors.primaryDark : Colors.transparent,
+      borderRadius: BorderRadius.circular(12),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: () => setState(() => tab = index),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+          child: Text(
+            label,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: tab == index ? Colors.white : AppColors.textMuted,
+              fontWeight: FontWeight.w800,
+              fontSize: 13,
+            ),
+          ),
+        ),
       ),
     ),
   );

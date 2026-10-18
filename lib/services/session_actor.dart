@@ -1,12 +1,19 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'super_admin.dart';
 
 class SessionActor {
-  const SessionActor(this.id, this.name, {this.publicId = ''});
+  const SessionActor(
+    this.id,
+    this.name, {
+    this.publicId = '',
+    this.role = 'staff',
+  });
   final String id;
   final String name;
   final String publicId;
+  final String role;
 }
 
 String accountFullName(Map<String, dynamic> data) {
@@ -45,6 +52,19 @@ Future<SessionActor> resolveSessionActor(
   SharedPreferences? preferences,
 }) async {
   final prefs = preferences ?? await SharedPreferences.getInstance();
+  if (admin && SuperAdmin.isSession(prefs)) {
+    final profile =
+        (await db.collection('super_admin_profiles').doc(SuperAdmin.id).get())
+            .data() ??
+        {};
+    final name = accountFullName(profile);
+    return SessionActor(
+      SuperAdmin.id,
+      name.isEmpty ? SuperAdmin.name : name,
+      publicId: SuperAdmin.id,
+      role: 'super_admin',
+    );
+  }
   final expectedRole = admin ? 'admin' : 'staff';
   final savedRole = prefs.getString('lastRole')?.trim().toLowerCase();
   if (savedRole != null && savedRole != expectedRole) {
@@ -65,7 +85,7 @@ Future<SessionActor> resolveSessionActor(
   final profile = account?.data();
   // Login explicitly supports the built-in admin before a profile is created.
   if (emergency && profile == null && id == 'ADM-0001') {
-    return SessionActor(id, 'Admin User', publicId: id);
+    return SessionActor(id, 'Admin User', publicId: id, role: 'admin');
   }
   if (profile == null ||
       profile['isVoided'] == true ||
@@ -85,5 +105,16 @@ Future<SessionActor> resolveSessionActor(
         ? name
         : user?.displayName ?? (admin ? 'Admin User' : 'Staff'),
     publicId: '${profile[admin ? 'adminId' : 'staffId'] ?? ''}',
+    role: expectedRole,
+  );
+}
+
+/// Branch inventory actions are shared by staff and their branch admin.
+Future<SessionActor> resolveBranchInventoryActor(FirebaseFirestore db) async {
+  final prefs = await SharedPreferences.getInstance();
+  return resolveSessionActor(
+    db,
+    admin: prefs.getString('lastRole')?.trim().toLowerCase() == 'admin',
+    preferences: prefs,
   );
 }

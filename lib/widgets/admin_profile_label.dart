@@ -3,23 +3,25 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../services/admin_profile_identity.dart';
 
 class AdminProfileLabel extends StatelessWidget {
   const AdminProfileLabel({super.key, this.greeting = false});
   final bool greeting;
   Future<String> identity() async {
     final prefs = await SharedPreferences.getInstance();
-    final adminId = prefs.getString('adminId') ?? 'ADM-001';
-    return prefs.getString('lastUserId') == 'emergency-admin'
-        ? adminId
-        : FirebaseAuth.instance.currentUser?.uid ?? adminId;
+    return resolveAdminProfileIdentity(
+      FirebaseFirestore.instance,
+      prefs,
+      authUserId: FirebaseAuth.instance.currentUser?.uid,
+    );
   }
 
   @override
   Widget build(BuildContext context) => FutureBuilder<String>(
     future: identity(),
     builder: (context, id) => StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-      stream: id.hasData
+      stream: id.hasData && id.data!.isNotEmpty
           ? FirebaseFirestore.instance
                 .collection('staff_requests')
                 .doc(id.data)

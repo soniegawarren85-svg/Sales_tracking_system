@@ -87,6 +87,11 @@ List<Map<String, dynamic>> groupAllocations(
   }).toList()..sort((a, b) => allocationDate(b).compareTo(allocationDate(a)));
 }
 
+final _historyCache = Expando<Map<String, List<Map<String, dynamic>>>>();
+
+Map<String, List<Map<String, dynamic>>> _cachedHistory(FirebaseFirestore db) =>
+    _historyCache[db] ??= {};
+
 Stream<List<Map<String, dynamic>>> branchAllocationHistory(
   FirebaseFirestore db,
   String branchId,
@@ -96,21 +101,47 @@ Stream<List<Map<String, dynamic>>> branchAllocationHistory(
   late StreamController<List<Map<String, dynamic>>> controller;
   final subscriptions =
       <StreamSubscription<QuerySnapshot<Map<String, dynamic>>>>[];
+  var revision = 0;
+  var cancelled = false;
   void emit() {
-    if (deliveries == null || legacy == null) return;
-    final records = deliveries!
+    final version = ++revision;
+    final records = (deliveries ?? [])
         .where((doc) => doc.data()['kind'] != 'return')
         .map((doc) => {...doc.data(), '_id': doc.id})
         .toList();
     final ids = records.map((r) => r['_id']).toSet();
-    for (final doc in legacy!) {
+    for (final doc
+        in legacy ?? <QueryDocumentSnapshot<Map<String, dynamic>>>[]) {
       final data = doc.data();
       if (data['type'] != 'assignment' || ids.contains(data['allocationId'])) {
         continue;
       }
       records.add({...data, '_id': doc.id, 'status': ChecklistStatus.received});
     }
-    controller.add(records);
+    void publish() {
+      if (cancelled || version != revision) return;
+      final snapshot = List<Map<String, dynamic>>.of(records);
+      _cachedHistory(db)[branchId] = snapshot;
+      controller.add(snapshot);
+    }
+
+    publish();
+    // Render saved records immediately. Legacy profile lookups must never
+    // block the whole list, or overwrite a newer checklist snapshot.
+    for (var index = 0; index < records.length; index++) {
+      final position = index;
+      unawaited(
+        metadata
+            .resolve(records[position])
+            .then((resolved) {
+              records[position] = resolved;
+              publish();
+            })
+            .catchError((Object _) {
+              // Keep the saved record visible when optional metadata is unavailable.
+            }),
+      );
+    }
   }
 
   controller = StreamController<List<Map<String, dynamic>>>(
@@ -136,25 +167,26 @@ Stream<List<Map<String, dynamic>>> branchAllocationHistory(
       }
     },
     onCancel: () async {
+      cancelled = true;
       for (final subscription in subscriptions) {
         await subscription.cancel();
       }
     },
   );
-  return controller.stream.asyncMap(
-    (records) => Future.wait(records.map(metadata.resolve)),
-  );
+  return controller.stream;
 }
 
 Future<void> showBranchAllocationHistory(
   BuildContext context,
   String branchId, {
   FirebaseFirestore? database,
+  List<Map<String, dynamic>>? initialRecords,
 }) => showDialog<void>(
   context: context,
   builder: (_) => AllocationHistoryDialog(
     branchId: branchId,
     database: database ?? FirebaseFirestore.instance,
+    initialRecords: initialRecords,
   ),
 );
 
@@ -193,6 +225,15 @@ class AllocationHistoryActions extends StatelessWidget {
                   branchId: branchId,
                   database: db,
                   pendingOnly: true,
+                  initialRecords: snapshot.data?.docs
+                      .where((doc) => doc.data()['kind'] != 'return')
+                      .map(
+                        (doc) => <String, dynamic>{
+                          ...doc.data(),
+                          '_id': doc.id,
+                        },
+                      )
+                      .toList(),
                 ),
               ),
               icon: Badge(
@@ -203,8 +244,17 @@ class AllocationHistoryActions extends StatelessWidget {
             ),
             IconButton(
               tooltip: 'Allocation history',
-              onPressed: () =>
-                  showBranchAllocationHistory(context, branchId, database: db),
+              onPressed: () => showBranchAllocationHistory(
+                context,
+                branchId,
+                database: db,
+                initialRecords: snapshot.data?.docs
+                    .where((doc) => doc.data()['kind'] != 'return')
+                    .map(
+                      (doc) => <String, dynamic>{...doc.data(), '_id': doc.id},
+                    )
+                    .toList(),
+              ),
               icon: const Icon(Icons.history_rounded),
             ),
           ],
@@ -220,10 +270,12 @@ class AllocationHistoryDialog extends StatefulWidget {
     required this.branchId,
     required this.database,
     this.pendingOnly = false,
+    this.initialRecords,
   });
   final String branchId;
   final FirebaseFirestore database;
   final bool pendingOnly;
+  final List<Map<String, dynamic>>? initialRecords;
   @override
   State<AllocationHistoryDialog> createState() =>
       _AllocationHistoryDialogState();
@@ -238,6 +290,7 @@ class _AllocationHistoryDialogState extends State<AllocationHistoryDialog> {
   bool _issuesOnly = false;
   DateTime _day = DateUtils.dateOnly(DateTime.now());
   DateTime? _endDay;
+  final _expanded = <String>{};
 
   Future<void> _pickDates() async {
     final picked = await showDateRangePicker(
@@ -296,8 +349,11 @@ class _AllocationHistoryDialogState extends State<AllocationHistoryDialog> {
         Expanded(
           child: StreamBuilder<List<Map<String, dynamic>>>(
             stream: _stream,
+            initialData:
+                _cachedHistory(widget.database)[widget.branchId] ??
+                widget.initialRecords,
             builder: (context, snapshot) {
-              if (snapshot.hasError) {
+              if (snapshot.hasError && !snapshot.hasData) {
                 return const Center(
                   child: Text('Unable to load allocation history.'),
                 );
@@ -370,6 +426,7 @@ class _AllocationHistoryDialogState extends State<AllocationHistoryDialog> {
 
   Widget _card(Map<String, dynamic> data) {
     final complete = data['_complete'] == true;
+    final expansionKey = '${data['deliveryId'] ?? data['_id']}';
     final records = AllocationChecklistService.rows(data['_records']);
     final received = records
         .where((r) => ChecklistStatus.label(r) == ChecklistStatus.received)
@@ -440,6 +497,18 @@ class _AllocationHistoryDialogState extends State<AllocationHistoryDialog> {
             ),
             const SizedBox(height: 6),
             Text(_quantity(data)),
+            for (final receiver in records.where(
+              (r) => ChecklistStatus.label(r) == ChecklistStatus.received,
+            )) ...[
+              const SizedBox(height: 6),
+              Text(
+                'Received by: ${receiver['confirmedByName'] ?? 'Not recorded'}',
+              ),
+              Text('Role: ${receiver['confirmedByRole'] ?? 'Not recorded'}'),
+              Text(
+                'Receiver ID: ${receiver['confirmedByPublicId'] ?? 'Not recorded'}',
+              ),
+            ],
             if (!complete && received > 0)
               Text(
                 '$received of ${records.length} allocation records received',
@@ -460,13 +529,19 @@ class _AllocationHistoryDialogState extends State<AllocationHistoryDialog> {
                   icon: const Icon(Icons.visibility_outlined),
                   label: const Text('View issue report'),
                 );
-                final itemsButton = FilledButton.icon(
-                  onPressed: () => showDialog<void>(
-                    context: context,
-                    builder: (_) => _AllocationDetails(data: data),
+                final itemsButton = IconButton(
+                  tooltip: _expanded.contains(expansionKey)
+                      ? 'Collapse items'
+                      : 'Expand items',
+                  onPressed: () => setState(() {
+                    if (!_expanded.add(expansionKey))
+                      _expanded.remove(expansionKey);
+                  }),
+                  icon: Icon(
+                    _expanded.contains(expansionKey)
+                        ? Icons.expand_less
+                        : Icons.expand_more,
                   ),
-                  icon: const Icon(Icons.visibility_outlined),
-                  label: const Text('View Items'),
                 );
                 if (constraints.maxWidth < 420) {
                   return Column(
@@ -493,6 +568,14 @@ class _AllocationHistoryDialogState extends State<AllocationHistoryDialog> {
                 );
               },
             ),
+            if (_expanded.contains(expansionKey))
+              SizedBox(
+                height: 420,
+                child: _AllocationDetails(
+                  key: ValueKey('$expansionKey:${data['_items']}'),
+                  data: data,
+                ),
+              ),
           ],
         ),
       ),
@@ -603,7 +686,7 @@ Widget _frame(BuildContext context, String title, Widget body) => Dialog(
 );
 
 class _AllocationDetails extends StatefulWidget {
-  const _AllocationDetails({required this.data});
+  const _AllocationDetails({super.key, required this.data});
   final Map<String, dynamic> data;
   @override
   State<_AllocationDetails> createState() => _AllocationDetailsState();
@@ -626,122 +709,118 @@ class _AllocationDetailsState extends State<_AllocationDetails> {
                   .contains(_query),
         )
         .toList();
-    return _frame(
-      context,
-      'Allocated items',
-      Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  '${widget.data['branchName'] ?? widget.data['staffName'] ?? 'Branch'}',
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w700,
-                    fontSize: 17,
-                  ),
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '${widget.data['branchName'] ?? widget.data['staffName'] ?? 'Branch'}',
+                style: const TextStyle(
+                  fontWeight: FontWeight.w700,
+                  fontSize: 17,
                 ),
-                const SizedBox(height: 12),
-                TextField(
-                  onChanged: (value) =>
-                      setState(() => _query = value.trim().toLowerCase()),
-                  decoration: const InputDecoration(
-                    hintText: 'Search allocated items',
-                    prefixIcon: Icon(Icons.search),
-                    border: OutlineInputBorder(),
-                  ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                onChanged: (value) =>
+                    setState(() => _query = value.trim().toLowerCase()),
+                decoration: const InputDecoration(
+                  hintText: 'Search allocated items',
+                  prefixIcon: Icon(Icons.search),
+                  border: OutlineInputBorder(),
                 ),
-                const SizedBox(height: 12),
-                SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: Row(
-                    children: [
-                      for (final type in ['Categories', 'Bundle', 'Beverages'])
-                        Padding(
-                          padding: const EdgeInsets.only(right: 8),
-                          child: ChoiceChip(
-                            label: Text(
-                              '$type (${_items.where((i) => i['_type'] == type).length})',
+              ),
+              const SizedBox(height: 12),
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: [
+                    for (final type in ['Categories', 'Bundle', 'Beverages'])
+                      Padding(
+                        padding: const EdgeInsets.only(right: 8),
+                        child: ChoiceChip(
+                          label: Text(
+                            '$type (${_items.where((i) => i['_type'] == type).length})',
+                          ),
+                          selected: _type == type,
+                          onSelected: (_) => setState(() => _type = type),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: visible.isEmpty
+              ? const Center(child: Text('No allocated items to display.'))
+              : ListView.builder(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                  itemCount: visible.length,
+                  itemBuilder: (context, index) {
+                    final item = visible[index];
+                    final parts = AllocationChecklistService.rows(
+                      item['items'],
+                    );
+                    return Card(
+                      elevation: 0,
+                      color: Colors.white,
+                      margin: const EdgeInsets.only(bottom: 12),
+                      child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              '${item['name'] ?? 'Item'}',
+                              style: const TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.w800,
+                              ),
                             ),
-                            selected: _type == type,
-                            onSelected: (_) => setState(() => _type = type),
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Expanded(
-            child: visible.isEmpty
-                ? const Center(child: Text('No allocated items to display.'))
-                : ListView.builder(
-                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-                    itemCount: visible.length,
-                    itemBuilder: (context, index) {
-                      final item = visible[index];
-                      final parts = AllocationChecklistService.rows(
-                        item['items'],
-                      );
-                      return Card(
-                        elevation: 0,
-                        color: Colors.white,
-                        margin: const EdgeInsets.only(bottom: 12),
-                        child: Padding(
-                          padding: const EdgeInsets.all(16),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                '${item['name'] ?? 'Item'}',
-                                style: const TextStyle(
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.w800,
+                            if (item['_category'] != null)
+                              Text('${item['_category']}'),
+                            if (item['flavor'] != null ||
+                                item['variant'] != null)
+                              Text('${item['flavor'] ?? item['variant']}'),
+                            if (inventoryDisplayId(item) != '--')
+                              Text('Item ID: ${inventoryDisplayId(item)}'),
+                            const SizedBox(height: 10),
+                            Text(
+                              item['_quantity'] == null
+                                  ? 'Catalog access'
+                                  : 'Qty: ${item['_quantity']}',
+                            ),
+                            Text(
+                              'Unit price: ${item['price'] == null && item['priceDelta'] == null && item['bundlePrice'] == null ? 'Not recorded' : '₱${item['bundlePrice'] ?? item['price'] ?? item['priceDelta']}'}',
+                            ),
+                            Text(
+                              'Expiry: ${item['expirationDate'] == null || '${item['expirationDate']}'.isEmpty ? 'Not recorded' : item['expirationDate']}',
+                            ),
+                            if (item['_type'] == 'Bundle' &&
+                                parts.isNotEmpty) ...[
+                              const Divider(height: 24),
+                              const Text(
+                                'Bundle contents',
+                                style: TextStyle(fontWeight: FontWeight.w700),
+                              ),
+                              for (final part in parts)
+                                Text(
+                                  '${part['name'] ?? 'Item'} • Qty: ${part['quantity'] ?? part['qty'] ?? 'Not recorded'}',
                                 ),
-                              ),
-                              if (item['_category'] != null)
-                                Text('${item['_category']}'),
-                              if (item['flavor'] != null ||
-                                  item['variant'] != null)
-                                Text('${item['flavor'] ?? item['variant']}'),
-                              if (inventoryDisplayId(item) != '--')
-                                Text('Item ID: ${inventoryDisplayId(item)}'),
-                              const SizedBox(height: 10),
-                              Text(
-                                item['_quantity'] == null
-                                    ? 'Catalog access'
-                                    : 'Qty: ${item['_quantity']}',
-                              ),
-                              Text(
-                                'Unit price: ${item['price'] == null && item['priceDelta'] == null && item['bundlePrice'] == null ? 'Not recorded' : '₱${item['bundlePrice'] ?? item['price'] ?? item['priceDelta']}'}',
-                              ),
-                              Text(
-                                'Expiry: ${item['expirationDate'] == null || '${item['expirationDate']}'.isEmpty ? 'Not recorded' : item['expirationDate']}',
-                              ),
-                              if (item['_type'] == 'Bundle' &&
-                                  parts.isNotEmpty) ...[
-                                const Divider(height: 24),
-                                const Text(
-                                  'Bundle contents',
-                                  style: TextStyle(fontWeight: FontWeight.w700),
-                                ),
-                                for (final part in parts)
-                                  Text(
-                                    '${part['name'] ?? 'Item'} • Qty: ${part['quantity'] ?? part['qty'] ?? 'Not recorded'}',
-                                  ),
-                              ],
                             ],
-                          ),
+                          ],
                         ),
-                      );
-                    },
-                  ),
-          ),
-        ],
-      ),
+                      ),
+                    );
+                  },
+                ),
+        ),
+      ],
     );
   }
 }

@@ -38,12 +38,17 @@ String? loginAccountStatusError(Map<String, dynamic> account) {
       account['isSuspended'] == true) {
     return 'Your account is temporarily suspended. Please contact your administrator.';
   }
+  if (account['requiresBranchAssignment'] == true &&
+      (account['branchIds'] is! List ||
+          (account['branchIds'] as List).where((id) => '$id'.trim().isNotEmpty).isEmpty)) {
+    return 'Your account has no assigned branch. Please ask the super admin to assign you before logging in.';
+  }
   return null;
 }
 
 String invalidLoginCredentialsMessage() => 'Invalid email or password.';
 
 bool isAccountIdLogin(String value) => RegExp(
-  r'^(STF-\d{3}|ADM-\d{3,4})$',
+  r'^(STF-\d{3}|ADM-\d{3,4}|SPR-001)$',
   caseSensitive: false,
 ).hasMatch(value.trim());

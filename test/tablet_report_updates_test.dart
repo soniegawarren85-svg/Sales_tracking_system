@@ -118,4 +118,89 @@ void main() {
       expect(tester.takeException(), isNull);
     });
   }
+
+  testWidgets('admin daily report remains scoped to its assigned branch', (
+    tester,
+  ) async {
+    final today = DateUtils.dateOnly(DateTime.now());
+    final data = BranchReportData({
+      'branches': [
+        {'_id': 'assigned', 'name': 'Sm Dagupan'},
+        {'_id': 'other', 'name': 'Other Branch'},
+      ],
+      'completed_sales': [
+        {
+          '_id': 'assigned-sale',
+          'salesId': 'ASSIGNED-1',
+          'branchId': 'assigned',
+          'timestamp': today.add(const Duration(hours: 1)),
+          'total': 125,
+        },
+        {
+          '_id': 'other-sale',
+          'salesId': 'OTHER-1',
+          'branchId': 'other',
+          'timestamp': today.add(const Duration(hours: 1)),
+          'total': 900,
+        },
+        {
+          '_id': 'assigned-refund',
+          'salesId': 'R-ASSIGNED-1',
+          'branchId': 'assigned',
+          'type': 'refund',
+          'timestamp': today.add(const Duration(hours: 2)),
+          'total': -20,
+        },
+        {
+          '_id': 'other-refund',
+          'salesId': 'R-OTHER-1',
+          'branchId': 'other',
+          'type': 'refund',
+          'timestamp': today.add(const Duration(hours: 2)),
+          'total': -900,
+        },
+      ],
+      'stock_adjustments': [
+        {
+          '_id': 'assigned-reduction',
+          'branchId': 'assigned',
+          'createdAt': today.add(const Duration(hours: 3)),
+          'lossAmount': 5,
+        },
+        {
+          '_id': 'other-reduction',
+          'branchId': 'other',
+          'createdAt': today.add(const Duration(hours: 3)),
+          'lossAmount': 50,
+        },
+      ],
+    });
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: DailySalesReport(
+            data: Stream.value(data),
+            branchId: 'assigned',
+            branchName: 'Sm Dagupan',
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Sales Reports · Sm Dagupan'), findsOneWidget);
+    expect(find.text('All branches'), findsNothing);
+    expect(find.text('Sales by branch'), findsNothing);
+    expect(find.text('Custom'), findsNothing);
+    expect(find.textContaining('₱125.00'), findsWidgets);
+    expect(find.textContaining('₱900.00'), findsNothing);
+    expect(find.textContaining('₱25.00'), findsOneWidget);
+    await tester.tap(find.byIcon(Icons.calendar_month).first);
+    await tester.pumpAndSettle();
+    expect(find.byType(DateRangePickerDialog), findsOneWidget);
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+  });
 }

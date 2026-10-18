@@ -1,5 +1,6 @@
+import '../services/activity_log.dart';
+import '../services/branch_permissions.dart';
 import 'dart:async';
-import '../services/checklist_status.dart';
 import 'package:sales_tracking/theme/app_colors.dart';
 import '../services/short_id_service.dart';
 import '../services/bundle_stock_service.dart';
@@ -102,9 +103,7 @@ class _ItemEditorState extends State<_ItemEditor> {
   late final _price = TextEditingController(
     text: '${_data['basePrice'] ?? _data['price'] ?? ''}',
   );
-  late final _stock = TextEditingController(
-    text: '${_data['stock'] ?? _data['startingStock'] ?? ''}',
-  );
+  late final _stock = TextEditingController(text: '0');
   late final _expiry = TextEditingController(
     text: '${_data['expirationDate'] ?? ''}'.split('T').first,
   );
@@ -130,16 +129,82 @@ class _ItemEditorState extends State<_ItemEditor> {
   String get _type => widget.entry?.type ?? 'Categories';
   List<Map<String, dynamic>> _ingredientOptions = [];
   late List<Map<String, dynamic>> _ingredients = bundleRows(
-    widget.entry?.source['items'],
+    widget.entry?.details['items'] ?? widget.entry?.source['items'],
   );
   bool _loadingIngredients = false;
   bool _recipeChanged = false;
+  bool _customCost = false;
+  void _computeCost() {
+    if (_customCost) return;
+    _cost.text = _ingredients
+        .fold<double>(
+          0,
+          (sum, item) =>
+              sum +
+              reportValueForSave(item['costPrice']) *
+                  bundleQuantity(item['quantity']),
+        )
+        .toStringAsFixed(2);
+  }
+
+  void _recordSaveActivity(
+    Map<String, dynamic> source,
+    Map<String, dynamic> changes, {
+    String? publicId,
+    int? restockedBundles,
+  }) {
+    final isNew = widget.entry == null;
+    final sizes = changes['sizes'];
+    final ingredientDetails = _ingredients
+        .map(
+          (item) => {
+            'name': item['name'] ?? 'Item',
+            'quantity': item['quantity'] ?? 1,
+          },
+        )
+        .toList();
+    final details = <String, dynamic>{
+      'itemName': _name.text.trim(),
+      'category': '${source['name'] ?? ''}',
+      'itemId':
+          publicId ??
+          widget.entry?.details['publicId'] ??
+          widget.entry?.details['id'] ??
+          '',
+      'costPrice': changes['costPrice'],
+      if (changes.containsKey('price')) 'sellingPrice': changes['price'],
+      if (sizes is List) 'sizePrices': sizes,
+      if (_type == 'Categories') ...{
+        'stock': changes['stock'],
+        'expirationDate': changes['expirationDate'],
+      },
+      if (_type == 'Beverages')
+        'description': changes['description']?.toString().trim(),
+      if (_type == 'Bundle') ...{
+        'ingredients': ingredientDetails,
+        if (restockedBundles != null) 'additionalStock': restockedBundles,
+      },
+      'fields': changes.keys.toList(),
+    };
+    unawaited(
+      ActivityLog.record(
+        isNew ? 'inventory_created' : 'inventory_edited',
+        '${isNew ? 'Created' : 'Updated'} ${_type == 'Bundle' ? 'bundle' : 'inventory item'} ${_name.text.trim()}',
+        database: widget.firestore,
+        details: details,
+      ),
+    );
+  }
+
   String _ingredientTab = 'Categories';
   String? _ingredientCategory;
   @override
   void initState() {
     super.initState();
-    if (_type == 'Bundle') _loadIngredients();
+    if (_type == 'Bundle') {
+      _computeCost();
+      _loadIngredients();
+    }
   }
 
   String _ingredientKey(Map item) =>
@@ -213,6 +278,7 @@ class _ItemEditorState extends State<_ItemEditor> {
               : {...match, 'quantity': item['quantity'] ?? 1};
         }).toList();
       });
+      _computeCost();
     } catch (error) {
       if (mounted) {
         setState(
@@ -250,6 +316,17 @@ class _ItemEditorState extends State<_ItemEditor> {
       _error = null;
     });
     try {
+      await BranchPermissions.require(
+        'adminAllowInventoryEdits',
+        database: widget.firestore,
+      );
+      final cost = num.parse(_cost.text.trim());
+      final prices = _type == 'Beverages'
+          ? _sizes.map((size) => num.parse(size.$2.text.trim()))
+          : [num.parse(_price.text.trim())];
+      if (prices.any((price) => price < cost)) {
+        throw StateError('Selling price cannot be lower than cost price.');
+      }
       if (_type == 'Bundle' &&
           (_ingredients.isEmpty ||
               _ingredients.any(
@@ -267,21 +344,19 @@ class _ItemEditorState extends State<_ItemEditor> {
       }
       final changes = <String, dynamic>{
         'name': _name.text.trim(),
-        'costPrice': _type == 'Bundle'
-            ? _ingredients.fold<double>(
-                0,
-                (sum, item) =>
-                    sum +
-                    (num.tryParse('${item['costPrice']}')?.toDouble() ?? 0) *
-                        bundleQuantity(item['quantity']),
-              )
-            : num.parse(_cost.text.trim()),
+        'costPrice': num.parse(_cost.text.trim()),
         _type == 'Beverages' ? 'basePrice' : 'price': _type == 'Beverages'
             ? 0
             : num.parse(_price.text.trim()),
         'imageUrl': ?url,
         if (_type == 'Categories') ...{
-          'stock': int.parse(_stock.text),
+          'stock':
+              int.parse(_stock.text) +
+              (widget.entry == null
+                  ? 0
+                  : reportValueForSave(
+                      _data['stock'] ?? _data['startingStock'],
+                    ).toInt()),
           'expirationDate': _expiry.text,
           if (widget.entry == null) 'startingStock': int.parse(_stock.text),
         },
@@ -304,7 +379,7 @@ class _ItemEditorState extends State<_ItemEditor> {
             _type == 'Beverages' ? 'coffee_products' : 'sales_inventory',
           )
           .doc('${source['id']}');
-      final publicId = widget.entry == null
+      final bundlePublicId = widget.entry == null && _type == 'Bundle'
           ? await ShortIdService.next(categoryPrefix('${source['name'] ?? ''}'))
           : null;
       if (_type == 'Bundle' && int.parse(_additionalBundles.text) > 0) {
@@ -326,6 +401,12 @@ class _ItemEditorState extends State<_ItemEditor> {
           changes,
           ingredients: _ingredients,
         );
+        _recordSaveActivity(
+          source,
+          changes,
+          publicId: bundlePublicId,
+          restockedBundles: int.parse(_additionalBundles.text),
+        );
         if (mounted) Navigator.pop(context);
         return;
       }
@@ -334,6 +415,7 @@ class _ItemEditorState extends State<_ItemEditor> {
           ...changes,
           if (_recipeChanged) 'items': _ingredients,
         });
+        _recordSaveActivity(source, changes, publicId: bundlePublicId);
         if (mounted) Navigator.pop(context);
         return;
       }
@@ -344,72 +426,60 @@ class _ItemEditorState extends State<_ItemEditor> {
         if (mounted) Navigator.pop(context);
         return;
       }
-      final metadata = <String, dynamic>{
-        for (final key in [
-          'name',
-          'costPrice',
-          'price',
-          'basePrice',
-          'sizes',
-          'imageUrl',
-        ])
-          if (patch.containsKey(key)) key: patch[key],
-      };
-      bool needsUpdate(Map<String, dynamic> allocation) {
-        if (_type != 'Categories') {
-          return inventoryChangedFields(allocation, metadata).isNotEmpty;
-        }
-        final items = (allocation['items'] as List? ?? [])
-            .whereType<Map>()
-            .map((i) => Map<String, dynamic>.from(i))
-            .toList();
-        final index = catalogItemIndex(items, widget.entry!.details);
-        return index >= 0 &&
-            items[index]['isDeleted'] != true &&
-            items[index]['isVoided'] != true &&
-            inventoryChangedFields(items[index], metadata).isNotEmpty;
-      }
-
-      final linked = widget.entry == null || metadata.isEmpty
-          ? <DocumentReference<Map<String, dynamic>>>[]
-          : await bundleMetadataTargets(db, ref.id, needsUpdate: needsUpdate);
+      String? createdPublicId;
       await db.runTransaction((tx) async {
-        final snapshots = await Future.wait([ref, ...linked].map(tx.get));
-        final snapshot = snapshots.first;
-        final allocations =
-            <DocumentReference<Map<String, dynamic>>, Map<String, dynamic>>{};
-        for (final assignedSnapshot in snapshots.skip(1)) {
-          final target = assignedSnapshot.reference;
-          final data = assignedSnapshot.data();
-          if (data == null ||
-              data['isDeleted'] == true ||
-              (target.parent.id == 'allocation_checklist' &&
-                  !ChecklistStatus.incomingOpen(data))) {
-            continue;
-          }
-          allocations[target] = data;
-        }
+        final counterRef = widget.entry == null
+            ? db
+                  .collection('system_counters')
+                  .doc(
+                    'public_${categoryPrefix('${source['name'] ?? ''}')}',
+                  )
+            : null;
+        final snapshotFuture = tx.get(ref);
+        final counterFuture = counterRef == null ? null : tx.get(counterRef);
+        final snapshot = await snapshotFuture;
+        final counterSnapshot = counterFuture == null
+            ? null
+            : await counterFuture;
         final current = snapshot.data();
         if (current == null || current['isDeleted'] == true) {
           throw StateError('This record is no longer active');
         }
         if (_type != 'Categories') {
-          for (final target in allocations.entries) {
-            final update = inventoryChangedFields(target.value, metadata);
-            if (update.isNotEmpty) tx.update(target.key, update);
+          if (counterRef != null) {
+            final counter = counterSnapshot?.data();
+            final next =
+                ((counter?['count'] as num?)?.toInt() ?? 0) + 1;
+            createdPublicId = shortCode(
+              categoryPrefix('${source['name'] ?? ''}'),
+              next,
+            );
+            tx.set(counterRef, {'count': next});
           }
-          tx.update(ref, {...patch, 'updatedAt': FieldValue.serverTimestamp()});
+          tx.update(ref, {
+            ...patch,
+            if (createdPublicId != null) 'publicId': createdPublicId,
+            'updatedAt': FieldValue.serverTimestamp(),
+          });
           return;
         }
         final items = (current['items'] as List? ?? [])
             .map((value) => Map<String, dynamic>.from(value as Map))
             .toList();
         if (widget.entry == null) {
+          final prefix = categoryPrefix('${source['name'] ?? ''}');
+          final nextNumber =
+              ((counterSnapshot?.data()?['count'] as num?)?.toInt() ?? 0) + 1;
+          createdPublicId = shortCode(prefix, nextNumber);
+          tx.set(
+            db.collection('system_counters').doc('public_$prefix'),
+            {'count': nextNumber},
+          );
           items.add({
             ...changes,
             'id':
                 'VAR-${DateTime.now().microsecondsSinceEpoch}-${Random.secure().nextInt(1000000).toString().padLeft(6, '0')}',
-            'publicId': publicId,
+            'publicId': createdPublicId,
             'isDeleted': false,
           });
         } else {
@@ -434,26 +504,10 @@ class _ItemEditorState extends State<_ItemEditor> {
             // A metadata-only edit must not restore stock sold during editing.
             if (editedStock == initialStock) 'stock': currentStock.toInt(),
           };
-          for (final target in allocations.entries) {
-            final assigned = (target.value['items'] as List? ?? [])
-                .whereType<Map>()
-                .map((item) => Map<String, dynamic>.from(item))
-                .toList();
-            final match = catalogItemIndex(assigned, widget.entry!.details);
-            if (match >= 0) {
-              if (assigned[match]['isDeleted'] == true ||
-                  assigned[match]['isVoided'] == true) {
-                continue;
-              }
-              final update = inventoryChangedFields(assigned[match], metadata);
-              if (update.isEmpty) continue;
-              assigned[match] = {...assigned[match], ...update};
-              tx.update(target.key, {'items': assigned});
-            }
-          }
         }
         tx.update(ref, {'items': items});
       });
+      _recordSaveActivity(source, patch, publicId: createdPublicId);
       if (mounted) Navigator.pop(context);
     } catch (error) {
       debugPrint('Inventory save failed: $error');
@@ -475,6 +529,9 @@ class _ItemEditorState extends State<_ItemEditor> {
     child: TextFormField(
       controller: controller,
       enabled: !_saving,
+      onChanged: (_) {
+        if (controller == _cost) _customCost = true;
+      },
       keyboardType: number
           ? const TextInputType.numberWithOptions(decimal: true)
           : TextInputType.text,
@@ -545,20 +602,57 @@ class _ItemEditorState extends State<_ItemEditor> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                _field(_name, 'Name'),
-                if (_type != 'Bundle')
-                  _field(_cost, 'Cost price (₱)', number: true),
-                if (_type == 'Bundle')
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 14),
-                    child: Text(
-                      'Cost per bundle: ₱${_ingredients.fold<double>(0, (sum, item) => sum + (num.tryParse('${item['costPrice']}')?.toDouble() ?? 0) * bundleQuantity(item['quantity'])).toStringAsFixed(2)}',
-                    ),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: ClipRRect(
+                    borderRadius: BorderRadius.circular(12),
+                    child: SizedBox(width: 52, height: 52, child: _image()),
                   ),
+                  title: const Text('Item picture'),
+                  trailing: IconButton(
+                    tooltip: 'Choose picture',
+                    icon: const Icon(Icons.photo_library_outlined),
+                    onPressed: _saving
+                        ? null
+                        : () async {
+                            final file = await ImagePicker().pickImage(
+                              source: ImageSource.gallery,
+                              maxWidth: 800,
+                              maxHeight: 800,
+                              imageQuality: 70,
+                            );
+                            if (file == null) return;
+                            final bytes = await file.readAsBytes();
+                            if (mounted) {
+                              setState(() {
+                                _photo = bytes;
+                                _upload = widget
+                                    .upload(bytes)
+                                    .catchError((_) => null);
+                              });
+                            }
+                          },
+                  ),
+                ),
+                _field(_name, 'Name'),
                 if (_type != 'Beverages')
-                  _field(_price, 'Selling price (₱)', number: true),
+                  _field(_price, 'Selling price (\u20b1)', number: true),
+                _field(_cost, 'Cost price (\u20b1)', number: true),
+                if (_type == 'Bundle')
+                  TextButton(
+                    onPressed: () {
+                      _customCost = false;
+                      _computeCost();
+                    },
+                    child: const Text('Recompute ingredient cost'),
+                  ),
                 if (_type == 'Categories') ...[
-                  _field(_stock, 'Current stock', number: true, integer: true),
+                  _field(
+                    _stock,
+                    'Additional stock',
+                    number: true,
+                    integer: true,
+                  ),
                   TextFormField(
                     controller: _expiry,
                     readOnly: true,
@@ -609,38 +703,6 @@ class _ItemEditorState extends State<_ItemEditor> {
                     ),
                   ),
                 ],
-                ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: ClipRRect(
-                    borderRadius: BorderRadius.circular(12),
-                    child: SizedBox(width: 52, height: 52, child: _image()),
-                  ),
-                  title: const Text('Item picture'),
-                  trailing: IconButton(
-                    tooltip: 'Choose picture',
-                    icon: const Icon(Icons.photo_library_outlined),
-                    onPressed: _saving
-                        ? null
-                        : () async {
-                            final file = await ImagePicker().pickImage(
-                              source: ImageSource.gallery,
-                              maxWidth: 800,
-                              maxHeight: 800,
-                              imageQuality: 70,
-                            );
-                            if (file == null) return;
-                            final bytes = await file.readAsBytes();
-                            if (mounted) {
-                              setState(() {
-                                _photo = bytes;
-                                _upload = widget
-                                    .upload(bytes)
-                                    .catchError((_) => null);
-                              });
-                            }
-                          },
-                  ),
-                ),
                 if (_type == 'Bundle') ...[
                   _field(
                     _additionalBundles,
@@ -661,8 +723,7 @@ class _ItemEditorState extends State<_ItemEditor> {
                   ),
                   const SizedBox(height: 12),
                   if (_loadingIngredients) const LinearProgressIndicator(),
-                  Wrap(
-                    spacing: 8,
+                  _ScrollingChips(
                     children: [
                       for (final type in ['Categories', 'Beverages', 'Add-ons'])
                         ChoiceChip(
@@ -674,11 +735,10 @@ class _ItemEditorState extends State<_ItemEditor> {
                     ],
                   ),
                   if (_ingredientTab == 'Categories')
-                    Wrap(
-                      spacing: 8,
+                    _ScrollingChips(
                       children: [
                         ChoiceChip(
-                          label: const Text('All categories'),
+                          label: const Text('All'),
                           selected: _ingredientCategory == null,
                           onSelected: (_) =>
                               setState(() => _ingredientCategory = null),
@@ -738,6 +798,7 @@ class _ItemEditorState extends State<_ItemEditor> {
                                       ? null
                                       : (value) => setState(() {
                                           _recipeChanged = true;
+                                          _customCost = false;
                                           if (value == true) {
                                             _ingredients.add({
                                               ...option,
@@ -746,6 +807,7 @@ class _ItemEditorState extends State<_ItemEditor> {
                                           } else {
                                             _ingredients.removeAt(index);
                                           }
+                                          _computeCost();
                                         }),
                                 ),
                                 if (selected)
@@ -771,6 +833,8 @@ class _ItemEditorState extends State<_ItemEditor> {
                                       _recipeChanged = true;
                                       item['quantity'] =
                                           int.tryParse(value) ?? 0;
+                                      _customCost = false;
+                                      _computeCost();
                                     },
                                   ),
                               ],
@@ -825,4 +889,14 @@ int catalogItemIndex(
       )
       .toList();
   return matches.length == 1 ? matches.single.key : -1;
+}
+
+class _ScrollingChips extends StatelessWidget {
+  const _ScrollingChips({required this.children});
+  final List<Widget> children;
+  @override
+  Widget build(BuildContext context) => SingleChildScrollView(
+    scrollDirection: Axis.horizontal,
+    child: Row(spacing: 8, children: children),
+  );
 }

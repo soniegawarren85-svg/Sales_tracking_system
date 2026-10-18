@@ -5,6 +5,8 @@ import '../widgets/bundle_beverage_dialog.dart';
 import 'package:sales_tracking/theme/app_colors.dart';
 import '../services/inventory_display_ids.dart';
 import '../services/staff_allocation_scope.dart';
+import '../services/bundle_stock_service.dart';
+import '../services/sale_stock.dart';
 import '../widgets/staff_refund_dialog.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -167,6 +169,25 @@ class _DailyStockPageState extends State<DailyStockPage>
       return false;
     }
     if (_transactionSettings[key] != false) return true;
+    if (key == 'allowRefunds') {
+      showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          icon: const Icon(Icons.block_rounded, color: AppColors.primary),
+          title: const Text('Refunds unavailable'),
+          content: const Text(
+            'Processing refunds is disabled for this branch. Please contact your administrator.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Close'),
+            ),
+          ],
+        ),
+      );
+      return false;
+    }
     _showStyledSnackBar(
       'This action has been disabled by the administrator.',
       isError: true,
@@ -205,6 +226,7 @@ class _DailyStockPageState extends State<DailyStockPage>
   bool _cashierToolsCollapsed = false;
   bool _isSavingPendingOrder = false;
   final Map<String, int> _optimisticStockByKey = {};
+  final Map<String, String> _optimisticSaleByKey = {};
   String? _selectedGroupName;
   String _orderSearchQuery = '';
   List<Map<String, dynamic>> _latestOrderItems = const [];
@@ -1011,6 +1033,7 @@ class _DailyStockPageState extends State<DailyStockPage>
 
   void _applyConfirmedStockLocally(
     Iterable<MapEntry<String, int>> soldEntries,
+    String saleId,
   ) {
     final confirmedStockByKey = <String, int>{};
     for (final entry in soldEntries) {
@@ -1050,6 +1073,9 @@ class _DailyStockPageState extends State<DailyStockPage>
       return confirmedStock == null ? item : {...item, 'stock': confirmedStock};
     }).toList();
     _optimisticStockByKey.addAll(confirmedStockByKey);
+    for (final key in {...confirmedStockByKey.keys, ...bundleSold.keys}) {
+      _optimisticSaleByKey[key] = saleId;
+    }
   }
 
   List<Map<String, dynamic>> _orderItemsFromDocs(
@@ -1067,25 +1093,41 @@ class _DailyStockPageState extends State<DailyStockPage>
       final isBundle = data['isBundle'] == true;
 
       if (isBundle) {
-        if (_hasExpiredBundleItem(data)) continue;
         final int bundleStock = _availableBundleStock(data);
         if (bundleStock <= 0) continue;
 
         final groupKey = sourceId.isEmpty ? name : '$sourceId|$name';
         final key = groupKey;
-        if (itemMap.containsKey(key)) continue;
-
+        final staffDocumentId = data['staffDocId']?.toString() ?? '';
+        final rawInstances = bundleRows(data['bundleInstances']);
+        final source = <String, dynamic>{
+          'staffInventoryDocId': staffDocumentId,
+          'stock': bundleStock,
+          'assignedAt': data['assignedAt'],
+          'instances': rawInstances
+              .where((instance) => bundleInstanceAvailable(instance, data))
+              .toList(),
+        };
+        if (itemMap.containsKey(key)) {
+          final existing = itemMap[key]!;
+          existing['stock'] = _parseInt(existing['stock']) + bundleStock;
+          existing['startingStock'] = existing['stock'];
+          (existing['bundleInventorySources'] as List<Map<String, dynamic>>)
+              .add(source);
+          continue;
+        }
         itemMap[key] = {
           'name': name,
           'groupKey': groupKey,
           'sourceInventoryId': sourceId,
-          'staffInventoryDocId': data['staffDocId']?.toString() ?? '',
+          'staffInventoryDocId': staffDocumentId,
           'inventoryOwnerId': data['staffId']?.toString() ?? '',
           'variant': '',
           'price': _parsePrice(data['price']),
           'flavor': data['name']?.toString() ?? 'Bundle',
           'stock': bundleStock,
           'startingStock': bundleStock,
+          'bundleInventorySources': [source],
           'imageUrl': data['imageUrl']?.toString() ?? '',
           'categoryImageUrl': data['imageUrl']?.toString() ?? '',
           'isBundle': true,
@@ -1127,7 +1169,7 @@ class _DailyStockPageState extends State<DailyStockPage>
             if (variantId.isNotEmpty) variantId else name,
             if (variantId.isEmpty && variantName.isNotEmpty) variantName,
           ].join('|');
-          if (itemMap.containsKey(key)) continue;
+
           final int stockValue = itemData['stock'] is num
               ? (itemData['stock'] as num).toInt()
               : int.tryParse(itemData['stock']?.toString() ?? '') ?? 0;
@@ -1140,6 +1182,21 @@ class _DailyStockPageState extends State<DailyStockPage>
               ? stockValue
               : startingStockValue;
           if (effectiveStock <= 0) continue;
+          final stockSource = <String, dynamic>{
+            'staffInventoryDocId': data['staffDocId'],
+            'stock': effectiveStock,
+            'assignedAt': data['assignedAt'],
+          };
+          if (itemMap.containsKey(key)) {
+            final existing = itemMap[key]!;
+            if (data['isCoffee'] != true) {
+              existing['stock'] = _parseInt(existing['stock']) + effectiveStock;
+              existing['startingStock'] =
+                  _parseInt(existing['startingStock']) + startingStockValue;
+              (existing['categoryInventorySources'] as List).add(stockSource);
+            }
+            continue;
+          }
           itemMap[key] = {
             'name': name,
             'groupKey': groupKey,
@@ -1159,6 +1216,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                 '',
             'flavor': itemData['flavor']?.toString() ?? variantName,
             'stock': effectiveStock,
+            'categoryInventorySources': [stockSource],
             'startingStock': startingStockValue,
             'imageUrl': itemData['imageUrl']?.toString() ?? '',
             'categoryImageUrl': data['imageUrl']?.toString() ?? '',
@@ -4365,7 +4423,7 @@ class _DailyStockPageState extends State<DailyStockPage>
             (element) => _cartKey(element) == entry.key,
             orElse: () => {},
           );
-          return {
+          final line = <String, dynamic>{
             'name': item['name'],
             'variant': item['variant'],
             'price': item['price'],
@@ -4390,6 +4448,29 @@ class _DailyStockPageState extends State<DailyStockPage>
             'sourceInventoryId': item['sourceInventoryId'] ?? '',
             'staffInventoryDocId': item['staffInventoryDocId'] ?? '',
           };
+          if (item['isBundle'] != true && item['isCoffee'] != true) {
+            line['stockAllocations'] = categorySaleLines(item, entry.value)
+                .map(
+                  (source) => {
+                    'staffInventoryDocId': source['staffInventoryDocId'],
+                    'quantity': source['quantity'],
+                  },
+                )
+                .toList();
+          }
+          if (item['isBundle'] == true) {
+            line['bundleStockAllocations'] = bundleSaleLines(item, entry.value)
+                .map((allocation) {
+                  return {
+                    'staffInventoryDocId': allocation['staffInventoryDocId'],
+                    'quantity': allocation['quantity'],
+                    if (allocation['bundleInstanceIds'] != null)
+                      'bundleInstanceIds': allocation['bundleInstanceIds'],
+                  };
+                })
+                .toList();
+          }
+          return line;
         }).toList(),
         'timestamp': DateTime.now(),
         'status': 'completed',
@@ -4407,7 +4488,7 @@ class _DailyStockPageState extends State<DailyStockPage>
 
       if (mounted) {
         setState(() {
-          _applyConfirmedStockLocally(receiptEntries);
+          _applyConfirmedStockLocally(receiptEntries, salesId);
           // The local drawer stream supplies the already-updated balance.
           _cart.clear();
           _cartItemLookup.clear();
@@ -4867,6 +4948,10 @@ class _DailyStockPageState extends State<DailyStockPage>
         'categoryId': item['categoryId']?.toString() ?? '',
         'stock': _parseInt(item['stock']),
         'startingStock': _parseInt(item['startingStock']),
+        if (item['categoryInventorySources'] != null)
+          'categoryInventorySources': item['categoryInventorySources'],
+        if (item['bundleInventorySources'] != null)
+          'bundleInventorySources': item['bundleInventorySources'],
         'variantSlot': item['variantSlot'] is num
             ? (item['variantSlot'] as num).toInt()
             : 0,
@@ -7128,15 +7213,7 @@ class _DailyStockPageState extends State<DailyStockPage>
   }
 
   int _availableBundleStock(Map<String, dynamic> bundleData) {
-    final instances = _bundleInstancesFromData(bundleData);
-    if (instances.isEmpty) {
-      return _parseInt(bundleData['bundleCount']);
-    }
-    return instances.where((instance) {
-      final status =
-          instance['status']?.toString().trim().toLowerCase() ?? 'available';
-      return status == 'available';
-    }).length;
+    return availableBundleStock(bundleData);
   }
 
   bool _hasExpiredBundleItem(Map<String, dynamic> bundleData) {
@@ -8493,8 +8570,7 @@ class _DailyStockPageState extends State<DailyStockPage>
             .map(_CachedDoc.fromFirestore)
             .toList();
         final docs =
-            (_cachedStaffInventoryDocs.isNotEmpty ||
-                firestoreDocs == null ||
+            (firestoreDocs == null ||
                 (firestoreDocs.isEmpty && _cachedStaffInventoryDocs.isNotEmpty))
             ? _cachedStaffInventoryDocs
             : firestoreDocs;
@@ -8724,19 +8800,32 @@ class _DailyStockPageState extends State<DailyStockPage>
                 });
               } else {
                 if (rootData['isBundle'] != true) continue;
-                if (_hasExpiredBundleItem(rootData)) continue;
-                if (_hasExpiredBundleItem(data)) continue;
                 if (_availableBundleStock(data) <= 0) continue;
                 filteredDocs.add({
                   ...data,
                   'staffDocId': doc.id,
                   'sourceInventoryId': effectiveSourceId,
                   'name': rootData['name'] ?? data['name'],
+                  'price': rootData['price'] ?? data['price'],
+                  'items': rootData['items'] ?? data['items'],
                   'imageUrl': rootData['imageUrl'] ?? data['imageUrl'],
                 });
               }
             }
 
+            final appliedSales = docs
+                .expand(
+                  (doc) => (doc.data()['appliedSaleIds'] as List? ?? []).map(
+                    (id) => '$id',
+                  ),
+                )
+                .toSet();
+            for (final entry in _optimisticSaleByKey.entries.toList()) {
+              if (appliedSales.contains(entry.value)) {
+                _optimisticStockByKey.remove(entry.key);
+                _optimisticSaleByKey.remove(entry.key);
+              }
+            }
             final orderItems = _orderItemsFromDocs(filteredDocs);
             _cacheLatestOrderItems(orderItems);
 
@@ -9099,7 +9188,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                 ),
                 SizedBox(height: 3),
                 Text(
-                  'Build orders and review the ticket on the side',
+                  'Build and review sales process',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(

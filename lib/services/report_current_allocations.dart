@@ -89,101 +89,82 @@ List<Map<String, dynamic>> currentReportAllocations(
   return result;
 }
 
-/// Each day uses its last configured opening fund, plus that day's additions.
+/// Cash is a reusable branch fund, not a daily expense. Use one configured
+/// balance per branch as of the selected period's end (capped at today).
 Map<String, double> configuredReportCash(
   BranchReportData data,
   DateTime start,
   DateTime end,
   DateTime now,
 ) {
+  final todayEnd = DateTime(now.year, now.month, now.day + 1);
+  final cutoff = end.isBefore(todayEnd) ? end : todayEnd;
+  final includesToday = !end.isBefore(todayEnd) && start.isBefore(todayEnd);
   final result = <String, double>{};
-  final today = DateTime(now.year, now.month, now.day);
   for (final branch in data.rows('branches')) {
+    if (branch['isDeleted'] == true || branch['isVoided'] == true) continue;
     final id = '${branch['_id']}';
-    final history = data
-        .rows('budget_history')
-        .where((r) => (r['branchId'] ?? r['staffId']) == id)
-        .toList();
     final drawer =
         data
             .rows('staff_cash_drawer')
             .where((r) => r['_id'] == id)
             .firstOrNull ??
         {};
-    var total = 0.0;
-    for (
-      var day = start;
-      day.isBefore(end) && !day.isAfter(today);
-      day = DateTime(day.year, day.month, day.day + 1)
-    ) {
-      final next = DateTime(day.year, day.month, day.day + 1);
-      final settings =
-          history
-              .where(
-                (r) =>
-                    r['type'] == 'set_daily_cash_drawer' &&
-                    (cashRecordDate(
-                          r['createdAt'] ?? r['timestamp'],
-                        )?.isBefore(next) ??
-                        false),
-              )
-              .toList()
-            ..sort(
-              (a, b) => cashRecordDate(
-                a['createdAt'] ?? a['timestamp'],
-              )!.compareTo(cashRecordDate(b['createdAt'] ?? b['timestamp'])!),
-            );
-      final reports = data
-          .rows('daily_reports')
-          .where(
-            (r) =>
-                r['branchId'] == id &&
-                reportInRange(
-                  r['reportDateKey'] ?? r['reportDate'] ?? r['createdAt'],
-                  day,
-                  next,
-                ),
-          )
-          .toList();
-      final earliestAllocation =
-          history
-              .map((r) => cashRecordDate(r['createdAt'] ?? r['timestamp']))
-              .whereType<DateTime>()
-              .toList()
-            ..sort();
-      final initializedByAllocation =
-          settings.isEmpty &&
-          reports.isEmpty &&
-          earliestAllocation.isNotEmpty &&
-          !earliestAllocation.first.isBefore(day) &&
-          earliestAllocation.first.isBefore(next);
-      total += initializedByAllocation
-          ? 0
-          : day == today &&
-                (drawer['dailyOpeningCash'] != null ||
-                    drawer['openingCash'] != null)
-          ? reportValue(drawer['dailyOpeningCash'] ?? drawer['openingCash'])
-          : settings.isNotEmpty
-          ? reportValue(settings.last['amount'] ?? settings.last['budget'])
-          : reports.isNotEmpty
-          ? reportValue(
-              reports.last['openingCash'] ?? reports.last['allocatedBudget'],
+    final history =
+        data
+            .rows('budget_history')
+            .where(
+              (r) =>
+                  (r['branchId'] ?? r['staffId']) == id &&
+                  (cashRecordDate(
+                        r['createdAt'] ?? r['timestamp'],
+                      )?.isBefore(cutoff) ??
+                      false),
             )
-          : day == today
-          ? reportValue(drawer['dailyOpeningCash'] ?? drawer['openingCash'])
-          : 0;
-      total += history
-          .where(
-            (r) =>
-                r['type'] != 'set_daily_cash_drawer' &&
-                reportInRange(r['createdAt'] ?? r['timestamp'], day, next),
-          )
-          .fold<double>(
-            0,
-            (sum, r) => sum + reportValue(r['amount'] ?? r['budget']),
+            .toList()
+          ..sort(
+            (a, b) => cashRecordDate(
+              a['createdAt'] ?? a['timestamp'],
+            )!.compareTo(cashRecordDate(b['createdAt'] ?? b['timestamp'])!),
           );
-    }
-    result[id] = total;
+    final configured = history
+        .where((r) => r['type'] == 'set_daily_cash_drawer')
+        .lastOrNull;
+    final reports =
+        data
+            .rows('daily_reports')
+            .where(
+              (r) =>
+                  r['branchId'] == id &&
+                  (cashRecordDate(
+                        r['reportDateKey'] ?? r['reportDate'] ?? r['createdAt'],
+                      )?.isBefore(cutoff) ??
+                      false),
+            )
+            .toList()
+          ..sort(
+            (a, b) =>
+                cashRecordDate(
+                  a['reportDateKey'] ?? a['reportDate'] ?? a['createdAt'],
+                )!.compareTo(
+                  cashRecordDate(
+                    b['reportDateKey'] ?? b['reportDate'] ?? b['createdAt'],
+                  )!,
+                ),
+          );
+    result[id] =
+        includesToday &&
+            (drawer['dailyOpeningCash'] ?? drawer['openingCash']) != null
+        ? reportValue(drawer['dailyOpeningCash'] ?? drawer['openingCash'])
+        : configured != null
+        ? reportValue(configured['amount'] ?? configured['budget'])
+        : reports.isNotEmpty
+        ? reportValue(
+            reports.last['openingCash'] ?? reports.last['allocatedBudget'],
+          )
+        : history.isNotEmpty
+        ? reportValue(history.first['amount'] ?? history.first['budget'])
+        : 0;
   }
   return result;
 }

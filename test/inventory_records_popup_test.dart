@@ -6,9 +6,7 @@ import 'package:sales_tracking/widgets/admin_addons.dart';
 import 'package:sales_tracking/widgets/admin_void_inventory.dart';
 
 void main() {
-  testWidgets('void requires a typed reason and saves it with the record', (
-    tester,
-  ) async {
+  testWidgets('void reason dropdown supports a custom reason', (tester) async {
     final db = FakeFirebaseFirestore();
     final ref = db.collection('coffee_addons').doc('cream');
     await ref.set({'name': 'Cream', 'priceDelta': 20});
@@ -22,8 +20,15 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Void item'));
     await tester.pumpAndSettle();
-    expect(find.text('Please enter a reason.'), findsOneWidget);
+    expect(find.text('Please select a reason.'), findsOneWidget);
     expect((await ref.get()).data()!['isDeleted'], isNull);
+    await tester.tap(find.byType(DropdownButtonFormField<String>));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Others').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Void item'));
+    await tester.pumpAndSettle();
+    expect(find.text('Please enter a reason.'), findsOneWidget);
     await tester.enterText(find.byType(TextFormField), '  Damaged packaging  ');
     await tester.tap(find.text('Void item'));
     await tester.pumpAndSettle();
@@ -31,6 +36,31 @@ void main() {
     expect(data['isDeleted'], true);
     expect(data['voidReason'], 'Damaged packaging');
     expect(data['deletedAt'], isA<Timestamp>());
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('standard void reason is saved without custom text', (
+    tester,
+  ) async {
+    final db = FakeFirebaseFirestore();
+    final ref = db.collection('coffee_addons').doc('cream');
+    await ref.set({'name': 'Cream', 'priceDelta': 20});
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: AdminAddonsTable(firestore: db)),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Void add-on'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byType(DropdownButtonFormField<String>));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Damaged item').last);
+    await tester.pumpAndSettle();
+    expect(find.byType(TextFormField), findsNothing);
+    await tester.tap(find.text('Void item'));
+    await tester.pumpAndSettle();
+    expect((await ref.get()).data()!['voidReason'], 'Damaged item');
     await tester.pumpWidget(const SizedBox());
   });
 

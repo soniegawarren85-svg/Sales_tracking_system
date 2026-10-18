@@ -1,13 +1,15 @@
 import 'package:flutter/material.dart';
 import '../services/branch_report_data.dart';
+import '../services/bundle_stock_service.dart';
 import '../theme/app_colors.dart';
 import 'historical_cash_drawer.dart';
 import 'report_item_history.dart';
 import '../services/number_format.dart';
 
 /// Cost of sold units, excluding unsold starting and additional stock.
-double branchStockCost(Map row) =>
-    reportValue(row['costPrice']) * reportValue(row['sold']);
+double branchStockCost(Map row) => row['totalCost'] != null
+    ? reportValue(row['totalCost'])
+    : reportValue(row['costPrice']) * reportValue(row['sold']);
 double? branchSizePrice(Map row, String size) {
   final option = (row['sizes'] as List? ?? [])
       .whereType<Map>()
@@ -113,8 +115,10 @@ class BranchAllocationTable extends StatelessWidget {
     };
     bool low(Map row) =>
         !beverages &&
-        row['remaining'] != null &&
-        reportValue(row['remaining']) <= 50;
+        inventoryLowStock(
+          row['remaining'],
+          type: '${row['type'] ?? 'Categories'}',
+        );
     bool near(Map row) {
       final date = cashRecordDate(row['expirationDate']);
       final today = DateUtils.dateOnly(DateTime.now());

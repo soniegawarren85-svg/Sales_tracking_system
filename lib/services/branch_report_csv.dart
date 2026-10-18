@@ -41,7 +41,10 @@ List<List<dynamic>> branchReportRows(
   double soldCost(Iterable<Map<String, dynamic>> rows) => rows.fold<double>(
     0,
     (total, row) =>
-        total + reportValue(row['costPrice']) * reportValue(row['sold']),
+        total +
+        (row['totalCost'] != null
+            ? reportValue(row['totalCost'])
+            : reportValue(row['costPrice']) * reportValue(row['sold'])),
   );
   final rows = <List<dynamic>>[
     ['SALES REPORT'],
@@ -150,7 +153,11 @@ List<List<dynamic>> branchReportRows(
             row['sold'],
             money(row['profit']),
             money(row['netProfit']),
-            money(reportValue(row['costPrice']) * reportValue(row['sold'])),
+            money(
+              (row['totalCost'] != null
+                  ? reportValue(row['totalCost'])
+                  : reportValue(row['costPrice']) * reportValue(row['sold'])),
+            ),
             cashRecordDate(row['expirationDate']) == null
                 ? ''
                 : date(cashRecordDate(row['expirationDate'])!),

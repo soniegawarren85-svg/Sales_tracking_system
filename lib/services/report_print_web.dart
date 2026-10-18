@@ -1,3 +1,4 @@
+import 'activity_log.dart';
 import 'dart:async';
 import 'dart:js_interop';
 import 'dart:typed_data';
@@ -51,6 +52,7 @@ Future<void> printReportDocument({
       try {
         frame.contentWindow?.focus();
         frame.contentWindow?.print();
+        unawaited(ActivityLog.record('report_print_requested', 'Opened print dialog for $name'));
         status.textContent = 'If the print dialog did not open, use the print icon in the PDF toolbar or Download PDF.';
       } catch (_) {
         status.textContent = 'Use the print icon in the PDF toolbar, or download the PDF and print it.';

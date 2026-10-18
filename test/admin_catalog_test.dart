@@ -366,4 +366,28 @@ void main() {
     }
     await tester.pumpWidget(const SizedBox());
   });
+
+  testWidgets('locked branch inventory hides branch switching', (tester) async {
+    final db = FakeFirebaseFirestore();
+    await db.collection('branches').doc('dagupan').set({'name': 'SM Dagupan'});
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: AdminCatalog(
+            firestore: db,
+            type: 'Categories',
+            onOpen: (_) {},
+            lockedBranchId: 'dagupan',
+            lockedBranchName: 'SM Dagupan',
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Branch: SM Dagupan'), findsOneWidget);
+    expect(find.byType(DropdownButtonFormField<String>), findsNothing);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
 }

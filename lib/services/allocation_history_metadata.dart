@@ -9,6 +9,12 @@ class AllocationHistoryMetadata {
   final _documents = <String, Future<Map<String, dynamic>>>{};
   final _names = <String, Future<String>>{};
   final _adminIdsByName = <String, Future<String>>{};
+  final _profiles = <String, Future<Map<String, dynamic>>>{};
+  Future<Map<String, dynamic>> _profile(String identity) =>
+      _profiles.putIfAbsent(
+        identity,
+        () async => (await findAccountProfile(db, identity))?.data() ?? {},
+      );
 
   Future<Map<String, dynamic>> _document(String path) => _documents.putIfAbsent(
     path,
@@ -17,6 +23,21 @@ class AllocationHistoryMetadata {
 
   Future<Map<String, dynamic>> resolve(Map<String, dynamic> record) async {
     final result = Map<String, dynamic>.from(record);
+    final receiver = _first(record, ['confirmedBy', 'receivedBy']);
+    if (receiver.isNotEmpty &&
+        (_first(record, ['confirmedByPublicId']).isEmpty ||
+            _first(record, ['confirmedByRole']).isEmpty)) {
+      final profile = await _profile(receiver);
+      final name = accountFullName(profile);
+      if (_first(record, ['confirmedByName']).isEmpty && name.isNotEmpty) {
+        result['confirmedByName'] = name;
+      }
+      final role = '${profile['role'] ?? ''}'.toLowerCase();
+      if (role.isNotEmpty)
+        result['confirmedByRole'] = role == 'admin' ? 'Admin' : 'Cashier';
+      final code = _first(profile, ['adminId', 'staffId', 'publicId']);
+      if (code.isNotEmpty) result['confirmedByPublicId'] = code;
+    }
     var savedName = _first(record, [
       'allocatedByName',
       'assignedByName',
@@ -91,9 +112,8 @@ class AllocationHistoryMetadata {
     }
     if (branchCode.isNotEmpty) result['branchCode'] = branchCode;
     final profileIdentity = identity.isNotEmpty ? identity : adminId;
-    if (profileIdentity.isNotEmpty) {
-      final profile = await findAccountProfile(db, profileIdentity);
-      final profileData = profile?.data() ?? {};
+    if (profileIdentity.isNotEmpty && (savedName.isEmpty || adminId.isEmpty)) {
+      final profileData = await _profile(profileIdentity);
       final name = await _names.putIfAbsent(profileIdentity, () async {
         return accountFullName(profileData);
       });

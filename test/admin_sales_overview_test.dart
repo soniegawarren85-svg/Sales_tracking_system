@@ -80,4 +80,14 @@ void main() {
       6,
     );
   });
+
+  test('sales overview only includes the assigned branch', () {
+    final sales = salesForBranch([
+      {'branchId': 'dagupan', 'total': 250},
+      {'branchId': 'calasiao', 'total': 400},
+      {'total': 100},
+    ], 'dagupan');
+
+    expect(sales.map((sale) => sale['total']), [250]);
+  });
 }

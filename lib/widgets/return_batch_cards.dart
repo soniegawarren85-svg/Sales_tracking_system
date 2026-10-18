@@ -425,6 +425,163 @@ class _ReturnBatchListState extends State<ReturnBatchList> {
             : completed > 0
             ? 'Waiting Admin Confirmation • $completed/${batch.length} accepted'
             : 'Waiting Admin Confirmation';
+        final statusBanner = Container(
+          color: completed == batch.length
+              ? Colors.green.shade700
+              : declined.isNotEmpty
+              ? Colors.red.shade800
+              : AppColors.primaryDeep,
+          padding: const EdgeInsets.all(14),
+          child: Row(
+            children: [
+              Icon(
+                completed == batch.length
+                    ? Icons.check_circle_outline
+                    : declined.isNotEmpty
+                    ? Icons.cancel_outlined
+                    : widget.admin
+                    ? Icons.assignment_return_outlined
+                    : Icons.hourglass_top_rounded,
+                color: Colors.white,
+                size: 20,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  status,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w800,
+                    fontSize: 15,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+        final details = Padding(
+          padding: const EdgeInsets.all(14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'Return records • ${batch.length} item${batch.length == 1 ? '' : 's'}',
+                      style: const TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                        color: AppColors.primaryDeep,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  FilledButton.icon(
+                    style: FilledButton.styleFrom(
+                      backgroundColor: AppColors.primaryDark,
+                    ),
+                    icon: const Icon(Icons.visibility_outlined, size: 18),
+                    label: const Text('View'),
+                    onPressed:
+                        !batch.every((doc) => metadata.containsKey(doc.id))
+                        ? null
+                        : () => showDialog<void>(
+                            context: context,
+                            builder: (_) => _ReturnBatchDetails(
+                              docs: batch,
+                              itemBuilder: widget.itemBuilder,
+                              metadata: metadata,
+                            ),
+                          ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 6),
+              ReturnStaffDetails(
+                key: ValueKey(
+                  '${data['submittedBy']}/${data['submittedByName']}',
+                ),
+                data: data,
+                db: batch.first.reference.firestore,
+              ),
+              Text(
+                'Returned: ${returnDateLabel(data['createdAt'])}',
+                style: const TextStyle(
+                  fontSize: 12,
+                  color: AppColors.textMuted,
+                ),
+              ),
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  for (final type in ['Categories', 'Bundle', 'Beverages'])
+                    Chip(
+                      backgroundColor: AppColors.surfaceTint,
+                      label: Text(
+                        '$type (${batch.where((doc) => AllocationChecklistService.type(metadata[doc.id] ?? doc.data()) == type).length})',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: AppColors.primaryDeep,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 6),
+              if (completed > 0 || declined.isNotEmpty)
+                Text(
+                  '$completed accepted · ${declined.length} declined · ${pending.length} awaiting review',
+                  style: const TextStyle(fontSize: 12),
+                ),
+              if (widget.admin &&
+                  pending.isNotEmpty &&
+                  widget.onDecision != null)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: ReturnDecisionButtons(
+                    key: ValueKey(batch.first.id),
+                    onDecision: (accept) => widget.onDecision!(pending, accept),
+                  ),
+                ),
+              if (declined.isNotEmpty)
+                OutlinedButton.icon(
+                  icon: const Icon(Icons.message_outlined, size: 18),
+                  label: const Text('View reason'),
+                  onPressed: () => showDialog<void>(
+                    context: context,
+                    builder: (context) => AlertDialog(
+                      constraints: const BoxConstraints(maxWidth: 460),
+                      title: const Text('Reason for declining'),
+                      content: SingleChildScrollView(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            for (final doc in declined)
+                              Padding(
+                                padding: const EdgeInsets.only(bottom: 12),
+                                child: Text(
+                                  '${returnText([metadata[doc.id]?['name'], doc.data()['name']])}\n${returnText([doc.data()['declineReason']])}\nAdmin: ${returnText([doc.data()['declinedByName']])}',
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(context),
+                          child: const Text('Close'),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        );
         return Container(
           margin: const EdgeInsets.only(bottom: 12),
           decoration: BoxDecoration(
@@ -433,177 +590,46 @@ class _ReturnBatchListState extends State<ReturnBatchList> {
             border: Border.all(color: AppColors.border),
           ),
           clipBehavior: Clip.antiAlias,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Container(
-                color: completed == batch.length
-                    ? Colors.green.shade700
-                    : declined.isNotEmpty
-                    ? Colors.red.shade800
-                    : AppColors.primaryDeep,
-                padding: const EdgeInsets.all(14),
-                child: Row(
-                  children: [
-                    Icon(
+          child: widget.admin
+              ? ExpansionTile(
+                  leading: CircleAvatar(
+                    backgroundColor: completed == batch.length
+                        ? const Color(0xFFE7F4EC)
+                        : AppColors.blush,
+                    child: Icon(
                       completed == batch.length
-                          ? Icons.check_circle_outline
-                          : declined.isNotEmpty
-                          ? Icons.cancel_outlined
-                          : widget.admin
-                          ? Icons.assignment_return_outlined
-                          : Icons.hourglass_top_rounded,
-                      color: Colors.white,
-                      size: 20,
+                          ? Icons.check_rounded
+                          : Icons.assignment_return_rounded,
+                      color: completed == batch.length
+                          ? const Color(0xFF27834A)
+                          : AppColors.primaryDark,
                     ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        status,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.w800,
-                          fontSize: 15,
-                        ),
-                      ),
+                  ),
+                  title: Text(
+                    returnText([data['branchName'], data['staffId']]),
+                    style: const TextStyle(
+                      color: AppColors.text,
+                      fontWeight: FontWeight.w900,
                     ),
-                  ],
+                  ),
+                  subtitle: Text(
+                    '$status • ${returnDateLabel(data['createdAt'])}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: AppColors.textMuted,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  iconColor: AppColors.primaryDark,
+                  collapsedIconColor: AppColors.primaryDark,
+                  children: [details],
+                )
+              : Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [statusBanner, details],
                 ),
-              ),
-              Padding(
-                padding: const EdgeInsets.all(14),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            returnText([data['branchName'], data['staffId']]),
-                            style: const TextStyle(
-                              fontWeight: FontWeight.bold,
-                              fontSize: 16,
-                              color: AppColors.primaryDeep,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        FilledButton.icon(
-                          style: FilledButton.styleFrom(
-                            backgroundColor: AppColors.primaryDark,
-                          ),
-                          icon: const Icon(Icons.visibility_outlined, size: 18),
-                          label: const Text('View'),
-                          onPressed:
-                              !batch.every(
-                                (doc) => metadata.containsKey(doc.id),
-                              )
-                              ? null
-                              : () => showDialog<void>(
-                                  context: context,
-                                  builder: (_) => _ReturnBatchDetails(
-                                    docs: batch,
-                                    itemBuilder: widget.itemBuilder,
-                                    metadata: metadata,
-                                  ),
-                                ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 6),
-                    ReturnStaffDetails(
-                      key: ValueKey(
-                        '${data['submittedBy']}/${data['submittedByName']}',
-                      ),
-                      data: data,
-                      db: batch.first.reference.firestore,
-                    ),
-                    Text(
-                      'Returned: ${returnDateLabel(data['createdAt'])}',
-                      style: const TextStyle(
-                        fontSize: 12,
-                        color: AppColors.textMuted,
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    Wrap(
-                      spacing: 6,
-                      runSpacing: 6,
-                      children: [
-                        for (final type in [
-                          'Categories',
-                          'Bundle',
-                          'Beverages',
-                        ])
-                          Chip(
-                            backgroundColor: AppColors.surfaceTint,
-                            label: Text(
-                              '$type (${batch.where((doc) => AllocationChecklistService.type(metadata[doc.id] ?? doc.data()) == type).length})',
-                              style: const TextStyle(
-                                fontSize: 12,
-                                color: AppColors.primaryDeep,
-                              ),
-                            ),
-                          ),
-                      ],
-                    ),
-                    const SizedBox(height: 6),
-                    if (completed > 0 || declined.isNotEmpty)
-                      Text(
-                        '$completed accepted · ${declined.length} declined · ${pending.length} awaiting review',
-                        style: const TextStyle(fontSize: 12),
-                      ),
-                    if (widget.admin &&
-                        pending.isNotEmpty &&
-                        widget.onDecision != null)
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 8),
-                        child: ReturnDecisionButtons(
-                          key: ValueKey(batch.first.id),
-                          onDecision: (accept) =>
-                              widget.onDecision!(pending, accept),
-                        ),
-                      ),
-                    if (declined.isNotEmpty)
-                      OutlinedButton.icon(
-                        icon: const Icon(Icons.message_outlined, size: 18),
-                        label: const Text('View reason'),
-                        onPressed: () => showDialog<void>(
-                          context: context,
-                          builder: (context) => AlertDialog(
-                            constraints: const BoxConstraints(maxWidth: 460),
-                            title: const Text('Reason for declining'),
-                            content: SingleChildScrollView(
-                              child: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  for (final doc in declined)
-                                    Padding(
-                                      padding: const EdgeInsets.only(
-                                        bottom: 12,
-                                      ),
-                                      child: Text(
-                                        '${returnText([metadata[doc.id]?['name'], doc.data()['name']])}\n${returnText([doc.data()['declineReason']])}\nAdmin: ${returnText([doc.data()['declinedByName']])}',
-                                      ),
-                                    ),
-                                ],
-                              ),
-                            ),
-                            actions: [
-                              TextButton(
-                                onPressed: () => Navigator.pop(context),
-                                child: const Text('Close'),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-            ],
-          ),
         );
       },
     );

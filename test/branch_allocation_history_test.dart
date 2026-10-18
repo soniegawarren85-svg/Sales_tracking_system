@@ -99,7 +99,7 @@ void main() {
       ),
     );
     expect(tester.getSize(dialogBody).width, lessThanOrEqualTo(680));
-    await tester.tap(find.text('View Items'));
+    await tester.tap(find.byTooltip('Expand items'));
     await tester.pumpAndSettle();
     expect(find.text('Categories (2)'), findsOneWidget);
     expect(find.text('Chocolate cookie'), findsOneWidget);
@@ -110,7 +110,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Cookie box'), findsOneWidget);
     expect(find.text('Qty: 2'), findsOneWidget);
-    await tester.tap(find.byTooltip('Close').last);
+    await tester.tap(find.byTooltip('Collapse items'));
     await tester.pumpAndSettle();
     await db.doc('staff_inventory_history/new').set({
       'staffId': 'branch',
@@ -188,9 +188,9 @@ void main() {
 
     expect(find.text('Pending'), findsWidgets);
     expect(find.text('Issue Reported'), findsOneWidget);
-    expect(find.text('View Items'), findsOneWidget);
+    expect(find.byTooltip('Expand items'), findsOneWidget);
     expect(
-      tester.getCenter(find.text('View Items')).dx,
+      tester.getCenter(find.byTooltip('Expand items')).dx,
       greaterThan(tester.getCenter(find.text('View issue report')).dx),
     );
     await tester.tap(find.text('View issue report'));
@@ -241,14 +241,14 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('Allocated by: Ana Cruz'), findsOneWidget);
       expect(find.text('Qty: 5 allocated units'), findsOneWidget);
-      expect(find.text('View Items'), findsOneWidget);
-      await tester.tap(find.text('View Items'));
+      expect(find.byTooltip('Expand items'), findsOneWidget);
+      await tester.tap(find.byTooltip('Expand items'));
       await tester.pumpAndSettle();
       expect(find.text('Cookie'), findsOneWidget);
       await tester.enterText(find.byType(TextField).last, 'missing');
       await tester.pumpAndSettle();
       expect(find.text('Cookie'), findsNothing);
-      await tester.tap(find.byTooltip('Close').last);
+      await tester.tap(find.byTooltip('Collapse items'));
       await tester.pumpAndSettle();
       await tester.pumpWidget(
         MaterialApp(

@@ -1,7 +1,9 @@
 import '../../widgets/void_reason_dialog.dart';
 import '../../services/catalog_image_service.dart';
+import '../../services/activity_log.dart';
 import 'package:sales_tracking/theme/app_colors.dart';
 import '../../services/short_id_service.dart';
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -273,6 +275,17 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
       _showSnack('Enter a valid selling price for every size.', isError: true);
       return;
     }
+    if (_sizes.any(
+      (size) =>
+          _parsePrice(size.priceController.text) <
+          _parsePrice(_costController.text),
+    )) {
+      _showSnack(
+        'Selling price cannot be lower than cost price.',
+        isError: true,
+      );
+      return;
+    }
     final sizes = _sizes
         .map(
           (s) => {
@@ -295,20 +308,25 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
       if (_coffeeImageBytes != null && imageUrl == null) {
         throw StateError('Picture could not upload. Please retry.');
       }
-      final publicCoffeeId = await ShortIdService.next('CF');
       final coffeeId = await _firestore.runTransaction<String>((
         transaction,
       ) async {
+        final publicCounterRef = _firestore
+            .collection('system_counters')
+            .doc('public_CF');
         final counterRef = _firestore
             .collection('system_counters')
             .doc('coffee_products');
         final productRef = _firestore.collection('coffee_products').doc();
+        final publicCounterSnap = await transaction.get(publicCounterRef);
         final counterSnap = await transaction.get(counterRef);
+        final publicNumber =
+            ((publicCounterSnap.data()?['count'] as num?)?.toInt() ?? 0) + 1;
         final current = (counterSnap.data()?['current'] as num?)?.toInt() ?? 0;
         final next = current + 1;
-        final now = DateTime.now();
-        final coffeeId = publicCoffeeId;
+        final coffeeId = shortCode('CF', publicNumber);
 
+        transaction.set(publicCounterRef, {'count': publicNumber});
         transaction.set(counterRef, {
           'current': next,
           'updatedAt': FieldValue.serverTimestamp(),
@@ -334,6 +352,19 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
 
         return coffeeId;
       });
+      unawaited(
+        ActivityLog.record(
+          'inventory_created',
+          'Created beverage product ${_flavorNameController.text.trim()}',
+          details: {
+            'itemName': _flavorNameController.text.trim(),
+            'itemId': coffeeId,
+            'costPrice': _parsePrice(_costController.text),
+            'sizePrices': sizes,
+            'description': _descriptionController.text.trim(),
+          },
+        ),
+      );
       if (!mounted) return;
       setState(() {
         _flavorNameController.clear();

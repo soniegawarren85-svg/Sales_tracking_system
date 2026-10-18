@@ -1,5 +1,7 @@
+import 'package:fake_cloud_firestore/fake_cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sales_tracking/widgets/admin_catalog.dart';
 import 'package:sales_tracking/widgets/admin_item_editor.dart';
 import 'package:sales_tracking/widgets/admin_sales_overview.dart';
@@ -193,5 +195,59 @@ void main() {
     expect(tester.takeException(), isNull);
     await tester.tap(find.text('Cancel'));
     await tester.pumpAndSettle();
+  });
+
+  testWidgets('new inventory item saves its public ID with the item update', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    final db = FakeFirebaseFirestore();
+    await db.collection('sales_inventory').doc('cookies').set({
+      'name': 'Cookies',
+      'items': <Map<String, dynamic>>[],
+    });
+    final category = {'id': 'cookies', 'name': 'Cookies'};
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: TextButton(
+              onPressed: () => showAdminItemEditor(
+                context,
+                category: category,
+                firestore: db,
+                upload: (_) async => null,
+              ),
+              child: const Text('Open add item'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('Open add item'));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.byType(TextFormField).at(0), 'Choco Cookie');
+    await tester.enterText(find.byType(TextFormField).at(1), '35');
+    await tester.enterText(find.byType(TextFormField).at(2), '15');
+    await tester.enterText(find.byType(TextFormField).at(3), '12');
+    await tester.tap(find.byIcon(Icons.calendar_today));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('OK'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, 'Add'));
+    await tester.pumpAndSettle();
+
+    final saved = await db.collection('sales_inventory').doc('cookies').get();
+    final item = (saved.data()!['items'] as List).single as Map;
+    expect(item['name'], 'Choco Cookie');
+    expect(item['publicId'], 'CO-001');
+    expect(item['stock'], 12);
+    expect(
+      (await db.collection('system_counters').doc('public_CO').get())
+          .data()!['count'],
+      1,
+    );
+    expect(tester.takeException(), isNull);
   });
 }

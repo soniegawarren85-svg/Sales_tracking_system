@@ -1,3 +1,5 @@
+import '../../services/activity_log.dart';
+import '../../services/branch_permissions.dart';
 import '../../widgets/top_edge_refresh.dart';
 import '../../widgets/branch_receipts_dialog.dart';
 import '../../widgets/screen_loading_region.dart';
@@ -10,12 +12,12 @@ import '../../widgets/horizontal_controls.dart';
 import '../../widgets/branch_allocation_history.dart';
 import '../../services/branch_report_data.dart'
     show BranchReportData, reportRefund, validReportSale;
-import 'package:firebase_auth/firebase_auth.dart';
+import '../../services/branch_session.dart';
+import '../../widgets/branch_report_dialog.dart';
 import '../../widgets/assigned_branch_staff.dart';
 import '../../widgets/branch_editor_dialog.dart';
 import '../../services/bundle_stock_service.dart';
 import 'dart:async';
-import '../../widgets/branch_report_dialog.dart';
 import '../../services/inventory_display_ids.dart';
 import 'package:sales_tracking/theme/app_colors.dart';
 import '../../services/analytics_hours.dart';
@@ -28,7 +30,6 @@ import '../../widgets/branch_analytics_bars.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/services.dart';
-import '../../services/cash_drawer_service.dart';
 import '../../services/number_format.dart';
 
 // ── Color Palette ─────────────────────────────────────────────────
@@ -283,6 +284,8 @@ class _BudgetPageState extends State<BudgetPage>
   @override
   void initState() {
     super.initState();
+    _selectedBranchId = BranchSession.instance.branchId;
+    _activeBranchName = BranchSession.instance.displayName;
     for (final collection in [
       'sales_inventory',
       'coffee_products',
@@ -360,6 +363,11 @@ class _BudgetPageState extends State<BudgetPage>
       final now = DateTime.now();
       final dateKey =
           '${now.year.toString().padLeft(4, '0')}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+      await BranchPermissions.require(
+        'adminAllowAllocations',
+        database: _firestore,
+        branchId: isBranch ? targetId : null,
+      );
       final budgetRef = _firestore.collection('staff_budget').doc(targetId);
       final existingBudgetSnapshot = await budgetRef.get();
       final lastBudgetDate =
@@ -422,6 +430,13 @@ class _BudgetPageState extends State<BudgetPage>
         }, SetOptions(merge: true));
       });
 
+      await ActivityLog.record(
+        'cash_drawer_set',
+        'Set daily cash drawer for $targetName',
+        database: _firestore,
+        branchId: isBranch ? targetId : null,
+        details: {'amount': newAllocation},
+      );
       // Add to budget history for audit trail
       await _firestore.collection('budget_history').add({
         'staffId': targetId,
@@ -1825,6 +1840,11 @@ class _BudgetPageState extends State<BudgetPage>
     Set<String> coffeeProductIds = const {},
     Set<String> addonIds = const {},
   }) async {
+    await BranchPermissions.require(
+      'adminAllowAllocations',
+      database: _firestore,
+      branchId: isBranch ? staffId : null,
+    );
     final allocator = await resolveSessionActor(_firestore, admin: true);
     final branchCode = isBranch
         ? ((await _firestore.collection('branches').doc(staffId).get())
@@ -2000,15 +2020,19 @@ class _BudgetPageState extends State<BudgetPage>
         final sourceRef = _firestore
             .collection('sales_inventory')
             .doc(sourceDocId);
-        final staffRef = _firestore
-            .collection('staff_inventory')
-            .doc(_staffInventoryDocId(staffId, sourceDocId));
         final sourceSnapshot = sourceSnapshots[sourceDocId]!;
 
         final sourceData = sourceSnapshot.data();
         if (sourceData == null) continue;
 
         final isBundle = sourceData['isBundle'] == true;
+        final staffRef = _firestore
+            .collection('staff_inventory')
+            .doc(
+              isBundle
+                  ? '${_staffInventoryDocId(staffId, sourceDocId)}_v${bundleAllocationVersionKey(sourceData)}'
+                  : '${_staffInventoryDocId(staffId, sourceDocId)}_$deliveryId',
+            );
         final Map<String, dynamic>? staffData =
             null; // Pending delivery contains only the new quantities.
         final selectedForDoc = grouped[sourceDocId]!;
@@ -2035,11 +2059,6 @@ class _BudgetPageState extends State<BudgetPage>
                   .whereType<Map>()
                   .map((entry) => Map<String, dynamic>.from(entry))
                   .toList();
-          final existingStaffInstances =
-              (staffData?['bundleInstances'] as List<dynamic>? ?? [])
-                  .whereType<Map>()
-                  .map((entry) => Map<String, dynamic>.from(entry))
-                  .toList();
           final assignedAt = Timestamp.now();
           final selectedInstances = sourceInstances
               .where(
@@ -2051,6 +2070,7 @@ class _BudgetPageState extends State<BudgetPage>
                   ...instance,
                   'status': 'available',
                   'assignedAt': assignedAt,
+                  'batchId': deliveryId,
                 },
               )
               .toList();
@@ -2064,6 +2084,7 @@ class _BudgetPageState extends State<BudgetPage>
                     '${sourceData['bundleId'] ?? sourceDocId}-$deliveryId-$number',
                 'status': 'available',
                 'assignedAt': assignedAt,
+                'batchId': deliveryId,
                 'items': items,
               });
             }
@@ -2085,12 +2106,10 @@ class _BudgetPageState extends State<BudgetPage>
             'staffId': staffId,
             'staffName': staffName,
             'sourceInventoryId': sourceDocId,
+            'bundleVersionId': bundleAllocationVersionKey(sourceData),
             'bundleCount': currentStaffCount + qty,
             'assignedStartingStock': currentAssignedStartingStock + qty,
-            'bundleInstances': [
-              ...existingStaffInstances,
-              ...selectedInstances,
-            ],
+            'bundleInstances': selectedInstances,
             'isDeleted': false,
             'assignedAt': FieldValue.serverTimestamp(),
             'updatedAt': FieldValue.serverTimestamp(),
@@ -2184,6 +2203,14 @@ class _BudgetPageState extends State<BudgetPage>
       }
     });
 
+    await ActivityLog.record(
+      'inventory_allocated',
+      'Allocated items to $staffName',
+      database: _firestore,
+      branchId: isBranch ? staffId : null,
+      eventId: 'allocation_$deliveryId',
+      details: {'quantities': quantities},
+    );
     return true;
   }
 
@@ -2418,15 +2445,6 @@ class _BudgetPageState extends State<BudgetPage>
         ],
       ),
     );
-  }
-
-  void _showBranchReportDetail({
-    required String branchId,
-    required String branchName,
-    required List<String> staffIds,
-    required List<String> staffNames,
-  }) {
-    showBranchReport(context, branchId: branchId, branchName: branchName);
   }
 
   void _showReportDetail(String staffId, String staffName) {
@@ -4339,26 +4357,7 @@ class _BudgetPageState extends State<BudgetPage>
     return Scaffold(
       backgroundColor: AppColors.background,
       floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
-      floatingActionButton: _selectedBranchId == null
-          ? FloatingActionButton(
-              tooltip: 'Create branch',
-              shape: const CircleBorder(),
-              backgroundColor: kPrimary,
-              foregroundColor: Colors.white,
-              onPressed: _showCreateBranchDialog,
-              child: const Icon(Icons.add),
-            )
-          : _buildBranchQuickActions(
-              branchId: _selectedBranchId!,
-              branchName: _activeBranchName,
-              staffIds: _activeBranchStaffIds,
-              staffNames: _activeBranchStaffNames,
-              controller: _budgetControllers.putIfAbsent(
-                _selectedBranchId!,
-                () => TextEditingController(),
-              ),
-              enabled: _activeBranchStaffIds.isNotEmpty,
-            ),
+      floatingActionButton: null,
       body: FadeTransition(
         opacity: _fadeAnim,
         child: SlideTransition(
@@ -4371,16 +4370,7 @@ class _BudgetPageState extends State<BudgetPage>
                     ? _buildHeader()
                     : _buildSelectedBranchHeader(),
               ),
-              if (_selectedBranchId == null)
-                _buildPinnedBudgetControls()
-              else
-                Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 20,
-                    vertical: 12,
-                  ),
-                  child: _buildAllocationSearch(),
-                ),
+              if (_selectedBranchId == null) _buildPinnedBudgetControls(),
               Expanded(
                 child: ScreenLoadingRegion(
                   child: TopEdgeRefresh(
@@ -4396,52 +4386,6 @@ class _BudgetPageState extends State<BudgetPage>
                               branches: true,
                               todayOnly: true,
                               selectedDate: _analyticsDate,
-                            ),
-                          ),
-                          Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 16),
-                            child: Card(
-                              color: Colors.white,
-                              child: Padding(
-                                padding: const EdgeInsets.all(18),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    const ListTile(
-                                      contentPadding: EdgeInsets.zero,
-                                      leading: CircleAvatar(
-                                        backgroundColor: AppColors.blush,
-                                        child: Icon(
-                                          Icons.pie_chart_outline,
-                                          color: kPrimary,
-                                        ),
-                                      ),
-                                      title: Text(
-                                        'Branch sales reports',
-                                        style: TextStyle(
-                                          fontWeight: FontWeight.w800,
-                                        ),
-                                      ),
-                                      subtitle: Text(
-                                        'Compare branches, review sales, and generate reports',
-                                      ),
-                                    ),
-                                    Align(
-                                      alignment: Alignment.centerLeft,
-                                      child: FilledButton.icon(
-                                        onPressed: () =>
-                                            showBranchReport(context),
-                                        icon: const Icon(
-                                          Icons.assessment_outlined,
-                                        ),
-                                        label: const Text(
-                                          'View branches report',
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
                             ),
                           ),
                           _buildBranchManagementSection(),
@@ -4830,29 +4774,23 @@ class _BudgetPageState extends State<BudgetPage>
                 Padding(
                   padding: const EdgeInsets.only(top: 10),
                   child: Text(
-                    'Assign staff first to allocate items or cash.',
+                    'No staff are assigned to this branch yet.',
                     style: TextStyle(
                       color: Colors.orange.shade800,
                       fontWeight: FontWeight.w600,
                     ),
                   ),
                 ),
-              const SizedBox(height: 10),
-              _buildBranchSalesSummary(branchId),
-              const SizedBox(height: 8),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Expanded(child: _buildAllocationCategories()),
-                  AllocationHistoryActions(branchId: branchId),
-                ],
-              ),
-              const SizedBox(height: 8),
-              _buildBranchItemsTable(branchId),
-              const SizedBox(height: 12),
-              _buildBranchReportSummary(branchId),
-              const SizedBox(height: 16),
-              _buildPeriodBranchAnalytics(branchId, branchName),
+                const SizedBox(height: 10),
+                _buildBranchSalesSummary(branchId),
+                const SizedBox(height: 16),
+                _buildAllocationFilters(),
+                const SizedBox(height: 12),
+                _buildBranchItemsTable(branchId, allowAllocationChanges: false),
+                const SizedBox(height: 20),
+                _buildBranchReportSummary(branchId),
+                const SizedBox(height: 16),
+                _buildPeriodBranchAnalytics(branchId, branchName),
               const SizedBox(height: 82),
             ],
           ),
@@ -6474,25 +6412,27 @@ class _BudgetPageState extends State<BudgetPage>
     ],
   );
 
-  Widget _buildAllocationCategories() => HorizontalControls(
-    spacing: 8,
-
-    children: ['Categories', 'Bundle', 'Beverages']
-        .map(
-          (filter) => ChoiceChip(
-            label: Text(filter),
-            selected: _allocationFilter == filter,
-            selectedColor: kPrimary.withOpacity(0.18),
-            labelStyle: TextStyle(
-              color: _allocationFilter == filter
-                  ? kBannerTop
-                  : Colors.grey.shade700,
-              fontWeight: FontWeight.w800,
+  Widget _buildAllocationCategories() => Align(
+    alignment: Alignment.centerLeft,
+    child: HorizontalControls(
+      spacing: 8,
+      children: ['Categories', 'Bundle', 'Beverages']
+          .map(
+            (filter) => ChoiceChip(
+              label: Text(filter),
+              selected: _allocationFilter == filter,
+              selectedColor: kPrimary.withOpacity(0.18),
+              labelStyle: TextStyle(
+                color: _allocationFilter == filter
+                    ? kBannerTop
+                    : Colors.grey.shade700,
+                fontWeight: FontWeight.w800,
+              ),
+              onSelected: (_) => setState(() => _allocationFilter = filter),
             ),
-            onSelected: (_) => setState(() => _allocationFilter = filter),
-          ),
-        )
-        .toList(),
+          )
+          .toList(),
+    ),
   );
 
   Widget _buildAllocationSearch() => TextField(
@@ -6598,6 +6538,7 @@ class _BudgetPageState extends State<BudgetPage>
   Widget _buildBranchItemsTable(
     String branchId, {
     bool showAllocationDetails = false,
+    bool allowAllocationChanges = true,
   }) {
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
       stream: _branchInventoryStreams.putIfAbsent(
@@ -6623,7 +6564,9 @@ class _BudgetPageState extends State<BudgetPage>
             ),
           );
         }
-        final rows = docs.expand(_allocationRowsForDocument).where((row) {
+        final allocationRows = docs.expand(_allocationRowsForDocument).where((
+          row,
+        ) {
           final matchesFilter =
               (_allocationFilter == 'Bundle' && row.type == 'Bundle') ||
               (_allocationFilter == 'Beverages' && row.type == 'Beverages') ||
@@ -6635,7 +6578,17 @@ class _BudgetPageState extends State<BudgetPage>
           return matchesFilter &&
               (_allocationSearchQuery.isEmpty ||
                   details.contains(_allocationSearchQuery));
-        }).toList();
+        });
+        final rows = <_AllocationTableRow>[];
+        final displayedBundleIds = <String>{};
+        for (final row in allocationRows) {
+          if (row.type == 'Bundle') {
+            if (row.remaining <= 0 || !displayedBundleIds.add(row.id)) {
+              continue;
+            }
+          }
+          rows.add(row);
+        }
         if (rows.isEmpty) {
           return const Padding(
             padding: EdgeInsets.all(16),
@@ -6664,20 +6617,32 @@ class _BudgetPageState extends State<BudgetPage>
             );
             Map<String, dynamic> metric(_AllocationTableRow row) =>
                 metrics.where((m) => m['id'] == row.id).firstOrNull ?? {};
+            final displayedCategoryIds = <String>{};
             final tableRows = rows
-                .where((row) => metric(row).isNotEmpty)
-                .map(
-                  (row) => <String, dynamic>{
-                    ...metric(row),
-                    ...?activity
-                        .where((item) => item['id'] == row.id)
-                        .firstOrNull,
+                .where((row) {
+                  final current = metric(row);
+                  if (current.isEmpty) return false;
+                  if (row.type == 'Category') {
+                    if (_parseInt(current['remaining']) <= 0) return false;
+                    if (!displayedCategoryIds.add(row.id)) return false;
+                  }
+                  return true;
+                })
+                .map((row) {
+                  final current = metric(row);
+                  final period = activity
+                      .where((item) => item['id'] == row.id)
+                      .firstOrNull;
+                  return <String, dynamic>{
+                    ...current,
+                    ...?period,
+                    if (row.type == 'Bundle') 'starting': current['remaining'],
                     'id': row.id,
-                    'name': row.name,
+                    'name': current['name'] ?? row.name,
                     'type': row.type == 'Category' ? 'Categories' : row.type,
-                    'price': row.price,
-                  },
-                )
+                    'price': current['price'] ?? row.price,
+                  };
+                })
                 .toList();
             return BranchAllocationTable(
               rows: tableRows,
@@ -6687,19 +6652,21 @@ class _BudgetPageState extends State<BudgetPage>
                 return Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    IconButton(
-                      tooltip: 'Edit / add allocation',
-                      onPressed: () =>
-                          _showEditBranchAllocationDialog(row, branchId),
-                      icon: const Icon(Icons.edit_rounded),
-                      color: kDeep,
-                    ),
-                    IconButton(
-                      tooltip: 'Void allocation',
-                      onPressed: () => _removeBranchAllocation(row),
-                      icon: const Icon(Icons.cancel_outlined),
-                      color: Colors.deepOrange,
-                    ),
+                    if (allowAllocationChanges) ...[
+                      IconButton(
+                        tooltip: 'Edit / add allocation',
+                        onPressed: () =>
+                            _showEditBranchAllocationDialog(row, branchId),
+                        icon: const Icon(Icons.edit_rounded),
+                        color: kDeep,
+                      ),
+                      IconButton(
+                        tooltip: 'Void allocation',
+                        onPressed: () => _removeBranchAllocation(row),
+                        icon: const Icon(Icons.cancel_outlined),
+                        color: Colors.deepOrange,
+                      ),
+                    ],
                     IconButton(
                       tooltip: 'View history',
                       onPressed: salesSnapshot.hasData
@@ -7247,6 +7214,12 @@ class _BudgetPageState extends State<BudgetPage>
         'createdAt': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),
       });
+      await ActivityLog.record(
+        'branch_created',
+        'Created branch ${values['name']}',
+        database: _firestore,
+        branchId: branchRef.id,
+      );
       if (mounted) _showSnack('Branch created', Colors.green.shade600);
     } catch (e) {
       if (mounted) _showSnack('Error creating branch: $e', Colors.red.shade600);
@@ -7849,11 +7822,6 @@ class _BudgetPageState extends State<BudgetPage>
               children: [
                 Row(
                   children: [
-                    IconButton(
-                      tooltip: 'Back to branches',
-                      onPressed: () => setState(() => _selectedBranchId = null),
-                      icon: const Icon(Icons.arrow_back, color: Colors.white),
-                    ),
                     const Spacer(),
                     IconButton(
                       tooltip: 'Staff',
@@ -7862,18 +7830,16 @@ class _BudgetPageState extends State<BudgetPage>
                       icon: const Icon(Icons.groups, color: Colors.white),
                     ),
                     IconButton(
-                      tooltip: 'Reports',
-                      onPressed: () => _showBranchReportDetail(
+                      tooltip: 'Daily report',
+                      onPressed: () => showBranchReport(
+                        context,
                         branchId: branchId,
                         branchName: name,
-                        staffIds: (data?['staffIds'] as List? ?? [])
-                            .map((id) => '$id')
-                            .toList(),
-                        staffNames: (data?['staffNames'] as List? ?? [])
-                            .map((value) => '$value')
-                            .toList(),
                       ),
-                      icon: const Icon(Icons.assignment, color: Colors.white),
+                      icon: const Icon(
+                        Icons.assignment_outlined,
+                        color: Colors.white,
+                      ),
                     ),
                   ],
                 ),
@@ -7931,15 +7897,6 @@ class _BudgetPageState extends State<BudgetPage>
             padding: const EdgeInsets.fromLTRB(14, 42, 20, 22),
             child: Row(
               children: [
-                IconButton(
-                  tooltip: 'Back to branches',
-                  onPressed: () => setState(() => _selectedBranchId = null),
-                  icon: const Icon(
-                    Icons.arrow_back_rounded,
-                    color: Colors.white,
-                  ),
-                ),
-                const SizedBox(width: 6),
                 Container(
                   width: 52,
                   height: 52,
@@ -7988,20 +7945,15 @@ class _BudgetPageState extends State<BudgetPage>
                   onPressed: () => showAssignedBranchStaff(context, branchId),
                 ),
                 IconButton(
-                  tooltip: 'Reports',
+                  tooltip: 'Daily report',
                   icon: const Icon(
-                    Icons.assignment_rounded,
+                    Icons.assignment_outlined,
                     color: Colors.white,
                   ),
-                  onPressed: () => _showBranchReportDetail(
+                  onPressed: () => showBranchReport(
+                    context,
                     branchId: branchId,
                     branchName: name,
-                    staffIds: (data?['staffIds'] as List<dynamic>? ?? [])
-                        .map((id) => id.toString())
-                        .toList(),
-                    staffNames: (data?['staffNames'] as List<dynamic>? ?? [])
-                        .map((name) => name.toString())
-                        .toList(),
                   ),
                 ),
               ],

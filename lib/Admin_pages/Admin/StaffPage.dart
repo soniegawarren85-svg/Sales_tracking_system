@@ -1,9 +1,11 @@
+import '../../services/activity_log.dart';
+import '../../services/branch_permissions.dart';
+import '../../services/branch_session.dart';
 import '../../widgets/profile_avatar.dart';
 import '../../widgets/staff_deactivation_dialog.dart';
 import '../../widgets/inventory_records_table.dart';
 import 'package:sales_tracking/theme/app_colors.dart';
 import '../../services/public_item_id.dart';
-import '../../widgets/admin_staff_branches.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -250,7 +252,17 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
         }
         final staff = snapshot.data!.docs
             .map(AdminModel.fromDoc)
-            .where((member) => member.isValidStaff)
+            .where((member) {
+              final assignedBranches =
+                  (member.details['branchIds'] as List? ?? [])
+                      .map((id) => '$id')
+                      .toSet();
+              final legacyBranch =
+                  '${member.details['branchId'] ?? ''}'.trim();
+              return member.isValidStaff &&
+                  (assignedBranches.contains(BranchSession.instance.branchId) ||
+                      legacyBranch == BranchSession.instance.branchId);
+            })
             .toList();
         final accepted = staff
             .where((member) => member.status == 'accepted')
@@ -258,9 +270,11 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
         final deactivated = staff
             .where((member) => member.status == 'deactivated')
             .toList();
-        final inactive = accepted
-            .where((member) => member.isInactiveByLogin)
+        final activeCount = accepted
+            .where((member) => !member.isInactiveByLogin)
             .length;
+        final inactiveCount = accepted.length - activeCount;
+        final branchName = BranchSession.instance.displayName;
         return CustomScrollView(
           slivers: [
             SliverAppBar(
@@ -280,20 +294,20 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                       padding: const EdgeInsets.fromLTRB(22, 32, 22, 16),
                       child: Opacity(
                         opacity: opacity,
-                        child: const Column(
+                        child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           mainAxisAlignment: MainAxisAlignment.end,
                           children: [
                             Text(
-                              'Staff Section',
-                              style: TextStyle(
+                              'Staff Management',
+                              style: const TextStyle(
                                 color: Colors.white,
                                 fontSize: 24,
                                 fontWeight: FontWeight.w700,
                               ),
                             ),
-                            SizedBox(height: 4),
-                            Text(
+                            const SizedBox(height: 4),
+                            const Text(
                               'Manage staff accounts',
                               style: TextStyle(
                                 color: Colors.white70,
@@ -314,37 +328,31 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                   padding: const EdgeInsets.all(16),
                   child: _buildStatsRow(
                     total: accepted.length,
-                    active: accepted.length - inactive,
+                    active: activeCount,
                     pending: deactivated.length,
-                    deactivated: inactive,
+                    deactivated: inactiveCount,
                   ),
                 ),
-
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 16),
                   child: _buildDeactivatedStaffButton(deactivated),
                 ),
-                const Padding(
-                  padding: EdgeInsets.all(16),
-                  child: AdminStaffBranches(),
-                ),
-
-                const Padding(
-                  padding: EdgeInsets.all(16),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 20, 16, 8),
                   child: Text(
-                    'Staff Accounts',
-                    style: TextStyle(
-                      fontSize: 22,
+                    'Staff Accounts · $branchName',
+                    style: const TextStyle(
+                      fontSize: 16,
                       fontWeight: FontWeight.bold,
                       color: AppColors.primaryDark,
                     ),
                   ),
                 ),
-                if (accepted.isEmpty)
+                if (accepted.isEmpty && deactivated.isEmpty)
                   const Padding(
                     padding: EdgeInsets.all(24),
                     child: Text(
-                      'No active staff accounts. Tap + to create one.',
+                      'No staff assigned to this branch yet.',
                     ),
                   ),
                 ...accepted.asMap().entries.map(
@@ -678,39 +686,55 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
     required int active,
     required int pending,
     required int deactivated,
-  }) {
-    return Row(
-      children: [
-        _buildStatCard(
+  }) => LayoutBuilder(
+    builder: (context, constraints) {
+      final columns = constraints.maxWidth >= 760
+          ? 4
+          : constraints.maxWidth >= 380
+          ? 2
+          : 1;
+      final width =
+          (constraints.maxWidth - (columns - 1) * 10) / columns;
+      final cards = [
+        (
           label: 'Total',
           count: total,
-          colors: [AppColors.primaryDeep, AppColors.primaryDark],
           icon: Icons.groups_rounded,
         ),
-        const SizedBox(width: 10),
-        _buildStatCard(
+        (
           label: 'Active',
           count: active,
-          colors: [AppColors.primaryDeep, AppColors.primaryDark],
           icon: Icons.verified_user_rounded,
         ),
-        const SizedBox(width: 10),
-        _buildStatCard(
+        (
           label: 'Deactivated',
           count: pending,
-          colors: [AppColors.primaryDeep, AppColors.primaryDark],
           icon: Icons.pending_rounded,
         ),
-        const SizedBox(width: 10),
-        _buildStatCard(
+        (
           label: 'Inactive',
           count: deactivated,
-          colors: [AppColors.primaryDeep, AppColors.primaryDark],
           icon: Icons.block_rounded,
         ),
-      ],
-    );
-  }
+      ];
+      return Wrap(
+        spacing: 10,
+        runSpacing: 10,
+        children: [
+          for (final card in cards)
+            SizedBox(
+              width: width,
+              child: _buildStatCard(
+                label: card.label,
+                count: card.count,
+                colors: const [AppColors.primaryDeep, AppColors.primaryDark],
+                icon: card.icon,
+              ),
+            ),
+        ],
+      );
+    },
+  );
 
   Widget _buildStatCard({
     required String label,
@@ -719,16 +743,14 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
     required IconData icon,
     VoidCallback? onTap,
   }) {
-    return Expanded(
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(18),
-        child: _AnimatedCountCard(
-          label: label,
-          count: count,
-          colors: colors,
-          icon: icon,
-        ),
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(18),
+      child: _AnimatedCountCard(
+        label: label,
+        count: count,
+        colors: colors,
+        icon: icon,
       ),
     );
   }
@@ -1018,13 +1040,22 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
       if (reason == null) return;
     }
     try {
+      await BranchPermissions.require(
+        'adminAllowStaffManagement',
+        branchId: BranchSession.instance.branchId,
+      );
       await FirebaseFirestore.instance
           .collection('staff_requests')
           .doc(admin.id)
           .update({
             'status': newStatus,
-            'deactivationReason': ?reason,
-            if (reason != null) 'deactivatedAt': FieldValue.serverTimestamp(),
+            if (reason != null) ...{
+              'deactivationReason': reason,
+              'deactivatedAt': FieldValue.serverTimestamp(),
+            } else ...{
+              'deactivationReason': FieldValue.delete(),
+              'deactivatedAt': FieldValue.delete(),
+            },
           });
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1042,8 +1073,8 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Failed to update staff status.'),
+        SnackBar(
+          content: Text('Failed to update staff status: $e'),
           behavior: SnackBarBehavior.floating,
           backgroundColor: AppColors.primaryDark,
         ),
@@ -2139,6 +2170,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
     FirebaseApp? secondaryApp;
     UserCredential? createdCredential;
     try {
+      await BranchPermissions.require('adminAllowStaffManagement');
       final staffId = await _generateStaffId();
       secondaryApp = await Firebase.initializeApp(
         name: 'staffCreate${DateTime.now().microsecondsSinceEpoch}',
@@ -2175,6 +2207,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
             'createdAt': FieldValue.serverTimestamp(),
           });
 
+      await ActivityLog.record('account_created', 'Created cashier account $staffId', details: {'accountId': uid});
       await secondaryAuth.signOut();
       if (!mounted) return;
       _clearCreateStaffForm();

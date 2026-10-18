@@ -1,6 +1,8 @@
 import 'package:fake_cloud_firestore/fake_cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:sales_tracking/widgets/activity_feed.dart';
 import 'package:sales_tracking/widgets/transaction_settings_dialog.dart';
 
 void main() {
@@ -31,9 +33,9 @@ void main() {
 
     await tester.tap(find.byType(DropdownButtonFormField<String>));
     await tester.pumpAndSettle();
-    expect(find.text('All branches'), findsOneWidget);
+    expect(find.text('All branches'), findsNWidgets(2));
     expect(
-      tester.getTopLeft(find.text('All branches')).dy,
+      tester.getTopLeft(find.text('All branches').last).dy,
       lessThan(tester.getTopLeft(find.text('Alpha').last).dy),
     );
     await tester.tap(find.text('All branches').last);
@@ -41,10 +43,6 @@ void main() {
     await tester.tap(find.byType(Switch).first);
     await tester.pumpAndSettle();
 
-    expect(
-      find.textContaining('discount control updated successfully.'),
-      findsOneWidget,
-    );
     final settings = (await firestore.doc('admin_settings/transactions').get())
         .data()!;
     final branchSettings = settings['branchSettings'] as Map;
@@ -88,7 +86,7 @@ void main() {
 
     await tester.tap(find.byType(DropdownButtonFormField<String>));
     await tester.pumpAndSettle();
-    expect(find.text('All branches'), findsOneWidget);
+    expect(find.text('All branches'), findsNWidgets(2));
     await tester.tap(find.text('All branches').last);
     await tester.pumpAndSettle();
     await tester.tap(find.byTooltip('Edit'));
@@ -111,4 +109,120 @@ void main() {
     expect(find.text('All branches'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('admin tax configuration stays on the assigned branch', (
+    tester,
+  ) async {
+    final firestore = FakeFirebaseFirestore();
+    await firestore.collection('branches').doc('alpha').set({'name': 'Alpha'});
+    await firestore.collection('branches').doc('beta').set({'name': 'Beta'});
+    await firestore.doc('admin_settings/transactions').set({
+      'branchSettings': {
+        'alpha': {'taxEnabled': false, 'taxClassification': 'nonVat'},
+        'beta': {'taxEnabled': false, 'taxClassification': 'nonVat'},
+      },
+    });
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: TransactionSettingsDialog(
+            kind: 'tax',
+            branchId: 'alpha',
+            firestore: firestore,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byType(DropdownButtonFormField<String>), findsNothing);
+    expect(find.text('All branches'), findsNothing);
+    await tester.tap(find.byType(Switch));
+    await tester.pumpAndSettle();
+
+    final settings = (await firestore.doc('admin_settings/transactions').get())
+        .data()!;
+    final branches = settings['branchSettings'] as Map;
+    expect((branches['alpha'] as Map)['taxEnabled'], isTrue);
+    expect((branches['beta'] as Map)['taxEnabled'], isFalse);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'admin discount settings stay on the assigned branch and log changes',
+    (tester) async {
+      SharedPreferences.setMockInitialValues({
+        'lastRole': 'admin',
+        'lastUserId': 'admin-doc',
+      });
+      final firestore = FakeFirebaseFirestore();
+      await firestore.collection('branches').doc('alpha').set({
+        'name': 'Alpha',
+      });
+      await firestore.collection('branches').doc('beta').set({'name': 'Beta'});
+      await firestore.collection('staff_requests').doc('admin-doc').set({
+        'role': 'admin',
+        'status': 'accepted',
+        'adminId': 'ADM-002',
+        'firstName': 'Branch',
+        'lastName': 'Admin',
+      });
+      await firestore.doc('admin_settings/transactions').set({
+        'branchSettings': {
+          'alpha': {'discountsEnabled': true},
+          'beta': {'discountsEnabled': true},
+        },
+      });
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: TransactionSettingsDialog(
+              kind: 'discounts',
+              branchId: 'alpha',
+              firestore: firestore,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byType(DropdownButtonFormField<String>), findsNothing);
+      expect(find.text('All branches'), findsNothing);
+      await tester.tap(find.byType(Switch));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Confirm'));
+      await tester.pumpAndSettle();
+
+      final settings =
+          (await firestore.doc('admin_settings/transactions').get()).data()!;
+      final branches = settings['branchSettings'] as Map;
+      expect((branches['alpha'] as Map)['discountsEnabled'], isFalse);
+      expect((branches['beta'] as Map)['discountsEnabled'], isTrue);
+      final activity = (await firestore.collection('activity_logs').get()).docs;
+      expect(activity, hasLength(1));
+      expect(activity.single.data()['actorId'], 'admin-doc');
+      expect(activity.single.data()['branchIds'], ['alpha']);
+      expect(activity.single.data()['details']['fields'], ['discountsEnabled']);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: ActivityFeed(
+              actorId: 'admin-doc',
+              branchId: 'alpha',
+              database: firestore,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        find.textContaining('discount control updated successfully.'),
+        findsWidgets,
+      );
+      expect(find.textContaining('Updated: discountsEnabled'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
 }

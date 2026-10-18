@@ -29,7 +29,7 @@ class StaffMobileSalesLayout extends StatelessWidget {
               automaticallyImplyLeading: false,
               backgroundColor: AppColors.primary,
               foregroundColor: Colors.white,
-              expandedHeight: reviewing ? 56 : 94,
+              expandedHeight: 56,
               leading: reviewing
                   ? IconButton(
                       tooltip: 'Back to items',
@@ -51,18 +51,6 @@ class StaffMobileSalesLayout extends StatelessWidget {
                   icon: const Icon(Icons.menu_rounded),
                 ),
               ],
-              flexibleSpace: reviewing
-                  ? null
-                  : FlexibleSpaceBar(
-                      background: Container(
-                        alignment: Alignment.bottomLeft,
-                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-                        child: const Text(
-                          'Build and review staff orders',
-                          style: TextStyle(color: Colors.white70, fontSize: 12),
-                        ),
-                      ),
-                    ),
             ),
             SliverPadding(
               padding: const EdgeInsets.fromLTRB(12, 12, 12, 16),

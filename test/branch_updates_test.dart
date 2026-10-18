@@ -119,4 +119,40 @@ void main() {
     expect(find.text('Receipt 0'), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
   });
+  testWidgets('Recent sales only displays receipts from assigned branch', (
+    tester,
+  ) async {
+    final db = FakeFirebaseFirestore();
+    final today = Timestamp.fromDate(DateTime.now());
+    await db.collection('completed_sales').doc('dagupan').set({
+      'salesId': 'Dagupan receipt',
+      'branchId': 'dagupan',
+      'timestamp': today,
+      'items': [],
+      'total': 10,
+    });
+    await db.collection('completed_sales').doc('calasiao').set({
+      'salesId': 'Calasiao receipt',
+      'branchId': 'calasiao',
+      'timestamp': today,
+      'items': [],
+      'total': 20,
+    });
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: AdminRecentSales(firestore: db, branchId: 'dagupan'),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Dagupan receipt'), findsOneWidget);
+    expect(find.text('Calasiao receipt'), findsNothing);
+    expect(find.text('Today • ×1 receipts'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+  });
 }

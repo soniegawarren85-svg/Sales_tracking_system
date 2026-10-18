@@ -9,15 +9,43 @@ String _staffName(Map<String, dynamic> data) {
       .map((key) => '${data[key] ?? ''}')
       .where((value) => value.isNotEmpty)
       .join(' ');
-  return name.isEmpty ? '${data['staffId'] ?? 'Staff'}' : name;
+  return name.isEmpty
+      ? '${data['adminId'] ?? data['staffId'] ?? 'Staff'}'
+      : name;
+}
+
+String _assignmentRole(Map<String, dynamic> data) {
+  final role = '${data['role'] ?? ''}'.trim().toLowerCase();
+  if (role.isNotEmpty) return role;
+  if ('${data['adminId'] ?? ''}'.trim().isNotEmpty) return 'admin';
+  if ('${data['staffId'] ?? ''}'.trim().isNotEmpty) return 'staff';
+  return '';
+}
+
+bool _isActiveForAssignment(Map<String, dynamic> data, String role) {
+  final status = '${data['status'] ?? ''}'.trim().toLowerCase();
+  return data['isDeleted'] != true &&
+      data['isVoided'] != true &&
+      data['isDeactivated'] != true &&
+      data['isSuspended'] != true &&
+      (status == 'accepted' || (role == 'admin' && status.isEmpty));
 }
 
 String _staffKey(QueryDocumentSnapshot<Map<String, dynamic>> doc) =>
     '${doc.data()['uid'] ?? doc.data()['userId'] ?? doc.id}';
 
 class AdminStaffBranches extends StatelessWidget {
-  const AdminStaffBranches({super.key, this.firestore});
+  const AdminStaffBranches({
+    super.key,
+    this.firestore,
+    this.includeAdmins = false,
+    this.branchId,
+    this.allowAssignment = true,
+  });
   final FirebaseFirestore? firestore;
+  final bool includeAdmins;
+  final String? branchId;
+  final bool allowAssignment;
   @override
   Widget build(BuildContext context) {
     final db = firestore ?? FirebaseFirestore.instance;
@@ -34,7 +62,11 @@ class AdminStaffBranches extends StatelessWidget {
                 return const Center(child: CircularProgressIndicator());
               }
               final docs = branches.data!.docs
-                  .where((doc) => doc.data()['isVoided'] != true)
+                  .where(
+                    (doc) =>
+                        doc.data()['isVoided'] != true &&
+                        (branchId == null || doc.id == branchId),
+                  )
                   .toList();
               if (docs.isEmpty) {
                 return const Text(
@@ -52,13 +84,23 @@ class AdminStaffBranches extends StatelessWidget {
                         final ids = (data['staffIds'] as List? ?? [])
                             .map((id) => '$id')
                             .toSet();
-                        final members = staff.data!.docs
-                            .where(
-                              (member) =>
-                                  ids.contains(_staffKey(member)) &&
-                                  member.data()['status'] == 'accepted',
-                            )
-                            .toList();
+                        final members =
+                            staff.data!.docs
+                                .where(
+                                  (member) =>
+                                      ids.contains(_staffKey(member)) &&
+                                      member.data()['status'] == 'accepted' &&
+                                      (includeAdmins ||
+                                          _assignmentRole(member.data()) ==
+                                              'staff'),
+                                )
+                                .toList()
+                              ..sort(
+                                (a, b) => (a.data()['role'] == 'admin' ? 0 : 1)
+                                    .compareTo(
+                                      b.data()['role'] == 'admin' ? 0 : 1,
+                                    ),
+                              );
                         return SizedBox(
                           width: columns == 2
                               ? constraints.maxWidth / 2
@@ -79,6 +121,8 @@ class AdminStaffBranches extends StatelessWidget {
                                   height:
                                       MediaQuery.sizeOf(context).height * .65,
                                   child: _BranchStaffSheet(
+                                    includeAdmins: includeAdmins,
+                                    allowAssignment: allowAssignment,
                                     branch: doc.reference,
                                     firestore: db,
                                   ),
@@ -111,8 +155,21 @@ class AdminStaffBranches extends StatelessWidget {
                                                 message: _staffName(
                                                   member.data(),
                                                 ),
-                                                child: ProfileAvatar(
-                                                  data: member.data(),
+                                                child: Column(
+                                                  mainAxisSize:
+                                                      MainAxisSize.min,
+                                                  children: [
+                                                    ProfileAvatar(
+                                                      data: member.data(),
+                                                    ),
+                                                    if (includeAdmins)
+                                                      Text(
+                                                        member.data()['role'] ==
+                                                                'admin'
+                                                            ? 'Admin'
+                                                            : 'Cashier',
+                                                      ),
+                                                  ],
                                                 ),
                                               ),
                                             ),
@@ -153,17 +210,18 @@ class AdminStaffBranches extends StatelessWidget {
                                       ),
                                     ),
                                     const SizedBox(height: 8),
-                                    const Row(
-                                      children: [
-                                        Expanded(
-                                          child: Text('View & assign staff'),
-                                        ),
-                                        Icon(
-                                          Icons.arrow_forward,
-                                          color: AppColors.primary,
-                                        ),
-                                      ],
-                                    ),
+                                    if (allowAssignment)
+                                      const Row(
+                                        children: [
+                                          Expanded(
+                                            child: Text('View & assign staff'),
+                                          ),
+                                          Icon(
+                                            Icons.arrow_forward,
+                                            color: AppColors.primary,
+                                          ),
+                                        ],
+                                      ),
                                   ],
                                 ),
                               ),
@@ -182,7 +240,14 @@ class AdminStaffBranches extends StatelessWidget {
 }
 
 class _BranchStaffSheet extends StatefulWidget {
-  const _BranchStaffSheet({required this.branch, required this.firestore});
+  const _BranchStaffSheet({
+    required this.branch,
+    required this.firestore,
+    this.includeAdmins = false,
+    this.allowAssignment = true,
+  });
+  final bool includeAdmins;
+  final bool allowAssignment;
   final DocumentReference<Map<String, dynamic>> branch;
   final FirebaseFirestore firestore;
   @override
@@ -192,6 +257,7 @@ class _BranchStaffSheet extends StatefulWidget {
 class _BranchStaffSheetState extends State<_BranchStaffSheet> {
   bool _saving = false;
   String? _error;
+  String _selectedRole = 'staff';
 
   Future<void> _assign(
     QueryDocumentSnapshot<Map<String, dynamic>> staff,
@@ -215,7 +281,7 @@ class _BranchStaffSheetState extends State<_BranchStaffSheet> {
             .map((value) => '$value')
             .toList();
         if (assign &&
-            (data['status'] != 'accepted' ||
+            (!_isActiveForAssignment(data, _assignmentRole(data)) ||
                 branchIds.any((id) => id != widget.branch.id))) {
           throw StateError('Staff is inactive or assigned to another branch.');
         }
@@ -262,108 +328,153 @@ class _BranchStaffSheetState extends State<_BranchStaffSheet> {
   }
 
   @override
-  Widget build(BuildContext context) =>
-      StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-        stream: widget.branch.snapshots(),
-        builder: (context, branch) =>
-            StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-              stream: widget.firestore.collection('staff_requests').snapshots(),
-              builder: (context, snapshot) {
-                if (snapshot.hasError || branch.hasError) {
-                  return const Center(
-                    child: Text('Unable to load staff assignments.'),
-                  );
-                }
-                if (!snapshot.hasData || !branch.hasData) {
-                  return const Center(child: CircularProgressIndicator());
-                }
-                final ids = (branch.data!.data()?['staffIds'] as List? ?? [])
-                    .map((id) => '$id')
-                    .toSet();
-                final staff = snapshot.data!.docs
-                    .where(
-                      (doc) =>
-                          '${doc.data()['role']}'.toLowerCase() == 'staff' &&
-                          (doc.data()['status'] == 'accepted' ||
-                              ids.contains(_staffKey(doc))),
-                    )
-                    .where((doc) {
-                      if (ids.contains(_staffKey(doc))) return true;
-                      final branchIds = (doc.data()['branchIds'] as List? ?? [])
-                          .map((id) => '$id');
-                      return !branchIds.any((id) => id != widget.branch.id);
-                    })
-                    .toList();
-                staff.sort(
-                  (a, b) => (ids.contains(_staffKey(b)) ? 1 : 0).compareTo(
-                    ids.contains(_staffKey(a)) ? 1 : 0,
+  Widget build(
+    BuildContext context,
+  ) => StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+    stream: widget.branch.snapshots(),
+    builder: (context, branch) =>
+        StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+          stream: widget.firestore.collection('staff_requests').snapshots(),
+          builder: (context, snapshot) {
+            if (snapshot.hasError || branch.hasError) {
+              return const Center(
+                child: Text('Unable to load staff assignments.'),
+              );
+            }
+            if (!snapshot.hasData || !branch.hasData) {
+              return const Center(child: CircularProgressIndicator());
+            }
+            final ids = (branch.data!.data()?['staffIds'] as List? ?? [])
+                .map((id) => '$id')
+                .toSet();
+            final staff = snapshot.data!.docs
+                .where(
+                  (doc) =>
+                      _assignmentRole(doc.data()) ==
+                          (widget.includeAdmins ? _selectedRole : 'staff') &&
+                      (_isActiveForAssignment(
+                            doc.data(),
+                            _assignmentRole(doc.data()),
+                          ) ||
+                          ids.contains(_staffKey(doc))),
+                )
+                .where((doc) {
+                  if (!widget.allowAssignment &&
+                      !ids.contains(_staffKey(doc))) {
+                    return false;
+                  }
+                  if (ids.contains(_staffKey(doc))) return true;
+                  final branchIds = (doc.data()['branchIds'] as List? ?? [])
+                      .map((id) => '$id');
+                  return !branchIds.any((id) => id != widget.branch.id);
+                })
+                .toList();
+            staff.sort(
+              (a, b) => (ids.contains(_staffKey(b)) ? 1 : 0).compareTo(
+                ids.contains(_staffKey(a)) ? 1 : 0,
+              ),
+            );
+            return Column(
+              children: [
+                ListTile(
+                  title: Text(
+                    'Staff in ${branch.data!.data()?['name'] ?? 'Branch'}',
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 20,
+                    ),
                   ),
-                );
-                return Column(
-                  children: [
-                    ListTile(
-                      title: Text(
-                        'Staff in ${branch.data!.data()?['name'] ?? 'Branch'}',
-                        style: const TextStyle(
-                          fontWeight: FontWeight.bold,
-                          fontSize: 20,
-                        ),
-                      ),
-                      subtitle: const Text(
-                        'Assigned staff and available accounts',
-                      ),
-                      trailing: IconButton(
-                        tooltip: 'Close',
-                        onPressed: () => Navigator.pop(context),
-                        icon: const Icon(Icons.close),
-                      ),
+                  subtitle: Text(
+                    widget.allowAssignment
+                        ? 'Assigned staff and available accounts'
+                        : 'Staff assigned to this branch',
+                  ),
+                  trailing: IconButton(
+                    tooltip: 'Close',
+                    onPressed: () => Navigator.pop(context),
+                    icon: const Icon(Icons.close),
+                  ),
+                ),
+                if (_saving) const LinearProgressIndicator(),
+                if (_error != null)
+                  Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Text(
+                      _error!,
+                      style: const TextStyle(color: Colors.red),
                     ),
-                    if (_saving) const LinearProgressIndicator(),
-                    if (_error != null)
-                      Padding(
-                        padding: const EdgeInsets.all(12),
-                        child: Text(
-                          _error!,
-                          style: const TextStyle(color: Colors.red),
+                  ),
+                if (widget.includeAdmins)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+                    child: DropdownButtonFormField<String>(
+                      initialValue: _selectedRole,
+                      decoration: const InputDecoration(
+                        labelText: 'Select role to assign',
+                        border: OutlineInputBorder(),
+                      ),
+                      items: const [
+                        DropdownMenuItem(
+                          value: 'staff',
+                          child: Text('Staff / Cashier'),
                         ),
-                      ),
-                    Expanded(
-                      child: ListView(
-                        children: [
-                          if (staff.isEmpty)
-                            const ListTile(
-                              title: Text('No available staff accounts.'),
-                            ),
-                          ...staff.map((doc) {
-                            final data = doc.data();
-                            final assigned = ids.contains(_staffKey(doc));
-                            final elsewhere = (data['branchIds'] as List? ?? [])
-                                .any((id) => id != widget.branch.id);
-                            return CheckboxListTile(
-                              value: assigned,
-                              secondary: ProfileAvatar(data: data),
-                              title: Text(_staffName(data)),
-                              subtitle: Text(
-                                assigned
-                                    ? (data['status'] == 'accepted'
-                                          ? 'Assigned to this branch'
-                                          : 'Deactivated')
-                                    : elsewhere
-                                    ? 'Assigned to another branch'
-                                    : 'Available to assign',
-                              ),
-                              activeColor: AppColors.primary,
-                              onChanged: _saving || (!assigned && elsewhere)
-                                  ? null
-                                  : (value) => _assign(doc, value == true),
-                            );
-                          }),
-                        ],
-                      ),
+                        DropdownMenuItem(value: 'admin', child: Text('Admin')),
+                      ],
+                      onChanged: _saving
+                          ? null
+                          : (role) {
+                              if (role != null) {
+                                setState(() => _selectedRole = role);
+                              }
+                            },
                     ),
-                  ],
-                );
-              },
-            ),
-      );
+                  ),
+                Expanded(
+                  child: ListView(
+                    children: [
+                      if (staff.isEmpty)
+                        const ListTile(
+                          title: Text('No available accounts for this role.'),
+                        ),
+                      ...staff.map((doc) {
+                        final data = doc.data();
+                        final assigned = ids.contains(_staffKey(doc));
+                        final elsewhere = (data['branchIds'] as List? ?? [])
+                            .any((id) => id != widget.branch.id);
+                        final title = Text(
+                          '${_staffName(data)}${widget.includeAdmins ? ' • ${_assignmentRole(data) == 'admin' ? 'Admin' : 'Cashier'}' : ''}',
+                        );
+                        if (!widget.allowAssignment) {
+                          return ListTile(
+                            leading: ProfileAvatar(data: data),
+                            title: title,
+                          );
+                        }
+                        return CheckboxListTile(
+                          value: assigned,
+                          secondary: ProfileAvatar(data: data),
+                          title: title,
+                          subtitle: Text(
+                            assigned
+                                ? (data['status'] == 'accepted'
+                                      ? 'Assigned to this branch'
+                                      : 'Deactivated')
+                                : elsewhere
+                                ? 'Assigned to another branch'
+                                : 'Available to assign',
+                          ),
+                          activeColor: AppColors.primary,
+                          onChanged: _saving || (!assigned && elsewhere)
+                              ? null
+                              : (value) => _assign(doc, value == true),
+                        );
+                      }),
+                    ],
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
+  );
 }

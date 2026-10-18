@@ -19,8 +19,15 @@ import '../theme/app_colors.dart';
 import 'inventory_records_table.dart';
 
 class DailySalesReport extends StatefulWidget {
-  const DailySalesReport({super.key, this.data});
+  const DailySalesReport({
+    super.key,
+    this.data,
+    this.branchId,
+    this.branchName,
+  });
   final Stream<BranchReportData>? data;
+  final String? branchId;
+  final String? branchName;
   @override
   State<DailySalesReport> createState() => _DailySalesReportState();
 }
@@ -128,7 +135,12 @@ class _DailySalesReportState extends State<DailySalesReport> {
                       .toList(),
                 ),
                 pw.SizedBox(height: 16),
-                pw.Header(level: 1, text: 'Branch sales comparison'),
+                pw.Header(
+                  level: 1,
+                  text: widget.branchId == null
+                      ? 'Branch sales comparison'
+                      : 'Branch sales',
+                ),
                 ...branches.entries.map(
                   (e) => pw.Padding(
                     padding: const pw.EdgeInsets.symmetric(vertical: 4),
@@ -180,9 +192,13 @@ class _DailySalesReportState extends State<DailySalesReport> {
     appBar: AppBar(
       backgroundColor: AppColors.primaryDeep,
       foregroundColor: Colors.white,
-      title: const Text(
-        'Sales Reports',
-        style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+      title: Text(
+        widget.branchName == null
+            ? 'Sales Reports'
+            : 'Sales Reports · ${widget.branchName}',
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
       ),
     ),
     body: StreamBuilder<BranchReportData>(
@@ -199,7 +215,7 @@ class _DailySalesReportState extends State<DailySalesReport> {
         final data = snapshot.data!;
         final start = range.$1, end = range.$2;
         final sales = data
-            .sales(null, start, end)
+            .sales(widget.branchId, start, end)
             .where(
               (s) =>
                   !reportRefund(s) &&
@@ -232,19 +248,22 @@ class _DailySalesReportState extends State<DailySalesReport> {
                 (n, i) => n + reportValue(i['quantity']),
               ),
         );
-        final cashByOwner = configuredReportCash(
-          data,
-          start,
-          end,
-          DateTime.now(),
-        );
+        final cashByOwner =
+            configuredReportCash(data, start, end, DateTime.now())..removeWhere(
+              (branch, _) =>
+                  widget.branchId != null && branch != widget.branchId,
+            );
         final cash = cashByOwner.values.fold<double>(
           0,
           (sum, value) => sum + value,
         );
         final branches = {
           for (final b in data.rows('branches'))
-            '${b['_id']}': '${b['name'] ?? b['branchName'] ?? b['_id']}',
+            if (widget.branchId == null || b['_id'] == widget.branchId)
+              '${b['_id']}': '${b['name'] ?? b['branchName'] ?? b['_id']}',
+          if (widget.branchId != null &&
+              !data.rows('branches').any((b) => b['_id'] == widget.branchId))
+            widget.branchId!: widget.branchName ?? 'Assigned branch',
         };
         final chart = {
           for (final b in branches.entries)
@@ -256,7 +275,12 @@ class _DailySalesReportState extends State<DailySalesReport> {
         for (final allocation
             in data
                 .rows('staff_inventory')
-                .where((r) => r['isDeleted'] != true)) {
+                .where(
+                  (r) =>
+                      r['isDeleted'] != true &&
+                      (widget.branchId == null ||
+                          (r['branchId'] ?? r['staffId']) == widget.branchId),
+                )) {
           final branch = '${allocation['branchId'] ?? allocation['staffId']}';
           final entries =
               allocation['isBundle'] == true || allocation['isCoffee'] == true
@@ -293,7 +317,12 @@ class _DailySalesReportState extends State<DailySalesReport> {
             });
           }
         }
-        final current = currentReportAllocations(data, DateTime.now());
+        final current = currentReportAllocations(data, DateTime.now())
+            .where(
+              (row) =>
+                  widget.branchId == null || row['branchId'] == widget.branchId,
+            )
+            .toList();
         final allocated = current.fold<double>(
           0,
           (sum, row) => sum + reportValue(row['quantity']),
@@ -441,14 +470,16 @@ class _DailySalesReportState extends State<DailySalesReport> {
                               ),
                               const SizedBox(height: 12),
                               InventoryRecordsTable(
-                                headings: const [
+                                headings: [
                                   'ID',
                                   'Item',
-                                  'Branch',
+                                  if (widget.branchId == null) 'Branch',
                                   'Type',
                                   'Remaining',
                                 ],
-                                flex: const {0: 1, 1: 2, 2: 1.5, 3: 1, 4: 1},
+                                flex: widget.branchId == null
+                                    ? const {0: 1, 1: 2, 2: 1.5, 3: 1, 4: 1}
+                                    : const {0: 1, 1: 2, 2: 1, 3: 1},
                                 rows: current
                                     .where(
                                       (r) =>
@@ -461,7 +492,8 @@ class _DailySalesReportState extends State<DailySalesReport> {
                                           [
                                                 'id',
                                                 'name',
-                                                'branch',
+                                                if (widget.branchId == null)
+                                                  'branch',
                                                 'type',
                                                 'remaining',
                                               ]
@@ -474,7 +506,7 @@ class _DailySalesReportState extends State<DailySalesReport> {
                                 const Text('No current allocations.'),
                             ] else if (selectedDetail == 'Cash allocated') ...[
                               const Text(
-                                'Opening cash and additions for each day in the selected period.',
+                                'Configured cash fund per branch as of the end of the period. Daily reuse is counted once.',
                               ),
                               ...branches.entries.map(
                                 (b) => ListTile(
@@ -486,20 +518,22 @@ class _DailySalesReportState extends State<DailySalesReport> {
                               ),
                             ] else if (selectedDetail == 'Total sold items')
                               InventoryRecordsTable(
-                                headings: const [
+                                headings: [
                                   'ID',
                                   'Item',
-                                  'Branch',
+                                  if (widget.branchId == null) 'Branch',
                                   'Sold',
                                 ],
-                                flex: const {0: 1, 1: 2, 2: 1.5, 3: 1},
+                                flex: widget.branchId == null
+                                    ? const {0: 1, 1: 2, 2: 1.5, 3: 1}
+                                    : const {0: 1, 1: 2, 2: 1},
                                 rows: allRows
                                     .where((r) => reportValue(r['sold']) > 0)
                                     .map(
                                       (r) => [
                                         'id',
                                         'name',
-                                        'branch',
+                                        if (widget.branchId == null) 'branch',
                                         'sold',
                                       ].map((k) => Text('${r[k]}')).toList(),
                                     )
@@ -507,22 +541,24 @@ class _DailySalesReportState extends State<DailySalesReport> {
                               )
                             else ...[
                               InventoryRecordsTable(
-                                headings: const [
+                                headings: [
                                   'Receipt',
                                   'Date',
-                                  'Branch',
+                                  if (widget.branchId == null) 'Branch',
                                   'Payment',
                                   'Total',
                                   'Details',
                                 ],
-                                flex: const {
-                                  0: 2,
-                                  1: 1.6,
-                                  2: 1.2,
-                                  3: 1,
-                                  4: 1,
-                                  5: 1,
-                                },
+                                flex: widget.branchId == null
+                                    ? const {
+                                        0: 2,
+                                        1: 1.6,
+                                        2: 1.2,
+                                        3: 1,
+                                        4: 1,
+                                        5: 1,
+                                      }
+                                    : const {0: 2, 1: 1.6, 2: 1, 3: 1, 4: 1},
                                 rows: sales
                                     .map(
                                       (sale) => <Widget>[
@@ -532,10 +568,11 @@ class _DailySalesReportState extends State<DailySalesReport> {
                                         Text(
                                           reportDateLabel(sale['timestamp']),
                                         ),
-                                        Text(
-                                          branches['${sale['branchId']}'] ??
-                                              '${sale['branchId'] ?? 'Unassigned'}',
-                                        ),
+                                        if (widget.branchId == null)
+                                          Text(
+                                            branches['${sale['branchId']}'] ??
+                                                '${sale['branchId'] ?? 'Unassigned'}',
+                                          ),
                                         Text(
                                           '${sale['paymentMode'] ?? 'Cash'}',
                                         ),
@@ -579,7 +616,7 @@ class _DailySalesReportState extends State<DailySalesReport> {
                       scrollDirection: Axis.horizontal,
                       child: Row(
                         spacing: 8,
-                        children: ['Day', 'Week', 'Month', 'Year', 'Custom']
+                        children: ['Day', 'Week', 'Month', 'Year']
                             .map(
                               (p) => ChoiceChip(
                                 label: Text(p),
@@ -600,25 +637,13 @@ class _DailySalesReportState extends State<DailySalesReport> {
                   TextButton.icon(
                     icon: const Icon(Icons.calendar_month),
                     label: Text(
-                      period == 'Custom' && customRange != null
-                          ? '${MaterialLocalizations.of(context).formatShortDate(customRange!.start)} ? ${MaterialLocalizations.of(context).formatShortDate(customRange!.end)}'
+                      customRange != null
+                          ? '${MaterialLocalizations.of(context).formatShortDate(customRange!.start)} – ${MaterialLocalizations.of(context).formatShortDate(customRange!.end)}'
                           : MaterialLocalizations.of(
                               context,
                             ).formatMediumDate(day),
                     ),
-                    onPressed: () async {
-                      if (period == 'Custom') {
-                        await pickRange();
-                        return;
-                      }
-                      final selected = await showDatePicker(
-                        context: context,
-                        initialDate: day,
-                        firstDate: DateTime(2020),
-                        lastDate: DateTime.now(),
-                      );
-                      if (selected != null) setState(() => day = selected);
-                    },
+                    onPressed: pickRange,
                   ),
                 ],
               ),
@@ -635,6 +660,7 @@ class _DailySalesReportState extends State<DailySalesReport> {
                     start: start,
                     end: end,
                     period: period,
+                    branchId: widget.branchId,
                   ),
                   const SizedBox(height: 12),
                   ReportSalesTimeline(
@@ -642,6 +668,7 @@ class _DailySalesReportState extends State<DailySalesReport> {
                     start: start,
                     end: end,
                     period: period,
+                    branchId: widget.branchId,
                   ),
                   const SizedBox(height: 20),
                   Align(
@@ -660,6 +687,7 @@ class _DailySalesReportState extends State<DailySalesReport> {
                                       data,
                                       start,
                                       end,
+                                      branchId: widget.branchId,
                                     );
                                     final filename =
                                         'sales-report-${start.year}-${start.month}-${start.day}.csv';

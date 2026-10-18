@@ -24,6 +24,13 @@ List<Map<String, dynamic>> completedReceipts(
     )
     .toList();
 
+List<Map<String, dynamic>> salesForBranch(
+  Iterable<Map<String, dynamic>> sales,
+  String? branchId,
+) => sales
+    .where((sale) => branchId == null || sale['branchId'] == branchId)
+    .toList();
+
 List<Map<String, dynamic>> salesForDay(
   Iterable<Map<String, dynamic>> sales,
   DateTime day,
@@ -44,10 +51,12 @@ class AdminSalesOverview extends StatefulWidget {
     this.branches = false,
     this.todayOnly = false,
     this.selectedDate,
+    this.branchId,
   });
   final bool branches;
   final bool todayOnly;
   final DateTime? selectedDate;
+  final String? branchId;
 
   @override
   State<AdminSalesOverview> createState() => _AdminSalesOverviewState();
@@ -146,17 +155,17 @@ class _AdminSalesOverviewState extends State<AdminSalesOverview> {
         return const Center(child: ScreenLoadingIndicator());
       }
       final records = snapshot.data!.docs.map((doc) => doc.data());
-      final sales =
-          completedReceipts(
+      final branchSales = salesForBranch(
+        completedReceipts(
                 (widget.todayOnly || widget.selectedDate != null)
                     ? salesForDay(records, _day)
                     : records,
-              )
-              .where(
-                (sale) =>
-                    branchIds == null || branchIds.contains(sale['branchId']),
-              )
-              .toList();
+              ).where(
+          (sale) => branchIds == null || branchIds.contains(sale['branchId']),
+        ),
+        widget.branchId,
+      );
+      final sales = branchSales;
       final amount = sales.fold<double>(
         0,
         (sum, sale) => sum + saleNumber(sale['total']),
@@ -181,7 +190,7 @@ class _AdminSalesOverviewState extends State<AdminSalesOverview> {
           'Total profit',
           report == null
               ? 'Loading…'
-              : '₱${report.profitForSales(records.where((r) => branchIds == null || branchIds.contains(r['branchId']))).toStringAsFixed(2)}',
+              : '₱${report.profitForSales(salesForBranch(records.where((r) => branchIds == null || branchIds.contains(r['branchId'])), widget.branchId)).toStringAsFixed(2)}',
           Icons.trending_up,
         ),
       ];

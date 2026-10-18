@@ -5,6 +5,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:image_picker/image_picker.dart';
 import '../services/transaction_settings.dart';
 import '../services/catalog_image_service.dart';
+import '../services/activity_log.dart';
 
 Future<bool> confirmSetting(BuildContext context, String message) async =>
     await showDialog<bool>(
@@ -38,9 +39,13 @@ class TransactionSettingsDialog extends StatefulWidget {
     super.key,
     required this.kind,
     this.firestore,
+    this.separateRoles = false,
+    this.branchId,
   });
   final FirebaseFirestore? firestore;
   final String kind;
+  final bool separateRoles;
+  final String? branchId;
   @override
   State<TransactionSettingsDialog> createState() =>
       _TransactionSettingsDialogState();
@@ -57,10 +62,21 @@ class _TransactionSettingsDialogState extends State<TransactionSettingsDialog> {
   }
 
   bool voided = false, busy = false;
-  String? selectedBranchId;
+  late String? selectedBranchId;
   late final reference = (widget.firestore ?? FirebaseFirestore.instance)
       .collection('admin_settings')
       .doc('transactions');
+
+  @override
+  void initState() {
+    super.initState();
+    selectedBranchId = widget.branchId ?? allBranchesSelection;
+  }
+
+  bool get _isBranchScoped =>
+      widget.branchId != null &&
+      ['discounts', 'payments', 'permissions', 'tax'].contains(widget.kind);
+
   void notify(String text) =>
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
   Future<void> save(
@@ -114,11 +130,19 @@ class _TransactionSettingsDialogState extends State<TransactionSettingsDialog> {
 
       await reference.set({
         'branchSettings': {
-          for (final branchId in branchIds)
-            branchId: patchForBranch(branchId),
+          for (final branchId in branchIds) branchId: patchForBranch(branchId),
         },
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
+      for (final branchId in branchIds) {
+        await ActivityLog.record(
+          'settings_updated',
+          message,
+          database: reference.firestore,
+          branchId: branchId,
+          details: {'kind': widget.kind, 'fields': patch.keys.toList()},
+        );
+      }
       if (mounted) notify(message);
     } catch (e) {
       if (mounted) notify('Unable to save: $e');
@@ -316,9 +340,9 @@ class _TransactionSettingsDialogState extends State<TransactionSettingsDialog> {
 
   Widget _branchDropdown(
     List<QueryDocumentSnapshot<Map<String, dynamic>>> branches,
-    String branchId,
-    {bool includeAll = false}
-  ) => DropdownButtonFormField<String>(
+    String branchId, {
+    bool includeAll = false,
+  }) => DropdownButtonFormField<String>(
     initialValue: branchId,
     decoration: const InputDecoration(
       labelText: 'Branch',
@@ -349,10 +373,11 @@ class _TransactionSettingsDialogState extends State<TransactionSettingsDialog> {
   );
 
   bool get _hasAllBranches =>
-      widget.kind == 'permissions' ||
-      widget.kind == 'tax' ||
-      widget.kind == 'discounts' ||
-      widget.kind == 'payments';
+      !_isBranchScoped &&
+      (widget.kind == 'permissions' ||
+          widget.kind == 'tax' ||
+          widget.kind == 'discounts' ||
+          widget.kind == 'payments');
 
   @override
   Widget build(BuildContext context) => AlertDialog(
@@ -389,10 +414,15 @@ class _TransactionSettingsDialogState extends State<TransactionSettingsDialog> {
           if (branches.isEmpty) {
             return const Text('Create a branch before configuring settings.');
           }
+          if (_isBranchScoped &&
+              !branches.any((branch) => branch.id == widget.branchId)) {
+            return const Text('The assigned branch is unavailable.');
+          }
           final isAllBranches =
-              _hasAllBranches &&
-              selectedBranchId == allBranchesSelection;
-          final branchId = isAllBranches
+              _hasAllBranches && selectedBranchId == allBranchesSelection;
+          final branchId = _isBranchScoped
+              ? widget.branchId!
+              : isAllBranches
               ? branches.first.id
               : branches.any((branch) => branch.id == selectedBranchId)
               ? selectedBranchId!
@@ -417,10 +447,7 @@ class _TransactionSettingsDialogState extends State<TransactionSettingsDialog> {
               final data = settingsForBranch(rawSettings, branchId);
               if (widget.kind == 'tax') {
                 final branchTaxSettings = branches
-                    .map(
-                      (branch) =>
-                          settingsForBranch(rawSettings, branch.id),
-                    )
+                    .map((branch) => settingsForBranch(rawSettings, branch.id))
                     .toList();
                 final taxEnabled = isAllBranches
                     ? branchTaxSettings.every(
@@ -430,8 +457,7 @@ class _TransactionSettingsDialogState extends State<TransactionSettingsDialog> {
                 final classifications = branchTaxSettings
                     .map(
                       (settings) =>
-                          settings['taxClassification']?.toString() ??
-                          'nonVat',
+                          settings['taxClassification']?.toString() ?? 'nonVat',
                     )
                     .toSet();
                 final taxClassification = isAllBranches
@@ -446,22 +472,21 @@ class _TransactionSettingsDialogState extends State<TransactionSettingsDialog> {
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      _branchDropdown(
-                        branches,
-                        isAllBranches ? allBranchesSelection : branchId,
-                        includeAll: true,
-                      ),
+                      if (!_isBranchScoped)
+                        _branchDropdown(
+                          branches,
+                          isAllBranches ? allBranchesSelection : branchId,
+                          includeAll: true,
+                        ),
                       const SizedBox(height: 8),
                       SwitchListTile(
                         title: const Text('Enable tax'),
                         value: taxEnabled,
                         onChanged: busy
                             ? null
-                            : (value) => saveBranches(
-                                targetBranches,
-                                {'taxEnabled': value},
-                                'Tax setting updated for $branchName.',
-                              ),
+                            : (value) => saveBranches(targetBranches, {
+                                'taxEnabled': value,
+                              }, 'Tax setting updated for $branchName.'),
                       ),
                       const Align(
                         alignment: Alignment.centerLeft,
@@ -515,44 +540,87 @@ class _TransactionSettingsDialogState extends State<TransactionSettingsDialog> {
                 );
               }
               if (widget.kind == 'permissions') {
-                return Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    _branchDropdown(
-                      branches,
-                      isAllBranches ? allBranchesSelection : branchId,
-                      includeAll: true,
-                    ),
-                    const SizedBox(height: 8),
-                    ...staffPermissions.entries.map(
-                      (entry) => SwitchListTile(
-                        title: Text(entry.value),
-                        value: isAllBranches
-                            ? branches.every(
-                                (branch) =>
-                                    settingsForBranch(
-                                      rawSettings,
-                                      branch.id,
-                                    )[entry.key] !=
-                                    false,
+                return SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (!_isBranchScoped)
+                        _branchDropdown(
+                          branches,
+                          isAllBranches ? allBranchesSelection : branchId,
+                          includeAll: true,
+                        ),
+                      const SizedBox(height: 8),
+                      if (widget.separateRoles)
+                        ExpansionTile(
+                          title: const Text('Admin permissions'),
+                          children: adminPermissions.entries
+                              .map(
+                                (entry) => SwitchListTile(
+                                  title: Text(entry.value),
+                                  value: isAllBranches
+                                      ? branches.every(
+                                          (branch) =>
+                                              settingsForBranch(
+                                                rawSettings,
+                                                branch.id,
+                                              )[entry.key] !=
+                                              false,
+                                        )
+                                      : data[entry.key] != false,
+                                  onChanged: busy
+                                      ? null
+                                      : (value) => saveBranches(
+                                          isAllBranches
+                                              ? branches
+                                                    .map((b) => b.id)
+                                                    .toList()
+                                              : [branchId],
+                                          {entry.key: value},
+                                          'Admin permission updated.',
+                                        ),
+                                ),
                               )
-                            : data[entry.key] != false,
-                        onChanged: busy
-                            ? null
-                            : (value) => isAllBranches
-                            ? saveBranches(
-                                branches.map((branch) => branch.id).toList(),
-                                {entry.key: value},
-                                'Permission updated for all branches.',
-                              )
-                            : save(
-                                branchId,
-                                {entry.key: value},
-                                '$branchName permission updated successfully.',
+                              .toList(),
+                        ),
+                      ExpansionTile(
+                        initiallyExpanded: !widget.separateRoles,
+                        title: const Text('Cashier permissions'),
+                        children: staffPermissions.entries
+                            .map(
+                              (entry) => SwitchListTile(
+                                title: Text(entry.value),
+                                value: isAllBranches
+                                    ? branches.every(
+                                        (branch) =>
+                                            settingsForBranch(
+                                              rawSettings,
+                                              branch.id,
+                                            )[entry.key] !=
+                                            false,
+                                      )
+                                    : data[entry.key] != false,
+                                onChanged: busy
+                                    ? null
+                                    : (value) => isAllBranches
+                                          ? saveBranches(
+                                              branches
+                                                  .map((branch) => branch.id)
+                                                  .toList(),
+                                              {entry.key: value},
+                                              'Permission updated for all branches.',
+                                            )
+                                          : save(
+                                              branchId,
+                                              {entry.key: value},
+                                              '$branchName permission updated successfully.',
+                                            ),
                               ),
+                            )
+                            .toList(),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 );
               }
               final rows = settingRows(data, widget.kind);
@@ -562,7 +630,10 @@ class _TransactionSettingsDialogState extends State<TransactionSettingsDialog> {
               final discountsEnabled = isAllBranches
                   ? branches.every(
                       (branch) =>
-                          settingsForBranch(rawSettings, branch.id)['discountsEnabled'] !=
+                          settingsForBranch(
+                            rawSettings,
+                            branch.id,
+                          )['discountsEnabled'] !=
                           false,
                     )
                   : data['discountsEnabled'] != false;
@@ -570,11 +641,12 @@ class _TransactionSettingsDialogState extends State<TransactionSettingsDialog> {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    _branchDropdown(
-                      branches,
-                      isAllBranches ? allBranchesSelection : branchId,
-                      includeAll: true,
-                    ),
+                    if (!_isBranchScoped)
+                      _branchDropdown(
+                        branches,
+                        isAllBranches ? allBranchesSelection : branchId,
+                        includeAll: true,
+                      ),
                     const SizedBox(height: 8),
                     if (widget.kind == 'discounts')
                       SwitchListTile(

@@ -13,6 +13,9 @@ import 'services/inventory_service.dart';
 import 'services/offline_login.dart';
 import 'bones/bottom_nav.dart';
 import 'Admin_pages/Admin/Dashboard.dart';
+import 'Super_admin_pages/Dashboard.dart';
+import 'services/super_admin.dart';
+import 'services/login_validation.dart';
 import 'widgets/network_status_banner.dart';
 
 void main() async {
@@ -61,8 +64,30 @@ class _SessionGateState extends State<SessionGate> {
 
   Future<Widget> _resolveStartPage() async {
     final prefs = await SharedPreferences.getInstance();
+    await SuperAdmin.migrateLegacySession(prefs);
+    if (SuperAdmin.isSession(prefs)) return const SuperAdminDashboard();
+    if (prefs.getString('lastRole') == SuperAdmin.role) {
+      await prefs.remove('lastRole');
+      await prefs.remove('lastUserId');
+      await prefs.remove('superAdminId');
+      return const LoginScreen();
+    }
     final lastRole = prefs.getString('lastRole')?.trim().toLowerCase();
     final savedUserId = prefs.getString('lastUserId') ?? '';
+    if (savedUserId.isNotEmpty && savedUserId != 'emergency-admin') {
+      try {
+        final profile = await FirebaseFirestore.instance.collection('staff_requests').doc(savedUserId).get();
+        if (profile.exists && loginAccountStatusError(profile.data()!) != null) {
+          await FirebaseAuth.instance.signOut();
+          for (final key in ['lastRole', 'lastUserId', 'lastStaffDocId', 'lastStaffPublicId', 'adminId']) {
+            await prefs.remove(key);
+          }
+          return const LoginScreen();
+        }
+      } catch (_) {
+        // Offline login uses the synchronized account snapshot.
+      }
+    }
     final savedPublicId = prefs.getString('lastStaffPublicId') ?? '';
     final hasOfflineSession = lastRole == 'admin' || lastRole == 'staff';
     final user = FirebaseAuth.instance.currentUser;

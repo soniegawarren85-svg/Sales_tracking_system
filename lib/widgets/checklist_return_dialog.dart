@@ -5,7 +5,7 @@ import '../services/public_item_id.dart';
 import '../theme/app_colors.dart';
 import 'return_batch_cards.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
+import '../services/session_actor.dart';
 import 'package:flutter/material.dart';
 import '../services/allocation_checklist_service.dart';
 
@@ -35,7 +35,8 @@ class _ChecklistReturnDialogState extends State<ChecklistReturnDialog> {
   bool loading = true, saving = false;
   String? batchId;
   List<Map<String, dynamic>>? pendingItems;
-  String actorName = '', actorPublicId = '';
+  String actorName = '',
+      actorPublicId = '';
   final profiles = <String, Map<String, dynamic>>{};
 
   @override
@@ -50,8 +51,8 @@ class _ChecklistReturnDialogState extends State<ChecklistReturnDialog> {
       error = '';
     });
     try {
-      final user = FirebaseAuth.instance.currentUser;
-      if (user == null) throw StateError('Please sign in again.');
+      final user = await resolveBranchInventoryActor(widget.db);
+
       final ids = widget.scopeIds.toSet().toList();
       final snapshots = <QueryDocumentSnapshot<Map<String, dynamic>>>[];
       for (var offset = 0; offset < ids.length; offset += 30) {
@@ -66,15 +67,15 @@ class _ChecklistReturnDialogState extends State<ChecklistReturnDialog> {
       final records = await Future.wait([
         widget.db
             .collection('completed_sales')
-            .where('userId', isEqualTo: user.uid)
+            .where('userId', isEqualTo: user.id)
             .get(),
         widget.db
             .collection('stock_adjustments')
-            .where('userId', isEqualTo: user.uid)
+            .where('userId', isEqualTo: user.id)
             .get(),
         widget.db
             .collection('stock_adjustments')
-            .where('staffId', isEqualTo: user.uid)
+            .where('staffId', isEqualTo: user.id)
             .get(),
       ]);
       final choices = <Map<String, dynamic>>[];
@@ -109,7 +110,7 @@ class _ChecklistReturnDialogState extends State<ChecklistReturnDialog> {
         }
       }
       final staffUids = {
-        user.uid,
+        user.id,
         ...refunds.values.map((doc) => '${doc.data()['userId'] ?? ''}'),
         ...reductions.values.map(
           (doc) => '${doc.data()['userId'] ?? doc.data()['staffId'] ?? ''}',
@@ -146,12 +147,11 @@ class _ChecklistReturnDialogState extends State<ChecklistReturnDialog> {
           };
         }),
       );
-      actorName = returnText([
-        profiles[user.uid]?['name'],
-        user.displayName,
-        user.email,
-      ], 'Staff');
-      actorPublicId = '${profiles[user.uid]?['staffId'] ?? 'Not recorded'}';
+      actorName = returnText([profiles[user.id]?['name'], user.name], 'Staff');
+      actorPublicId = returnText([
+        user.publicId,
+        profiles[user.id]?['staffId'],
+      ]);
       final branchNames = <String, String>{};
       for (final id in ids) {
         final data = (await widget.db.collection('branches').doc(id).get())
@@ -171,7 +171,7 @@ class _ChecklistReturnDialogState extends State<ChecklistReturnDialog> {
         if (count <= 0 || data['isDeleted'] == true) return;
         final branchId =
             data['branchId'] ??
-            (ids.contains(data['staffId']) && data['staffId'] != user.uid
+            (ids.contains(data['staffId']) && data['staffId'] != user.id
                 ? data['staffId']
                 : null) ??
             (collection == 'staff_inventory'
@@ -228,13 +228,13 @@ class _ChecklistReturnDialogState extends State<ChecklistReturnDialog> {
           'isAddon': item['isAddon'] == true || resolved['isAddon'] == true,
           'staffName': returnText(
             [profile?['name'], data['staffName'], data['staffFullName']],
-            (data['userId'] ?? data['staffId']) == user.uid
+            (data['userId'] ?? data['staffId']) == user.id
                 ? actorName
                 : 'Not recorded',
           ),
           'staffPublicId': returnText(
             [data['staffPublicId'], profile?['staffId']],
-            (data['userId'] ?? data['staffId']) == user.uid
+            (data['userId'] ?? data['staffId']) == user.id
                 ? actorPublicId
                 : 'Not recorded',
           ),
@@ -363,7 +363,7 @@ class _ChecklistReturnDialogState extends State<ChecklistReturnDialog> {
           ),
         ),
         content: Text(
-          'Return these ${items.length} refund/reduce records to the admin with their quantities and reasons?',
+          'Return these ${items.length} refund/reduce records to the super admin with their quantities and reasons?',
         ),
         actions: [
           TextButton(
@@ -388,13 +388,13 @@ class _ChecklistReturnDialogState extends State<ChecklistReturnDialog> {
       error = '';
     });
     try {
-      final user = FirebaseAuth.instance.currentUser;
-      if (user == null) throw StateError('Please sign in again.');
+      final user = await resolveBranchInventoryActor(widget.db);
+
       await ReturnBatchService(widget.db)
           .submit(
             batchId: batchId!,
             items: pendingItems!,
-            actorId: user.uid,
+            actorId: user.id,
             actorName: actorName,
             actorPublicId: actorPublicId,
             scopeIds: widget.scopeIds,

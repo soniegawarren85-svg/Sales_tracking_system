@@ -6,29 +6,8 @@ Future<List<DocumentReference<Map<String, dynamic>>>> bundleMetadataTargets(
   String id, {
   bool Function(Map<String, dynamic>)? needsUpdate,
 }) async {
-  final snapshots = await Future.wait([
-    db
-        .collection('staff_inventory')
-        .where('sourceInventoryId', isEqualTo: id)
-        .get(),
-    db
-        .collection('allocation_checklist')
-        .where('sourceInventoryId', isEqualTo: id)
-        .get(),
-  ]);
-  return snapshots
-      .expand((snapshot) => snapshot.docs)
-      .where((doc) {
-        final data = doc.data();
-        if (data['isDeleted'] == true || data['isVoided'] == true) return false;
-        if (doc.reference.parent.id == 'allocation_checklist' &&
-            !ChecklistStatus.incomingOpen(data)) {
-          return false;
-        }
-        return needsUpdate?.call(data) ?? true;
-      })
-      .map((doc) => doc.reference)
-      .toList();
+  // Catalog edits never rewrite delivered or pending allocation snapshots.
+  return [];
 }
 
 Future<List<DocumentReference<Map<String, dynamic>>>> readBundleMetadataTargets(
@@ -66,6 +45,27 @@ void writeBundleMetadata(
   }
 }
 
+List<Map<String, dynamic>> _bundleRecipeRows(dynamic value) =>
+    (value is List ? value : const [])
+        .whereType<Map>()
+        .map((item) => Map<String, dynamic>.from(item))
+        .toList();
+
+dynamic _recipeExpirationDate(List<Map<String, dynamic>> items) {
+  final dates =
+      items
+          .map((item) {
+            final value = item['expirationDate'];
+            if (value is Timestamp) return value.toDate();
+            if (value is DateTime) return value;
+            return DateTime.tryParse('$value');
+          })
+          .whereType<DateTime>()
+          .toList()
+        ..sort();
+  return dates.isEmpty ? '' : dates.first.toIso8601String();
+}
+
 /// Update current stock and pending deliveries, preserving historical receipts.
 Future<void> updateBundleMetadata(
   FirebaseFirestore db,
@@ -80,7 +80,27 @@ Future<void> updateBundleMetadata(
       throw StateError('Bundle is no longer available.');
     }
     final targets = await readBundleMetadataTargets(tx, references);
-    tx.update(source, {...changes, 'updatedAt': FieldValue.serverTimestamp()});
+    final update = <String, dynamic>{
+      ...changes,
+      'updatedAt': FieldValue.serverTimestamp(),
+    };
+    if (changes['items'] is List) {
+      final recipe = _bundleRecipeRows(changes['items']);
+      final expirationDate = _recipeExpirationDate(recipe);
+      update['bundleInstances'] =
+          _bundleRecipeRows(central.data()?['bundleInstances']).map((instance) {
+            final status = '${instance['status'] ?? 'available'}'.toLowerCase();
+            if (status.isNotEmpty && status != 'available') return instance;
+            return {
+              ...instance,
+              'items': recipe
+                  .map((item) => {...item}..remove('remaining'))
+                  .toList(),
+              'expirationDate': expirationDate,
+            };
+          }).toList();
+    }
+    tx.update(source, update);
     writeBundleMetadata(tx, targets, changes);
   });
 }
