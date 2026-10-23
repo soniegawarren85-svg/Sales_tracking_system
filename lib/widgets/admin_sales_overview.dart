@@ -52,11 +52,13 @@ class AdminSalesOverview extends StatefulWidget {
     this.todayOnly = false,
     this.selectedDate,
     this.branchId,
+    this.additionalTotals = const [],
   });
   final bool branches;
   final bool todayOnly;
   final DateTime? selectedDate;
   final String? branchId;
+  final List<(String, String, IconData)> additionalTotals;
 
   @override
   State<AdminSalesOverview> createState() => _AdminSalesOverviewState();
@@ -157,10 +159,10 @@ class _AdminSalesOverviewState extends State<AdminSalesOverview> {
       final records = snapshot.data!.docs.map((doc) => doc.data());
       final branchSales = salesForBranch(
         completedReceipts(
-                (widget.todayOnly || widget.selectedDate != null)
-                    ? salesForDay(records, _day)
-                    : records,
-              ).where(
+          (widget.todayOnly || widget.selectedDate != null)
+              ? salesForDay(records, _day)
+              : records,
+        ).where(
           (sale) => branchIds == null || branchIds.contains(sale['branchId']),
         ),
         widget.branchId,
@@ -193,6 +195,7 @@ class _AdminSalesOverviewState extends State<AdminSalesOverview> {
               : '₱${report.profitForSales(salesForBranch(records.where((r) => branchIds == null || branchIds.contains(r['branchId'])), widget.branchId)).toStringAsFixed(2)}',
           Icons.trending_up,
         ),
+        ...widget.additionalTotals,
       ];
       return LayoutBuilder(
         builder: (context, constraints) {
@@ -203,7 +206,10 @@ class _AdminSalesOverviewState extends State<AdminSalesOverview> {
             children: values
                 .map(
                   (value) => SizedBox(
-                    width: columns == 2 && value == values.last
+                    width:
+                        columns == 2 &&
+                            value == values.last &&
+                            widget.additionalTotals.isEmpty
                         ? constraints.maxWidth
                         : (constraints.maxWidth - (columns - 1) * 12) / columns,
                     child: Container(

@@ -120,8 +120,22 @@ class _ActivityFeedState extends State<ActivityFeed> {
     final actors = {?actorId, ...?actorIds};
     Query<Map<String, dynamic>> query = db
         .collection('activity_logs')
-        .orderBy('createdAt', descending: true)
-        .limit(actors.isEmpty ? 100 : 200);
+        .orderBy('createdAt', descending: true);
+    if (range != null) {
+      query = query
+          .where(
+            'createdAt',
+            isGreaterThanOrEqualTo: Timestamp.fromDate(range!.start),
+          )
+          .where(
+            'createdAt',
+            isLessThan: Timestamp.fromDate(
+              DateTime(range!.end.year, range!.end.month, range!.end.day + 1),
+            ),
+          );
+    } else {
+      query = query.limit(actors.isEmpty ? 100 : 200);
+    }
     const branchActions = {
       'inventory_allocated',
       'return_approved',
@@ -455,4 +469,57 @@ class _ActivityFeedState extends State<ActivityFeed> {
       builder: (context, receipts) => feed(receipts.data?.docs ?? const []),
     );
   }
+}
+
+class RecentActivityPanel extends StatefulWidget {
+  const RecentActivityPanel({super.key, this.database});
+  final FirebaseFirestore? database;
+  @override
+  State<RecentActivityPanel> createState() => _RecentActivityPanelState();
+}
+
+class _RecentActivityPanelState extends State<RecentActivityPanel> {
+  late DateTimeRange range = DateTimeRange(
+    start: DateUtils.dateOnly(DateTime.now()),
+    end: DateUtils.dateOnly(DateTime.now()),
+  );
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Row(
+        children: [
+          const Expanded(
+            child: Text(
+              'Recent Activities',
+              style: TextStyle(fontSize: 19, fontWeight: FontWeight.w700),
+            ),
+          ),
+          IconButton(
+            tooltip: 'Filter activity dates',
+            icon: const Icon(Icons.date_range_outlined),
+            onPressed: () async {
+              final result = await showDateRangePicker(
+                context: context,
+                firstDate: DateTime(2020),
+                lastDate: DateTime.now(),
+                initialDateRange: range,
+              );
+              if (result != null && mounted) setState(() => range = result);
+            },
+          ),
+        ],
+      ),
+      Text(
+        '${MaterialLocalizations.of(context).formatShortDate(range.start)} – ${MaterialLocalizations.of(context).formatShortDate(range.end)}',
+      ),
+      const SizedBox(height: 12),
+      ActivityFeed(
+        database: widget.database,
+        range: range,
+        compact: true,
+        cardRows: true,
+      ),
+    ],
+  );
 }

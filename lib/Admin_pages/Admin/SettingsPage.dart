@@ -1,10 +1,12 @@
 import '../../widgets/admin_change_password_dialog.dart';
+import '../../widgets/account_profile_editor_sheet.dart';
 import '../../widgets/transaction_settings_dialog.dart';
 import '../../services/catalog_image_service.dart';
-import '../../services/profile_field_validation.dart';
 import '../../services/admin_profile_identity.dart';
+import '../../services/verified_profile_email_change.dart';
 import 'package:sales_tracking/theme/app_colors.dart';
 import '../../services/branch_session.dart';
+import '../../services/session_actor.dart';
 import '../../services/public_item_id.dart';
 import 'dart:convert';
 import '../../widgets/backup_restore_dialog.dart';
@@ -20,7 +22,10 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sales_tracking/Login/Login/Login.dart';
 
 class SettingsPage extends StatefulWidget {
-  const SettingsPage({super.key});
+  const SettingsPage({this.onOpenStaff, this.onOpenReports, super.key});
+
+  final VoidCallback? onOpenStaff;
+  final VoidCallback? onOpenReports;
 
   @override
   State<SettingsPage> createState() => _SettingsPageState();
@@ -294,6 +299,28 @@ class _SettingsPageState extends State<SettingsPage> {
                 delegate: SliverChildListDelegate([
                   const SizedBox(height: 6),
 
+                  if (MediaQuery.sizeOf(context).width < 600 &&
+                      widget.onOpenStaff != null &&
+                      widget.onOpenReports != null) ...[
+                    _sectionLabel("Others"),
+                    _settingItem(
+                      icon: Icons.people_rounded,
+                      title: "Staff",
+                      subtitle: "Manage staff accounts",
+                      iconColor: const Color(0xFF7B1FA2),
+                      iconBg: const Color(0xFFF3E5F5),
+                      onTap: widget.onOpenStaff!,
+                    ),
+                    _settingItem(
+                      icon: Icons.bar_chart_rounded,
+                      title: "Reports",
+                      subtitle: "View sales reports",
+                      iconColor: const Color(0xFF3949AB),
+                      iconBg: const Color(0xFFE8EAF6),
+                      onTap: widget.onOpenReports!,
+                    ),
+                    const SizedBox(height: 6),
+                  ],
                   _sectionLabel("Account"),
                   _settingItem(
                     icon: Icons.manage_accounts_rounded,
@@ -581,197 +608,62 @@ class _SettingsPageState extends State<SettingsPage> {
     bool readOnly = false,
   }) async {
     final uid = _profileId;
+    final db = FirebaseFirestore.instance;
     var data = <String, dynamic>{...?incomingData};
-    final snapshot = await FirebaseFirestore.instance
-        .collection('staff_requests')
-        .doc(uid)
-        .get();
+    final profile = db.collection('staff_requests').doc(uid);
+    final snapshot = await profile.get();
     data = {...data, ...?snapshot.data()};
     if (!mounted) return;
 
     final authUser = FirebaseAuth.instance.currentUser;
-    final currentUser = authUser?.uid == _profileId ? authUser : null;
-    final firstName = TextEditingController(
-      text: data['firstName']?.toString() ?? '',
-    );
-    final middleName = TextEditingController(
-      text: data['middleName']?.toString() ?? '',
-    );
-    final lastName = TextEditingController(
-      text: data['lastName']?.toString() ?? '',
-    );
-    final email = TextEditingController(
-      text: data['email']?.toString() ?? currentUser?.email ?? '',
-    );
-    final age = TextEditingController(text: data['age']?.toString() ?? '');
-    final address = TextEditingController(
-      text: data['address']?.toString() ?? '',
-    );
-    final formKey = GlobalKey<FormState>();
+    final expectedAuthUid = '${data['authUid'] ?? uid}'.trim();
+    final currentUser = authUser?.uid == expectedAuthUid ? authUser : null;
 
-    final route = DialogRoute<void>(
+    final message = await showModalBottomSheet<String>(
       context: context,
-      builder: (dialogContext) {
-        return Dialog(
-          insetPadding: const EdgeInsets.symmetric(
-            horizontal: 20,
-            vertical: 24,
-          ),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(28),
-          ),
-          child: ConstrainedBox(
-            constraints: BoxConstraints(
-              maxWidth: 620,
-              maxHeight: MediaQuery.of(dialogContext).size.height * 0.86,
-            ),
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.fromLTRB(24, 22, 24, 18),
-              child: Form(
-                key: formKey,
-                autovalidateMode: AutovalidateMode.onUserInteraction,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    const Text(
-                      'Account information',
-                      style: TextStyle(
-                        fontSize: 22,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    const SizedBox(height: 18),
-                    TextFormField(
-                      readOnly: readOnly,
-                      controller: firstName,
-                      validator: (value) => ProfileFieldValidation.name(value),
-                      decoration: const InputDecoration(
-                        labelText: 'First name',
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    TextFormField(
-                      readOnly: readOnly,
-                      controller: middleName,
-                      validator: (value) =>
-                          ProfileFieldValidation.name(value, required: false),
-                      decoration: const InputDecoration(
-                        labelText: 'Middle name',
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    TextFormField(
-                      readOnly: readOnly,
-                      controller: lastName,
-                      validator: (value) =>
-                          ProfileFieldValidation.name(value, required: false),
-                      decoration: const InputDecoration(labelText: 'Last name'),
-                    ),
-                    const SizedBox(height: 10),
-                    TextFormField(
-                      readOnly: readOnly,
-                      controller: email,
-                      keyboardType: TextInputType.emailAddress,
-                      validator: (value) => ProfileFieldValidation.gmail(value),
-                      decoration: const InputDecoration(
-                        labelText: 'Gmail / email',
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    TextFormField(
-                      readOnly: readOnly,
-                      controller: age,
-                      keyboardType: TextInputType.number,
-                      validator: (value) => ProfileFieldValidation.age(value),
-                      decoration: const InputDecoration(labelText: 'Age'),
-                    ),
-                    const SizedBox(height: 10),
-                    TextFormField(
-                      readOnly: readOnly,
-                      controller: address,
-                      maxLines: 3,
-                      validator: ProfileFieldValidation.wordLimit,
-                      decoration: const InputDecoration(labelText: 'Address'),
-                    ),
-                    const SizedBox(height: 18),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.end,
-                      children: [
-                        TextButton(
-                          onPressed: () => Navigator.pop(dialogContext),
-                          child: Text(readOnly ? 'Close' : 'Cancel'),
-                        ),
-                        const SizedBox(width: 10),
-                        if (!readOnly)
-                          FilledButton(
-                            onPressed: () async {
-                              if (!(formKey.currentState?.validate() ??
-                                  false)) {
-                                return;
-                              }
-                              try {
-                                await FirebaseFirestore.instance
-                                    .collection('staff_requests')
-                                    .doc(uid)
-                                    .set({
-                                      'firstName': firstName.text.trim(),
-                                      'middleName': middleName.text.trim(),
-                                      'lastName': lastName.text.trim(),
-                                      'email': email.text.trim(),
-                                      if (currentUser?.email != null)
-                                        'authEmail': currentUser!.email,
-                                      'age': age.text.trim(),
-                                      'address': address.text.trim(),
-                                      'updatedAt': FieldValue.serverTimestamp(),
-                                    }, SetOptions(merge: true));
-                                final updatedName = [
-                                  firstName.text.trim(),
-                                  middleName.text.trim(),
-                                  lastName.text.trim(),
-                                ].where((part) => part.isNotEmpty).join(' ');
-                                if (updatedName.isNotEmpty) {
-                                  await currentUser?.updateDisplayName(
-                                    updatedName,
-                                  );
-                                }
-                                if (dialogContext.mounted) {
-                                  Navigator.pop(dialogContext);
-                                }
-                                if (mounted) {
-                                  _showStyledSnackBar(
-                                    'Account information updated.',
-                                  );
-                                }
-                              } catch (error) {
-                                if (mounted) {
-                                  _showStyledSnackBar(
-                                    'Unable to save account information: $error',
-                                    isError: true,
-                                  );
-                                }
-                              }
-                            },
-                            child: const Text('Save'),
-                          ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        );
-      },
+      isScrollControlled: true,
+      useSafeArea: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => AccountProfileEditorSheet(
+        profile: data,
+        readOnly: readOnly,
+        onSave: (values) async {
+          var verificationSent = false;
+          if (values.emailChanged || values.verifyPendingEmail) {
+            verificationSent = await requestVerifiedProfileEmailChange(
+              profile: profile,
+              profileData: data,
+              newEmail: values.email,
+              currentPassword: values.currentPassword,
+            );
+          }
+
+          await profile.set({
+            'firstName': values.firstName,
+            'middleName': values.middleName,
+            'lastName': values.lastName,
+            'age': values.age,
+            'address': values.address,
+            'updatedAt': FieldValue.serverTimestamp(),
+          }, SetOptions(merge: true));
+
+          final updatedName = [
+            values.firstName,
+            values.middleName,
+            values.lastName,
+          ].where((part) => part.isNotEmpty).join(' ');
+          if (updatedName.isNotEmpty) {
+            await currentUser?.updateDisplayName(updatedName);
+          }
+          return verificationSent
+              ? 'Profile saved. A verification link was sent to ${values.email}; the Gmail changes after you verify it.'
+              : values.emailChanged || values.verifyPendingEmail
+              ? 'Gmail verification is complete. Account information updated.'
+              : 'Account information updated.';
+        },
+      ),
     );
-    await Navigator.of(context).push(route);
-    await route.completed;
-    firstName.dispose();
-    middleName.dispose();
-    lastName.dispose();
-    email.dispose();
-    age.dispose();
-    address.dispose();
+    if (message != null && mounted) _showStyledSnackBar(message);
   }
 
   void _showStyledSnackBar(String message, {bool isError = false}) {
@@ -799,8 +691,11 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   Future<void> _showChangePassword(BuildContext context) async {
-    final changed = await showDialog<bool>(
+    final changed = await showModalBottomSheet<bool>(
       context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      backgroundColor: Colors.transparent,
       builder: (_) => const AdminChangePasswordDialog(),
     );
     if (changed == true && context.mounted) {
@@ -1208,9 +1103,7 @@ class _LogoutButtonState extends State<_LogoutButton>
                       onTap: () async {
                         Navigator.pop(context);
                         final prefs = await SharedPreferences.getInstance();
-                        await prefs.remove('lastRole');
-                        await prefs.remove('lastUserId');
-                        await prefs.remove('adminId');
+                        await clearPersistedAccountSession(prefs);
                         await FirebaseAuth.instance.signOut();
                         if (!context.mounted) return;
                         Navigator.of(context).pushAndRemoveUntil(

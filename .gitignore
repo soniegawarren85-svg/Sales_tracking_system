@@ -32,6 +32,11 @@ migrate_working_dir/
 .pub/
 /build/
 /coverage/
+functions/node_modules/
+functions/reset_page/
+functions/.env
+functions/.env.*
+!functions/.env.example
 
 # Symbolication related
 app.*.symbols

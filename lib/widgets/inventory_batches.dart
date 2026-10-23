@@ -6,6 +6,7 @@ import '../services/bundle_stock_service.dart';
 import '../services/inventory_reconciliation_service.dart';
 import '../services/session_actor.dart';
 import '../services/number_format.dart';
+import '../services/sale_stock.dart';
 
 Map<String, String> allocationBatchLabels(
   Iterable<Map<String, dynamic>> records,
@@ -262,6 +263,10 @@ class _BatchDialog extends StatefulWidget {
 }
 
 class _BatchDialogState extends State<_BatchDialog> {
+  String search = '';
+  DateTimeRange? range;
+  String dateMode = 'allocated';
+  final salesByAllocation = <String, List<Map<String, dynamic>>>{};
   List<Map<String, dynamic>>? records;
   String? error;
   bool busy = false;
@@ -308,11 +313,44 @@ class _BatchDialogState extends State<_BatchDialog> {
           )
           .map((d) => <String, dynamic>{...d.data(), '_id': d.id})
           .toList();
+      final sales = await widget.db.collection('completed_sales').where('branchId', isEqualTo: original['staffId']).get();
+      for (final saleDoc in sales.docs) {
+        final sale = saleDoc.data();
+        if (sale['isVoided'] == true || sale['isDeleted'] == true) continue;
+        for (final line in expandSaleStockLines(bundleRows(sale['items']))) {
+          final allocationId = '${line['staffInventoryDocId'] ?? ''}';
+          if (widget.itemId != null && ![line['id'], line['itemId'], line['variantId'], line['publicId']].contains(widget.itemId)) continue;
+          salesByAllocation.putIfAbsent(allocationId, () => []).add({...line, 'soldAt': sale['timestamp'] ?? sale['createdAt']});
+        }
+      }
       rows.sort(
         (a, b) => date(b['assignedAt']).compareTo(date(a['assignedAt'])),
       );
-      if (mounted) setState(() => records = rows);
+      final grouped = <String, Map<String, dynamic>>{};
+      for (final row in rows) {
+        final reconciliation = '${row['reconciliationId'] ?? ''}';
+        final key = row['origin'] == 'unbundle' && reconciliation.isNotEmpty
+            ? '$reconciliation|${row['sourceInventoryId']}'
+            : '${row['_id']}';
+        final previous = grouped[key];
+        if (previous == null) {
+          grouped[key] = Map<String, dynamic>.from(row);
+          grouped[key]!['_sales'] = <Map<String, dynamic>>[
+            ...?salesByAllocation['${row['_id']}'],
+          ];
+        } else {
+          final sales = bundleRows(previous['_sales'])
+            ..addAll(bundleRows(salesByAllocation['${row['_id']}']));
+          previous['_sales'] = sales;
+          previous['items'] = aggregateCategoryAllocationItems([
+            ...bundleRows(previous['items']),
+            ...bundleRows(row['items']),
+          ]);
+        }
+      }
+      if (mounted) setState(() => records = grouped.values.toList());
     } catch (e) {
+      debugPrint('Unable to load allocation batches: $e');
       if (mounted) setState(() => error = e is StateError ? e.message : '$e');
     }
   }
@@ -417,9 +455,27 @@ class _BatchDialogState extends State<_BatchDialog> {
         '${record['_id']}': allocationInstanceBatches(
           record,
           '${record['_id']}',
+          availableOnly: false,
         ),
     };
     final visibleRecords = (records ?? <Map<String, dynamic>>[])
+        .where((record) => dateMode != 'sold' || bundleRows(record['_sales']).any((sale) => range == null || (!date(sale['soldAt']).isBefore(range!.start) && date(sale['soldAt']).isBefore(DateTime(range!.end.year, range!.end.month, range!.end.day + 1)))))
+        .where(
+          (record) =>
+              search.isEmpty || '$record'.toLowerCase().contains(search),
+        )
+        .where(
+          (record) =>
+              dateMode == 'sold' || range == null ||
+              (!date(record['assignedAt']).isBefore(range!.start) &&
+                  date(record['assignedAt']).isBefore(
+                    DateTime(
+                      range!.end.year,
+                      range!.end.month,
+                      range!.end.day + 1,
+                    ),
+                  )),
+        )
         .where(
           (record) =>
               !bundle ||
@@ -464,6 +520,55 @@ class _BatchDialogState extends State<_BatchDialog> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                TextField(
+                  decoration: InputDecoration(
+                    hintText: 'Search allocation batches',
+                    prefixIcon: const Icon(Icons.search),
+                    suffixIcon: IconButton(
+                      tooltip: 'Filter allocation dates',
+                      icon: const Icon(Icons.date_range),
+                      onPressed: () async {
+                        final result = await showDateRangePicker(
+                          context: context,
+                          firstDate: DateTime(2020),
+                          lastDate: DateTime.now(),
+                          initialDateRange: range,
+                        );
+                        if (result != null && mounted)
+                          setState(() => range = result);
+                      },
+                    ),
+                  ),
+                  onChanged: (value) =>
+                      setState(() => search = value.trim().toLowerCase()),
+                ),
+                if (range != null)
+                  Wrap(
+                    children: [
+                      InputChip(
+                        label: Text(
+                          '${dateLabel(range!.start)} to ${dateLabel(range!.end)}',
+                        ),
+                        onDeleted: () => setState(() => range = null),
+                      ),
+                    ],
+                  ),
+                const SizedBox(height: 12),
+                DropdownButtonFormField<String>(
+                  initialValue: dateMode,
+                  decoration: const InputDecoration(
+                    labelText: 'Filter dates by',
+                  ),
+                  items: const [
+                    DropdownMenuItem(
+                      value: 'allocated',
+                      child: Text('Allocation'),
+                    ),
+                    DropdownMenuItem(value: 'sold', child: Text('Sold')),
+                  ],
+                  onChanged: (value) => setState(() => dateMode = value!),
+                ),
+                const SizedBox(height: 12),
                 if (records == null && error == null)
                   const LinearProgressIndicator(),
                 if (bundle) ...[
@@ -535,15 +640,23 @@ class _BatchDialogState extends State<_BatchDialog> {
                         in batchesByAllocation['${record['_id']}'] ?? [])
                       Builder(
                         builder: (context) {
-                          final instances =
-                              batch['instances'] as List<Map<String, dynamic>>;
+                          final instances = bundleRows(batch['instances']);
+                          final availableIds = availableReconciliationInstances(
+                            record,
+                            '${record['_id']}',
+                          ).map((i) => '${i['id']}').toSet();
+                          final selectable = instances
+                              .where((i) => availableIds.contains('${i['id']}'))
+                              .toList();
                           final selectedCount = instances
                               .where(
                                 (instance) =>
                                     selected.contains('${instance['id']}'),
                               )
                               .length;
-                          final allSelected = selectedCount == instances.length;
+                          final allSelected =
+                              selectable.isNotEmpty &&
+                              selectedCount == selectable.length;
                           final someSelected =
                               selectedCount > 0 && !allSelected;
                           return Card(
@@ -562,12 +675,12 @@ class _BatchDialogState extends State<_BatchDialog> {
                                         : someSelected
                                         ? null
                                         : false,
-                                    onChanged: busy
+                                    onChanged: busy || selectable.isEmpty
                                         ? null
                                         : (checked) => setState(
                                             () => toggleBatchSelection(
                                               '${record['_id']}',
-                                              instances,
+                                              selectable,
                                               checked == true,
                                             ),
                                           ),
@@ -627,10 +740,12 @@ class _BatchDialogState extends State<_BatchDialog> {
                               '${record['origin'] == 'unbundle' || items.any((item) => item['origin'] == 'unbundle') ? 'Unbundle' : 'Allocated'} | ${batchLabels['${record['_id']}'] ?? 'Batch - 001'}',
                             ),
                             children: [
+                              for (final sale in bundleRows(record['_sales']))
+                                ListTile(title: Text('Sold: ${sale['quantity']}'), subtitle: Text('Sold: ${date(sale['soldAt']).toLocal()}')),
                               for (final item in items)
                                 ListTile(
                                   title: Text(
-                                    '${item['name']} - ${item['stock'] ?? item['startingStock']} remaining',
+                                    '${item['name']} - ${item['stock'] ?? item['startingStock']} remaining / ${item['assignedStartingStock'] ?? item['startingStock'] ?? item['stock']} allocated',
                                   ),
                                   subtitle: Text(
                                     '${formatMoney(num.tryParse('${item['price']}') ?? 0)} | Expiry: ${dateLabel(item['expirationDate'])}${item['origin'] == 'unbundle' ? '\nUnbundle: +${item['unbundledQuantity']}' : ''}',
@@ -1278,3 +1393,23 @@ class _RequestsDialogState extends State<_RequestsDialog> {
     ),
   );
 }
+
+Future<void> showBranchBatchHistory(BuildContext context, String branchId, FirebaseFirestore db) => showDialog<void>(context: context, builder: (context) => AlertDialog(
+  title: const Text('Batch history'),
+  content: SizedBox(width: 620, height: 420, child: FutureBuilder<QuerySnapshot<Map<String, dynamic>>>(
+    future: db.collection('staff_inventory').where('staffId', isEqualTo: branchId).get(),
+    builder: (context, snapshot) {
+      if (snapshot.hasError) return const Text('Unable to load batch history. Please try again.');
+      if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+      final groups = <String, QueryDocumentSnapshot<Map<String, dynamic>>>{};
+      for (final doc in snapshot.data!.docs) {
+        final data = doc.data();
+        final key = data['isBundle'] == true ? bundleInventoryGroupKey(data) : '${data['sourceInventoryId']}';
+        groups.putIfAbsent(key, () => doc);
+      }
+      if (groups.isEmpty) return const Text('No allocation batches recorded.');
+      return ListView(children: [for (final doc in groups.values) ListTile(title: Text('${doc.data()['name'] ?? 'Inventory'}'), subtitle: const Text('View allocated and depleted batches'), trailing: const Icon(Icons.chevron_right), onTap: () => showInventoryBatches(context, allocationId: doc.id, scopeIds: [branchId], database: db))]);
+    },
+  )),
+  actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Close'))],
+));

@@ -28,6 +28,31 @@ void main() {
     },
   );
 
+  test('logout clears every persisted account identity', () async {
+    SharedPreferences.setMockInitialValues({
+      'lastRole': 'staff',
+      'lastUserId': 'staff-doc',
+      'lastStaffDocId': 'staff-doc',
+      'lastStaffPublicId': 'STF-001',
+      'adminId': 'ADM-001',
+      'superAdminId': 'Spr-001',
+    });
+    final prefs = await SharedPreferences.getInstance();
+
+    await clearPersistedAccountSession(prefs);
+
+    for (final key in [
+      'lastRole',
+      'lastUserId',
+      'lastStaffDocId',
+      'lastStaffPublicId',
+      'adminId',
+      'superAdminId',
+    ]) {
+      expect(prefs.containsKey(key), isFalse);
+    }
+  });
+
   test('built-in admin session works before profile creation', () async {
     SharedPreferences.setMockInitialValues({
       'lastRole': 'admin',

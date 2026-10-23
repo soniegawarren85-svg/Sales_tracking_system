@@ -72,12 +72,12 @@ Future<void> updateBranchInventoryItem({
       for (final candidate in candidates) candidate.ref.path: candidate.ref,
     };
     final latest = <String, Map<String, dynamic>>{};
-    for (final entry in references.entries) {
-      final snapshot = await transaction.get(entry.value);
+    final snapshots = await Future.wait(references.values.map(transaction.get));
+    for (final snapshot in snapshots) {
       if (!snapshot.exists) {
         throw StateError('This item is no longer allocated to the branch.');
       }
-      latest[entry.key] = snapshot.data() ?? {};
+      latest[snapshot.reference.path] = snapshot.data() ?? {};
     }
     final currentItems = candidates.map((candidate) {
       final allocation = latest[candidate.ref.path]!;

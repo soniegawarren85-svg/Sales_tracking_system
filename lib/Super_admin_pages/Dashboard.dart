@@ -14,6 +14,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../services/session_actor.dart';
 
 import '../services/inventory_service.dart';
 import '../services/expiry_notification_service.dart';
@@ -51,12 +52,12 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard>
 
   static const String kShopLogoAsset = 'Assets/Image/ob.jpg';
   final _navItems = const [
-    _NavItem(icon: Icons.dashboard_rounded, label: 'Dashboard'),
-    _NavItem(icon: Icons.storefront_rounded, label: 'Branch Sales'),
+    _NavItem(icon: Icons.dashboard_rounded, label: 'Overview'),
+    _NavItem(icon: Icons.storefront_rounded, label: 'Branch Performance'),
     _NavItem(icon: Icons.inventory_2_rounded, label: 'Inventory'),
-    _NavItem(icon: Icons.people_rounded, label: 'Staff'),
-    _NavItem(icon: Icons.bar_chart_rounded, label: 'Reports'),
-    _NavItem(icon: Icons.settings_rounded, label: 'Settings'),
+    _NavItem(icon: Icons.people_rounded, label: 'User Accounts'),
+    _NavItem(icon: Icons.bar_chart_rounded, label: 'Sales Analytics'),
+    _NavItem(icon: Icons.settings_rounded, label: 'System Settings'),
   ];
 
   // ── Entrance animation controller for the home page content ──────────────
@@ -257,7 +258,10 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard>
       case 4:
         return const ReportsPage();
       case 5:
-        return const SuperAdminSettingsPage();
+        return SuperAdminSettingsPage(
+          onOpenStaff: () => setState(() => _selectedIndex = 3),
+          onOpenReports: () => setState(() => _selectedIndex = 4),
+        );
       default:
         return _buildHomePage();
     }
@@ -326,8 +330,10 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard>
                 children: [
                   _buildStatsCard(),
                   const SizedBox(height: 16),
-                  const AdminSalesOverview(todayOnly: true),
-                  const SizedBox(height: 20),
+                  if (MediaQuery.sizeOf(context).width >= 600) ...[
+                    const AdminSalesOverview(todayOnly: true),
+                    const SizedBox(height: 20),
+                  ],
                   const SuperAdminTotals(),
                   const SizedBox(height: 20),
                   SizedBox(
@@ -340,20 +346,7 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard>
                       ),
                       child: Padding(
                         padding: const EdgeInsets.all(16),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Text(
-                              'Recent Activities',
-                              style: TextStyle(
-                                fontSize: 19,
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                            const SizedBox(height: 12),
-                            const ActivityFeed(compact: true, cardRows: true),
-                          ],
-                        ),
+                        child: const RecentActivityPanel(),
                       ),
                     ),
                   ),
@@ -600,9 +593,7 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard>
     );
     if (confirmed != true || !mounted) return;
     final prefs = await SharedPreferences.getInstance();
-    for (final key in ['lastRole', 'lastUserId', 'superAdminId']) {
-      await prefs.remove(key);
-    }
+    await clearPersistedAccountSession(prefs);
     await FirebaseAuth.instance.signOut();
     if (!mounted) return;
     Navigator.of(context).pushAndRemoveUntil(
@@ -1011,33 +1002,53 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard>
       ],
     ),
     child: SafeArea(
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: ConstrainedBox(
-          constraints: BoxConstraints(
-            minWidth: MediaQuery.sizeOf(context).width,
-          ),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceAround,
-            children: List.generate(
-              _navItems.length,
-              (index) => _buildNavItem(_navItems[index], index),
+      child: Row(
+        children: [
+          Expanded(
+            child: _buildNavItem(
+              const _NavItem(icon: Icons.dashboard_rounded, label: 'Dashboard'),
+              0,
             ),
           ),
-        ),
+          Expanded(
+            child: _buildNavItem(
+              const _NavItem(
+                icon: Icons.storefront_rounded,
+                label: 'Branch Sales',
+              ),
+              1,
+            ),
+          ),
+          Expanded(
+            child: _buildNavItem(
+              const _NavItem(
+                icon: Icons.inventory_2_rounded,
+                label: 'Inventory',
+              ),
+              2,
+            ),
+          ),
+          Expanded(
+            child: _buildNavItem(
+              const _NavItem(icon: Icons.more_horiz_rounded, label: 'More'),
+              5,
+            ),
+          ),
+        ],
       ),
     ),
   );
 
   Widget _buildNavItem(_NavItem item, int index) {
-    final selected = _selectedIndex == index;
+    final selected =
+        _selectedIndex == index || (index == 5 && _selectedIndex >= 3);
     return GestureDetector(
       onTap: () => setState(() => _selectedIndex = index),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 220),
         curve: Curves.easeInOut,
         padding: EdgeInsets.symmetric(
-          horizontal: MediaQuery.of(context).size.width >= 600 ? 12 : 18,
+          horizontal: MediaQuery.of(context).size.width >= 600 ? 12 : 4,
           vertical: MediaQuery.of(context).size.width >= 600 ? 5 : 8,
         ),
         decoration: BoxDecoration(
@@ -1079,7 +1090,7 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard>
                 fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
                 letterSpacing: 0.2,
               ),
-              child: Text(item.label),
+              child: Text(item.label, textAlign: TextAlign.center),
             ),
           ],
         ),

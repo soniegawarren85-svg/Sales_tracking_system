@@ -256,7 +256,7 @@ void main() {
         'branchIds': ['branch-1'],
         'description': 'Updated inventory $index',
         'createdAt': Timestamp.fromDate(
-          DateTime(2026, 10, 18, index == 0 ? 23 : index),
+          DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day, index == 0 ? 23 : index),
         ),
       });
     }

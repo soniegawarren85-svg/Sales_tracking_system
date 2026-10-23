@@ -63,6 +63,10 @@ class SuperAdminTotals extends StatelessWidget {
         ('Total branches', '${branchIds.length}', Icons.storefront_outlined),
       ];
 
+      if (MediaQuery.sizeOf(context).width < 600) {
+        return AdminSalesOverview(todayOnly: true, additionalTotals: values);
+      }
+
       return LayoutBuilder(
         builder: (context, constraints) {
           final columns = constraints.maxWidth < 600 ? 1 : values.length;

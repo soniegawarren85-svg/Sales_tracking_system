@@ -13,6 +13,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../../services/session_actor.dart';
 
 import '../../services/inventory_service.dart';
 import '../../services/expiry_notification_service.dart';
@@ -375,7 +376,10 @@ class _AdminDashboardState extends State<AdminDashboard>
           branchName: _assignedBranchName,
         );
       case 5:
-        return const SettingsPage();
+        return SettingsPage(
+          onOpenStaff: () => setState(() => _selectedIndex = 3),
+          onOpenReports: () => setState(() => _selectedIndex = 4),
+        );
       default:
         return _buildHomePage();
     }
@@ -719,9 +723,7 @@ class _AdminDashboardState extends State<AdminDashboard>
     );
     if (confirmed != true || !mounted) return;
     final prefs = await SharedPreferences.getInstance();
-    for (final key in ['lastRole', 'lastUserId', 'adminId']) {
-      await prefs.remove(key);
-    }
+    await clearPersistedAccountSession(prefs);
     await FirebaseAuth.instance.signOut();
     if (!mounted) return;
     Navigator.of(context).pushAndRemoveUntil(
@@ -1130,33 +1132,53 @@ class _AdminDashboardState extends State<AdminDashboard>
       ],
     ),
     child: SafeArea(
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: ConstrainedBox(
-          constraints: BoxConstraints(
-            minWidth: MediaQuery.sizeOf(context).width,
-          ),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceAround,
-            children: List.generate(
-              _navItems.length,
-              (index) => _buildNavItem(_navItems[index], index),
+      child: Row(
+        children: [
+          Expanded(
+            child: _buildNavItem(
+              const _NavItem(icon: Icons.dashboard_rounded, label: 'Dashboard'),
+              0,
             ),
           ),
-        ),
+          Expanded(
+            child: _buildNavItem(
+              const _NavItem(
+                icon: Icons.storefront_rounded,
+                label: 'Branch Sales',
+              ),
+              1,
+            ),
+          ),
+          Expanded(
+            child: _buildNavItem(
+              const _NavItem(
+                icon: Icons.inventory_2_rounded,
+                label: 'Inventory',
+              ),
+              2,
+            ),
+          ),
+          Expanded(
+            child: _buildNavItem(
+              const _NavItem(icon: Icons.more_horiz_rounded, label: 'More'),
+              5,
+            ),
+          ),
+        ],
       ),
     ),
   );
 
   Widget _buildNavItem(_NavItem item, int index) {
-    final selected = _selectedIndex == index;
+    final selected =
+        _selectedIndex == index || (index == 5 && _selectedIndex >= 3);
     return GestureDetector(
       onTap: () => setState(() => _selectedIndex = index),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 220),
         curve: Curves.easeInOut,
         padding: EdgeInsets.symmetric(
-          horizontal: MediaQuery.of(context).size.width >= 600 ? 12 : 18,
+          horizontal: MediaQuery.of(context).size.width >= 600 ? 12 : 4,
           vertical: MediaQuery.of(context).size.width >= 600 ? 5 : 8,
         ),
         decoration: BoxDecoration(
@@ -1198,7 +1220,7 @@ class _AdminDashboardState extends State<AdminDashboard>
                 fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
                 letterSpacing: 0.2,
               ),
-              child: Text(item.label),
+              child: Text(item.label, textAlign: TextAlign.center),
             ),
           ],
         ),

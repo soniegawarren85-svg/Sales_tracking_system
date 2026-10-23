@@ -3333,6 +3333,7 @@ class _InventoryPageState extends State<InventoryPage>
                   type: _catalogType,
                   lockedBranchId: widget.branchId,
                   lockedBranchName: widget.branchName,
+                  showBatchHistory: false,
                   onBeverageTabChanged: (value) =>
                       setState(() => _addonsTab = value),
                   onOpen: _openCatalogEntry,

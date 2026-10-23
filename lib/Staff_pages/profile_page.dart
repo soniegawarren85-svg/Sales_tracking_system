@@ -1,6 +1,15 @@
 import 'package:sales_tracking/theme/app_colors.dart';
 import '../services/staff_login_session.dart';
 import '../services/profile_field_validation.dart';
+import '../widgets/confirm_password_dialog.dart';
+import '../services/account_password_service.dart';
+import '../services/session_actor.dart';
+import '../services/profile_email.dart';
+import '../services/account_session_control.dart';
+import '../widgets/email_pending_badge.dart';
+import '../services/password_policy.dart';
+import '../widgets/password_strength_checklist.dart';
+import 'dart:async';
 import '../widgets/branch_staff_activity_dialog.dart';
 import '../services/public_item_id.dart';
 import 'dart:convert';
@@ -26,7 +35,7 @@ class ProfilePage extends StatefulWidget {
 }
 
 class _ProfilePageState extends State<ProfilePage>
-    with SingleTickerProviderStateMixin {
+    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   late AnimationController _animController;
   late Animation<double> _fadeAnim;
   late Animation<Offset> _slideAnim;
@@ -41,6 +50,11 @@ class _ProfilePageState extends State<ProfilePage>
   static const Color _border = AppColors.blush;
   static const Color _textSoft = AppColors.textMuted;
   String? _staffDocId;
+  Map<String, dynamic>? _loadedProfile;
+  String? _verifiedSessionEmail;
+  bool _refreshingEmail = false;
+  bool _hasPendingEmail = false;
+  Timer? _emailRefreshTimer;
   bool _isUploadingProfilePhoto = false;
   String? _lastProfilePhotoUrl;
   // ────────────────────────────────────────────────────────────────
@@ -48,6 +62,8 @@ class _ProfilePageState extends State<ProfilePage>
   @override
   void initState() {
     super.initState();
+    _verifiedSessionEmail = FirebaseAuth.instance.currentUser?.email;
+    WidgetsBinding.instance.addObserver(this);
     _animController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 700),
@@ -59,22 +75,84 @@ class _ProfilePageState extends State<ProfilePage>
     ).animate(CurvedAnimation(parent: _animController, curve: Curves.easeOut));
     _animController.forward();
     _loadStaffDocId();
+    _emailRefreshTimer = Timer.periodic(const Duration(seconds: 15), (_) {
+      if (mounted &&
+          _hasPendingEmail &&
+          WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) {
+        _loadStaffDocId();
+      }
+    });
   }
 
   Future<void> _loadStaffDocId() async {
-    final prefs = await SharedPreferences.getInstance();
-    final uid =
-        FirebaseAuth.instance.currentUser?.uid ??
-        prefs.getString('lastStaffDocId') ??
-        prefs.getString('lastUserId');
-    if (!mounted) return;
-    setState(() => _staffDocId = uid);
+    if (_refreshingEmail) return;
+    _refreshingEmail = true;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final uid =
+          FirebaseAuth.instance.currentUser?.uid ??
+          prefs.getString('lastStaffDocId') ??
+          prefs.getString('lastUserId');
+      if (!mounted) return;
+      if (_staffDocId != uid) setState(() => _staffDocId = uid);
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null || user.uid != uid) return;
+      try {
+        await user.reload().timeout(const Duration(seconds: 10));
+        final email = FirebaseAuth.instance.currentUser?.email;
+        if (mounted && email != null)
+          setState(() => _verifiedSessionEmail = email);
+        final ref = FirebaseFirestore.instance
+            .collection('staff_requests')
+            .doc(uid);
+        final profile = (await ref.get()).data();
+        if (email != null &&
+            profile?['pendingAuthEmail']?.toString().toLowerCase() ==
+                email.toLowerCase()) {
+          await ref.update({
+            'email': email,
+            'authEmail': email,
+            'pendingAuthEmail': FieldValue.delete(),
+          });
+        }
+      } catch (error) {
+        debugPrint('Unable to refresh verified profile email: $error');
+      }
+    } finally {
+      _refreshingEmail = false;
+    }
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _emailRefreshTimer?.cancel();
     _animController.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _loadStaffDocId();
+  }
+
+  String _profileEmail(Map<String, dynamic> data) {
+    final pending = data['pendingAuthEmail']?.toString().trim() ?? '';
+    _hasPendingEmail = pending.isNotEmpty;
+    if (pending.isNotEmpty &&
+        normalizedProfileEmail(pending) ==
+            normalizedProfileEmail(_verifiedSessionEmail))
+      return _verifiedSessionEmail!;
+    return pending.isNotEmpty
+        ? pending
+        : data['email']?.toString() ?? 'No email';
+  }
+
+  bool _emailPending(Map<String, dynamic> data) {
+    final pending = normalizedProfileEmail(data['pendingAuthEmail']);
+    return pending.isNotEmpty &&
+        pending != normalizedProfileEmail(_verifiedSessionEmail) &&
+        pending != normalizedProfileEmail(data['authEmail']);
   }
 
   // ─── LOGOUT ──────────────────────────────────────────────────────────────
@@ -97,9 +175,7 @@ class _ProfilePageState extends State<ProfilePage>
       return;
     }
     final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('lastRole');
-    await prefs.remove('lastUserId');
-    await prefs.remove('adminId');
+    await clearPersistedAccountSession(prefs);
     await FirebaseAuth.instance.signOut();
     navigator.pushAndRemoveUntil(
       MaterialPageRoute(builder: (_) => const LoginScreen()),
@@ -274,103 +350,125 @@ class _ProfilePageState extends State<ProfilePage>
 
   // ─── EDIT PROFILE — Half-Screen Bottom Sheet ──────────────────────────────
   Future<void> _showEditProfileSheet() async {
-    final currentUser = FirebaseAuth.instance.currentUser;
-    final prefs = await SharedPreferences.getInstance();
-    final uid =
-        currentUser?.uid ??
-        _staffDocId ??
-        prefs.getString('lastStaffDocId') ??
-        prefs.getString('lastUserId');
-    if (!mounted) return;
+    final uid = _staffDocId ?? FirebaseAuth.instance.currentUser?.uid;
     if (uid == null || uid.isEmpty) {
       _showStyledSnackBar(
-        'Unable to identify your staff account. Please sign in again.',
+        'Please sign in again to edit your profile.',
         isError: true,
       );
       return;
     }
-
     final docRef = FirebaseFirestore.instance
         .collection('staff_requests')
         .doc(uid);
-    late final DocumentSnapshot<Map<String, dynamic>> snapshot;
-    try {
-      snapshot = await docRef.get();
-    } catch (error) {
-      if (!mounted) return;
-      debugPrint('Unable to load staff profile for editing: $error');
-      _showStyledSnackBar(
-        'Unable to load your profile. Check your connection and try again.',
-        isError: true,
-      );
-      return;
-    }
-    if (!mounted) return;
-    if (!snapshot.exists) {
-      _showStyledSnackBar(
-        'Your staff profile could not be found. Please sign in again.',
-        isError: true,
-      );
-      return;
-    }
-    final staffData = snapshot.data() ?? {};
-
-    final firstNameController = TextEditingController(
-      text: staffData['firstName']?.toString() ?? '',
-    );
-    final lastNameController = TextEditingController(
-      text: staffData['lastName']?.toString() ?? '',
-    );
-    final emailController = TextEditingController(
-      text: staffData['email']?.toString() ?? '',
-    );
-    final phoneController = TextEditingController(
-      text: staffData['phone']?.toString() ?? '',
-    );
-    final addressController = TextEditingController(
-      text: staffData['address']?.toString() ?? '',
-    );
-    final ageController = TextEditingController(
-      text: staffData['age']?.toString() ?? '',
-    );
-
+    final cached = _loadedProfile;
+    final loading = cached == null
+        ? docRef.get().timeout(const Duration(seconds: 10))
+        : null;
+    Widget? editor;
+    Widget buildEditor(Map<String, dynamic> data) =>
+        editor ??= _EditProfileSheet(
+          docRef: docRef,
+          firstNameController: TextEditingController(
+            text: '${data['firstName'] ?? ''}',
+          ),
+          lastNameController: TextEditingController(
+            text: '${data['lastName'] ?? ''}',
+          ),
+          emailController: TextEditingController(
+            text: '${data['pendingAuthEmail'] ?? data['email'] ?? ''}',
+          ),
+          phoneController: TextEditingController(
+            text: '${data['phone'] ?? ''}',
+          ),
+          addressController: TextEditingController(
+            text: '${data['address'] ?? ''}',
+          ),
+          ageController: TextEditingController(text: '${data['age'] ?? ''}'),
+          onSaved: _showStyledSnackBar,
+        );
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       useSafeArea: true,
-      builder: (sheetContext) {
-        return _EditProfileSheet(
-          docRef: docRef,
-          firstNameController: firstNameController,
-          lastNameController: lastNameController,
-          emailController: emailController,
-          phoneController: phoneController,
-          addressController: addressController,
-          ageController: ageController,
-          onSaved: () {
-            _showStyledSnackBar('Profile updated successfully.');
-          },
-        );
-      },
+      builder: (_) => cached != null
+          ? buildEditor(cached)
+          : FutureBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+              future: loading,
+              builder: (context, snapshot) {
+                if (snapshot.hasData && snapshot.data!.exists) {
+                  return buildEditor(snapshot.data!.data()!);
+                }
+                return Container(
+                  padding: const EdgeInsets.all(24),
+                  decoration: const BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.vertical(
+                      top: Radius.circular(28),
+                    ),
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      const Text(
+                        'Edit Profile',
+                        style: TextStyle(
+                          fontSize: 22,
+                          fontWeight: FontWeight.bold,
+                          color: _pinkDark,
+                        ),
+                      ),
+                      const SizedBox(height: 20),
+                      if (snapshot.connectionState == ConnectionState.done)
+                        const Text(
+                          'Unable to load your profile. Check your connection and reopen Edit Profile.',
+                        )
+                      else ...[
+                        const LinearProgressIndicator(color: _pinkDark),
+                        for (var i = 0; i < 3; i++)
+                          Container(
+                            height: 48,
+                            margin: const EdgeInsets.only(top: 16),
+                            decoration: BoxDecoration(
+                              color: _border.withValues(alpha: .5),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                          ),
+                      ],
+                    ],
+                  ),
+                );
+              },
+            ),
     );
   }
 
   Future<void> _showChangePasswordSheet() async {
     final currentUser = FirebaseAuth.instance.currentUser;
-    final email = currentUser?.email;
-    if (currentUser == null || email == null) return;
+    final prefs = await SharedPreferences.getInstance();
+    final uid =
+        _staffDocId ??
+        currentUser?.uid ??
+        prefs.getString('lastStaffDocId') ??
+        prefs.getString('lastUserId');
+    if (!mounted) return;
+    if (uid == null || uid.isEmpty) {
+      _showStyledSnackBar(
+        'Please sign in again to change your password.',
+        isError: true,
+      );
+      return;
+    }
 
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       useSafeArea: true,
-      builder: (_) => _ChangePasswordSheet(
-        currentUser: currentUser,
-        email: email,
-        onMessage: _showStyledSnackBar,
-      ),
+      builder: (_) =>
+          _ChangePasswordSheet(accountId: uid, onMessage: _showStyledSnackBar),
     );
   }
 
@@ -536,9 +634,10 @@ class _ProfilePageState extends State<ProfilePage>
         }
 
         final staffData = snapshot.data!.data() as Map<String, dynamic>? ?? {};
+        _loadedProfile = Map<String, dynamic>.from(staffData);
         final firstName = staffData['firstName'] ?? 'Staff';
         final lastName = staffData['lastName'] ?? 'Member';
-        final email = staffData['email'] ?? 'No email';
+        final email = _verifiedSessionEmail ?? confirmedProfileEmail(staffData);
         final staffId = publicItemId('${staffData['staffId'] ?? 'N/A'}');
         final photoUrl =
             staffData['photoUrl']?.toString() ??
@@ -1062,7 +1161,7 @@ class _ProfilePageState extends State<ProfilePage>
 
           final staffData =
               snapshot.data!.data() as Map<String, dynamic>? ?? {};
-          final email = staffData['email'] ?? 'N/A';
+          final email = _profileEmail(staffData);
           final firstName = staffData['firstName'] ?? 'N/A';
           final lastName = staffData['lastName'] ?? 'N/A';
           final address = staffData['address'] ?? 'N/A';
@@ -1211,6 +1310,9 @@ class _ProfilePageState extends State<ProfilePage>
                                 icon: detail.$1,
                                 label: detail.$2,
                                 value: detail.$3.toString(),
+                                pending:
+                                    detail.$2 == 'Email Address' &&
+                                    _emailPending(staffData),
                               ),
                             );
                           }).toList(),
@@ -1352,6 +1454,7 @@ class _ProfilePageState extends State<ProfilePage>
   }
 
   Widget _buildDetailTile({
+    bool pending = false,
     required IconData icon,
     required String label,
     required String value,
@@ -1407,6 +1510,10 @@ class _ProfilePageState extends State<ProfilePage>
                     color: Color(0xFF24141A),
                   ),
                 ),
+                if (pending) ...[
+                  const SizedBox(height: 6),
+                  const EmailPendingBadge(),
+                ],
               ],
             ),
           ),
@@ -1589,7 +1696,7 @@ class _EditProfileSheet extends StatefulWidget {
   final TextEditingController phoneController;
   final TextEditingController addressController;
   final TextEditingController ageController;
-  final VoidCallback onSaved;
+  final ValueChanged<String> onSaved;
 
   const _EditProfileSheet({
     required this.docRef,
@@ -1613,6 +1720,7 @@ class _EditProfileSheetState extends State<_EditProfileSheet>
   late Animation<double> _sheetFade;
   late Animation<Offset> _sheetSlide;
   bool _isSaving = false;
+  late final String _initialEmail;
 
   // ── Pink palette (local copy) ───────────────────────────────────
   static const Color _pinkDark = AppColors.primaryDark;
@@ -1625,6 +1733,7 @@ class _EditProfileSheetState extends State<_EditProfileSheet>
   @override
   void initState() {
     super.initState();
+    _initialEmail = normalizedProfileEmail(widget.emailController.text);
     _sheetAnimCtrl = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 500),
@@ -1650,6 +1759,7 @@ class _EditProfileSheetState extends State<_EditProfileSheet>
   }
 
   Future<void> _saveProfile() async {
+    if (_isSaving) return;
     final firstName = widget.firstNameController.text.trim();
     final lastName = widget.lastNameController.text.trim();
     final email = widget.emailController.text.trim();
@@ -1657,24 +1767,119 @@ class _EditProfileSheetState extends State<_EditProfileSheet>
     final address = widget.addressController.text.trim();
     final ageText = widget.ageController.text.trim();
     final age = int.tryParse(ageText);
-
+    var authUser = FirebaseAuth.instance.currentUser;
+    var authEmail = authUser?.email?.trim() ?? '';
+    final changingAuthEmail = normalizedProfileEmail(email) != _initialEmail;
     if (!(_formKey.currentState?.validate() ?? false)) return;
 
     setState(() => _isSaving = true);
 
     try {
+      final emailEdited = normalizedProfileEmail(email) != _initialEmail;
+      if (emailEdited &&
+          await profileEmailTaken(
+            widget.docRef.firestore,
+            email,
+            widget.docRef.id,
+          )) {
+        if (mounted)
+          _showSheetSnackBar(
+            'This email is already used by another account.',
+            isError: true,
+          );
+        return;
+      }
+      if (changingAuthEmail) {
+        final password = await _requestCurrentPassword();
+        if (password == null || !mounted) return;
+        if (authUser?.uid != widget.docRef.id) {
+          final profile =
+              (await widget.docRef.get()).data() as Map<String, dynamic>? ?? {};
+          final candidates = <String>{
+            for (final field in ['pendingAuthEmail', 'authEmail', 'email'])
+              if ('${profile[field] ?? ''}'.trim().isNotEmpty)
+                '${profile[field]}'.trim(),
+          };
+          FirebaseAuthException? failure;
+          for (final candidate in candidates) {
+            try {
+              final credential = await FirebaseAuth.instance
+                  .signInWithEmailAndPassword(
+                    email: candidate,
+                    password: password,
+                  );
+              if (credential.user?.uid != widget.docRef.id) {
+                await FirebaseAuth.instance.signOut();
+                throw StateError(
+                  'Please sign in to your staff account again before changing email.',
+                );
+              }
+              authUser = credential.user;
+              break;
+            } on FirebaseAuthException catch (error) {
+              failure = error;
+              if (![
+                'invalid-credential',
+                'wrong-password',
+                'user-not-found',
+              ].contains(error.code))
+                rethrow;
+            }
+          }
+          if (authUser?.uid != widget.docRef.id) {
+            if (failure != null) throw failure;
+            throw StateError(
+              'Please sign in again before changing your email.',
+            );
+          }
+        } else {
+          await authUser!.reauthenticateWithCredential(
+            EmailAuthProvider.credential(email: authEmail, password: password),
+          );
+        }
+        authEmail = authUser!.email!;
+        await authUser.verifyBeforeUpdateEmail(email);
+      }
+
       await widget.docRef.set({
         'firstName': firstName,
         'lastName': lastName,
-        'email': email,
+        if (emailEdited) 'email': authEmail,
+        if (emailEdited && authUser?.uid == widget.docRef.id) ...{
+          'authEmail': authEmail,
+          'pendingAuthEmail': changingAuthEmail ? email : FieldValue.delete(),
+        },
         'phone': phone,
         'address': address,
         'age': age,
       }, SetOptions(merge: true));
 
       if (!mounted) return;
-      widget.onSaved();
+      widget.onSaved(
+        changingAuthEmail
+            ? 'Verification link sent to your new Gmail. Open it to activate your new sign-in and password-reset email, then sign in again.'
+            : 'Profile updated successfully.',
+      );
       Navigator.of(context).pop();
+    } on FirebaseAuthException catch (error) {
+      if (!mounted) return;
+      final message = switch (error.code) {
+        'wrong-password' ||
+        'invalid-credential' => 'The current password is incorrect.',
+        'email-already-in-use' =>
+          'That Gmail is already linked to another account.',
+        'invalid-email' => 'Enter a valid Gmail address.',
+        'requires-recent-login' =>
+          'Please sign in again, then retry changing your Gmail.',
+        'network-request-failed' =>
+          'Check your internet connection and try again.',
+        'too-many-requests' =>
+          'Too many attempts. Please wait before trying again.',
+        'operation-not-allowed' =>
+          'Email changes are unavailable for this account. Please contact your administrator.',
+        _ => 'Unable to update your email (${error.code}). Please try again.',
+      };
+      _showSheetSnackBar(message, isError: true);
     } catch (e) {
       if (!mounted) return;
       _showSheetSnackBar('Error updating profile: $e', isError: true);
@@ -1683,6 +1888,10 @@ class _EditProfileSheetState extends State<_EditProfileSheet>
     }
   }
 
+  Future<String?> _requestCurrentPassword() => showDialog<String>(
+    context: context,
+    builder: (_) => const ConfirmPasswordDialog(),
+  );
   void _showSheetSnackBar(String message, {bool isError = false}) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -2038,53 +2247,12 @@ class _EditProfileSheetState extends State<_EditProfileSheet>
 
 // ─── Reusable Sheet Components ────────────────────────────────────────────────
 
-class _PasswordField extends StatelessWidget {
-  final TextEditingController controller;
-  final String label;
-  final bool obscureText;
-  final VoidCallback onToggle;
-
-  const _PasswordField({
-    required this.controller,
-    required this.label,
-    required this.obscureText,
-    required this.onToggle,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return TextFormField(
-      controller: controller,
-      obscureText: obscureText,
-      decoration: InputDecoration(
-        labelText: label,
-        prefixIcon: const Icon(Icons.lock_outline_rounded),
-        suffixIcon: IconButton(
-          onPressed: onToggle,
-          icon: Icon(
-            obscureText
-                ? Icons.visibility_off_outlined
-                : Icons.visibility_outlined,
-          ),
-        ),
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
-          borderSide: const BorderSide(color: AppColors.primaryDark, width: 2),
-        ),
-      ),
-    );
-  }
-}
-
 class _ChangePasswordSheet extends StatefulWidget {
-  final User currentUser;
-  final String email;
+  final String accountId;
   final void Function(String message, {bool isError}) onMessage;
 
   const _ChangePasswordSheet({
-    required this.currentUser,
-    required this.email,
+    required this.accountId,
     required this.onMessage,
   });
 
@@ -2093,16 +2261,76 @@ class _ChangePasswordSheet extends StatefulWidget {
 }
 
 class _ChangePasswordSheetState extends State<_ChangePasswordSheet> {
+  bool _logoutAll = false;
+  bool _continuing = false;
+  String? _logoutError;
+
+  Future<void> _finishPasswordChange() async {
+    if (_continuing) return;
+    if (!_logoutAll) {
+      Navigator.pop(context);
+      return;
+    }
+    setState(() {
+      _continuing = true;
+      _logoutError = null;
+    });
+    try {
+      await logOutAccountDevices(FirebaseFirestore.instance, widget.accountId);
+      // The app-wide session listener also signs this device out.
+      if (mounted) Navigator.pop(context);
+    } catch (_) {
+      if (mounted)
+        setState(
+          () => _logoutError =
+              'Unable to log out all devices. Check your connection and try again.',
+        );
+    } finally {
+      if (mounted) setState(() => _continuing = false);
+    }
+  }
+
+  final _autofillUsername = TextEditingController(
+    text: FirebaseAuth.instance.currentUser?.email ?? '',
+  );
+  bool _saved = false;
+
   final _currentPasswordController = TextEditingController();
   final _newPasswordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
+  String? _error;
+  void _showMessage(String message, {bool isError = false}) {
+    if (isError) {
+      if (mounted) setState(() => _error = message);
+    } else {
+      widget.onMessage(message);
+    }
+  }
+
   bool _isSaving = false;
   bool _obscureCurrent = true;
   bool _obscureNew = true;
   bool _obscureConfirm = true;
 
   @override
+  void initState() {
+    super.initState();
+    for (final controller in [
+      _currentPasswordController,
+      _newPasswordController,
+      _confirmPasswordController,
+    ]) {
+      controller.addListener(_passwordChanged);
+    }
+  }
+
+  void _passwordChanged() {
+    if (mounted) setState(() {});
+  }
+
+  @override
   void dispose() {
+    _autofillUsername.dispose();
     _currentPasswordController.dispose();
     _newPasswordController.dispose();
     _confirmPasswordController.dispose();
@@ -2110,61 +2338,110 @@ class _ChangePasswordSheetState extends State<_ChangePasswordSheet> {
   }
 
   Future<void> _savePassword() async {
-    if (_isSaving) return;
+    if (_isSaving || _saved) return;
 
-    final currentPassword = _currentPasswordController.text.trim();
-    final newPassword = _newPasswordController.text.trim();
-    final confirmPassword = _confirmPasswordController.text.trim();
+    final currentPassword = _currentPasswordController.text;
+    final newPassword = _newPasswordController.text;
+    final confirmPassword = _confirmPasswordController.text;
 
     if (currentPassword.isEmpty ||
         newPassword.isEmpty ||
         confirmPassword.isEmpty) {
-      widget.onMessage('Please complete all password fields.', isError: true);
+      _showMessage('Please complete all password fields.', isError: true);
       return;
     }
 
-    if (newPassword.length < 6) {
-      widget.onMessage(
-        'New password must be at least 6 characters.',
+    if (!PasswordStrength(newPassword).isAcceptable) {
+      _showMessage(
+        'Password is weak. Meet at least 3 of the 5 requirements to use a fair password.',
         isError: true,
       );
       return;
     }
 
     if (newPassword != confirmPassword) {
-      widget.onMessage('Passwords do not match.', isError: true);
+      _showMessage('Passwords do not match.', isError: true);
       return;
     }
 
-    setState(() => _isSaving = true);
+    setState(() {
+      _isSaving = true;
+      _error = null;
+    });
     try {
-      final credential = EmailAuthProvider.credential(
-        email: widget.email,
-        password: currentPassword,
-      );
-      await widget.currentUser.reauthenticateWithCredential(credential);
-      await widget.currentUser.updatePassword(newPassword);
-      await FirebaseFirestore.instance
+      final ref = FirebaseFirestore.instance
           .collection('staff_requests')
-          .doc(widget.currentUser.uid)
-          .set({
-            'mustChangePassword': false,
-            'passwordChangedAt': FieldValue.serverTimestamp(),
-          }, SetOptions(merge: true));
+          .doc(widget.accountId);
+      final data = (await ref.get(
+        const GetOptions(source: Source.server),
+      )).data();
+      if (data == null)
+        throw StateError('Staff account not found. Please sign in again.');
+      final user = FirebaseAuth.instance.currentUser;
+      if (data['passwordAuthMode'] != 'firestore' &&
+          user?.uid == widget.accountId &&
+          user?.email != null) {
+        await user!.reauthenticateWithCredential(
+          EmailAuthProvider.credential(
+            email: user.email!,
+            password: currentPassword,
+          ),
+        );
+        await user.updatePassword(newPassword);
+        await ref.update({
+          'mustChangePassword': false,
+          'passwordChangedAt': FieldValue.serverTimestamp(),
+          'credentialsChangedAt': FieldValue.serverTimestamp(),
+          'passwordAuthMode': 'firebase',
+          'passwordCredential': FieldValue.delete(),
+          for (final field in legacyPasswordFields) field: FieldValue.delete(),
+        });
+      } else {
+        await changeFirestoreAccountPassword(
+          account: ref,
+          currentPassword: currentPassword,
+          newPassword: newPassword,
+        );
+      }
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        for (final key
+            in prefs
+                .getKeys()
+                .where(
+                  (key) =>
+                      key.startsWith('offlineAccount.') ||
+                      key.startsWith('offlineLogin.'),
+                )
+                .toList()) {
+          await prefs.remove(key);
+        }
+      } catch (error) {
+        debugPrint(
+          'Unable to clear remembered login after password change: $error',
+        );
+      }
 
       if (!mounted) return;
       FocusManager.instance.primaryFocus?.unfocus();
-      Navigator.of(context).pop();
-      widget.onMessage('Password updated successfully.');
+      TextInput.finishAutofillContext(shouldSave: true);
+      _currentPasswordController.clear();
+      _newPasswordController.clear();
+      _confirmPasswordController.clear();
+      setState(() {
+        _saved = true;
+      });
     } on FirebaseAuthException catch (e) {
       final message =
           e.code == 'wrong-password' || e.code == 'invalid-credential'
           ? 'Current password is incorrect.'
           : 'Unable to update password. Please try again.';
-      if (mounted) widget.onMessage(message, isError: true);
+      if (mounted) _showMessage(message, isError: true);
+    } on StateError catch (error) {
+      if (mounted) _showMessage(error.message, isError: true);
     } catch (_) {
       if (mounted) {
-        widget.onMessage(
+        _showMessage(
           'Unable to update password. Please try again.',
           isError: true,
         );
@@ -2178,88 +2455,167 @@ class _ChangePasswordSheetState extends State<_ChangePasswordSheet> {
   Widget build(BuildContext context) {
     final bottomPadding = MediaQuery.of(context).viewInsets.bottom;
 
-    return SingleChildScrollView(
-      padding: EdgeInsets.only(bottom: bottomPadding),
-      child: Container(
-        padding: const EdgeInsets.fromLTRB(18, 14, 18, 18),
-        decoration: const BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
-        ),
-        child: SafeArea(
-          top: false,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Center(
-                child: Container(
-                  width: 44,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: _ProfilePageState._border,
-                    borderRadius: BorderRadius.circular(4),
+    return AutofillGroup(
+      onDisposeAction: AutofillContextAction.cancel,
+      child: SingleChildScrollView(
+        padding: EdgeInsets.only(bottom: bottomPadding),
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(18, 14, 18, 18),
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+          ),
+          child: SafeArea(
+            top: false,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Center(
+                  child: Container(
+                    width: 44,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: _ProfilePageState._border,
+                      borderRadius: BorderRadius.circular(4),
+                    ),
                   ),
                 ),
-              ),
-              const SizedBox(height: 18),
-              const Text(
-                'Change Password',
-                style: TextStyle(
-                  color: _ProfilePageState._pinkDark,
-                  fontSize: 20,
-                  fontWeight: FontWeight.w900,
-                ),
-              ),
-              const SizedBox(height: 16),
-              _PasswordField(
-                controller: _currentPasswordController,
-                label: 'Current Password',
-                obscureText: _obscureCurrent,
-                onToggle: () =>
-                    setState(() => _obscureCurrent = !_obscureCurrent),
-              ),
-              const SizedBox(height: 12),
-              _PasswordField(
-                controller: _newPasswordController,
-                label: 'New Password',
-                obscureText: _obscureNew,
-                onToggle: () => setState(() => _obscureNew = !_obscureNew),
-              ),
-              const SizedBox(height: 12),
-              _PasswordField(
-                controller: _confirmPasswordController,
-                label: 'Confirm New Password',
-                obscureText: _obscureConfirm,
-                onToggle: () =>
-                    setState(() => _obscureConfirm = !_obscureConfirm),
-              ),
-              const SizedBox(height: 18),
-              ElevatedButton(
-                onPressed: _isSaving ? null : _savePassword,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: _ProfilePageState._pinkDark,
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14),
+                const SizedBox(height: 18),
+                const Text(
+                  'Change Password',
+                  style: TextStyle(
+                    color: _ProfilePageState._pinkDark,
+                    fontSize: 20,
+                    fontWeight: FontWeight.w900,
                   ),
                 ),
-                child: _isSaving
-                    ? const SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(
-                          color: Colors.white,
-                          strokeWidth: 2,
+                const SizedBox(height: 16),
+                if (_saved) ...[
+                  const Icon(
+                    Icons.check_circle_rounded,
+                    color: Colors.green,
+                    size: 42,
+                  ),
+                  const SizedBox(height: 12),
+                  const Text(
+                    'Password changed successfully. Use your new password the next time you sign in.',
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 18),
+                  Container(
+                    decoration: BoxDecoration(
+                      color: AppColors.blush.withValues(alpha: .4),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Column(
+                      children: [
+                        RadioListTile<bool>(
+                          value: false,
+                          groupValue: _logoutAll,
+                          activeColor: AppColors.primary,
+                          onChanged: _continuing
+                              ? null
+                              : (value) => setState(() => _logoutAll = value!),
+                          title: const Text('Stay logged in'),
+                          subtitle: const Text('Continue using this device.'),
                         ),
-                      )
-                    : const Text(
-                        'Save Password',
-                        style: TextStyle(fontWeight: FontWeight.w800),
+                        RadioListTile<bool>(
+                          value: true,
+                          groupValue: _logoutAll,
+                          activeColor: AppColors.primary,
+                          onChanged: _continuing
+                              ? null
+                              : (value) => setState(() => _logoutAll = value!),
+                          title: const Text('Log out all devices'),
+                          subtitle: const Text(
+                            'Includes this device. Sign in again with your new password.',
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (_logoutError != null)
+                    Text(
+                      _logoutError!,
+                      style: const TextStyle(color: Colors.red),
+                    ),
+                  FilledButton(
+                    style: FilledButton.styleFrom(
+                      backgroundColor: AppColors.primary,
+                    ),
+                    onPressed: _continuing ? null : _finishPasswordChange,
+                    child: Text(_continuing ? 'Logging out…' : 'Continue'),
+                  ),
+                ] else ...[
+                  Offstage(
+                    child: TextField(
+                      controller: _autofillUsername,
+                      autofillHints: const [AutofillHints.username],
+                      readOnly: true,
+                    ),
+                  ),
+                  PasswordEntryField(
+                    controller: _currentPasswordController,
+                    label: 'Current Password',
+                    obscureText: _obscureCurrent,
+                    onToggle: () =>
+                        setState(() => _obscureCurrent = !_obscureCurrent),
+                  ),
+                  const SizedBox(height: 12),
+                  PasswordEntryField(
+                    controller: _newPasswordController,
+                    label: 'New Password',
+                    obscureText: _obscureNew,
+                    onToggle: () => setState(() => _obscureNew = !_obscureNew),
+                  ),
+                  PasswordStrengthChecklist(
+                    password: _newPasswordController.text,
+                  ),
+                  const SizedBox(height: 12),
+                  PasswordEntryField(
+                    controller: _confirmPasswordController,
+                    label: 'Confirm New Password',
+                    obscureText: _obscureConfirm,
+                    onToggle: () =>
+                        setState(() => _obscureConfirm = !_obscureConfirm),
+                  ),
+                  const SizedBox(height: 18),
+                  if (_error != null)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 12),
+                      child: Text(
+                        _error!,
+                        style: const TextStyle(color: Colors.red),
                       ),
-              ),
-            ],
+                    ),
+                  ElevatedButton(
+                    onPressed: _isSaving || _saved ? null : _savePassword,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: _ProfilePageState._pinkDark,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                    ),
+                    child: _isSaving
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              color: Colors.white,
+                              strokeWidth: 2,
+                            ),
+                          )
+                        : const Text(
+                            'Save Password',
+                            style: TextStyle(fontWeight: FontWeight.w800),
+                          ),
+                  ),
+                ],
+              ],
+            ),
           ),
         ),
       ),

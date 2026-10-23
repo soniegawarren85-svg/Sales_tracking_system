@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <meta name="robots" content="noindex,nofollow">
+  <title>Password changed | Angel'Z Bites Cupcakes</title>
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: Arial, Helvetica, sans-serif;
+      color: #52102a;
+      background: #a90f48;
+    }
+    * { box-sizing: border-box; }
+    body {
+      min-height: 100vh;
+      margin: 0;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      overflow: hidden;
+      background:
+        radial-gradient(circle at 8% 95%, #d14872 0 19%, transparent 19.2%),
+        radial-gradient(circle at 96% 5%, #c43d68 0 18%, transparent 18.2%),
+        linear-gradient(135deg, #c01850, #7c123d);
+    }
+    main {
+      width: min(100%, 460px);
+      padding: 42px 32px 36px;
+      border-radius: 28px;
+      text-align: center;
+      background: #fff;
+      box-shadow: 0 24px 70px #3d092b55;
+      animation: appear .45s ease-out both;
+    }
+    .check {
+      width: 84px;
+      height: 84px;
+      display: grid;
+      place-items: center;
+      margin: 0 auto 22px;
+      border-radius: 50%;
+      background: #f8e6ed;
+      color: #bd174f;
+      font-size: 48px;
+      font-weight: 700;
+      animation: check .65s .15s cubic-bezier(.2, .8, .2, 1.3) both;
+    }
+    h1 { margin: 0 0 12px; font-size: 25px; }
+    p { margin: 0; color: #666; line-height: 1.55; }
+    a {
+      display: block;
+      margin-top: 28px;
+      padding: 15px 18px;
+      border-radius: 15px;
+      background: #bd174f;
+      color: #fff;
+      font-weight: 700;
+      text-decoration: none;
+    }
+    @keyframes appear {
+      from { opacity: 0; transform: translateY(12px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes check {
+      from { opacity: 0; transform: scale(.4) rotate(-15deg); }
+      to { opacity: 1; transform: scale(1) rotate(0); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation-duration: .01ms !important; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="check" aria-hidden="true">✓</div>
+    <h1>Password changed successfully</h1>
+    <p>Your new password is ready. Returning you to the login screen…</p>
+    <a id="continue" href="angelzbites://login">Continue to Login</a>
+  </main>
+  <script src="/reset-complete.js" defer></script>
+</body>
+</html>

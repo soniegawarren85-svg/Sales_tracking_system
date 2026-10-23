@@ -6,6 +6,7 @@ import 'package:sales_tracking/theme/app_colors.dart';
 import '../services/inventory_display_ids.dart';
 import '../services/staff_allocation_scope.dart';
 import '../services/bundle_stock_service.dart';
+import '../services/beverage_sales_summary.dart';
 import '../services/sale_stock.dart';
 import '../widgets/staff_refund_dialog.dart';
 import 'dart:async';
@@ -1209,6 +1210,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                 (data['isCoffee'] == true ? data['publicId'] : null),
             'variant': variantName,
             'price': _parsePrice(itemData['price']),
+            'costPrice': _parsePrice(itemData['costPrice']),
             'category': data['category']?.toString() ?? '',
             'categoryId':
                 data['categoryId']?.toString() ??
@@ -4427,6 +4429,7 @@ class _DailyStockPageState extends State<DailyStockPage>
             'name': item['name'],
             'variant': item['variant'],
             'price': item['price'],
+            'costPrice': item['costPrice'] ?? 0,
             'quantity': entry.value,
             'category': item['category'] ?? '',
             'isBundle': item['isBundle'] == true,
@@ -4939,6 +4942,7 @@ class _DailyStockPageState extends State<DailyStockPage>
         'name': item['name']?.toString() ?? '',
         'variant': item['variant']?.toString() ?? '',
         'price': _parsePrice(item['price']),
+        'costPrice': _parsePrice(item['costPrice']),
         'quantity': entry.value,
         'itemId': item['itemId']?.toString() ?? item['id']?.toString() ?? '',
         'sourceInventoryId': item['sourceInventoryId']?.toString() ?? '',
@@ -8735,6 +8739,11 @@ class _DailyStockPageState extends State<DailyStockPage>
                     'variant': sizeName,
                     'flavor': data['name'] ?? 'Beverages',
                     'price': baseVariantPrice,
+                    'costPrice': coffeeSizeCostPrice(
+                      size: size,
+                      data: data,
+                      rootData: rootData,
+                    ),
                     'basePrice': basePrice,
                     'sizePriceDelta': delta,
                     'addonName': '',
@@ -8761,6 +8770,13 @@ class _DailyStockPageState extends State<DailyStockPage>
                       'variant': '$sizeName + $addonName',
                       'flavor': data['name'] ?? 'Beverages',
                       'price': baseVariantPrice + addonDelta,
+                      'costPrice':
+                          coffeeSizeCostPrice(
+                            size: size,
+                            data: data,
+                            rootData: rootData,
+                          ) +
+                          (num.tryParse('${addon['costPrice'] ?? 0}') ?? 0),
                       'basePrice': basePrice,
                       'sizePriceDelta': delta,
                       'addonName': addonName,
@@ -11133,20 +11149,10 @@ class _DailyStockPageState extends State<DailyStockPage>
     final imageUrl = coffeeVariants.isEmpty
         ? ''
         : coffeeVariants.first['imageUrl']?.toString() ?? '';
-    final originalPrices = coffeeVariants
-        .map((item) {
-          final basePrice = _parsePrice(item['basePrice']);
-          if (basePrice > 0) return basePrice;
-          return _parsePrice(item['price']) -
-              _parsePrice(item['sizePriceDelta']) -
-              _parsePrice(item['addonPriceDelta']);
-        })
-        .where((price) => price > 0)
-        .toList();
-    final originalPrice = originalPrices.isEmpty
-        ? 0.0
-        : originalPrices.reduce(min);
-    final priceLabel = formatMoney(originalPrice);
+    final sizePrices = [
+      for (final entry in sizeEntries)
+        (name: entry.key, price: _baseCoffeeSizePrice(entry.value)),
+    ];
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -11155,7 +11161,7 @@ class _DailyStockPageState extends State<DailyStockPage>
           physics: const NeverScrollableScrollPhysics(),
           gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
             maxCrossAxisExtent: constraints.maxWidth >= 700 ? 240 : 230,
-            mainAxisExtent: 220,
+            mainAxisExtent: 250,
             crossAxisSpacing: 12,
             mainAxisSpacing: 12,
           ),
@@ -11214,17 +11220,18 @@ class _DailyStockPageState extends State<DailyStockPage>
                           spacing: 6,
                           runSpacing: 6,
                           children: [
-                            _MiniTag(
-                              label: priceLabel,
-                              bgColor: const Color(0xFFE8F5E9),
-                              textColor: const Color(0xFF2E7D32),
-                            ),
-                            _MiniTag(
-                              label:
-                                  '${sizeEntries.length} size${sizeEntries.length == 1 ? '' : 's'}',
-                              bgColor: _AppColors.cardBg,
-                              textColor: _AppColors.textSoft,
-                            ),
+                            for (final sizePrice in sizePrices)
+                              _MiniTag(
+                                label: sizePrice.price > 0
+                                    ? '${sizePrice.name} · ${formatMoney(sizePrice.price)}'
+                                    : '${sizePrice.name} · Price not set',
+                                bgColor: sizePrice.price > 0
+                                    ? const Color(0xFFE8F5E9)
+                                    : const Color(0xFFFFF3F7),
+                                textColor: sizePrice.price > 0
+                                    ? const Color(0xFF2E7D32)
+                                    : _AppColors.textSoft,
+                              ),
                           ],
                         ),
                       ],
@@ -11237,6 +11244,18 @@ class _DailyStockPageState extends State<DailyStockPage>
         );
       },
     );
+  }
+
+  double _baseCoffeeSizePrice(List<Map<String, dynamic>> variants) {
+    Map<String, dynamic>? baseVariant;
+    for (final variant in variants) {
+      if ((variant['addonName']?.toString().trim() ?? '').isEmpty) {
+        baseVariant = variant;
+        break;
+      }
+    }
+    baseVariant ??= variants.isEmpty ? null : variants.first;
+    return baseVariant == null ? 0 : beverageSizeSellingPrice(baseVariant);
   }
 
   List<Widget> _buildAnimatedItemGroups(

@@ -1,5 +1,6 @@
 import '../theme/app_colors.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import '../services/receipt_tax.dart';
 import 'package:flutter/material.dart';
 import '../services/branch_report_data.dart';
 import 'historical_cash_drawer.dart';
@@ -624,6 +625,9 @@ class _StaffPerformancePanelState extends State<StaffPerformancePanel> {
                                                         '${item['publicId'] ?? item['itemId'] ?? item['id'] ?? item['coffeeId'] ?? 'ID not recorded'} • ${item['variant'] ?? item['name']}\n${item['quantity']} × ${_money(item['price'] ?? item['unitPrice'])}',
                                                       ),
                                                     ),
+                                                  Text(
+                                                    'Tax classification: ${receiptTaxLabel(sale)}',
+                                                  ),
                                                   if (discount > 0)
                                                     Text(
                                                       'Discount${(sale['discountName'] ?? sale['discountType']) == null ? '' : ' (${sale['discountName'] ?? sale['discountType']})'}: ${_money(discount)}',

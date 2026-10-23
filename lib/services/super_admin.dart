@@ -1,7 +1,9 @@
 import 'dart:convert';
 import 'package:crypto/crypto.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_core/firebase_core.dart';
 import 'account_password_service.dart';
 
 /// Dedicated super-admin identity and session, separate from ordinary admins.
@@ -53,11 +55,70 @@ class SuperAdmin {
     String password, {
     SharedPreferences? preferences,
     FirebaseFirestore? database,
+    String? currentPassword,
   }) async {
     final prefs = preferences ?? await SharedPreferences.getInstance();
     if (database != null) {
-      if (password.length < 6)
+      if (password.length < 6) {
         throw ArgumentError('Use at least 6 characters.');
+      }
+      final profile =
+          (await database.collection('super_admin_profiles').doc(id).get())
+              .data();
+      final authUid = '${profile?['authUid'] ?? ''}'.trim();
+      if (authUid.isNotEmpty) {
+        if (currentPassword == null || currentPassword.isEmpty) {
+          throw StateError(
+            'Enter your current password to update the linked account.',
+          );
+        }
+        final app = await Firebase.initializeApp(
+          name:
+              'superAdminPasswordChange${DateTime.now().microsecondsSinceEpoch}',
+          options: Firebase.app().options,
+        );
+        final auth = FirebaseAuth.instanceFor(app: app);
+        try {
+          UserCredential? credential;
+          FirebaseAuthException? lastAuthError;
+          for (final email in <String>{
+            if ('${profile?['pendingAuthEmail'] ?? ''}'.trim().isNotEmpty)
+              '${profile?['pendingAuthEmail']}'.trim(),
+            if ('${profile?['authEmail'] ?? ''}'.trim().isNotEmpty)
+              '${profile?['authEmail']}'.trim(),
+            if ('${profile?['email'] ?? ''}'.trim().isNotEmpty)
+              '${profile?['email']}'.trim(),
+          }) {
+            try {
+              credential = await auth.signInWithEmailAndPassword(
+                email: email,
+                password: currentPassword,
+              );
+              break;
+            } on FirebaseAuthException catch (error) {
+              lastAuthError = error;
+              if (![
+                'invalid-credential',
+                'wrong-password',
+                'user-not-found',
+              ].contains(error.code)) {
+                rethrow;
+              }
+            }
+          }
+          final user = credential?.user;
+          if (user == null || user.uid != authUid) {
+            if (lastAuthError != null) throw lastAuthError;
+            throw StateError(
+              'Unable to verify the linked Super Admin account.',
+            );
+          }
+          await user.updatePassword(password);
+        } finally {
+          await auth.signOut();
+          await app.delete();
+        }
+      }
       await database.collection('super_admin_credentials').doc(id).set({
         'passwordCredential': await createPasswordCredential(password),
         'credentialsChangedAt': FieldValue.serverTimestamp(),

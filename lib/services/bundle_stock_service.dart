@@ -11,6 +11,23 @@ List<Map<String, dynamic>> bundleRows(dynamic value) =>
         .toList();
 int bundleQuantity(dynamic value) => num.tryParse('$value')?.toInt() ?? 0;
 
+num coffeeSizeCostPrice({
+  required Map size,
+  required Map data,
+  Map? rootData,
+}) {
+  final sizeName = '${size['name'] ?? ''}'.trim().toLowerCase();
+  final rootSize = bundleRows(rootData?['sizes'])
+      .where(
+        (option) => '${option['name'] ?? ''}'.trim().toLowerCase() == sizeName,
+      )
+      .firstOrNull;
+  return num.tryParse(
+        '${size['costPrice'] ?? rootSize?['costPrice'] ?? data['costPrice'] ?? rootData?['costPrice'] ?? 0}',
+      ) ??
+      0;
+}
+
 bool inventoryLowStock(dynamic quantity, {required String type}) {
   final stock = num.tryParse('$quantity');
   return stock != null && stock <= (type.toLowerCase() == 'bundle' ? 20 : 50);
@@ -74,7 +91,7 @@ List<Map<String, dynamic>> bundleBeverageSizes(
           'sourceCollection': 'coffee_products',
           'publicId': data['publicId'] ?? data['coffeeId'],
           'isCoffee': true,
-          'costPrice': data['costPrice'] ?? 0,
+          'costPrice': size['costPrice'] ?? data['costPrice'] ?? 0,
           'price':
               (num.tryParse('${data['basePrice']}') ?? 0) +
               (num.tryParse('${size['priceDelta']}') ?? 0),

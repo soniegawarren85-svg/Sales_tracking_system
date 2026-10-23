@@ -1,3 +1,4 @@
+import '../../services/profile_email.dart';
 import '../../services/activity_log.dart';
 import '../../services/branch_permissions.dart';
 import '../../services/branch_session.dart';
@@ -3472,7 +3473,7 @@ class StaffApplicant {
       staffId: data['staffId'] as String? ?? '',
       age: data['age']?.toString() ?? '',
       phone: data['phone'] as String? ?? '',
-      email: data['email'] as String? ?? '',
+      email: confirmedProfileEmail(data),
       address: data['address'] as String? ?? '',
       status: data['status'] as String? ?? 'pending',
     );
@@ -3524,7 +3525,7 @@ class AdminModel {
       id: doc.id,
       firstName: data['firstName'] as String? ?? '',
       lastName: data['lastName'] as String? ?? '',
-      email: data['email'] as String? ?? '',
+      email: confirmedProfileEmail(data),
       phone: data['phone'] as String? ?? '',
       staffId: data['staffId'] as String? ?? '',
       adminId: data['adminId'] as String? ?? '',

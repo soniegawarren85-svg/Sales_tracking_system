@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta name="referrer" content="no-referrer">
+    <title>Reset password · Angel'Z Bites Cupcakes</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family: system-ui, sans-serif;
+        color: #401326;
+        background: #fff3f7;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        padding: 24px;
+        background:
+          radial-gradient(at top right, #f8cddd, transparent 60%),
+          radial-gradient(at bottom left, #f7d4e0, transparent 55%),
+          #fff5f8;
+      }
+      main {
+        width: 100%;
+        max-width: 460px;
+        padding: 34px;
+        background: #fff;
+        border: 1px solid #f3d3df;
+        border-radius: 28px;
+        box-shadow: 0 18px 70px #8d153524;
+      }
+      .brand {
+        color: #a51648;
+        font-weight: 800;
+        letter-spacing: .03em;
+      }
+      h1 { margin: 18px 0 8px; font-size: 28px; color: #861239; }
+      p { color: #795365; line-height: 1.55; }
+      label { display: block; margin-top: 20px; font-size: 14px; font-weight: 650; }
+      input {
+        width: 100%;
+        margin-top: 7px;
+        padding: 14px;
+        border: 1px solid #dfb8c8;
+        border-radius: 12px;
+        font: inherit;
+      }
+      input:focus { outline: 2px solid #bc2454; outline-offset: 2px; }
+      button {
+        width: 100%;
+        margin-top: 16px;
+        padding: 14px 16px;
+        border: 0;
+        border-radius: 12px;
+        background: linear-gradient(135deg, #c21850, #991443);
+        color: white;
+        font: inherit;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      button:disabled { opacity: .55; cursor: wait; }
+      .secondary { background: #fff0f5; color: #a91648; }
+      #message {
+        padding: 12px;
+        border-radius: 12px;
+        background: #fff0f5;
+        overflow-wrap: anywhere;
+      }
+      #success {
+        text-align: center;
+        color: #315f44;
+      }
+      .success-mark {
+        display: grid;
+        width: 82px;
+        height: 82px;
+        margin: 24px auto 16px;
+        place-items: center;
+        border-radius: 50%;
+        background: #e8f7ec;
+        color: #23824a;
+        font-size: 46px;
+        transform: scale(.5);
+        opacity: 0;
+      }
+      .success-visible .success-mark {
+        animation: check-pop 650ms cubic-bezier(.16, 1.4, .4, 1) forwards;
+      }
+      .success-visible h1 {
+        animation: fade-up 450ms ease-out 150ms both;
+      }
+      @keyframes check-pop {
+        65% { transform: scale(1.12); opacity: 1; }
+        100% { transform: scale(1); opacity: 1; }
+      }
+      @keyframes fade-up {
+        from { opacity: 0; transform: translateY(8px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+      .username {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip-path: inset(50%);
+      }
+      [hidden] { display: none !important; }
+      @media (prefers-reduced-motion: reduce) {
+        *, *::before, *::after { animation-duration: .01ms !important; }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="brand">Angel'Z Bites Cupcakes</div>
+      <h1>Reset your password</h1>
+      <p id="intro">Checking your reset link…</p>
+      <p id="message" role="alert" hidden></p>
+      <form id="form" hidden>
+        <label for="password">New password</label>
+        <input id="password" type="password" name="new-password"
+          autocomplete="new-password" minlength="6" required>
+        <label for="confirm">Confirm new password</label>
+        <input id="confirm" type="password" name="confirm-password"
+          autocomplete="new-password" minlength="6" required>
+        <button class="secondary" type="button" id="generate">Suggest strong password</button>
+        <output id="suggestion" hidden></output>
+        <button class="secondary" type="button" id="use" hidden>Use this password</button>
+        <button id="save" type="submit">Save new password</button>
+      </form>
+      <section id="success" role="status" hidden>
+        <div class="success-mark" aria-hidden="true">✓</div>
+        <h1>Password changed successfully!</h1>
+        <p>Your password has been saved. You can now sign in with your new password.</p>
+        <button id="return" type="button" onclick="location.href='angelzbites://login'">
+          Return to Login
+        </button>
+      </section>
+    </main>
+    <script src="reset.js" defer></script>
+  </body>
+</html>

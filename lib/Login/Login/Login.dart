@@ -1,4 +1,7 @@
 import '../../services/account_password_service.dart';
+import '../../services/profile_email.dart';
+import '../../services/account_session_control.dart';
+import '../../services/password_policy.dart';
 import 'dart:async';
 import '../../services/super_admin.dart';
 import '../../Super_admin_pages/Dashboard.dart';
@@ -201,6 +204,10 @@ class _LoginScreenState extends State<LoginScreen>
     required Map<String, dynamic> accountData,
   }) async {
     final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(
+      'accountSessionVersion.$userId',
+      accountSessionVersion(accountData),
+    );
     await prefs.setString('offlineLogin.username', username);
     await prefs.setString(
       'offlineLogin.passwordHash',
@@ -468,7 +475,7 @@ class _LoginScreenState extends State<LoginScreen>
     final matches = <String, QueryDocumentSnapshot<Map<String, dynamic>>>{};
     final emailVariants = {email.trim(), email.trim().toLowerCase()};
     final queries = <Future<QuerySnapshot<Map<String, dynamic>>>>[];
-    for (final field in const ['email', 'authEmail']) {
+    for (final field in const ['email', 'authEmail', 'pendingAuthEmail']) {
       for (final variant in emailVariants) {
         queries.add(
           collection
@@ -481,7 +488,7 @@ class _LoginScreenState extends State<LoginScreen>
       for (final doc in result.docs) {
         final data = doc.data();
         final normalizedEmail = email.trim().toLowerCase();
-        final hasMatchingEmail = ['email', 'authEmail'].any(
+        final hasMatchingEmail = ['email', 'authEmail', 'pendingAuthEmail'].any(
           (field) =>
               '${data[field] ?? ''}'.trim().toLowerCase() == normalizedEmail,
         );
@@ -546,6 +553,7 @@ class _LoginScreenState extends State<LoginScreen>
 
       // A changed password is authoritative; never retry legacy/default secrets.
       for (final doc in accountDocs) {
+        if (usesLinkedAuthentication(doc.data())) continue;
         if (doc.data()['passwordCredential'] == null) continue;
         if (!await matchesAccountPassword(doc.data(), password)) {
           _showMessage(invalidLoginCredentialsMessage(), isError: true);
@@ -561,6 +569,7 @@ class _LoginScreenState extends State<LoginScreen>
           username.startsWith('ADM-') &&
           _isAcceptedAdminPassword(password) &&
           !accountDocs.any((doc) => isSuperAdminCreatedAdmin(doc.data())) &&
+          !accountDocs.any((doc) => usesLinkedAuthentication(doc.data())) &&
           !accountDocs.any(
             (doc) => doc.data()['credentialsChangedAt'] != null,
           )) {
@@ -643,40 +652,61 @@ class _LoginScreenState extends State<LoginScreen>
 
       for (final accountDoc in accountDocs) {
         final accountData = accountDoc.data();
+        final pendingAuthEmail = accountData['pendingAuthEmail']
+            ?.toString()
+            .trim();
         final email =
-            (accountData['authEmail'] ?? accountData['email'])
-                ?.toString()
-                .trim() ??
-            '';
+            pendingAuthEmail != null &&
+                pendingAuthEmail.toLowerCase() == username.toLowerCase()
+            ? pendingAuthEmail
+            : (accountData['authEmail'] ?? accountData['email'])
+                      ?.toString()
+                      .trim() ??
+                  '';
         if (email.isEmpty) continue;
 
-        for (final authPassword
-            in accountData['credentialsChangedAt'] != null
-                ? [password]
-                : _authPasswordCandidates(
-                    username,
-                    password,
-                    allowLegacyAdminPasswords: !isSuperAdminCreatedAdmin(
-                      accountData,
-                    ),
-                  )) {
-          try {
-            credential = await FirebaseAuth.instance
-                .signInWithEmailAndPassword(
-                  email: email,
-                  password: authPassword,
-                )
-                .timeout(const Duration(seconds: 8));
-            signedInDoc = accountDoc;
-            break;
-          } on FirebaseAuthException catch (e) {
-            lastAuthError = e;
-            if (e.code != 'user-not-found' &&
-                e.code != 'wrong-password' &&
-                e.code != 'invalid-credential') {
-              rethrow;
+        for (final signInEmail in <String>{
+          email,
+          if (pendingAuthEmail != null && pendingAuthEmail.isNotEmpty)
+            pendingAuthEmail,
+        }) {
+          for (final authPassword
+              in usesLinkedAuthentication(accountData) ||
+                      accountData['credentialsChangedAt'] != null
+                  ? [password]
+                  : _authPasswordCandidates(
+                      username,
+                      password,
+                      allowLegacyAdminPasswords: !isSuperAdminCreatedAdmin(
+                        accountData,
+                      ),
+                    )) {
+            try {
+              credential = await FirebaseAuth.instance
+                  .signInWithEmailAndPassword(
+                    email: signInEmail,
+                    password: authPassword,
+                  )
+                  .timeout(const Duration(seconds: 8));
+              final expectedAuthUid =
+                  '${accountData['authUid'] ?? accountDoc.id}'.trim();
+              if (credential.user?.uid != expectedAuthUid) {
+                await FirebaseAuth.instance.signOut();
+                credential = null;
+                continue;
+              }
+              signedInDoc = accountDoc;
+              break;
+            } on FirebaseAuthException catch (e) {
+              lastAuthError = e;
+              if (e.code != 'user-not-found' &&
+                  e.code != 'wrong-password' &&
+                  e.code != 'invalid-credential') {
+                rethrow;
+              }
             }
           }
+          if (signedInDoc != null) break;
         }
 
         if (signedInDoc != null) break;
@@ -691,6 +721,7 @@ class _LoginScreenState extends State<LoginScreen>
               .toLowerCase();
           final status = rawStatus.isEmpty ? 'accepted' : rawStatus;
           if (status == 'accepted' &&
+              !usesLinkedAuthentication(data) &&
               data['credentialsChangedAt'] == null &&
               _storedPasswordMatches(data, password)) {
             fallbackDoc = doc;
@@ -757,6 +788,8 @@ class _LoginScreenState extends State<LoginScreen>
         }
         final publicId = (data[isAdmin ? 'adminId' : 'staffId'] ?? username)
             .toString();
+        final signedInAuthEmail = credential.user?.email;
+        final pendingAuthEmail = data['pendingAuthEmail']?.toString().trim();
         await _rememberOfflineAccount(
           username: publicId,
           password: password,
@@ -768,7 +801,20 @@ class _LoginScreenState extends State<LoginScreen>
         );
         unawaited(
           signedInDoc.reference
-              .update({'lastLoginAt': FieldValue.serverTimestamp()})
+              .update({
+                'lastLoginAt': FieldValue.serverTimestamp(),
+                'authEmail': ?signedInAuthEmail,
+                'passwordAuthMode': 'firebase',
+                'passwordCredential': FieldValue.delete(),
+                for (final field in legacyPasswordFields)
+                  field: FieldValue.delete(),
+                if (pendingAuthEmail != null &&
+                    signedInAuthEmail?.toLowerCase() ==
+                        pendingAuthEmail.toLowerCase()) ...{
+                  'email': signedInAuthEmail,
+                  'pendingAuthEmail': FieldValue.delete(),
+                },
+              })
               .catchError((Object error) {
                 debugPrint('Login status queued: $error');
               }),
@@ -840,6 +886,7 @@ class _LoginScreenState extends State<LoginScreen>
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppColors.background,
+      resizeToAvoidBottomInset: false,
       body: Stack(
         children: [
           // ── Decorative background blobs ──────────────────────────────
@@ -876,39 +923,46 @@ class _LoginScreenState extends State<LoginScreen>
 
               // ── SCROLLABLE FORM ─────────────────────────────────────
               Expanded(
-                child: LayoutBuilder(
-                  builder: (context, constraints) {
-                    final isTablet = constraints.maxWidth >= 700;
-                    final horizontalPadding = isTablet ? 40.0 : 28.0;
-                    final formMaxWidth = isTablet ? 560.0 : double.infinity;
+                child: AnimatedPadding(
+                  duration: const Duration(milliseconds: 180),
+                  curve: Curves.easeOut,
+                  padding: EdgeInsets.only(
+                    bottom: MediaQuery.viewInsetsOf(context).bottom,
+                  ),
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      final isTablet = constraints.maxWidth >= 700;
+                      final horizontalPadding = isTablet ? 40.0 : 28.0;
+                      final formMaxWidth = isTablet ? 560.0 : double.infinity;
 
-                    return SingleChildScrollView(
-                      physics: const BouncingScrollPhysics(),
-                      padding: EdgeInsets.symmetric(
-                        horizontal: horizontalPadding,
-                      ),
-                      child: Center(
-                        child: ConstrainedBox(
-                          constraints: BoxConstraints(maxWidth: formMaxWidth),
-                          child: FadeTransition(
-                            opacity: _fadeAnim,
-                            child: SlideTransition(
-                              position: _slideAnim,
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  SizedBox(height: isTablet ? 28 : 36),
-                                  _buildWelcomeText(),
-                                  const SizedBox(height: 5),
-                                  _buildForm(),
-                                ],
+                      return SingleChildScrollView(
+                        physics: const BouncingScrollPhysics(),
+                        padding: EdgeInsets.symmetric(
+                          horizontal: horizontalPadding,
+                        ),
+                        child: Center(
+                          child: ConstrainedBox(
+                            constraints: BoxConstraints(maxWidth: formMaxWidth),
+                            child: FadeTransition(
+                              opacity: _fadeAnim,
+                              child: SlideTransition(
+                                position: _slideAnim,
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    SizedBox(height: isTablet ? 28 : 36),
+                                    _buildWelcomeText(),
+                                    const SizedBox(height: 5),
+                                    _buildForm(),
+                                  ],
+                                ),
                               ),
                             ),
                           ),
                         ),
-                      ),
-                    );
-                  },
+                      );
+                    },
+                  ),
                 ),
               ),
             ],
@@ -1130,6 +1184,7 @@ class _LoginScreenState extends State<LoginScreen>
           controller: _passwordController,
           icon: Icons.lock_outline_rounded,
           obscureText: _obscurePassword,
+          isPasswordField: true,
           suffixIcon: IconButton(
             icon: Icon(
               _obscurePassword
@@ -1196,6 +1251,7 @@ class _LoginScreenState extends State<LoginScreen>
     required TextEditingController controller,
     required IconData icon,
     bool obscureText = false,
+    bool isPasswordField = false,
     Widget? suffixIcon,
     TextInputType keyboardType = TextInputType.text,
   }) {
@@ -1211,53 +1267,79 @@ class _LoginScreenState extends State<LoginScreen>
           ),
         ],
       ),
-      child: TextField(
-        controller: controller,
-        keyboardType: keyboardType,
-        obscureText: obscureText,
-        style: GoogleFonts.dmSans(
-          fontSize: 15,
-          color: AppColors.text,
-          fontWeight: FontWeight.w500,
-        ),
-        decoration: InputDecoration(
-          labelText: label,
-          labelStyle: GoogleFonts.dmSans(
-            fontSize: 13,
-            color: AppColors.rose,
+      child: Focus(
+        onKeyEvent: (_, event) {
+          if (isPasswordField &&
+              event is KeyDownEvent &&
+              (HardwareKeyboard.instance.isControlPressed ||
+                  HardwareKeyboard.instance.isMetaPressed) &&
+              (event.logicalKey == LogicalKeyboardKey.keyV ||
+                  event.logicalKey == LogicalKeyboardKey.keyC ||
+                  event.logicalKey == LogicalKeyboardKey.keyX)) {
+            return KeyEventResult.handled;
+          }
+          return KeyEventResult.ignored;
+        },
+        child: TextField(
+          controller: controller,
+          keyboardType: keyboardType,
+          obscureText: obscureText,
+          enableInteractiveSelection: !isPasswordField,
+          inputFormatters: isPasswordField
+              ? const [PasswordTypingFormatter()]
+              : null,
+          enableSuggestions: !isPasswordField,
+          autocorrect: !isPasswordField,
+          autofillHints: isPasswordField
+              ? null
+              : const [AutofillHints.username],
+          style: GoogleFonts.dmSans(
+            fontSize: 15,
+            color: AppColors.text,
             fontWeight: FontWeight.w500,
           ),
-          floatingLabelStyle: GoogleFonts.dmSans(
-            fontSize: 12,
-            color: AppColors.primary,
-            fontWeight: FontWeight.w600,
-          ),
-          prefixIcon: Padding(
-            padding: const EdgeInsets.only(left: 16, right: 8),
-            child: Icon(icon, color: AppColors.rose, size: 20),
-          ),
-          prefixIconConstraints: const BoxConstraints(
-            minWidth: 0,
-            minHeight: 0,
-          ),
-          suffixIcon: suffixIcon,
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(16),
-            borderSide: BorderSide.none,
-          ),
-          enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(16),
-            borderSide: BorderSide.none,
-          ),
-          focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(16),
-            borderSide: const BorderSide(color: AppColors.primary, width: 1.5),
-          ),
-          filled: true,
-          fillColor: Colors.white,
-          contentPadding: const EdgeInsets.symmetric(
-            vertical: 18,
-            horizontal: 16,
+          decoration: InputDecoration(
+            labelText: label,
+            labelStyle: GoogleFonts.dmSans(
+              fontSize: 13,
+              color: AppColors.rose,
+              fontWeight: FontWeight.w500,
+            ),
+            floatingLabelStyle: GoogleFonts.dmSans(
+              fontSize: 12,
+              color: AppColors.primary,
+              fontWeight: FontWeight.w600,
+            ),
+            prefixIcon: Padding(
+              padding: const EdgeInsets.only(left: 16, right: 8),
+              child: Icon(icon, color: AppColors.rose, size: 20),
+            ),
+            prefixIconConstraints: const BoxConstraints(
+              minWidth: 0,
+              minHeight: 0,
+            ),
+            suffixIcon: suffixIcon,
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(16),
+              borderSide: BorderSide.none,
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(16),
+              borderSide: BorderSide.none,
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(16),
+              borderSide: const BorderSide(
+                color: AppColors.primary,
+                width: 1.5,
+              ),
+            ),
+            filled: true,
+            fillColor: Colors.white,
+            contentPadding: const EdgeInsets.symmetric(
+              vertical: 18,
+              horizontal: 16,
+            ),
           ),
         ),
       ),

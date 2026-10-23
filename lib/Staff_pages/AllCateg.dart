@@ -5,6 +5,7 @@ import '../widgets/staff_inventory_history.dart';
 import 'package:sales_tracking/theme/app_colors.dart';
 import '../services/inventory_display_ids.dart';
 import '../services/public_item_id.dart';
+import '../services/beverage_sales_summary.dart';
 import 'dart:async';
 import 'dart:convert';
 
@@ -291,6 +292,11 @@ class _AllCategPageState extends State<AllCategPage>
         'name': sizeName,
         'variant': sizeName,
         'price': price,
+        'costPrice': coffeeSizeCostPrice(
+          size: size,
+          data: data,
+          rootData: rootData,
+        ),
         'sizePriceDelta': sizeDelta,
         'addons': addonByName.values.toList(),
         'isCoffee': true,
@@ -4284,31 +4290,16 @@ class _AllCategPageState extends State<AllCategPage>
           .collection('completed_sales')
           .snapshots(),
       builder: (context, salesSnapshot) {
-        var totalSoldFromReceipts = 0;
-        for (final saleDoc in salesSnapshot.data?.docs ?? const []) {
-          final sale = saleDoc.data();
-          final type = sale['type']?.toString().toLowerCase() ?? 'sale';
-          final status = sale['status']?.toString().toLowerCase() ?? '';
-          final sign = (type == 'refund' || status == 'refund') ? -1 : 1;
-          for (final raw in sale['items'] as List<dynamic>? ?? const []) {
-            if (raw is! Map) continue;
-            final sold = Map<String, dynamic>.from(raw);
-            if (sold['isCoffee'] != true) continue;
-            final soldCoffeeId = sold['coffeeId']?.toString().trim() ?? '';
-            final soldName =
-                sold['name']?.toString().trim().toLowerCase() ?? '';
-            final matchesCoffee = coffeeId.isNotEmpty
-                ? (soldCoffeeId == coffeeId ||
-                      soldCoffeeId == category['coffeeId']?.toString() ||
-                      sold['publicId'] == category['publicId'] &&
-                          category['publicId'] != null)
-                : soldName == coffeeName.trim().toLowerCase();
-            if (matchesCoffee) {
-              totalSoldFromReceipts +=
-                  sign * _parseInt(sold['quantity'], fallback: 1);
-            }
-          }
-        }
+        final totalSold = beverageSalesToday(
+          sales: [
+            for (final doc in salesSnapshot.data?.docs ?? const []) doc.data(),
+          ],
+          now: DateTime.now(),
+          branchIds: _staffInventoryIds.toSet(),
+          coffeeId: coffeeId,
+          coffeeName: coffeeName,
+          publicId: category['publicId']?.toString() ?? '',
+        );
         return _AnimatedCategorySection(
           index: index,
           child: _tableBlock(
@@ -4381,10 +4372,6 @@ class _AllCategPageState extends State<AllCategPage>
                         ? '--'
                         : formatMoney(_parsePrice(item['price']));
                   }
-
-                  final totalSold = totalSoldFromReceipts < 0
-                      ? 0
-                      : totalSoldFromReceipts;
 
                   return DataRow(
                     cells: [
@@ -5232,25 +5219,25 @@ class _AllCategPageState extends State<AllCategPage>
         title: categoryName,
         subtitle: 'Available items: ${items.length}',
         onHistory: () => _showStaffActivityHistory(
-        kind: 'categories',
-        categoryName: categoryName,
-        categoryId:
-            category['categoryId']?.toString() ??
-            (items.isNotEmpty
-                ? items.first['sourceDocId']?.toString()
-                : null),
-        itemIds: {
-          for (final item in items)
-            for (final key in ['itemId', 'id', 'publicId', 'sourceDocId'])
-              if (item[key]?.toString().trim().isNotEmpty == true)
-                item[key].toString().trim(),
+          kind: 'categories',
+          categoryName: categoryName,
+          categoryId:
+              category['categoryId']?.toString() ??
+              (items.isNotEmpty
+                  ? items.first['sourceDocId']?.toString()
+                  : null),
+          itemIds: {
+            for (final item in items)
+              for (final key in ['itemId', 'id', 'publicId', 'sourceDocId'])
+                if (item[key]?.toString().trim().isNotEmpty == true)
+                  item[key].toString().trim(),
             for (final item in items) _displayItemId(item),
-        },
-        itemNames: {
-          for (final item in items)
-            if (item['name']?.toString().trim().isNotEmpty == true)
-              item['name'].toString().trim(),
-        },
+          },
+          itemNames: {
+            for (final item in items)
+              if (item['name']?.toString().trim().isNotEmpty == true)
+                item['name'].toString().trim(),
+          },
         ),
         columns: [
           _tableColumn('ID'),

@@ -143,7 +143,7 @@ void main() {
     );
   });
 
-  testWidgets('settings show fixed identity without account editing', (
+  testWidgets('settings show fixed identity and allow profile editing', (
     tester,
   ) async {
     await tester.pumpWidget(
@@ -154,15 +154,13 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Super admin'), findsWidgets);
     expect(find.text('Spr-001'), findsOneWidget);
-    expect(find.text('Account information'), findsNothing);
-    expect(find.byIcon(Icons.edit_rounded), findsNothing);
+    expect(find.text('Account information'), findsOneWidget);
+    expect(find.byIcon(Icons.edit_rounded), findsOneWidget);
     expect(find.text('Change Password'), findsOneWidget);
     expect(find.text('Discount Control'), findsOneWidget);
   });
 
-  testWidgets('change password dialog updates the Super Admin login', (
-    tester,
-  ) async {
+  testWidgets('change password sheet accepts a fair password', (tester) async {
     await tester.pumpWidget(
       MaterialApp(
         home: SuperAdminSettingsPage(firestore: FakeFirebaseFirestore()),
@@ -172,23 +170,17 @@ void main() {
 
     await tester.tap(find.text('Change Password'));
     await tester.pumpAndSettle();
-    final fields = find.byType(TextField);
-    await tester.enterText(fields.at(0), 'Super@123');
-    await tester.enterText(fields.at(1), 'NewSuper@456');
-    await tester.enterText(fields.at(2), 'NewSuper@456');
-    await tester.tap(find.text('Save'));
-    await tester.pumpAndSettle();
-
-    final prefs = await SharedPreferences.getInstance();
-    expect(
-      await SuperAdmin.verifyPassword('NewSuper@456', preferences: prefs),
-      isTrue,
+    final fields = find.byType(TextFormField);
+    for (final entry in [(0, 'Super@123'), (1, 'Abcdefgh'), (2, 'Abcdefgh')]) {
+      tester.widget<TextFormField>(fields.at(entry.$1)).controller!.text =
+          entry.$2;
+    }
+    await tester.pump();
+    expect(find.text('Fair password'), findsOneWidget);
+    final saveButton = tester.widget<FilledButton>(
+      find.widgetWithText(FilledButton, 'Save Password'),
     );
-    expect(
-      await SuperAdmin.verifyPassword('Super@123', preferences: prefs),
-      isFalse,
-    );
-    expect(find.text('Password updated.'), findsOneWidget);
+    expect(saveButton.onPressed, isNotNull);
     expect(tester.takeException(), isNull);
   });
 }

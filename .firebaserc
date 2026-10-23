@@ -1,0 +1,8 @@
+{
+  "projects": {
+    "firebase.cmd functions:secrets:set RESEND_API_KEY": "sales-tracking-a7d58",
+    "default": "sales-tracking-a7d58"
+  },
+  "targets": {},
+  "etags": {}
+}

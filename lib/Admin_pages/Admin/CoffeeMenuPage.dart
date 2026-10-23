@@ -44,7 +44,6 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
   // Controllers
   final _descriptionController = TextEditingController();
   final _flavorNameController = TextEditingController();
-  final _costController = TextEditingController(text: '0');
   final _flavorPriceController = TextEditingController();
   final _addonNameController = TextEditingController();
   final _addonPriceController = TextEditingController();
@@ -104,7 +103,6 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
   void dispose() {
     _descriptionController.dispose();
     _flavorNameController.dispose();
-    _costController.dispose();
     _flavorPriceController.dispose();
     _addonNameController.dispose();
     _addonPriceController.dispose();
@@ -275,15 +273,19 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
       _showSnack('Enter a valid selling price for every size.', isError: true);
       return;
     }
+    if (_sizes.any((size) {
+      final cost = num.tryParse(size.costController.text);
+      return cost == null || !cost.isFinite || cost < 0;
+    })) {
+      _showSnack('Enter a valid cost for every size.', isError: true);
+      return;
+    }
     if (_sizes.any(
       (size) =>
           _parsePrice(size.priceController.text) <
-          _parsePrice(_costController.text),
+          _parsePrice(size.costController.text),
     )) {
-      _showSnack(
-        'Selling price cannot be lower than cost price.',
-        isError: true,
-      );
+      _showSnack('Each size price must be at least its cost.', isError: true);
       return;
     }
     final sizes = _sizes
@@ -291,6 +293,7 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
           (s) => {
             'name': s.nameController.text.trim(),
             'priceDelta': _parsePrice(s.priceController.text),
+            'costPrice': _parsePrice(s.costController.text),
           },
         )
         .where((s) => s['name']?.toString().isNotEmpty == true)
@@ -338,7 +341,7 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
           'coffeeIdNumber': next,
           'name': _flavorNameController.text.trim(),
           'basePrice': 0,
-          'costPrice': _parsePrice(_costController.text),
+          'costPrice': sizes.isEmpty ? 0 : sizes.first['costPrice'],
           'description': _descriptionController.text.trim(),
           'imageUrl': imageUrl ?? '',
           'sizes': sizes,
@@ -359,7 +362,7 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
           details: {
             'itemName': _flavorNameController.text.trim(),
             'itemId': coffeeId,
-            'costPrice': _parsePrice(_costController.text),
+            'costPrice': sizes.first['costPrice'],
             'sizePrices': sizes,
             'description': _descriptionController.text.trim(),
           },
@@ -370,7 +373,6 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
         _flavorNameController.clear();
         _flavorPriceController.clear();
         _descriptionController.clear();
-        _costController.text = '0';
         _coffeeImageBytes = null;
         _coffeeUpload = null;
         _resetSizes();
@@ -447,22 +449,9 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
 
             // ── Section 2: Sizes ─────────────────────────────────────────────
             _sectionHeader('Sizes & Price', Icons.local_drink_rounded),
-            TextFormField(
-              controller: _costController,
-              keyboardType: const TextInputType.numberWithOptions(
-                decimal: true,
-              ),
-              decoration: _inputDeco('Cost price (₱)', Icons.payments_outlined),
-              validator: (value) {
-                final cost = num.tryParse(value ?? '');
-                return cost == null || !cost.isFinite || cost < 0
-                    ? 'Enter a valid cost'
-                    : null;
-              },
-            ),
             const SizedBox(height: 4),
             Text(
-              'Set the selling price for each size.',
+              'Set the cost and selling price separately for each size.',
               style: TextStyle(color: Colors.grey.shade500, fontSize: 12),
             ),
             const SizedBox(height: 12),
@@ -496,8 +485,26 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
                             ),
                           ],
                           decoration: _inputDeco(
-                            'Price (₱)',
+                            'Selling (₱)',
                             Icons.payments_outlined,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: TextField(
+                          controller: size.costController,
+                          keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true,
+                          ),
+                          inputFormatters: [
+                            FilteringTextInputFormatter.allow(
+                              RegExp(r'[0-9.]'),
+                            ),
+                          ],
+                          decoration: _inputDeco(
+                            'Cost (₱)',
+                            Icons.receipt_long_outlined,
                           ),
                         ),
                       ),
@@ -766,9 +773,6 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
     final nameController = TextEditingController(
       text: data['name']?.toString() ?? '',
     );
-    final costController = TextEditingController(
-      text: '${data['costPrice'] ?? 0}',
-    );
     final priceController = TextEditingController(
       text: ((data['basePrice'] ?? 0) as num).toStringAsFixed(0),
     );
@@ -786,6 +790,7 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
                 (((size['priceDelta'] ?? 0) as num) +
                         ((data['basePrice'] ?? 0) as num))
                     .toStringAsFixed(2),
+            costPrice: '${size['costPrice'] ?? data['costPrice'] ?? 0}',
           ),
         )
         .toList();
@@ -812,16 +817,6 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
                       ),
                     ),
                     const SizedBox(height: 10),
-                    TextField(
-                      controller: costController,
-                      keyboardType: const TextInputType.numberWithOptions(
-                        decimal: true,
-                      ),
-                      decoration: _inputDeco(
-                        'Cost price (₱)',
-                        Icons.payments_outlined,
-                      ),
-                    ),
                     _CoffeeImagePicker(
                       imageBytes: editImageBytes.isEmpty
                           ? null
@@ -886,10 +881,18 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
                                     RegExp(r'[0-9.]'),
                                   ),
                                 ],
-                                decoration: _inputDeco(
-                                  'Price (₱)',
-                                  Icons.payments_outlined,
-                                ),
+                                decoration: _inputDeco('Selling (₱)', Icons.payments_outlined),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: TextField(
+                                controller: size.costController,
+                                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                                inputFormatters: [
+                                  FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
+                                ],
+                                decoration: _inputDeco('Cost (₱)', Icons.receipt_long_outlined),
                               ),
                             ),
                             IconButton(
@@ -928,9 +931,17 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
                 ),
                 ElevatedButton(
                   onPressed: () async {
-                    final cost = num.tryParse(costController.text.trim());
-                    if (cost == null || !cost.isFinite || cost < 0) {
-                      _showSnack('Enter a valid cost price.', isError: true);
+                    if (sizeDrafts.any((size) {
+                      final cost = num.tryParse(size.costController.text.trim());
+                      final price = num.tryParse(size.priceController.text.trim());
+                      return cost == null ||
+                          !cost.isFinite ||
+                          cost < 0 ||
+                          price == null ||
+                          !price.isFinite ||
+                          price < cost;
+                    })) {
+                      _showSnack('Enter valid costs and selling prices for every size.', isError: true);
                       return;
                     }
                     final newImageUrl = editImageBytes.isEmpty
@@ -945,6 +956,7 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
                             'priceDelta': _parsePrice(
                               size.priceController.text,
                             ),
+                            'costPrice': _parsePrice(size.costController.text),
                           },
                         )
                         .where(
@@ -953,7 +965,7 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
                         .toList();
                     await doc.reference.update({
                       'name': nameController.text.trim(),
-                      'costPrice': cost,
+                      'costPrice': sizes.isEmpty ? 0 : sizes.first['costPrice'],
                       'basePrice': 0,
                       'description': descriptionController.text.trim(),
                       'imageUrl': ?newImageUrl,
@@ -974,7 +986,6 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
     );
 
     nameController.dispose();
-    costController.dispose();
     priceController.dispose();
     descriptionController.dispose();
     for (final size in sizeDrafts) {
@@ -1935,13 +1946,20 @@ class _Panel extends StatelessWidget {
 class _OptionDraft {
   final TextEditingController nameController;
   final TextEditingController priceController;
+  final TextEditingController costController;
 
-  _OptionDraft({String name = '', String priceDelta = ''})
+  _OptionDraft({
+    String name = '',
+    String priceDelta = '',
+    String costPrice = '',
+  })
     : nameController = TextEditingController(text: name),
-      priceController = TextEditingController(text: priceDelta);
+      priceController = TextEditingController(text: priceDelta),
+      costController = TextEditingController(text: costPrice);
 
   void dispose() {
     nameController.dispose();
     priceController.dispose();
+    costController.dispose();
   }
 }

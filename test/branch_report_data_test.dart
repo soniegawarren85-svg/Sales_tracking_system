@@ -105,6 +105,42 @@ void main() {
       expect(data.totals('b', start, end)['Total net profit'], 49);
     },
   );
+  test('beverage size cost snapshots determine sales profit', () {
+    final data = BranchReportData({
+      'completed_sales': [
+        {
+          'branchId': 'b',
+          'timestamp': '2026-10-04T10:00:00',
+          'items': [
+            {
+              'name': 'Latte',
+              'variant': 'Small',
+              'quantity': 2,
+              'price': 50,
+              'costPrice': 10,
+              'isCoffee': true,
+            },
+            {
+              'name': 'Latte',
+              'variant': 'Large',
+              'quantity': 1,
+              'price': 90,
+              'costPrice': 20,
+              'isCoffee': true,
+            },
+          ],
+        },
+      ],
+    });
+
+    final totals = data.totals(
+      'b',
+      DateTime(2026, 10, 4),
+      DateTime(2026, 10, 5),
+    );
+    expect(totals['Total cost'], 40);
+    expect(totals['Total profit'], 150);
+  });
   test(
     'today uses configured 1200 instead of stale submitted 1000 and excludes GCash',
     () {

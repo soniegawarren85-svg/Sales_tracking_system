@@ -267,12 +267,14 @@ class AdminCatalog extends StatefulWidget {
     this.scrollController,
     this.lockedBranchId,
     this.lockedBranchName,
+    this.showBatchHistory = true,
   });
   final FirebaseFirestore? firestore;
   final ValueChanged<String>? onBranchChanged;
   final ScrollController? scrollController;
   final String? lockedBranchId;
   final String? lockedBranchName;
+  final bool showBatchHistory;
   final ValueChanged<Map<String, dynamic>?>? onCategorySelected;
   final Widget? actions;
   final ValueChanged<bool>? onBeverageTabChanged;
@@ -430,6 +432,19 @@ class _AdminCatalogState extends State<AdminCatalog> {
     if (options.isEmpty || base == null) return '—';
     final delta = num.tryParse('${options.first['priceDelta']}') ?? 0;
     return '₱${(base + delta).toStringAsFixed(2)}';
+  }
+
+  String _cost(AdminCatalogEntry entry, String size) {
+    final option = (entry.details['sizes'] as List? ?? [])
+        .whereType<Map>()
+        .where(
+          (value) => '${value['name']}'.toLowerCase() == size.toLowerCase(),
+        )
+        .firstOrNull;
+    final cost = num.tryParse(
+      '${option?['costPrice'] ?? entry.details['costPrice'] ?? entry.source['costPrice']}',
+    );
+    return cost == null ? '—' : '₱${cost.toStringAsFixed(2)}';
   }
 
   @override
@@ -668,6 +683,7 @@ class _AdminCatalogState extends State<AdminCatalog> {
                   type: widget.type,
                   query: _query,
                   firestore: widget.firestore,
+                  showBatchHistory: widget.showBatchHistory,
                 )
               else if (!widget.gallery &&
                   widget.type == 'Beverages' &&
@@ -929,13 +945,11 @@ class _AdminCatalogState extends State<AdminCatalog> {
                         children: [
                           cell(const Text('ID')),
                           cell(const Text('Item'), 3),
-                          cell(const Text('Cost price')),
+                          if (!beverages) cell(const Text('Cost price')),
                           if (beverages)
-                            ...[
-                              'Small',
-                              'Medium',
-                              'Large',
-                            ].map((size) => cell(Text(size)))
+                            ...['Small', 'Medium', 'Large'].map(
+                              (size) => cell(Text('$size\nCost / Sell')),
+                            )
                           else ...[
                             cell(const Text('Price')),
                             cell(const Text('Expiry'), 2),
@@ -976,18 +990,18 @@ class _AdminCatalogState extends State<AdminCatalog> {
                             spacing: 16,
                             runSpacing: 8,
                             children: [
-                              Text(
-                                'Cost: ₱${(num.tryParse('${entry.details['costPrice'] ?? entry.source['costPrice']}') ?? 0).toStringAsFixed(2)}',
-                                style: const TextStyle(fontSize: 12),
-                              ),
                               if (beverages)
                                 ...['Small', 'Medium', 'Large'].map(
                                   (size) => Text(
-                                    '$size: ${_price(entry, size)}',
+                                    '$size Cost: ${_cost(entry, size)} | Sell: ${_price(entry, size)}',
                                     style: const TextStyle(fontSize: 12),
                                   ),
                                 )
                               else ...[
+                                Text(
+                                  'Cost: ₱${(num.tryParse('${entry.details['costPrice'] ?? entry.source['costPrice']}') ?? 0).toStringAsFixed(2)}',
+                                  style: const TextStyle(fontSize: 12),
+                                ),
                                 Text(
                                   _price(entry),
                                   style: const TextStyle(fontSize: 12),
@@ -1032,18 +1046,30 @@ class _AdminCatalogState extends State<AdminCatalog> {
                               ),
                             ),
                             cell(identity(entry), 3),
-                            cell(
-                              Text(
-                                '₱${(num.tryParse('${entry.details['costPrice'] ?? entry.source['costPrice']}') ?? 0).toStringAsFixed(2)}',
-                                style: const TextStyle(fontSize: 12),
+                            if (!beverages)
+                              cell(
+                                Text(
+                                  '₱${(num.tryParse('${entry.details['costPrice'] ?? entry.source['costPrice']}') ?? 0).toStringAsFixed(2)}',
+                                  style: const TextStyle(fontSize: 12),
+                                ),
                               ),
-                            ),
                             if (beverages)
                               ...['Small', 'Medium', 'Large'].map(
                                 (size) => cell(
-                                  Text(
-                                    _price(entry, size),
-                                    style: const TextStyle(fontSize: 12),
+                                  Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Text(
+                                        _cost(entry, size),
+                                        style: const TextStyle(fontSize: 11),
+                                      ),
+                                      Text(
+                                        _price(entry, size),
+                                        style: const TextStyle(fontSize: 12),
+                                      ),
+                                    ],
                                   ),
                                 ),
                               )

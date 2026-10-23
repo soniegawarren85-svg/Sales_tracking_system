@@ -84,6 +84,8 @@ Future<void> changeFirestoreAccountPassword({
       'passwordCredential': credential,
       'passwordAuthMode': 'firestore',
       'credentialsChangedAt': FieldValue.serverTimestamp(),
+      'mustChangePassword': false,
+      'passwordChangedAt': FieldValue.serverTimestamp(),
       for (final field in legacyPasswordFields) field: FieldValue.delete(),
     });
   });

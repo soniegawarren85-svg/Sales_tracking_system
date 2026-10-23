@@ -6,6 +6,12 @@ import 'package:sales_tracking/services/allocation_checklist_service.dart';
 
 void main() {
   final today = DateTime.utc(2026, 9, 27, 1);
+  test('daily cash drawer minimum accepts 1500 and above only', () {
+    expect(CashDrawerService.meetsMinimumDailyOpeningCash(1499.99), isFalse);
+    expect(CashDrawerService.meetsMinimumDailyOpeningCash(1500), isTrue);
+    expect(CashDrawerService.meetsMinimumDailyOpeningCash(2000), isTrue);
+  });
+
   test(
     'calendar reset ignores recent sales update and preserves zero opening',
     () {

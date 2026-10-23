@@ -3,6 +3,7 @@ import 'package:sales_tracking/theme/app_colors.dart';
 import '../services/inventory_display_ids.dart';
 import '../services/staff_allocation_scope.dart';
 import '../services/staff_sales_history_scope.dart';
+import '../services/receipt_tax.dart';
 import '../services/public_item_id.dart';
 import '../widgets/staff_refund_dialog.dart';
 import '../services/staff_login_session.dart';
@@ -2216,6 +2217,14 @@ class _ReceiptCard extends StatelessWidget {
   final bool compact;
   const _ReceiptCard({required this.data, this.compact = false});
 
+  String _recordedText(List<String> fields) {
+    for (final field in fields) {
+      final value = data[field]?.toString().trim() ?? '';
+      if (value.isNotEmpty) return value;
+    }
+    return 'Not recorded';
+  }
+
   double _money(dynamic value) {
     if (value is num) return value.toDouble();
     return double.tryParse(value?.toString() ?? '') ?? 0.0;
@@ -2229,6 +2238,19 @@ class _ReceiptCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final salesId = data['salesId']?.toString() ?? 'Receipt';
+    final staffName = _recordedText([
+      'staffName',
+      'cashierName',
+      'userName',
+      'createdByName',
+    ]);
+    final staffId = _recordedText([
+      'staffPublicId',
+      'cashierId',
+      if (RegExp(r'^STF-', caseSensitive: false).hasMatch('${data['staffId']}'))
+        'staffId',
+    ]);
+    final taxLabel = receiptTaxLabel(data);
     final timestamp = data['timestamp'] is Timestamp
         ? (data['timestamp'] as Timestamp).toDate()
         : DateTime.now();
@@ -2415,6 +2437,14 @@ class _ReceiptCard extends StatelessWidget {
                     );
                   }),
                   const Divider(height: 18),
+                  _ReceiptLine('Staff name', staffName),
+                  _ReceiptLine('Staff ID', staffId),
+                  _ReceiptLine('Tax classification', taxLabel),
+                  if (taxLabel == 'VAT')
+                    _ReceiptLine(
+                      'VAT amount',
+                      formatMoney(receiptTaxAmount(data)),
+                    ),
                   _ReceiptLine(
                     isRefund ? 'Original payment method' : 'Payment method',
                     paymentMode == 'GCash' && gcashId.isNotEmpty
@@ -2479,12 +2509,16 @@ class _ReceiptLine extends StatelessWidget {
               ),
             ),
           ),
-          Text(
-            value,
-            style: TextStyle(
-              color: strong ? Colors.green.shade700 : _C.primaryDark,
-              fontSize: strong ? 16 : 12,
-              fontWeight: FontWeight.w900,
+          const SizedBox(width: 12),
+          Flexible(
+            child: Text(
+              value,
+              textAlign: TextAlign.right,
+              style: TextStyle(
+                color: strong ? Colors.green.shade700 : _C.primaryDark,
+                fontSize: strong ? 16 : 12,
+                fontWeight: FontWeight.w900,
+              ),
             ),
           ),
         ],

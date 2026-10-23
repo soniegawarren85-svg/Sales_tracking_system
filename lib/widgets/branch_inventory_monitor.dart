@@ -35,8 +35,10 @@ class BranchInventoryMonitor extends StatefulWidget {
     this.type = 'All',
     this.query = '',
     this.firestore,
+    this.showBatchHistory = true,
   });
   final FirebaseFirestore? firestore;
+  final bool showBatchHistory;
   final String branchId, type, query;
   @override
   State<BranchInventoryMonitor> createState() => _BranchInventoryMonitorState();
@@ -124,6 +126,8 @@ class _BranchInventoryMonitorState extends State<BranchInventoryMonitor> {
               ),
             ],
           ),
+        if (widget.showBatchHistory)
+          Align(alignment: Alignment.centerRight, child: TextButton.icon(onPressed: () => showBranchBatchHistory(context, widget.branchId, widget.firestore ?? FirebaseFirestore.instance), icon: const Icon(Icons.history), label: const Text('Batch history'))),
         BranchAllocationTable(
           rows: rows,
           beverages: widget.type == 'Beverages',
@@ -171,36 +175,33 @@ class _BranchInventoryMonitorState extends State<BranchInventoryMonitor> {
     BuildContext context,
     Map<String, dynamic> item,
   ) async {
+    final branchId = widget.branchId;
+    final db = widget.firestore ?? FirebaseFirestore.instance;
     final result = await showDialog<BranchInventoryEdit>(
       context: context,
-      builder: (_) => BranchInventoryEditDialog(item: item),
-    );
-    if (result == null || !context.mounted) return;
-    try {
-      await BranchPermissions.require(
-        'adminAllowInventoryEdits',
-        database: widget.firestore,
-        branchId: widget.branchId,
-      );
-      await updateBranchInventoryItem(
-        firestore: widget.firestore ?? FirebaseFirestore.instance,
-        branchId: widget.branchId,
+      builder: (_) => BranchInventoryEditDialog(
         item: item,
-        name: result.name,
-        price: result.price,
-        stock: result.stock,
+        onSave: (value) async {
+          await BranchPermissions.require(
+            'adminAllowInventoryEdits',
+            database: db,
+            branchId: branchId,
+          );
+          await updateBranchInventoryItem(
+            firestore: db,
+            branchId: branchId,
+            item: item,
+            name: value.name,
+            price: value.price,
+            stock: value.stock,
+          );
+        },
+      ),
+    );
+    if (result != null && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Branch inventory updated.')),
       );
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Branch inventory updated.')),
-        );
-      }
-    } catch (error) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Unable to update branch inventory: $error')),
-        );
-      }
     }
   }
 }

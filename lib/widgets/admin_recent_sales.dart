@@ -5,6 +5,7 @@ import 'package:sales_tracking/theme/app_colors.dart';
 import '../services/public_item_id.dart';
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import '../services/receipt_tax.dart';
 import 'package:flutter/material.dart';
 import '../services/branch_session.dart';
 
@@ -119,8 +120,7 @@ class _AdminRecentSalesState extends State<AdminRecentSales> {
               if (!snapshot.hasData) {
                 return const Center(child: ScreenLoadingIndicator());
               }
-              final branch =
-                  widget.branchId ?? BranchSession.instance.branchId;
+              final branch = widget.branchId ?? BranchSession.instance.branchId;
               final docs =
                   snapshot.data!.docs
                       .where(
@@ -300,8 +300,11 @@ class _AdminRecentSalesState extends State<AdminRecentSales> {
 }
 
 class ReceiptDetails extends StatelessWidget {
-  const ReceiptDetails({super.key, required this.id, required Map<String, dynamic> sale})
-    : _sale = sale;
+  const ReceiptDetails({
+    super.key,
+    required this.id,
+    required Map<String, dynamic> sale,
+  }) : _sale = sale;
   final String id;
   final Map<String, dynamic> _sale;
   Map<String, dynamic> get sale => refundValueRecord(_sale);
@@ -471,6 +474,7 @@ class _ReceiptIdentityState extends State<_ReceiptIdentity> {
           details._line(
             'Created by',
             sale['staffName'] ??
+                sale['cashierName'] ??
                 sale['userName'] ??
                 sale['createdByName'] ??
                 resolved['name'] ??
@@ -481,6 +485,7 @@ class _ReceiptIdentityState extends State<_ReceiptIdentity> {
           details._line(
             'Staff ID',
             sale['staffPublicId'] ??
+                sale['cashierId'] ??
                 resolved['staffId'] ??
                 (RegExp(r'^STF-').hasMatch('${sale['staffId']}')
                     ? sale['staffId']
@@ -570,7 +575,13 @@ class ReceiptInlineDetails extends StatelessWidget {
         ),
       ),
       _line('Subtotal', _money(sale['subtotal'])),
-      if (saleNumber(sale['tax']) != 0) _line('VAT / tax', _money(sale['tax'])),
+      _line('Tax classification', receiptTaxLabel(sale)),
+      _line('VAT / tax', _money(receiptTaxAmount(sale))),
+      if (saleNumber(sale['taxRate']) > 0)
+        _line(
+          'VAT rate',
+          '${(saleNumber(sale['taxRate']) * 100).toStringAsFixed(0)}%',
+        ),
       if (saleNumber(sale['discount']) != 0) ...[
         _line('Discount', _money(sale['discount'])),
         _line('Discount type', sale['discountType']),

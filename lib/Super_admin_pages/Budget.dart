@@ -358,6 +358,14 @@ class _BudgetPageState extends State<BudgetPage>
       _showSnack('Missing target ID', Colors.red.shade600);
       return;
     }
+    if (replaceDailyOpening &&
+        !CashDrawerService.meetsMinimumDailyOpeningCash(budget)) {
+      _showSnack(
+        'Daily cash drawer must be at least ${formatMoney(CashDrawerService.minimumDailyOpeningCash)}.',
+        Colors.orange.shade700,
+      );
+      return;
+    }
     try {
       final now = DateTime.now();
       final dateKey =
@@ -7228,6 +7236,8 @@ class _BudgetPageState extends State<BudgetPage>
             decoration: InputDecoration(
               labelText: 'Allocated Amount ',
               hintText: '0.00',
+              helperText:
+                  'Set Daily Cash minimum: ${formatMoney(CashDrawerService.minimumDailyOpeningCash)}',
               prefixIcon: const Icon(Icons.payments_rounded, color: kDeep),
               filled: true,
               fillColor: Colors.white,

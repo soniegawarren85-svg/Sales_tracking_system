@@ -16,6 +16,19 @@ class SessionActor {
   final String role;
 }
 
+Future<void> clearPersistedAccountSession(SharedPreferences preferences) async {
+  for (final key in [
+    'lastRole',
+    'lastUserId',
+    'lastStaffDocId',
+    'lastStaffPublicId',
+    'adminId',
+    'superAdminId',
+  ]) {
+    await preferences.remove(key);
+  }
+}
+
 String accountFullName(Map<String, dynamic> data) {
   final name = [
     data['firstName'],

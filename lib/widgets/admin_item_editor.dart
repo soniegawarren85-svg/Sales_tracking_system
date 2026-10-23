@@ -119,6 +119,9 @@ class _ItemEditorState extends State<_ItemEditor> {
             text:
                 '${(num.tryParse('${_data['basePrice']}') ?? 0) + (num.tryParse('${size['priceDelta']}') ?? 0)}',
           ),
+          TextEditingController(
+            text: '${size['costPrice'] ?? _data['costPrice'] ?? 0}',
+          ),
         ),
       )
       .toList();
@@ -302,7 +305,7 @@ class _ItemEditorState extends State<_ItemEditor> {
       _expiry,
       _description,
       _additionalBundles,
-      ..._sizes.expand((size) => [size.$1, size.$2]),
+      ..._sizes.expand((size) => [size.$1, size.$2, size.$3]),
     ]) {
       controller.dispose();
     }
@@ -322,10 +325,13 @@ class _ItemEditorState extends State<_ItemEditor> {
       );
       final cost = num.parse(_cost.text.trim());
       final prices = _type == 'Beverages'
-          ? _sizes.map((size) => num.parse(size.$2.text.trim()))
-          : [num.parse(_price.text.trim())];
-      if (prices.any((price) => price < cost)) {
-        throw StateError('Selling price cannot be lower than cost price.');
+          ? _sizes.map((size) => (
+              price: num.parse(size.$2.text.trim()),
+              cost: num.parse(size.$3.text.trim()),
+            ))
+          : [(price: num.parse(_price.text.trim()), cost: cost)];
+      if (prices.any((price) => price.price < price.cost)) {
+        throw StateError('Selling price cannot be lower than its cost price.');
       }
       if (_type == 'Bundle' &&
           (_ingredients.isEmpty ||
@@ -344,7 +350,9 @@ class _ItemEditorState extends State<_ItemEditor> {
       }
       final changes = <String, dynamic>{
         'name': _name.text.trim(),
-        'costPrice': num.parse(_cost.text.trim()),
+        'costPrice': _type == 'Beverages' && _sizes.isNotEmpty
+            ? num.parse(_sizes.first.$3.text.trim())
+            : num.parse(_cost.text.trim()),
         _type == 'Beverages' ? 'basePrice' : 'price': _type == 'Beverages'
             ? 0
             : num.parse(_price.text.trim()),
@@ -367,6 +375,7 @@ class _ItemEditorState extends State<_ItemEditor> {
                 (size) => {
                   'name': size.$1.text.trim(),
                   'priceDelta': num.parse(size.$2.text),
+                  'costPrice': num.parse(size.$3.text),
                 },
               )
               .toList(),
@@ -637,7 +646,8 @@ class _ItemEditorState extends State<_ItemEditor> {
                 _field(_name, 'Name'),
                 if (_type != 'Beverages')
                   _field(_price, 'Selling price (\u20b1)', number: true),
-                _field(_cost, 'Cost price (\u20b1)', number: true),
+                if (_type != 'Beverages')
+                  _field(_cost, 'Cost price (\u20b1)', number: true),
                 if (_type == 'Bundle')
                   TextButton(
                     onPressed: () {
@@ -691,6 +701,14 @@ class _ItemEditorState extends State<_ItemEditor> {
                     (size) => Row(
                       children: [
                         Expanded(child: _field(size.$1, 'Size')),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: _field(
+                            size.$3,
+                            'Cost price (₱)',
+                            number: true,
+                          ),
+                        ),
                         const SizedBox(width: 8),
                         Expanded(
                           child: _field(

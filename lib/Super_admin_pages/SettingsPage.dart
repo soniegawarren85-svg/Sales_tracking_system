@@ -1,8 +1,12 @@
 import 'dart:convert';
 import '../services/super_admin.dart';
+import '../services/session_actor.dart';
+import '../services/password_policy.dart';
+import '../services/verified_profile_email_change.dart';
 import '../widgets/transaction_settings_dialog.dart';
+import '../widgets/password_strength_checklist.dart';
+import '../widgets/account_profile_editor_sheet.dart';
 import '../services/catalog_image_service.dart';
-import '../services/profile_field_validation.dart';
 import 'package:sales_tracking/theme/app_colors.dart';
 import '../services/public_item_id.dart';
 import '../widgets/backup_restore_dialog.dart';
@@ -18,8 +22,16 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sales_tracking/Login/Login/Login.dart';
 
 class SuperAdminSettingsPage extends StatefulWidget {
-  const SuperAdminSettingsPage({super.key, this.firestore});
+  const SuperAdminSettingsPage({
+    this.onOpenStaff,
+    this.onOpenReports,
+    super.key,
+    this.firestore,
+  });
   final FirebaseFirestore? firestore;
+
+  final VoidCallback? onOpenStaff;
+  final VoidCallback? onOpenReports;
 
   @override
   State<SuperAdminSettingsPage> createState() => _SuperAdminSettingsPageState();
@@ -285,6 +297,28 @@ class _SuperAdminSettingsPageState extends State<SuperAdminSettingsPage> {
                 delegate: SliverChildListDelegate([
                   const SizedBox(height: 6),
 
+                  if (MediaQuery.sizeOf(context).width < 600 &&
+                      widget.onOpenStaff != null &&
+                      widget.onOpenReports != null) ...[
+                    _sectionLabel("Others"),
+                    _settingItem(
+                      icon: Icons.people_rounded,
+                      title: "Staff",
+                      subtitle: "Manage staff accounts",
+                      iconColor: const Color(0xFF7B1FA2),
+                      iconBg: const Color(0xFFF3E5F5),
+                      onTap: widget.onOpenStaff!,
+                    ),
+                    _settingItem(
+                      icon: Icons.bar_chart_rounded,
+                      title: "Reports",
+                      subtitle: "View sales reports",
+                      iconColor: const Color(0xFF3949AB),
+                      iconBg: const Color(0xFFE8EAF6),
+                      onTap: widget.onOpenReports!,
+                    ),
+                    const SizedBox(height: 6),
+                  ],
                   _sectionLabel("Account"),
                   _settingItem(
                     icon: Icons.manage_accounts_rounded,
@@ -564,198 +598,58 @@ class _SuperAdminSettingsPageState extends State<SuperAdminSettingsPage> {
     bool readOnly = false,
   }) async {
     final uid = _profileId;
+    final db = widget.firestore ?? FirebaseFirestore.instance;
     var data = <String, dynamic>{...?incomingData};
-    final snapshot = await (widget.firestore ?? FirebaseFirestore.instance)
-        .collection('super_admin_profiles')
-        .doc(uid)
-        .get();
+    final profile = db.collection('super_admin_profiles').doc(uid);
+    final snapshot = await profile.get();
     data = {...data, ...?snapshot.data()};
     if (!mounted) return;
 
-    final authUser = FirebaseAuth.instance.currentUser;
-    final currentUser = authUser?.uid == _profileId ? authUser : null;
-    final firstName = TextEditingController(
-      text: data['firstName']?.toString() ?? '',
-    );
-    final middleName = TextEditingController(
-      text: data['middleName']?.toString() ?? '',
-    );
-    final lastName = TextEditingController(
-      text: data['lastName']?.toString() ?? '',
-    );
-    final email = TextEditingController(
-      text: data['email']?.toString() ?? currentUser?.email ?? '',
-    );
-    final age = TextEditingController(text: data['age']?.toString() ?? '');
-    final address = TextEditingController(
-      text: data['address']?.toString() ?? '',
-    );
-    final formKey = GlobalKey<FormState>();
-
-    final route = DialogRoute<void>(
+    final message = await showModalBottomSheet<String>(
       context: context,
-      builder: (dialogContext) {
-        return Dialog(
-          insetPadding: const EdgeInsets.symmetric(
-            horizontal: 20,
-            vertical: 24,
-          ),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(28),
-          ),
-          child: ConstrainedBox(
-            constraints: BoxConstraints(
-              maxWidth: 620,
-              maxHeight: MediaQuery.of(dialogContext).size.height * 0.86,
-            ),
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.fromLTRB(24, 22, 24, 18),
-              child: Form(
-                key: formKey,
-                autovalidateMode: AutovalidateMode.onUserInteraction,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    const Text(
-                      'Account information',
-                      style: TextStyle(
-                        fontSize: 22,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    const SizedBox(height: 18),
-                    TextFormField(
-                      readOnly: readOnly,
-                      controller: firstName,
-                      validator: (value) => ProfileFieldValidation.name(value),
-                      decoration: const InputDecoration(
-                        labelText: 'First name',
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    TextFormField(
-                      readOnly: readOnly,
-                      controller: middleName,
-                      validator: (value) =>
-                          ProfileFieldValidation.name(value, required: false),
-                      decoration: const InputDecoration(
-                        labelText: 'Middle name',
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    TextFormField(
-                      readOnly: readOnly,
-                      controller: lastName,
-                      validator: (value) =>
-                          ProfileFieldValidation.name(value, required: false),
-                      decoration: const InputDecoration(labelText: 'Last name'),
-                    ),
-                    const SizedBox(height: 10),
-                    TextFormField(
-                      readOnly: readOnly,
-                      controller: email,
-                      keyboardType: TextInputType.emailAddress,
-                      validator: (value) => ProfileFieldValidation.gmail(value),
-                      decoration: const InputDecoration(
-                        labelText: 'Gmail / email',
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    TextFormField(
-                      readOnly: readOnly,
-                      controller: age,
-                      keyboardType: TextInputType.number,
-                      validator: (value) => ProfileFieldValidation.age(value),
-                      decoration: const InputDecoration(labelText: 'Age'),
-                    ),
-                    const SizedBox(height: 10),
-                    TextFormField(
-                      readOnly: readOnly,
-                      controller: address,
-                      maxLines: 3,
-                      validator: ProfileFieldValidation.wordLimit,
-                      decoration: const InputDecoration(labelText: 'Address'),
-                    ),
-                    const SizedBox(height: 18),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.end,
-                      children: [
-                        TextButton(
-                          onPressed: () => Navigator.pop(dialogContext),
-                          child: Text(readOnly ? 'Close' : 'Cancel'),
-                        ),
-                        const SizedBox(width: 10),
-                        if (!readOnly)
-                          FilledButton(
-                            onPressed: () async {
-                              if (!(formKey.currentState?.validate() ??
-                                  false)) {
-                                return;
-                              }
-                              try {
-                                await (widget.firestore ??
-                                        FirebaseFirestore.instance)
-                                    .collection('super_admin_profiles')
-                                    .doc(uid)
-                                    .set({
-                                      'firstName': firstName.text.trim(),
-                                      'middleName': middleName.text.trim(),
-                                      'lastName': lastName.text.trim(),
-                                      'email': email.text.trim(),
-                                      if (currentUser?.email != null)
-                                        'authEmail': currentUser!.email,
-                                      'age': age.text.trim(),
-                                      'address': address.text.trim(),
-                                      'updatedAt': FieldValue.serverTimestamp(),
-                                    }, SetOptions(merge: true));
-                                final updatedName = [
-                                  firstName.text.trim(),
-                                  middleName.text.trim(),
-                                  lastName.text.trim(),
-                                ].where((part) => part.isNotEmpty).join(' ');
-                                if (updatedName.isNotEmpty) {
-                                  await currentUser?.updateDisplayName(
-                                    updatedName,
-                                  );
-                                }
-                                if (dialogContext.mounted) {
-                                  Navigator.pop(dialogContext);
-                                }
-                                if (mounted) {
-                                  _showStyledSnackBar(
-                                    'Account information updated.',
-                                  );
-                                }
-                              } catch (error) {
-                                if (mounted) {
-                                  _showStyledSnackBar(
-                                    'Unable to save account information: $error',
-                                    isError: true,
-                                  );
-                                }
-                              }
-                            },
-                            child: const Text('Save'),
-                          ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        );
-      },
+      isScrollControlled: true,
+      useSafeArea: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => AccountProfileEditorSheet(
+        profile: data,
+        readOnly: readOnly,
+        onSave: (values) async {
+          var verificationSent = false;
+          if (values.emailChanged || values.verifyPendingEmail) {
+            final preferences = await SharedPreferences.getInstance();
+            if (!await SuperAdmin.verifyPassword(
+              values.currentPassword,
+              preferences: preferences,
+              database: db,
+            )) {
+              throw StateError('The current password is incorrect.');
+            }
+            verificationSent = await requestVerifiedProfileEmailChange(
+              profile: profile,
+              profileData: data,
+              newEmail: values.email,
+              currentPassword: values.currentPassword,
+            );
+          }
+
+          await profile.set({
+            'firstName': values.firstName,
+            'middleName': values.middleName,
+            'lastName': values.lastName,
+            'age': values.age,
+            'address': values.address,
+            'updatedAt': FieldValue.serverTimestamp(),
+          }, SetOptions(merge: true));
+
+          return verificationSent
+              ? 'Profile saved. A verification link was sent to ${values.email}; the Gmail changes after you verify it.'
+              : values.emailChanged || values.verifyPendingEmail
+              ? 'Gmail verification is complete. Account information updated.'
+              : 'Account information updated.';
+        },
+      ),
     );
-    await Navigator.of(context).push(route);
-    await route.completed;
-    firstName.dispose();
-    middleName.dispose();
-    lastName.dispose();
-    email.dispose();
-    age.dispose();
-    address.dispose();
+    if (message != null && mounted) _showStyledSnackBar(message);
   }
 
   void _showStyledSnackBar(String message, {bool isError = false}) {
@@ -783,9 +677,14 @@ class _SuperAdminSettingsPageState extends State<SuperAdminSettingsPage> {
   }
 
   Future<void> _showChangePassword(BuildContext context) async {
-    final changed = await showDialog<bool>(
+    final changed = await showModalBottomSheet<bool>(
       context: context,
-      builder: (_) => _SuperAdminChangePasswordDialog(database: widget.firestore ?? FirebaseFirestore.instance),
+      isScrollControlled: true,
+      useSafeArea: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _SuperAdminChangePasswordDialog(
+        database: widget.firestore ?? FirebaseFirestore.instance,
+      ),
     );
     if (changed == true && mounted) {
       _showStyledSnackBar('Password updated.');
@@ -1190,9 +1089,7 @@ class _LogoutButtonState extends State<_LogoutButton>
                       onTap: () async {
                         Navigator.pop(context);
                         final prefs = await SharedPreferences.getInstance();
-                        await prefs.remove('lastRole');
-                        await prefs.remove('lastUserId');
-                        await prefs.remove('superAdminId');
+                        await clearPersistedAccountSession(prefs);
                         await FirebaseAuth.instance.signOut();
                         if (!context.mounted) return;
                         Navigator.of(context).pushAndRemoveUntil(
@@ -1287,9 +1184,23 @@ class _SuperAdminChangePasswordDialogState
   final _confirmPassword = TextEditingController();
   String? _error;
   bool _saving = false;
+  bool _obscureCurrent = true;
+  bool _obscureNew = true;
+  bool _obscureConfirm = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _newPassword.addListener(_passwordChanged);
+  }
+
+  void _passwordChanged() {
+    if (mounted) setState(() {});
+  }
 
   @override
   void dispose() {
+    _newPassword.removeListener(_passwordChanged);
     _currentPassword.dispose();
     _newPassword.dispose();
     _confirmPassword.dispose();
@@ -1298,8 +1209,27 @@ class _SuperAdminChangePasswordDialogState
 
   Future<void> _save() async {
     final newPassword = _newPassword.text;
-    if (newPassword.length < 6 || newPassword != _confirmPassword.text) {
-      setState(() => _error = 'Check the new password.');
+    if (_currentPassword.text.isEmpty ||
+        newPassword.isEmpty ||
+        _confirmPassword.text.isEmpty) {
+      setState(() => _error = 'Please complete all password fields.');
+      return;
+    }
+    if (!PasswordStrength(newPassword).isAcceptable) {
+      setState(
+        () => _error =
+            'Password is weak. Meet at least 3 of the 5 requirements to use a fair password.',
+      );
+      return;
+    }
+    if (newPassword == _currentPassword.text) {
+      setState(
+        () => _error = 'Choose a password different from your current one.',
+      );
+      return;
+    }
+    if (newPassword != _confirmPassword.text) {
+      setState(() => _error = 'New password and confirmation do not match.');
       return;
     }
 
@@ -1328,6 +1258,7 @@ class _SuperAdminChangePasswordDialogState
         newPassword,
         preferences: prefs,
         database: widget.database,
+        currentPassword: _currentPassword.text,
       );
       if (mounted) Navigator.of(context).pop(true);
     } catch (error) {
@@ -1342,51 +1273,125 @@ class _SuperAdminChangePasswordDialogState
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text('Change Password'),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          TextField(
-            controller: _currentPassword,
-            obscureText: true,
-            decoration: const InputDecoration(labelText: 'Current password'),
-          ),
-          TextField(
-            controller: _newPassword,
-            obscureText: true,
-            decoration: const InputDecoration(labelText: 'New password'),
-          ),
-          TextField(
-            controller: _confirmPassword,
-            obscureText: true,
-            decoration: const InputDecoration(labelText: 'Confirm password'),
-          ),
-          if (_error != null) ...[
-            const SizedBox(height: 12),
-            Text(
-              _error!,
-              style: TextStyle(color: Theme.of(context).colorScheme.error),
+    final maxHeight = MediaQuery.sizeOf(context).height * .82;
+    return PopScope(
+      canPop: !_saving,
+      child: Container(
+        constraints: BoxConstraints(maxHeight: maxHeight),
+        padding: EdgeInsets.fromLTRB(
+          20,
+          12,
+          20,
+          20 + MediaQuery.viewInsetsOf(context).bottom,
+        ),
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+        ),
+        child: SafeArea(
+          top: false,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Center(
+                  child: Container(
+                    width: 44,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: Colors.black26,
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 18),
+                const Text(
+                  'Change Password',
+                  style: TextStyle(
+                    color: Color(0xFF9D174D),
+                    fontSize: 21,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                PasswordEntryField(
+                  controller: _currentPassword,
+                  label: 'Current Password',
+                  obscureText: _obscureCurrent,
+                  onToggle: () =>
+                      setState(() => _obscureCurrent = !_obscureCurrent),
+                  enabled: !_saving,
+                ),
+                const SizedBox(height: 12),
+                PasswordEntryField(
+                  controller: _newPassword,
+                  label: 'New Password',
+                  obscureText: _obscureNew,
+                  onToggle: () => setState(() => _obscureNew = !_obscureNew),
+                  enabled: !_saving,
+                ),
+                PasswordStrengthChecklist(password: _newPassword.text),
+                const SizedBox(height: 12),
+                PasswordEntryField(
+                  controller: _confirmPassword,
+                  label: 'Confirm New Password',
+                  obscureText: _obscureConfirm,
+                  onToggle: () =>
+                      setState(() => _obscureConfirm = !_obscureConfirm),
+                  enabled: !_saving,
+                ),
+                if (_error != null) ...[
+                  const SizedBox(height: 12),
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.red.shade50,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Text(
+                      _error!,
+                      style: TextStyle(
+                        color: Colors.red.shade800,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ],
+                if (_saving) ...[
+                  const SizedBox(height: 12),
+                  const LinearProgressIndicator(),
+                ],
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: _saving
+                            ? null
+                            : () => Navigator.of(context).pop(),
+                        child: const Text('Cancel'),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: FilledButton(
+                        onPressed: _saving ? null : _save,
+                        style: FilledButton.styleFrom(
+                          backgroundColor: const Color(0xFF9D174D),
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                        ),
+                        child: Text(_saving ? 'Saving…' : 'Save Password'),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
             ),
-          ],
-        ],
+          ),
+        ),
       ),
-      actions: [
-        TextButton(
-          onPressed: _saving ? null : () => Navigator.of(context).pop(),
-          child: const Text('Cancel'),
-        ),
-        ElevatedButton(
-          onPressed: _saving ? null : _save,
-          child: _saving
-              ? const SizedBox(
-                  width: 18,
-                  height: 18,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
-              : const Text('Save'),
-        ),
-      ],
     );
   }
 }

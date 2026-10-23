@@ -3,6 +3,11 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 class CashDrawerService {
   CashDrawerService._();
 
+  static const minimumDailyOpeningCash = 1500.0;
+
+  static bool meetsMinimumDailyOpeningCash(num amount) =>
+      amount >= minimumDailyOpeningCash;
+
   static DateTime? toDate(dynamic value) {
     if (value is Timestamp) return value.toDate();
     if (value is DateTime) return value;

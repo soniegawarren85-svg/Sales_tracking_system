@@ -1,0 +1,38 @@
+{
+  "hosting": {
+    "site": "sales-tracking-d8667-account",
+    "public": "web/account",
+    "ignore": [
+      ".*",
+      "node_modules/**"
+    ],
+    "headers": [
+      {
+        "source": "**",
+        "headers": [
+          {
+            "key": "Referrer-Policy",
+            "value": "no-referrer"
+          },
+          {
+            "key": "Cache-Control",
+            "value": "no-store"
+          },
+          {
+            "key": "X-Content-Type-Options",
+            "value": "nosniff"
+          }
+        ]
+      }
+    ]
+  },
+  "functions": [
+    {
+      "source": "functions",
+      "codebase": "default",
+      "predeploy": [
+        "node tools/prepare_reset_page.cjs"
+      ]
+    }
+  ]
+}
