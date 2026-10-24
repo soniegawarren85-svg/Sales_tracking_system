@@ -29,6 +29,7 @@ void main() {
       final calls = <String>[];
       String printed = '';
       printer.status.value = const ThermalPrinterStatus(
+        name: 'AngelZ Thermal Printer',
         address: 'saved-printer',
         isConnected: true,
       );
@@ -44,6 +45,9 @@ void main() {
         'salesId': 'S-123',
         'staffName': 'Ana Cruz',
         'staffPublicId': 'ST-004',
+        'branchName': 'SM Dagupan',
+        'branchAddress': '123 Main Street, Dagupan City',
+        'taxTin': '123-456-789-000',
         'items': [
           {'name': 'Cookie', 'quantity': 1, 'price': 99},
         ],
@@ -59,6 +63,14 @@ void main() {
       expect(printed, contains("Angel'z Bites Cupcakes"));
       expect(printed, contains('Cashier: Ana Cruz'));
       expect(printed, contains('Staff ID: ST-004'));
+      expect(printed, contains('SM Dagupan'));
+      expect(printed, contains('123 Main Street, Dagupan City'));
+      expect(printed, contains('BIR TIN: 123-456-789-000'));
+      expect(printed, contains('Printer: AngelZ Thermal Printer'));
+      expect(
+        printed.indexOf('Printer: AngelZ Thermal Printer'),
+        lessThan(printed.indexOf('Thank you for your purchase!')),
+      );
       expect(printed, contains('Cash tendered'));
       expect(printed, contains('10.61'));
       expect(printed, contains('PHP 99.00'));

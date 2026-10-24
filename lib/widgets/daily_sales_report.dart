@@ -14,6 +14,7 @@ import '../services/report_print.dart';
 import '../services/branch_report_data.dart';
 import '../services/number_format.dart';
 import '../services/inventory_display_ids.dart';
+import '../services/receipt_tax.dart';
 import '../services/report_pdf_theme.dart';
 import '../theme/app_colors.dart';
 import 'inventory_records_table.dart';
@@ -239,6 +240,10 @@ class _DailySalesReportState extends State<DailySalesReport> {
                     sale['vat'],
               ),
         );
+        final totalNetSales = sales.fold<double>(
+          0,
+          (sum, sale) => sum + receiptVatableSales(sale),
+        );
         final sold = sales.fold<double>(
           0,
           (sum, s) =>
@@ -354,7 +359,7 @@ class _DailySalesReportState extends State<DailySalesReport> {
           'Total profit': money(financialTotal('Total profit')),
           'Total VAT': money(totalVat),
           'Total net profit': money(financialTotal('Total net profit')),
-          'Total net sales': money(total - totalVat),
+          'Total net sales': money(totalNetSales),
           'Total loss': money(financialTotal('Total loss')),
         };
         final rows = allRows

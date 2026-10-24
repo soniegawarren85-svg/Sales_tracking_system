@@ -172,7 +172,11 @@ class _DashboardPageState extends State<DashboardPage>
   StreamSubscription<String>? _localCacheSubscription;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>?
   _receiptCacheSubscription;
+  final List<StreamSubscription<QuerySnapshot<Map<String, dynamic>>>>
+  _legacyReceiptCacheSubscriptions = [];
   String? _staffDocId;
+  String? _staffPublicId;
+  Set<String> _staffIdentityAliases = {};
   String _inventorySearchQuery = '';
   bool _isResolvingStaffIdentity = true;
   Stream<QuerySnapshot<Map<String, dynamic>>>? _staffInventoryStreamCache;
@@ -257,6 +261,12 @@ class _DashboardPageState extends State<DashboardPage>
         FirebaseAuth.instance.currentUser?.uid ??
         prefs.getString('lastStaffDocId') ??
         prefs.getString('lastUserId');
+    final identityAliases = <String>{
+      if ((uid ?? '').trim().isNotEmpty) uid!.trim(),
+      prefs.getString('lastStaffDocId')?.trim() ?? '',
+      prefs.getString('lastUserId')?.trim() ?? '',
+      prefs.getString('lastStaffPublicId')?.trim() ?? '',
+    }..remove('');
     if ((uid ?? '').isEmpty) {
       if (mounted) setState(() => _isResolvingStaffIdentity = false);
       return;
@@ -264,22 +274,140 @@ class _DashboardPageState extends State<DashboardPage>
     if (mounted) {
       setState(() {
         _staffDocId = uid;
+        _staffIdentityAliases = identityAliases;
+        _staffPublicId = prefs.getString('lastStaffPublicId')?.trim();
         _receiptStreamCache = null;
       });
     }
     _staffInventoryIds = const [];
     await _loadStaffInventoryIds(uid!);
     _receiptCacheSubscription?.cancel();
+    for (final subscription in _legacyReceiptCacheSubscriptions) {
+      await subscription.cancel();
+    }
+    _legacyReceiptCacheSubscriptions.clear();
+    final identityValues = _staffIdentityAliases.toList(growable: false);
+    final staffFilter = _staffReceiptFilter(identityValues);
     _receiptCacheSubscription = FirebaseFirestore.instance
         .collection('completed_sales')
-        .where('userId', isEqualTo: uid)
+        .where(staffFilter)
         .snapshots()
-        .listen((snapshot) async {
-          await LocalDatabaseSyncService().mergeCompletedSales(
-            snapshot.docs.map((doc) => {...doc.data(), '_localDocId': doc.id}),
+        .listen(
+          (snapshot) async {
+            await LocalDatabaseSyncService().mergeCompletedSales(
+              snapshot.docs.map(
+                (doc) => {...doc.data(), '_localDocId': doc.id},
+              ),
+            );
+            await _loadLocalDashboardCache();
+          },
+          onError: (Object error) {
+            debugPrint('Staff sales-history sync: $error');
+          },
+        );
+    try {
+      final profileCollection = FirebaseFirestore.instance.collection(
+        'staff_requests',
+      );
+      final authUid = FirebaseAuth.instance.currentUser?.uid.trim() ?? '';
+      if (authUid.isNotEmpty) {
+        try {
+          final linkedProfiles = await profileCollection
+              .where('authUid', isEqualTo: authUid)
+              .get()
+              .timeout(const Duration(seconds: 6));
+          for (final profile in linkedProfiles.docs) {
+            identityAliases.add(profile.id);
+            _addStaffProfileAliases(identityAliases, profile.data());
+          }
+        } catch (error) {
+          debugPrint('Unable to resolve staff profile by auth UID: $error');
+        }
+      }
+      for (final profileId in identityValues.toList()) {
+        final profile = await profileCollection
+            .doc(profileId)
+            .get()
+            .timeout(const Duration(seconds: 6));
+        final data = profile.data();
+        if (data == null) continue;
+        _addStaffProfileAliases(identityAliases, data);
+      }
+    } catch (error) {
+      debugPrint('Unable to load staff sales-history ID: $error');
+    }
+    final identityChanged =
+        identityAliases.length != _staffIdentityAliases.length ||
+        !identityAliases.containsAll(_staffIdentityAliases);
+    if (mounted && identityChanged) {
+      setState(() {
+        _staffIdentityAliases = identityAliases;
+        _staffPublicId = identityAliases.firstWhere(
+          (id) => id.toUpperCase().startsWith('STF-'),
+          orElse: () => _staffPublicId ?? '',
+        );
+        _receiptStreamCache = null;
+      });
+      await _receiptCacheSubscription?.cancel();
+      _receiptCacheSubscription = FirebaseFirestore.instance
+          .collection('completed_sales')
+          .where(_staffReceiptFilter(identityAliases.toList()))
+          .snapshots()
+          .listen(
+            (snapshot) async {
+              await LocalDatabaseSyncService().mergeCompletedSales(
+                snapshot.docs.map(
+                  (doc) => {...doc.data(), '_localDocId': doc.id},
+                ),
+              );
+              await _loadLocalDashboardCache();
+            },
+            onError: (Object error) {
+              debugPrint('Legacy staff sales-history sync: $error');
+            },
           );
-          await _loadLocalDashboardCache();
-        });
+    }
+  }
+
+  void _addStaffProfileAliases(
+    Set<String> aliases,
+    Map<String, dynamic> profile,
+  ) {
+    for (final key in const [
+      'uid',
+      'userId',
+      'authUid',
+      'staffDocId',
+      'staffId',
+      'staffPublicId',
+      'publicId',
+    ]) {
+      final value = profile[key]?.toString().trim() ?? '';
+      if (value.isNotEmpty) aliases.add(value);
+    }
+  }
+
+  Filter _staffReceiptFilter(List<String> rawAliases) {
+    final aliases = rawAliases
+        .map((id) => id.trim())
+        .where((id) => id.isNotEmpty)
+        .toSet()
+        .take(6)
+        .toList(growable: false);
+    if (aliases.isEmpty) {
+      final uid = _staffDocId?.trim() ?? '';
+      return Filter.or(
+        Filter('userId', isEqualTo: uid),
+        Filter('staffId', isEqualTo: uid),
+      );
+    }
+    return Filter.or(
+      Filter('userId', whereIn: aliases),
+      Filter('cashierId', whereIn: aliases),
+      Filter('staffUid', whereIn: aliases),
+      Filter('staffId', whereIn: aliases),
+      Filter('staffPublicId', whereIn: aliases),
+    );
   }
 
   @override
@@ -288,6 +416,9 @@ class _DashboardPageState extends State<DashboardPage>
     InventoryService().removeListener(_onInventoryChanged);
     _localCacheSubscription?.cancel();
     _receiptCacheSubscription?.cancel();
+    for (final subscription in _legacyReceiptCacheSubscriptions) {
+      subscription.cancel();
+    }
     _drawerCacheSubscription?.cancel();
     _allocationScopeSubscription?.cancel();
     super.dispose();
@@ -368,12 +499,8 @@ class _DashboardPageState extends State<DashboardPage>
   Stream<QuerySnapshot<Map<String, dynamic>>> _receiptStream() {
     if (_receiptStreamCache != null) return _receiptStreamCache!;
     final query = FirebaseFirestore.instance.collection('completed_sales');
-    final resolvedStaffId = _staffDocId?.trim() ?? '';
-    final staffId = resolvedStaffId.isNotEmpty
-        ? resolvedStaffId
-        : FirebaseAuth.instance.currentUser?.uid ?? '';
     return _receiptStreamCache = query
-        .where('userId', isEqualTo: staffId)
+        .where(_staffReceiptFilter(_staffIdentityAliases.toList()))
         .snapshots();
   }
 
@@ -388,6 +515,7 @@ class _DashboardPageState extends State<DashboardPage>
       backgroundColor: Colors.transparent,
       builder: (_) => _HistorySheet(
         staffId: staffId,
+        staffAliases: _staffIdentityAliases,
         receiptStream: _receiptStream(),
         localReceiptStream: LocalDatabaseSyncService()
             .watchLocalCompletedSales(),
@@ -1875,10 +2003,18 @@ class _DashboardPageState extends State<DashboardPage>
             final bySalesId = <String, Map<String, dynamic>>{};
 
             bool isVisibleReceipt(Map<String, dynamic> data) {
-              final timestamp = data['timestamp'];
-              if (timestamp is! Timestamp) return false;
-              if (!saleBelongsToStaff(data, staffId)) return false;
-              final dt = timestamp.toDate();
+              if (!saleBelongsToStaff(
+                data,
+                staffId,
+                staffAliases: {
+                  if ((_staffPublicId ?? '').trim().isNotEmpty)
+                    _staffPublicId!.trim(),
+                },
+              )) {
+                return false;
+              }
+              final dt = staffReceiptDate(data);
+              if (dt == null) return false;
               return !dt.isBefore(today) && dt.isBefore(tomorrow);
             }
 
@@ -2237,6 +2373,7 @@ class _ReceiptCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isMobile = MediaQuery.sizeOf(context).width < 700;
     final salesId = data['salesId']?.toString() ?? 'Receipt';
     final staffName = _recordedText([
       'staffName',
@@ -2439,7 +2576,20 @@ class _ReceiptCard extends StatelessWidget {
                   const Divider(height: 18),
                   _ReceiptLine('Staff name', staffName),
                   _ReceiptLine('Staff ID', staffId),
-                  _ReceiptLine('Tax classification', taxLabel),
+                  if ('${data['branchName'] ?? ''}'.trim().isNotEmpty)
+                    _ReceiptLine('Branch', data['branchName']),
+                  if (!isMobile &&
+                      '${data['branchAddress'] ?? ''}'.trim().isNotEmpty)
+                    _ReceiptLine('Branch address', data['branchAddress']),
+                  if (!isMobile) _ReceiptLine('Tax classification', taxLabel),
+                  if (taxLabel == 'VAT')
+                    if ('${data['taxTin'] ?? ''}'.trim().isNotEmpty)
+                      _ReceiptLine('BIR TIN', data['taxTin']),
+                  if (taxLabel == 'VAT')
+                    _ReceiptLine(
+                      'VATable sales',
+                      formatMoney(receiptVatableSales(data)),
+                    ),
                   if (taxLabel == 'VAT')
                     _ReceiptLine(
                       'VAT amount',
@@ -4361,8 +4511,10 @@ class _HistorySheet extends StatefulWidget {
   final Stream<QuerySnapshot<Map<String, dynamic>>> receiptStream;
   final Stream<List<Map<String, dynamic>>> localReceiptStream;
   final String staffId;
+  final Set<String> staffAliases;
   const _HistorySheet({
     required this.staffId,
+    this.staffAliases = const {},
     required this.receiptStream,
     required this.localReceiptStream,
   });
@@ -4372,54 +4524,33 @@ class _HistorySheet extends StatefulWidget {
 }
 
 class _HistorySheetState extends State<_HistorySheet> {
-  String _selectedDate = _formatDate(DateTime.now());
+  DateTime _selectedDay = DateUtils.dateOnly(DateTime.now());
+  DateTimeRange? _selectedRange;
   String _selectedPaymentMode = 'All';
 
-  DateTime? _receiptDate(dynamic value) {
-    if (value is Timestamp) return value.toDate().toLocal();
-    if (value is DateTime) return value.toLocal();
-    if (value is num) {
-      return DateTime.fromMillisecondsSinceEpoch(value.toInt()).toLocal();
-    }
-    if (value is String) return DateTime.tryParse(value)?.toLocal();
-    return null;
-  }
-
-  DateTime? _dateForReceipt(Map<String, dynamic> data) {
-    final timestampDate = _receiptDate(data['timestamp'] ?? data['createdAt']);
-    if (timestampDate != null) return timestampDate;
-
-    final salesId = data['salesId']?.toString() ?? '';
-    final match = RegExp(
-      r'^[A-Za-z]-?(\d{4})(\d{2})(\d{2})',
-    ).firstMatch(salesId);
-    if (match == null) return null;
-    final year = int.tryParse(match.group(1)!);
-    final month = int.tryParse(match.group(2)!);
-    final day = int.tryParse(match.group(3)!);
-    if (year == null || month == null || day == null) return null;
-    return DateTime(year, month, day);
-  }
-
-  Map<String, List<Map<String, dynamic>>> _groupByDate(
-    Iterable<Map<String, dynamic>> receipts,
-  ) {
-    final grouped = <String, List<Map<String, dynamic>>>{};
-    for (final data in receipts) {
-      final dt = _dateForReceipt(data);
-      if (dt == null) continue;
-      grouped.putIfAbsent(_formatDate(dt), () => []).add(data);
-    }
-    for (final values in grouped.values) {
-      values.sort((a, b) {
-        final at = _dateForReceipt(a);
-        final bt = _dateForReceipt(b);
-        return (bt?.millisecondsSinceEpoch ?? 0).compareTo(
-          at?.millisecondsSinceEpoch ?? 0,
-        );
+  Future<void> _selectDay() async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _selectedDay,
+      firstDate: DateTime(2020),
+      lastDate: DateTime.now(),
+    );
+    if (picked != null && mounted) {
+      setState(() {
+        _selectedDay = DateUtils.dateOnly(picked);
+        _selectedRange = null;
       });
     }
-    return grouped;
+  }
+
+  Future<void> _selectDateRange() async {
+    final picked = await showDateRangePicker(
+      context: context,
+      initialDateRange: _selectedRange,
+      firstDate: DateTime(2020),
+      lastDate: DateTime.now(),
+    );
+    if (picked != null && mounted) setState(() => _selectedRange = picked);
   }
 
   @override
@@ -4475,18 +4606,8 @@ class _HistorySheetState extends State<_HistorySheet> {
                   ),
                   const Spacer(),
                   IconButton(
-                    tooltip: 'Filter date',
-                    onPressed: () async {
-                      final picked = await showDatePicker(
-                        context: context,
-                        initialDate: DateTime.now(),
-                        firstDate: DateTime(2020),
-                        lastDate: DateTime.now(),
-                      );
-                      if (picked != null) {
-                        setState(() => _selectedDate = _formatDate(picked));
-                      }
-                    },
+                    tooltip: 'Filter date range',
+                    onPressed: _selectDateRange,
                     icon: const Icon(
                       Icons.calendar_today_rounded,
                       color: _C.primary,
@@ -4509,14 +4630,20 @@ class _HistorySheetState extends State<_HistorySheet> {
                     builder: (context, snapshot) {
                       final localReceipts = (localSnapshot.data ?? const [])
                           .where(
-                            (receipt) =>
-                                saleBelongsToStaff(receipt, widget.staffId),
+                            (receipt) => saleBelongsToStaff(
+                              receipt,
+                              widget.staffId,
+                              staffAliases: widget.staffAliases,
+                            ),
                           );
                       final cloudReceipts = (snapshot.data?.docs ?? [])
                           .map((doc) => doc.data())
                           .where(
-                            (receipt) =>
-                                saleBelongsToStaff(receipt, widget.staffId),
+                            (receipt) => saleBelongsToStaff(
+                              receipt,
+                              widget.staffId,
+                              staffAliases: widget.staffAliases,
+                            ),
                           )
                           .toList();
                       final bySalesId = <String, Map<String, dynamic>>{};
@@ -4528,7 +4655,15 @@ class _HistorySheetState extends State<_HistorySheet> {
                         final key = salesId.isNotEmpty
                             ? salesId
                             : 'local-${receipt['localId'] ?? bySalesId.length}';
-                        bySalesId[key] = receipt;
+                        final merged = Map<String, dynamic>.from(
+                          bySalesId[key] ?? const {},
+                        );
+                        for (final field in receipt.entries) {
+                          if (field.value != null) {
+                            merged[field.key] = field.value;
+                          }
+                        }
+                        bySalesId[key] = merged;
                       }
                       if (bySalesId.isEmpty &&
                           snapshot.connectionState == ConnectionState.waiting &&
@@ -4538,45 +4673,26 @@ class _HistorySheetState extends State<_HistorySheet> {
                           child: CircularProgressIndicator(color: _C.primary),
                         );
                       }
-                      final grouped = _groupByDate(bySalesId.values);
-                      final today = _formatDate(DateTime.now());
-                      final dates = {today, ...grouped.keys}.toList()
-                        ..sort((a, b) {
-                          DateTime parseDate(String value) {
-                            try {
-                              return DateTime.parse(value);
-                            } catch (_) {
-                              final parts = value.split(' ');
-                              if (parts.length < 3) return DateTime(1970);
-                              const months = [
-                                'January',
-                                'February',
-                                'March',
-                                'April',
-                                'May',
-                                'June',
-                                'July',
-                                'August',
-                                'September',
-                                'October',
-                                'November',
-                                'December',
-                              ];
-                              final month = months.indexOf(parts[0]) + 1;
-                              final day =
-                                  int.tryParse(parts[1].replaceAll(',', '')) ??
-                                  1;
-                              final year = int.tryParse(parts[2]) ?? 1970;
-                              return DateTime(year, month, day);
-                            }
-                          }
-
-                          return parseDate(b).compareTo(parseDate(a));
-                        });
-                      if (!dates.contains(_selectedDate)) {
-                        _selectedDate = today;
+                      if (bySalesId.isEmpty && snapshot.hasError) {
+                        return Center(
+                          child: Padding(
+                            padding: const EdgeInsets.all(24),
+                            child: Text(
+                              'Unable to load sales history. Please check your connection and try again.',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                color: AppColors.brand.shade500,
+                                fontSize: 15,
+                              ),
+                            ),
+                          ),
+                        );
                       }
-                      final receipts = grouped[_selectedDate] ?? [];
+                      final receipts = filterStaffReceiptDates(
+                        bySalesId.values,
+                        start: _selectedRange?.start ?? _selectedDay,
+                        end: _selectedRange?.end ?? _selectedDay,
+                      );
                       final filteredReceipts = receipts.where((receipt) {
                         if (_selectedPaymentMode == 'All') return true;
                         final mode =
@@ -4597,7 +4713,7 @@ class _HistorySheetState extends State<_HistorySheet> {
                         }
                       }
 
-                      if (grouped.isEmpty) {
+                      if (bySalesId.isEmpty) {
                         return Center(
                           child: Text(
                             'No receipt history yet.',
@@ -4611,52 +4727,26 @@ class _HistorySheetState extends State<_HistorySheet> {
 
                       return Column(
                         children: [
-                          SizedBox(
-                            height: 40,
-                            child: ListView.separated(
-                              scrollDirection: Axis.horizontal,
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 16,
-                              ),
-                              itemCount: dates.length,
-                              separatorBuilder: (_, _) =>
-                                  const SizedBox(width: 8),
-                              itemBuilder: (_, i) {
-                                final d = dates[i];
-                                final selected = d == _selectedDate;
-                                return GestureDetector(
-                                  onTap: () =>
-                                      setState(() => _selectedDate = d),
-                                  child: AnimatedContainer(
-                                    duration: const Duration(milliseconds: 200),
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 16,
-                                      vertical: 8,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: selected
-                                          ? _C.primary
-                                          : Colors.white,
-                                      borderRadius: BorderRadius.circular(20),
-                                      border: Border.all(
-                                        color: selected
-                                            ? _C.primary
-                                            : AppColors.brand.shade200,
-                                      ),
-                                    ),
-                                    child: Text(
-                                      d,
-                                      style: TextStyle(
-                                        fontSize: 12,
-                                        fontWeight: FontWeight.w700,
-                                        color: selected
-                                            ? Colors.white
-                                            : AppColors.brand.shade600,
-                                      ),
-                                    ),
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 16),
+                            child: Align(
+                              alignment: Alignment.centerLeft,
+                              child: FilledButton.icon(
+                                onPressed: _selectDay,
+                                icon: const Icon(Icons.event_rounded, size: 17),
+                                label: Text(_formatDate(_selectedDay)),
+                                style: FilledButton.styleFrom(
+                                  backgroundColor: _C.primary,
+                                  foregroundColor: Colors.white,
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 12,
+                                    vertical: 9,
                                   ),
-                                );
-                              },
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(14),
+                                  ),
+                                ),
+                              ),
                             ),
                           ),
                           Padding(
@@ -4719,9 +4809,7 @@ class _HistorySheetState extends State<_HistorySheet> {
                                           (data) => _ReceiptCard(
                                             data: refundReceiptDisplayData(
                                               data,
-                                              grouped.values.expand(
-                                                (rows) => rows,
-                                              ),
+                                              bySalesId.values,
                                             ),
                                             compact: false,
                                           ),

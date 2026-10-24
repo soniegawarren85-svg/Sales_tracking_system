@@ -9,6 +9,7 @@ import '../services/account_session_control.dart';
 import '../widgets/email_pending_badge.dart';
 import '../services/password_policy.dart';
 import '../widgets/password_strength_checklist.dart';
+import '../widgets/top_edge_refresh.dart';
 import 'dart:async';
 import '../widgets/branch_staff_activity_dialog.dart';
 import '../services/public_item_id.dart';
@@ -120,6 +121,31 @@ class _ProfilePageState extends State<ProfilePage>
       }
     } finally {
       _refreshingEmail = false;
+    }
+  }
+
+  Future<void> _refreshProfile() async {
+    await _loadStaffDocId();
+    final uid =
+        FirebaseAuth.instance.currentUser?.uid ?? _staffDocId?.trim() ?? '';
+    try {
+      if (uid.isNotEmpty) {
+        await FirebaseFirestore.instance
+            .collection('staff_requests')
+            .doc(uid)
+            .get(const GetOptions(source: Source.server))
+            .timeout(const Duration(seconds: 15));
+      }
+      if (mounted) setState(() {});
+    } catch (error) {
+      debugPrint('Unable to refresh staff profile: $error');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Unable to refresh profile. Check your connection.'),
+          ),
+        );
+      }
     }
   }
 
@@ -590,24 +616,31 @@ class _ProfilePageState extends State<ProfilePage>
         opacity: _fadeAnim,
         child: SlideTransition(
           position: _slideAnim,
-          child: CustomScrollView(
-            physics: const ClampingScrollPhysics(),
-            slivers: [
-              SliverToBoxAdapter(child: _buildHeader()),
-              SliverToBoxAdapter(
-                child: Column(
-                  children: [
-                    const SizedBox(height: 0),
-                    _buildInfoCard(),
-                    const SizedBox(height: 24),
-                    _buildChangePassword(),
-                    const SizedBox(height: 12),
-                    _buildLogout(),
-                    const SizedBox(height: 100),
-                  ],
-                ),
+          child: TopEdgeRefresh(
+            displacement: 24,
+            color: _pinkMid,
+            onRefresh: _refreshProfile,
+            child: CustomScrollView(
+              physics: const AlwaysScrollableScrollPhysics(
+                parent: ClampingScrollPhysics(),
               ),
-            ],
+              slivers: [
+                SliverToBoxAdapter(child: _buildHeader()),
+                SliverToBoxAdapter(
+                  child: Column(
+                    children: [
+                      const SizedBox(height: 0),
+                      _buildInfoCard(),
+                      const SizedBox(height: 24),
+                      _buildChangePassword(),
+                      const SizedBox(height: 12),
+                      _buildLogout(),
+                      const SizedBox(height: 100),
+                    ],
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),

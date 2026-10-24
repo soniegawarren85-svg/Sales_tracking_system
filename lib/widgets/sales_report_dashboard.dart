@@ -2,6 +2,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import '../services/branch_report_data.dart';
 import '../services/number_format.dart';
+import '../services/receipt_tax.dart';
 import '../theme/app_colors.dart';
 import 'historical_cash_drawer.dart';
 
@@ -248,7 +249,9 @@ class SalesReportDashboard extends StatelessWidget {
       transactions.add(rows.length.toDouble());
       cost.add(expense);
       vat.add(tax);
-      net.add(revenue - tax);
+      net.add(
+        rows.fold<double>(0, (sum, sale) => sum + receiptVatableSales(sale)),
+      );
       profit.add(gain);
     }
     Widget panel(String title, Widget body, {Widget? action}) => Container(

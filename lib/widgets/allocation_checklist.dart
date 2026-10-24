@@ -107,6 +107,24 @@ Query<Map<String, dynamic>> checklistQuery(
   return admin ? query : query.where('staffId', whereIn: ids.take(30).toList());
 }
 
+class _ChecklistIssue {
+  const _ChecklistIssue({
+    required this.type,
+    required this.quantity,
+    required this.itemId,
+    required this.itemName,
+    required this.details,
+    required this.hasPhysicalQuantity,
+  });
+
+  final String type;
+  final int quantity;
+  final String itemId;
+  final String itemName;
+  final String details;
+  final bool hasPhysicalQuantity;
+}
+
 class _ChecklistDialog extends StatefulWidget {
   final List<String> ids;
   final FirebaseFirestore db;
@@ -203,7 +221,8 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
     final form = GlobalKey<FormState>();
     return showDialog<String>(
       context: context,
-      builder: (context) => AlertDialog(
+      useRootNavigator: true,
+      builder: (dialogContext) => AlertDialog(
         constraints: const BoxConstraints(maxWidth: 420),
         title: Text('Report Issue'),
         content: Form(
@@ -223,13 +242,13 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () => Navigator.of(dialogContext).pop(),
             child: const Text('Cancel'),
           ),
           FilledButton(
             onPressed: () {
               if (form.currentState!.validate()) {
-                Navigator.pop(context, reason.trim());
+                Navigator.of(dialogContext).pop(reason.trim());
               }
             },
             child: const Text('Submit report'),
@@ -237,6 +256,215 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
         ],
       ),
     );
+  }
+
+  Future<_ChecklistIssue?> askIncomingIssue(Map<String, dynamic> data) async {
+    const issueTypes = ['Missing', 'Extra', 'Incorrect', 'Damaged', 'Others'];
+    final items = AllocationChecklistService.rows(data['items']);
+    final physicalStock =
+        data['isBundle'] == true ||
+        AllocationChecklistService.type(data) == 'Categories';
+    final quantityController = TextEditingController();
+    final detailsController = TextEditingController();
+    final formKey = GlobalKey<FormState>();
+    var selectedType = issueTypes.first;
+    var selectedItemKey = items.isEmpty
+        ? ''
+        : '${items.first['id'] ?? items.first['name'] ?? ''}';
+    var confirming = false;
+    _ChecklistIssue? pendingIssue;
+    final result = await showDialog<_ChecklistIssue>(
+      context: context,
+      useRootNavigator: true,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          final selectedItem = items.cast<Map<String, dynamic>?>().firstWhere(
+            (item) =>
+                item != null &&
+                '${item['id'] ?? item['name'] ?? ''}' == selectedItemKey,
+            orElse: () => null,
+          );
+          final allocatedQuantity = data['isBundle'] == true
+              ? AllocationChecklistService.quantity(data['bundleCount'])
+              : AllocationChecklistService.quantity(
+                  selectedItem?['stock'] ?? selectedItem?['startingStock'],
+                );
+          final quantityRequired = physicalStock && selectedType != 'Others';
+          final receivingQuantity =
+              pendingIssue == null ||
+                  !pendingIssue!.hasPhysicalQuantity ||
+                  pendingIssue!.type == 'Others'
+              ? 0
+              : switch (pendingIssue!.type) {
+                  'Missing' ||
+                  'Damaged' ||
+                  'Incorrect' => allocatedQuantity - pendingIssue!.quantity,
+                  'Extra' => allocatedQuantity + pendingIssue!.quantity,
+                  _ => 0,
+                };
+          return AlertDialog(
+            constraints: const BoxConstraints(maxWidth: 440),
+            title: Text(confirming ? 'Confirm Issue Report' : 'Report Issue'),
+            content: confirming
+                ? Text(
+                    pendingIssue!.type == 'Others'
+                        ? 'Submit this issue report: ${pendingIssue!.details}'
+                        : pendingIssue!.type == 'Damaged' ||
+                              pendingIssue!.type == 'Incorrect'
+                        ? '${pendingIssue!.quantity} ${pendingIssue!.itemName} will be excluded from staff inventory and sent to Admin for return confirmation. The remaining $receivingQuantity will be received.'
+                        : '${pendingIssue!.type == 'Missing' ? 'Only' : 'Staff inventory will receive'} $receivingQuantity ${pendingIssue!.itemName}${pendingIssue!.type == 'Missing' ? ' will be added to staff inventory.' : ' including the reported extra quantity.'}',
+                  )
+                : Form(
+                    key: formKey,
+                    child: SingleChildScrollView(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          DropdownButtonFormField<String>(
+                            initialValue: selectedType,
+                            decoration: const InputDecoration(
+                              labelText: 'Reason',
+                            ),
+                            items: [
+                              for (final type in issueTypes)
+                                DropdownMenuItem(
+                                  value: type,
+                                  child: Text(type),
+                                ),
+                            ],
+                            onChanged: (value) => setDialogState(
+                              () => selectedType = value ?? issueTypes.first,
+                            ),
+                          ),
+                          if (physicalStock && data['isBundle'] != true) ...[
+                            const SizedBox(height: 12),
+                            DropdownButtonFormField<String>(
+                              initialValue: selectedItemKey,
+                              decoration: const InputDecoration(
+                                labelText: 'Item',
+                              ),
+                              items: [
+                                for (final item in items)
+                                  DropdownMenuItem(
+                                    value:
+                                        '${item['id'] ?? item['name'] ?? ''}',
+                                    child: Text('${item['name'] ?? 'Item'}'),
+                                  ),
+                              ],
+                              onChanged: (value) => setDialogState(
+                                () =>
+                                    selectedItemKey = value ?? selectedItemKey,
+                              ),
+                              validator: (value) =>
+                                  value == null || value.isEmpty
+                                  ? 'Select an item'
+                                  : null,
+                            ),
+                          ],
+                          if (quantityRequired) ...[
+                            const SizedBox(height: 12),
+                            TextFormField(
+                              controller: quantityController,
+                              keyboardType: TextInputType.number,
+                              decoration: InputDecoration(
+                                labelText: 'Quantity',
+                                helperText: selectedType == 'Extra'
+                                    ? 'Allocated: $allocatedQuantity'
+                                    : 'Allocated: $allocatedQuantity; cannot exceed this amount',
+                              ),
+                              validator: (value) {
+                                final quantity = int.tryParse(
+                                  value?.trim() ?? '',
+                                );
+                                if (quantity == null || quantity <= 0) {
+                                  return 'Enter a whole number greater than zero';
+                                }
+                                if (selectedType != 'Extra' &&
+                                    quantity > allocatedQuantity) {
+                                  return 'Cannot exceed $allocatedQuantity';
+                                }
+                                return null;
+                              },
+                            ),
+                          ],
+                          if (!physicalStock)
+                            const Padding(
+                              padding: EdgeInsets.only(top: 12),
+                              child: Text(
+                                'This allocation grants catalog access and has no physical quantity to receive.',
+                              ),
+                            ),
+                          const SizedBox(height: 12),
+                          TextFormField(
+                            controller: detailsController,
+                            maxLines: 2,
+                            decoration: InputDecoration(
+                              labelText: selectedType == 'Others'
+                                  ? 'Describe the issue'
+                                  : 'Additional details (optional)',
+                            ),
+                            validator: (value) =>
+                                selectedType == 'Others' &&
+                                    (value == null || value.trim().isEmpty)
+                                ? 'Please describe the issue'
+                                : null,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+            actions: [
+              TextButton(
+                onPressed: () {
+                  if (confirming) {
+                    setDialogState(() => confirming = false);
+                  } else {
+                    Navigator.pop(dialogContext);
+                  }
+                },
+                child: Text(confirming ? 'Back' : 'Cancel'),
+              ),
+              FilledButton(
+                onPressed: () {
+                  if (confirming) {
+                    Navigator.pop(dialogContext, pendingIssue);
+                    return;
+                  }
+                  if (!formKey.currentState!.validate()) return;
+                  final item = selectedItem ?? const <String, dynamic>{};
+                  setDialogState(() {
+                    pendingIssue = _ChecklistIssue(
+                      type: selectedType,
+                      quantity: quantityRequired
+                          ? int.parse(quantityController.text.trim())
+                          : 0,
+                      itemId: '${item['id'] ?? ''}',
+                      itemName: data['isBundle'] == true
+                          ? '${data['name'] ?? 'Bundle'}'
+                          : '${item['name'] ?? data['name'] ?? 'Item'}',
+                      details: detailsController.text.trim(),
+                      hasPhysicalQuantity: physicalStock,
+                    );
+                    confirming = true;
+                  });
+                },
+                child: Text(
+                  confirming
+                      ? pendingIssue!.type == 'Others'
+                            ? 'Submit report'
+                            : 'Confirm and receive'
+                      : 'Continue',
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+    quantityController.dispose();
+    detailsController.dispose();
+    return result;
   }
 
   Future<void> actReturns(
@@ -315,7 +543,17 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
     if (busy.contains(id)) return;
     setState(() => busy.add(id));
     try {
-      final reason = report ? await askReason(widget.admin) : '';
+      final doc = await widget.db
+          .collection('allocation_checklist')
+          .doc(id)
+          .get();
+      final data = doc.data() ?? const <String, dynamic>{};
+      final incomingIssue = report && !widget.admin && !widget.returnsOnly
+          ? await askIncomingIssue(data)
+          : null;
+      final reason = report && incomingIssue == null
+          ? await askReason(widget.admin)
+          : incomingIssue?.details ?? '';
       if (reason == null || !mounted) return;
       if (!report) {
         final confirmed = await confirmChecklistReceipt(
@@ -333,13 +571,34 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
           : await resolveBranchInventoryActor(widget.db);
       final name = actor.name;
       final service = AllocationChecklistService(widget.db);
-      final changed = report
+      final changed =
+          report &&
+              incomingIssue != null &&
+              incomingIssue.hasPhysicalQuantity &&
+              incomingIssue.type != 'Others'
+          ? await service.decide(
+              id,
+              accept: true,
+              staffId: actor.id,
+              actorName: name,
+              actorPublicId: actor.publicId,
+              actorRole: actor.role,
+              scopeIds: widget.ids,
+              issueType: incomingIssue.type,
+              issueQuantity: incomingIssue.quantity,
+              issueItemId: incomingIssue.itemId,
+              issueItemName: incomingIssue.itemName,
+              reason: incomingIssue.details,
+            )
+          : report
           ? await service.report(
               id,
               admin: widget.admin,
               actorId: actor.id,
               actorName: name,
-              reason: reason,
+              reason: incomingIssue == null
+                  ? reason
+                  : '${incomingIssue.type}${incomingIssue.details.isEmpty ? '' : ': ${incomingIssue.details}'}',
               scopeIds: widget.ids,
             )
           : widget.admin
@@ -359,7 +618,12 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
           SnackBar(
             content: Text(
               changed
-                  ? 'Report submitted.'
+                  ? incomingIssue?.type == 'Damaged' ||
+                            incomingIssue?.type == 'Incorrect'
+                        ? 'Issue reported. The affected quantity is pending Admin return confirmation.'
+                        : incomingIssue?.hasPhysicalQuantity == true
+                        ? 'Issue reported and the adjusted quantity was received.'
+                        : 'Report submitted.'
                   : 'This transaction has already been processed.',
             ),
           ),

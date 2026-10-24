@@ -149,6 +149,89 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('VAT configuration saves an optional branch BIR TIN', (
+    tester,
+  ) async {
+    final firestore = FakeFirebaseFirestore();
+    await firestore.collection('branches').doc('alpha').set({'name': 'Alpha'});
+    await firestore.doc('admin_settings/transactions').set({
+      'branchSettings': {
+        'alpha': {'taxEnabled': true, 'taxClassification': 'vat'},
+      },
+    });
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: TransactionSettingsDialog(
+            kind: 'tax',
+            branchId: 'alpha',
+            firestore: firestore,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('BIR TIN (optional)'), findsOneWidget);
+    await tester.enterText(find.byType(TextFormField), '123-456-789-000');
+    await tester.tap(find.byTooltip('Save TIN'));
+    await tester.pumpAndSettle();
+
+    final settings = (await firestore.doc('admin_settings/transactions').get())
+        .data()!;
+    expect(
+      ((settings['branchSettings'] as Map)['alpha'] as Map)['taxTin'],
+      '123-456-789-000',
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('All branches VAT configuration applies one optional BIR TIN', (
+    tester,
+  ) async {
+    final firestore = FakeFirebaseFirestore();
+    await firestore.collection('branches').doc('alpha').set({'name': 'Alpha'});
+    await firestore.collection('branches').doc('beta').set({'name': 'Beta'});
+    await firestore.doc('admin_settings/transactions').set({
+      'branchSettings': {
+        'alpha': {
+          'taxEnabled': true,
+          'taxClassification': 'vat',
+          'taxTin': '111-111-111-000',
+        },
+        'beta': {
+          'taxEnabled': true,
+          'taxClassification': 'vat',
+          'taxTin': '222-222-222-000',
+        },
+      },
+    });
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: TransactionSettingsDialog(kind: 'tax', firestore: firestore),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('All branches'), findsOneWidget);
+    await tester.enterText(find.byType(TextFormField), '123-456-789-000');
+    await tester.tap(find.byTooltip('Save TIN'));
+    await tester.pumpAndSettle();
+
+    final branchSettings =
+        (await firestore.doc('admin_settings/transactions').get())
+                .data()!['branchSettings']
+            as Map;
+    for (final branchId in ['alpha', 'beta']) {
+      expect((branchSettings[branchId] as Map)['taxTin'], '123-456-789-000');
+    }
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets(
     'admin discount settings stay on the assigned branch and log changes',
     (tester) async {
@@ -221,7 +304,10 @@ void main() {
         find.textContaining('discount control updated successfully.'),
         findsWidgets,
       );
-      expect(find.textContaining('Updated: discountsEnabled'), findsOneWidget);
+      expect(
+        find.textContaining('Updated fields: Discounts Enabled'),
+        findsOneWidget,
+      );
       expect(tester.takeException(), isNull);
     },
   );

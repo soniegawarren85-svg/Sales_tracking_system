@@ -98,7 +98,7 @@ void main() {
     expect(reason, 'No longer assigned');
   });
   test(
-    'Backup round trip includes allocations, profiles and nested messages',
+    'Backup export includes records, nested messages and manifest counts',
     () async {
       final source = FakeFirebaseFirestore();
       await source.doc('allocation_checklist/pending').set({
@@ -108,6 +108,11 @@ void main() {
       await source.doc('staff_requests/admin').set({
         'firstName': 'Test',
         'createdAt': Timestamp.fromDate(DateTime(2026)),
+        'passwordCredential': {'hash': 'do-not-export'},
+        'api_key': 'do-not-export',
+      });
+      await source.doc('password_reset_otps/one-time-code').set({
+        'otp': 'do-not-export',
       });
       await source.doc('messages/thread/items/message').set({'text': 'Hello'});
       await source.doc('messages/thread').set({'name': 'Branch'});
@@ -115,12 +120,17 @@ void main() {
       final records = DatabaseBackup.validate(bytes);
       expect(records['allocation_checklist/pending']!['quantity'], 3);
       expect(records['messages/thread/items/message']!['text'], 'Hello');
-      final restored = FakeFirebaseFirestore();
-      await DatabaseBackup.restore(records, firestore: restored);
       expect(
-        (await restored.doc('staff_requests/admin').get()).data()!['createdAt'],
-        isA<Timestamp>(),
+        records['staff_requests/admin']!.containsKey('passwordCredential'),
+        isFalse,
       );
+      expect(records['staff_requests/admin']!.containsKey('api_key'), isFalse);
+      expect(records.containsKey('password_reset_otps/one-time-code'), isFalse);
+      expect(records['staff_requests/admin']!['createdAt'], isA<Timestamp>());
+      final manifest = DatabaseBackup.inspect(bytes);
+      expect(manifest.documentCount, 4);
+      expect(manifest.collectionCounts['messages'], 2);
+      expect(manifest.collectionCounts['password_reset_otps'], isNull);
     },
   );
   testWidgets('Discount edit, confirmation, void and restore persist', (

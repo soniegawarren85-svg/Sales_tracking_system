@@ -11,11 +11,7 @@ List<Map<String, dynamic>> bundleRows(dynamic value) =>
         .toList();
 int bundleQuantity(dynamic value) => num.tryParse('$value')?.toInt() ?? 0;
 
-num coffeeSizeCostPrice({
-  required Map size,
-  required Map data,
-  Map? rootData,
-}) {
+num coffeeSizeCostPrice({required Map size, required Map data, Map? rootData}) {
   final sizeName = '${size['name'] ?? ''}'.trim().toLowerCase();
   final rootSize = bundleRows(rootData?['sizes'])
       .where(
@@ -34,11 +30,7 @@ bool inventoryLowStock(dynamic quantity, {required String type}) {
 }
 
 String bundleInventoryGroupKey(Map data) {
-  for (final field in [
-    'bundleId',
-    'publicId',
-    'sourceInventoryId',
-  ]) {
+  for (final field in ['bundleId', 'publicId', 'sourceInventoryId']) {
     final value = '${data[field] ?? ''}'.trim().toLowerCase();
     if (value.isNotEmpty) return value;
   }
@@ -132,6 +124,28 @@ bool bundleInstanceAvailable(Map instance, Map bundle, {DateTime? now}) {
       ? <Map<String, dynamic>>[]
       : bundleRows(bundle['items']);
   return !items.any((item) => bundleExpired(item, day));
+}
+
+List<String> bundleDisplayItemNames(Map bundle, {DateTime? now}) {
+  final currentInstances = bundleRows(bundle['bundleInstances'])
+      .where((instance) => bundleInstanceAvailable(instance, bundle, now: now))
+      .toList();
+  final instanceItems = currentInstances
+      .expand((instance) => bundleRows(instance['items']))
+      .toList();
+  final items = instanceItems.isNotEmpty
+      ? instanceItems
+      : bundleRows(bundle['items']);
+  return items
+      .map((item) {
+        final variant = item['variant']?.toString().trim() ?? '';
+        return variant.isNotEmpty
+            ? variant
+            : item['name']?.toString().trim() ?? '';
+      })
+      .where((name) => name.isNotEmpty)
+      .toSet()
+      .toList();
 }
 
 int availableBundleStock(Map bundle, {DateTime? now}) {

@@ -1,10 +1,14 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:fake_cloud_firestore/fake_cloud_firestore.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sales_tracking/services/cash_drawer_service.dart';
 import 'package:sales_tracking/services/allocation_checklist_service.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+  setUp(() => SharedPreferences.setMockInitialValues({}));
+
   final today = DateTime.utc(2026, 9, 27, 1);
   test('daily cash drawer minimum accepts 1500 and above only', () {
     expect(CashDrawerService.meetsMinimumDailyOpeningCash(1499.99), isFalse);
@@ -281,6 +285,114 @@ void main() {
         ),
         hasLength(2),
       );
+    },
+  );
+
+  test('missing one of five receives and records only four units', () async {
+    final db = await fixture();
+    await db.collection('allocation_checklist').doc('delivery').update({
+      'items': [
+        {'id': 'cookie', 'name': 'Cookie', 'stock': 5, 'startingStock': 5},
+      ],
+    });
+
+    await AllocationChecklistService(db).decide(
+      'delivery',
+      accept: true,
+      staffId: 'staff',
+      actorName: 'Mia',
+      scopeIds: ['branch'],
+      issueType: 'Missing',
+      issueQuantity: 1,
+      issueItemId: 'cookie',
+      issueItemName: 'Cookie',
+    );
+
+    final stock =
+        (await db.collection('staff_inventory').doc('branch_source').get())
+            .data()!;
+    expect((stock['items'] as List).single['stock'], 4);
+    final history = (await db.collection('staff_inventory_history').get())
+        .docs
+        .single
+        .data();
+    expect((history['items'] as List).single['quantity'], 4);
+    expect(
+      (await db.collection('allocation_checklist').doc('delivery').get())
+          .data()!['status'],
+      'Received',
+    );
+  });
+
+  test('one extra unit receives six from an allocation of five', () async {
+    final db = await fixture();
+    await db.collection('allocation_checklist').doc('delivery').update({
+      'items': [
+        {'id': 'cookie', 'name': 'Cookie', 'stock': 5, 'startingStock': 5},
+      ],
+    });
+
+    await AllocationChecklistService(db).decide(
+      'delivery',
+      accept: true,
+      staffId: 'staff',
+      actorName: 'Mia',
+      scopeIds: ['branch'],
+      issueType: 'Extra',
+      issueQuantity: 1,
+      issueItemId: 'cookie',
+      issueItemName: 'Cookie',
+    );
+
+    final stock =
+        (await db.collection('staff_inventory').doc('branch_source').get())
+            .data()!;
+    expect((stock['items'] as List).single['stock'], 6);
+    final history = (await db.collection('staff_inventory_history').get())
+        .docs
+        .single
+        .data();
+    expect((history['items'] as List).single['quantity'], 6);
+  });
+
+  test(
+    'damaged and incorrect quantities are withheld for Admin return review',
+    () async {
+      for (final issueType in ['Damaged', 'Incorrect']) {
+        final db = await fixture();
+        await db.collection('allocation_checklist').doc('delivery').update({
+          'items': [
+            {'id': 'cookie', 'name': 'Cookie', 'stock': 5, 'startingStock': 5},
+          ],
+        });
+
+        await AllocationChecklistService(db).decide(
+          'delivery',
+          accept: true,
+          staffId: 'staff',
+          actorName: 'Mia',
+          scopeIds: ['branch'],
+          issueType: issueType,
+          issueQuantity: 1,
+          issueItemId: 'cookie',
+          issueItemName: 'Cookie',
+        );
+
+        final stock =
+            (await db.collection('staff_inventory').doc('branch_source').get())
+                .data()!;
+        expect((stock['items'] as List).single['stock'], 4);
+        final returnRecord =
+            (await db
+                    .collection('allocation_checklist')
+                    .doc('delivery_issue_return')
+                    .get())
+                .data()!;
+        expect(returnRecord['kind'], 'return');
+        expect(returnRecord['status'], 'Awaiting Admin Confirmation');
+        expect(returnRecord['quantity'], 1);
+        expect(returnRecord['issueType'], issueType);
+      }
     },
   );
 }

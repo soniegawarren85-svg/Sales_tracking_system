@@ -28,6 +28,7 @@ import '../services/local_database_sync_service.dart';
 import '../services/thermal_printer_service.dart';
 import '../widgets/top_notification.dart';
 import '../widgets/thermal_printer_settings_sheet.dart';
+import '../widgets/top_edge_refresh.dart';
 
 // ─── Theme Constants ─────────────────────────────────────────────────────────
 class _AppColors {
@@ -245,6 +246,7 @@ class _DailyStockPageState extends State<DailyStockPage>
   StreamSubscription? _branchHoursSubscription;
   int _branchClosingMinutes = 1140;
   String _activeBranchName = '';
+  String _activeBranchAddress = '';
   StreamSubscription? _budgetSubscription;
   StreamSubscription? _cashDrawerSubscription;
   bool _tabletOrientationLocked = false;
@@ -481,10 +483,11 @@ class _DailyStockPageState extends State<DailyStockPage>
               .listen(
                 (snapshot) {
                   if (!mounted || !snapshot.exists) return;
-                  setState(
-                    () =>
-                        _activeBranchName = '${snapshot.data()?['name'] ?? ''}',
-                  );
+                  setState(() {
+                    _activeBranchName = '${snapshot.data()?['name'] ?? ''}';
+                    _activeBranchAddress =
+                        '${snapshot.data()?['address'] ?? ''}'.trim();
+                  });
                   _branchClosingMinutes =
                       (snapshot.data()?['closingMinutes'] as num?)?.toInt() ??
                       1140;
@@ -514,6 +517,46 @@ class _DailyStockPageState extends State<DailyStockPage>
       _cashierToolsCollapsed =
           prefs.getBool('daily_stock_tools_collapsed_$uid') ?? false;
     });
+  }
+
+  Future<void> _refreshSalesProcess() async {
+    final ids = _staffInventoryIds
+        .where((id) => id.trim().isNotEmpty)
+        .toSet()
+        .take(10)
+        .toList();
+    final inventoryQuery = FirebaseFirestore.instance.collection(
+      'staff_inventory',
+    );
+    try {
+      await Future.wait([
+        FirebaseFirestore.instance
+            .collection('sales_inventory')
+            .get(const GetOptions(source: Source.server)),
+        if (ids.isEmpty)
+          inventoryQuery
+              .where('staffId', isEqualTo: '')
+              .get(const GetOptions(source: Source.server))
+        else if (ids.length == 1)
+          inventoryQuery
+              .where('staffId', isEqualTo: ids.first)
+              .get(const GetOptions(source: Source.server))
+        else
+          inventoryQuery
+              .where('staffId', whereIn: ids)
+              .get(const GetOptions(source: Source.server)),
+      ]).timeout(const Duration(seconds: 15));
+      await _loadLocalOrderCache();
+    } catch (error) {
+      debugPrint('Unable to refresh sales inventory: $error');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Unable to refresh. Please check your connection.'),
+          ),
+        );
+      }
+    }
   }
 
   Future<void> _setCashierToolsCollapsed(bool collapsed) async {
@@ -810,21 +853,30 @@ class _DailyStockPageState extends State<DailyStockPage>
   }
 
   double _discountedSubtotal(List<Map<String, dynamic>> orderItems) {
-    final total = _cartTotal(orderItems);
-    return (_seniorDiscount || _pwdDiscount)
-        ? total * (1 - _discountRate)
-        : total;
+    final total = roundTransactionMoney(_cartTotal(orderItems));
+    final discount = (_seniorDiscount || _pwdDiscount)
+        ? roundTransactionMoney(total * _discountRate)
+        : 0.0;
+    return roundTransactionMoney(total - discount);
   }
 
   double _taxValue(List<Map<String, dynamic>> orderItems) =>
       transactionTaxAmount(
         _transactionSettings,
-        taxableAmount: _discountedSubtotal(orderItems),
+        grossAmount: _discountedSubtotal(orderItems),
       );
 
+  double _vatableSalesValue(List<Map<String, dynamic>> orderItems) =>
+      transactionTaxBreakdown(
+        _transactionSettings,
+        grossAmount: _discountedSubtotal(orderItems),
+      ).vatableSales;
+
   double _discountValue(List<Map<String, dynamic>> orderItems) {
-    final total = _cartTotal(orderItems);
-    return (_seniorDiscount || _pwdDiscount) ? total * _discountRate : 0;
+    final total = roundTransactionMoney(_cartTotal(orderItems));
+    return roundTransactionMoney(
+      (_seniorDiscount || _pwdDiscount) ? total * _discountRate : 0,
+    );
   }
 
   String get _discountLabel {
@@ -1109,6 +1161,7 @@ class _DailyStockPageState extends State<DailyStockPage>
               .where((instance) => bundleInstanceAvailable(instance, data))
               .toList(),
         };
+        final bundleContentNames = bundleDisplayItemNames(data).join(', ');
         if (itemMap.containsKey(key)) {
           final existing = itemMap[key]!;
           existing['stock'] = _parseInt(existing['stock']) + bundleStock;
@@ -1135,18 +1188,7 @@ class _DailyStockPageState extends State<DailyStockPage>
           'publicId': data['publicId'],
           'bundleId': data['bundleId']?.toString() ?? '',
           'bundleItems': data['items'] ?? [],
-          'bundleContentNames': (data['items'] as List? ?? [])
-              .whereType<Map>()
-              .map(
-                (part) =>
-                    ((part['variant']?.toString().isNotEmpty ?? false)
-                            ? part['variant']
-                            : part['name'] ?? '')
-                        .toString(),
-              )
-              .where((name) => name.isNotEmpty)
-              .toSet()
-              .join(', '),
+          'bundleContentNames': bundleContentNames,
           'variantSlot': 0,
         };
         continue;
@@ -4379,15 +4421,22 @@ class _DailyStockPageState extends State<DailyStockPage>
           'lineTotal': price * entry.value,
         };
       }).toList();
-      final subtotal = _cartTotal(orderItems);
-      final discountAmount = (_seniorDiscount || _pwdDiscount)
-          ? subtotal * _discountRate
-          : 0.0;
-      final taxRate = transactionTaxRate(_transactionSettings);
-      final taxAmount = transactionTaxAmount(
-        _transactionSettings,
-        taxableAmount: subtotal - discountAmount,
+      final subtotal = roundTransactionMoney(_cartTotal(orderItems));
+      final discountAmount = roundTransactionMoney(
+        (_seniorDiscount || _pwdDiscount) ? subtotal * _discountRate : 0.0,
       );
+      final taxRate = transactionTaxRate(_transactionSettings);
+      final taxBreakdown = transactionTaxBreakdown(
+        _transactionSettings,
+        grossAmount: subtotal - discountAmount,
+      );
+      final saleTotal = taxBreakdown.total;
+      if ((saleTotal - orderTotal).abs() > .01) {
+        throw StateError(
+          'The rounded order total changed. Review the updated total before paying.',
+        );
+      }
+      final taxAmount = taxBreakdown.vatAmount;
       final discountType = _discountName;
 
       final drawerId = _drawerIdForOrder(orderItems);
@@ -4403,6 +4452,8 @@ class _DailyStockPageState extends State<DailyStockPage>
         if (drawerId.isNotEmpty) 'branchId': drawerId,
         if (_activeBranchName.trim().isNotEmpty)
           'branchName': _activeBranchName.trim(),
+        if (_activeBranchAddress.isNotEmpty)
+          'branchAddress': _activeBranchAddress,
         'staffName': _staffDisplayName,
         'staffPublicId': _staffPublicId,
         'salesId': salesId,
@@ -4410,11 +4461,16 @@ class _DailyStockPageState extends State<DailyStockPage>
         'discount': discountAmount,
         'discountType': discountType,
         'tax': taxAmount,
+        'vatAmount': taxAmount,
+        'vatableSales': taxBreakdown.vatableSales,
         'taxRate': taxRate,
         'taxClassification':
             _transactionSettings['taxClassification']?.toString() ?? 'nonVat',
+        if (taxRate > 0 &&
+            '${_transactionSettings['taxTin'] ?? ''}'.trim().isNotEmpty)
+          'taxTin': '${_transactionSettings['taxTin']}'.trim(),
         'discountProofId': discountProofId.trim(),
-        'total': orderTotal,
+        'total': saleTotal,
         'paidAmount': paidAmount,
         'change': change,
         'paymentMode': paymentMode,
@@ -4521,6 +4577,8 @@ class _DailyStockPageState extends State<DailyStockPage>
         'salesId': salesId,
         'timestamp': completedSalePayload['timestamp'],
         'branchName': _activeBranchName,
+        if (_activeBranchAddress.isNotEmpty)
+          'branchAddress': _activeBranchAddress,
         'staffName': _staffDisplayName,
         'staffPublicId': _staffPublicId,
         'items': receiptItems,
@@ -4528,10 +4586,15 @@ class _DailyStockPageState extends State<DailyStockPage>
         'discount': discountAmount,
         'discountType': discountType,
         'tax': taxAmount,
+        'vatAmount': taxAmount,
+        'vatableSales': taxBreakdown.vatableSales,
         'taxRate': taxRate,
         'taxClassification':
             _transactionSettings['taxClassification']?.toString() ?? 'nonVat',
-        'total': orderTotal,
+        if (taxRate > 0 &&
+            '${_transactionSettings['taxTin'] ?? ''}'.trim().isNotEmpty)
+          'taxTin': '${_transactionSettings['taxTin']}'.trim(),
+        'total': saleTotal,
         'paymentMode': paymentMode,
         'gcashTransactionId': gcashTransactionId,
         'paidAmount': paidAmount,
@@ -4540,17 +4603,27 @@ class _DailyStockPageState extends State<DailyStockPage>
       final printResult = _printSavedReceipt(receipt);
       await _showOrderSuccessDialog(
         salesId: salesId,
+        timestamp: completedSalePayload['timestamp'] as DateTime,
+        staffName: _staffDisplayName,
+        staffPublicId: _staffPublicId,
+        printerName:
+            ThermalPrinterService.instance.status.value.name?.trim() ?? '',
         items: receiptItems,
         subtotal: subtotal,
         discountAmount: discountAmount,
         taxAmount: taxAmount,
+        vatableSales: taxBreakdown.vatableSales,
         isVat: receipt['taxClassification'] == 'vat',
+        branchName: _activeBranchName,
+        branchAddress: _activeBranchAddress,
+        taxTin: receipt['taxTin']?.toString() ?? '',
         discountType: discountType,
-        total: orderTotal,
+        total: saleTotal,
         paidAmount: paidAmount,
         change: change,
         printResult: printResult,
         paymentMode: paymentMode,
+        paymentReference: gcashTransactionId,
         onRetryPrint: () => _printSavedReceipt(receipt),
       );
     } catch (e) {
@@ -4678,17 +4751,26 @@ class _DailyStockPageState extends State<DailyStockPage>
 
   Future<void> _showOrderSuccessDialog({
     required String salesId,
+    required DateTime timestamp,
+    required String staffName,
+    required String staffPublicId,
+    required String printerName,
     required List<Map<String, dynamic>> items,
     required double subtotal,
     required double discountAmount,
     required double taxAmount,
+    required double vatableSales,
     required bool isVat,
+    required String branchName,
+    required String branchAddress,
+    required String taxTin,
     required String discountType,
     required double total,
     required double paidAmount,
     required double change,
     required Future<bool> printResult,
     required String paymentMode,
+    required String paymentReference,
     required Future<bool> Function() onRetryPrint,
   }) async {
     if (!mounted) return;
@@ -4696,219 +4778,29 @@ class _DailyStockPageState extends State<DailyStockPage>
       context: context,
       barrierDismissible: false,
       builder: (dialogContext) {
-        final size = MediaQuery.sizeOf(dialogContext);
-        return Dialog(
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(28),
-          ),
-          backgroundColor: Colors.transparent,
-          elevation: 0,
-          child: Container(
-            width: min(size.width - 32, 720),
-            constraints: BoxConstraints(
-              maxHeight: min(size.height * 0.82, 560),
-            ),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(28),
-              boxShadow: [
-                BoxShadow(
-                  color: _AppColors.primary.withOpacity(0.2),
-                  blurRadius: 28,
-                  offset: const Offset(0, 10),
-                ),
-              ],
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.fromLTRB(22, 20, 22, 18),
-                  decoration: const BoxDecoration(
-                    gradient: LinearGradient(
-                      colors: [_AppColors.primaryDark, _AppColors.primary],
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                    ),
-                    borderRadius: BorderRadius.vertical(
-                      top: Radius.circular(28),
-                    ),
-                  ),
-                  child: Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.2),
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: const Icon(
-                          Icons.check_circle_rounded,
-                          color: Colors.white,
-                          size: 24,
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Text(
-                              'Order Successful',
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontSize: 19,
-                                fontWeight: FontWeight.w900,
-                              ),
-                            ),
-                            Text(
-                              'Receipt ID: $salesId\nCashier: $_staffDisplayName\nStaff ID: ${_staffPublicId.isEmpty ? 'Not recorded' : _staffPublicId}',
-                              style: TextStyle(
-                                color: Colors.white.withOpacity(0.78),
-                                fontSize: 11,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                Flexible(
-                  child: SingleChildScrollView(
-                    padding: const EdgeInsets.fromLTRB(22, 18, 22, 8),
-                    child: Column(
-                      children: [
-                        ...items.map((item) {
-                          final qty = item['quantity'] as int? ?? 0;
-                          final name = item['name']?.toString() ?? 'Item';
-                          final lineTotal =
-                              (item['lineTotal'] as num?)?.toDouble() ?? 0;
-                          return Padding(
-                            padding: const EdgeInsets.only(bottom: 10),
-                            child: Row(
-                              children: [
-                                Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 8,
-                                    vertical: 4,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: _AppColors.cardBg,
-                                    borderRadius: BorderRadius.circular(8),
-                                  ),
-                                  child: Text(
-                                    '${qty}x',
-                                    style: const TextStyle(
-                                      color: _AppColors.primary,
-                                      fontWeight: FontWeight.w900,
-                                      fontSize: 12,
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(width: 10),
-                                Expanded(
-                                  child: Text(
-                                    name,
-                                    style: const TextStyle(
-                                      color: _AppColors.textMid,
-                                      fontSize: 13,
-                                      fontWeight: FontWeight.w700,
-                                    ),
-                                  ),
-                                ),
-                                Text(
-                                  formatMoney(lineTotal),
-                                  style: const TextStyle(
-                                    color: _AppColors.textMid,
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w800,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          );
-                        }),
-                        const Divider(color: _AppColors.divider, height: 22),
-                        _SummaryRow(
-                          label: 'Subtotal',
-                          value: formatMoney(subtotal),
-                        ),
-                        if (discountAmount > 0) ...[
-                          const SizedBox(height: 6),
-                          _SummaryRow(
-                            label: '$discountType discount',
-                            value: '- ${formatMoney(discountAmount)}',
-                            valueColor: const Color(0xFF2E7D32),
-                          ),
-                        ],
-                        ...[
-                          const SizedBox(height: 6),
-                          _SummaryRow(
-                            label: isVat ? 'VAT (12%, included)' : 'Non VAT',
-                            value: formatMoney(taxAmount),
-                          ),
-                        ],
-                        const SizedBox(height: 6),
-                        _SummaryRow(label: 'Total', value: formatMoney(total)),
-                        const SizedBox(height: 6),
-                        _SummaryRow(
-                          label: paymentMode.toLowerCase() == 'cash'
-                              ? 'Cash tendered'
-                              : 'Amount paid',
-                          value: formatMoney(paidAmount),
-                        ),
-                        const SizedBox(height: 6),
-                        _SummaryRow(
-                          label: 'Net of sales',
-                          value: formatMoney((total - taxAmount)),
-                        ),
-                        const SizedBox(height: 6),
-                        _SummaryRow(
-                          label: 'Change',
-                          value: formatMoney(change),
-                          valueColor: const Color(0xFF2E7D32),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-                _ReceiptPrintActions(
-                  initialResult: printResult,
-                  onRetry: onRetryPrint,
-                ),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(22, 14, 22, 22),
-                  child: Align(
-                    alignment: Alignment.center,
-                    child: SizedBox(
-                      width: 260,
-                      child: ElevatedButton.icon(
-                        onPressed: () {
-                          Navigator.of(
-                            dialogContext,
-                            rootNavigator: true,
-                          ).pop();
-                        },
-                        icon: const Icon(Icons.storefront_rounded, size: 18),
-                        label: const Text('Back to Order'),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: _AppColors.primary,
-                          foregroundColor: Colors.white,
-                          elevation: 0,
-                          padding: const EdgeInsets.symmetric(vertical: 15),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(16),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
+        return _ReceiptGenerationDialog(
+          salesId: salesId,
+          timestamp: timestamp,
+          staffName: staffName,
+          staffPublicId: staffPublicId,
+          printerName: printerName,
+          items: items,
+          subtotal: subtotal,
+          discountAmount: discountAmount,
+          taxAmount: taxAmount,
+          vatableSales: vatableSales,
+          isVat: isVat,
+          branchName: branchName,
+          branchAddress: branchAddress,
+          taxTin: taxTin,
+          discountType: discountType,
+          total: total,
+          paidAmount: paidAmount,
+          change: change,
+          printResult: printResult,
+          paymentMode: paymentMode,
+          paymentReference: paymentReference,
+          onRetryPrint: onRetryPrint,
         );
       },
     );
@@ -7747,6 +7639,16 @@ class _DailyStockPageState extends State<DailyStockPage>
                                     : 'Non VAT',
                                 value: formatMoney(_taxValue(orderItems)),
                               ),
+                              if (_transactionSettings['taxClassification'] ==
+                                  'vat') ...[
+                                const SizedBox(height: 6),
+                                _OrderRow(
+                                  label: 'VATable sales',
+                                  value: formatMoney(
+                                    _vatableSalesValue(orderItems),
+                                  ),
+                                ),
+                              ],
                               const SizedBox(height: 8),
                               Container(
                                 margin: const EdgeInsets.only(top: 2),
@@ -10339,7 +10241,33 @@ class _DailyStockPageState extends State<DailyStockPage>
             isBundleGroup: true,
             visibleVariants: entries.expand((entry) => entry.value).toList(),
           )
-        else if (!_showCoffeeView)
+        else if (_showCoffeeView)
+          StaffSalesItemGrid(
+            itemCount: entries.length,
+            itemBuilder: (context, index, compact) {
+              final entry = entries[index];
+              final variants = entry.value;
+              final sizeGroups = <String, List<Map<String, dynamic>>>{};
+              for (final variant in variants) {
+                final item = variant.value;
+                final sizeName =
+                    item['coffeeSize']?.toString() ??
+                    item['variant']?.toString() ??
+                    'Regular';
+                sizeGroups.putIfAbsent(sizeName, () => []).add(item);
+              }
+              return _buildCoffeeFlavorCard(
+                _groupLabel(entry.key, variants),
+                variants.isNotEmpty
+                    ? inventoryDisplayId(variants.first.value)
+                    : '',
+                sizeGroups.entries.toList(),
+                compact:
+                    compact || MediaQuery.sizeOf(context).shortestSide < 600,
+              );
+            },
+          )
+        else
           SizedBox(
             height: 50,
             child: ListView.separated(
@@ -10417,7 +10345,7 @@ class _DailyStockPageState extends State<DailyStockPage>
               },
             ),
           ),
-        if (selectedEntry != null) ...[
+        if (selectedEntry != null && !_showCoffeeView) ...[
           const SizedBox(height: 14),
           _buildItemsInCategory(
             selectedEntry.key,
@@ -11143,8 +11071,9 @@ class _DailyStockPageState extends State<DailyStockPage>
   Widget _buildCoffeeFlavorCard(
     String displayGroupName,
     String coffeeId,
-    List<MapEntry<String, List<Map<String, dynamic>>>> sizeEntries,
-  ) {
+    List<MapEntry<String, List<Map<String, dynamic>>>> sizeEntries, {
+    bool compact = false,
+  }) {
     final coffeeVariants = sizeEntries.expand((entry) => entry.value).toList();
     final imageUrl = coffeeVariants.isEmpty
         ? ''
@@ -11154,95 +11083,76 @@ class _DailyStockPageState extends State<DailyStockPage>
         (name: entry.key, price: _baseCoffeeSizePrice(entry.value)),
     ];
 
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        return GridView.builder(
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
-            maxCrossAxisExtent: constraints.maxWidth >= 700 ? 240 : 230,
-            mainAxisExtent: 250,
-            crossAxisSpacing: 12,
-            mainAxisSpacing: 12,
+    return _DelayedFadeSlide(
+      delay: const Duration(milliseconds: 80),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () => _showCoffeeCustomizeDialog(
+            flavorName: displayGroupName,
+            coffeeId: coffeeId,
+            variants: coffeeVariants,
           ),
-          itemCount: 1,
-          itemBuilder: (context, index) {
-            return _DelayedFadeSlide(
-              delay: const Duration(milliseconds: 80),
-              child: Material(
-                color: Colors.transparent,
-                child: InkWell(
-                  onTap: () => _showCoffeeCustomizeDialog(
-                    flavorName: displayGroupName,
-                    coffeeId: coffeeId,
-                    variants: coffeeVariants,
-                  ),
-                  borderRadius: BorderRadius.circular(20),
-                  child: Container(
-                    padding: const EdgeInsets.all(14),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(
-                        color: _AppColors.border.withOpacity(0.75),
-                      ),
-                      boxShadow: [
-                        BoxShadow(
-                          color: _AppColors.primary.withOpacity(0.05),
-                          blurRadius: 16,
-                          offset: const Offset(0, 6),
-                        ),
-                      ],
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        _orderImageBox(
-                          imageUrl,
-                          fallbackIcon: Icons.local_cafe_rounded,
-                          size: 60,
-                          width: double.infinity,
-                          height: 88,
-                        ),
-                        const SizedBox(height: 10),
-                        Text(
-                          displayGroupName,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w900,
-                            color: _AppColors.textMid,
-                          ),
-                        ),
-                        const SizedBox(height: 6),
-                        Wrap(
-                          spacing: 6,
-                          runSpacing: 6,
-                          children: [
-                            for (final sizePrice in sizePrices)
-                              _MiniTag(
-                                label: sizePrice.price > 0
-                                    ? '${sizePrice.name} · ${formatMoney(sizePrice.price)}'
-                                    : '${sizePrice.name} · Price not set',
-                                bgColor: sizePrice.price > 0
-                                    ? const Color(0xFFE8F5E9)
-                                    : const Color(0xFFFFF3F7),
-                                textColor: sizePrice.price > 0
-                                    ? const Color(0xFF2E7D32)
-                                    : _AppColors.textSoft,
-                              ),
-                          ],
-                        ),
-                      ],
-                    ),
+          borderRadius: BorderRadius.circular(20),
+          child: Container(
+            padding: EdgeInsets.all(compact ? 8 : 14),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: _AppColors.border.withOpacity(0.75)),
+              boxShadow: [
+                BoxShadow(
+                  color: _AppColors.primary.withOpacity(0.05),
+                  blurRadius: 16,
+                  offset: const Offset(0, 6),
+                ),
+              ],
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _orderImageBox(
+                  imageUrl,
+                  fallbackIcon: Icons.local_cafe_rounded,
+                  size: compact ? 48 : 60,
+                  width: double.infinity,
+                  height: compact ? 64 : 88,
+                ),
+                SizedBox(height: compact ? 6 : 10),
+                Text(
+                  displayGroupName,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: compact ? 12 : 14,
+                    fontWeight: FontWeight.w900,
+                    color: _AppColors.textMid,
                   ),
                 ),
-              ),
-            );
-          },
-        );
-      },
+                const SizedBox(height: 6),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: [
+                    for (final sizePrice in sizePrices)
+                      _MiniTag(
+                        label: sizePrice.price > 0
+                            ? '${sizePrice.name} · ${formatMoney(sizePrice.price)}'
+                            : '${sizePrice.name} · Price not set',
+                        bgColor: sizePrice.price > 0
+                            ? const Color(0xFFE8F5E9)
+                            : const Color(0xFFFFF3F7),
+                        textColor: sizePrice.price > 0
+                            ? const Color(0xFF2E7D32)
+                            : _AppColors.textSoft,
+                      ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 
@@ -12572,46 +12482,51 @@ class _DailyStockPageState extends State<DailyStockPage>
     final isTabletLandscape = _isTabletLandscape(context);
     return Scaffold(
       backgroundColor: _AppColors.bg,
-      body: isTabletLandscape
-          ? _buildTabletSalesBody()
-          : MediaQuery.sizeOf(context).shortestSide < 600
-          ? StaffMobileSalesLayout(
-              reviewing: _showCartReview,
-              onBack: () => setState(() => _showCartReview = false),
-              onTools: () =>
-                  _showTabletToolsDrawer(_knownOrderItems(_latestOrderItems)),
-              body: _buildOrderSection(),
-              actions:
-                  !_showCartReview &&
-                      (!_showBundleView || _selectedGroupName == null)
-                  ? _buildDockedOrderActions()
-                  : null,
-            )
-          : SafeArea(
-              top: _showCartReview,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  if (_showCartReview)
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 16, 16, 10),
-                      child: _buildOrderReviewHeader(),
-                    )
-                  else
-                    _buildTabletSalesHeader(),
-                  Expanded(
-                    child: SingleChildScrollView(
-                      physics: const ClampingScrollPhysics(),
-                      padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
-                      child: _buildOrderSection(),
+      body: TopEdgeRefresh(
+        displacement: 24,
+        color: _AppColors.primary,
+        onRefresh: _refreshSalesProcess,
+        child: isTabletLandscape
+            ? _buildTabletSalesBody()
+            : MediaQuery.sizeOf(context).shortestSide < 600
+            ? StaffMobileSalesLayout(
+                reviewing: _showCartReview,
+                onBack: () => setState(() => _showCartReview = false),
+                onTools: () =>
+                    _showTabletToolsDrawer(_knownOrderItems(_latestOrderItems)),
+                body: _buildOrderSection(),
+                actions:
+                    !_showCartReview &&
+                        (!_showBundleView || _selectedGroupName == null)
+                    ? _buildDockedOrderActions()
+                    : null,
+              )
+            : SafeArea(
+                top: _showCartReview,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (_showCartReview)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 16, 16, 10),
+                        child: _buildOrderReviewHeader(),
+                      )
+                    else
+                      _buildTabletSalesHeader(),
+                    Expanded(
+                      child: SingleChildScrollView(
+                        physics: const ClampingScrollPhysics(),
+                        padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
+                        child: _buildOrderSection(),
+                      ),
                     ),
-                  ),
-                  if (!_showCartReview &&
-                      (!_showBundleView || _selectedGroupName == null))
-                    _buildDockedOrderActions(),
-                ],
+                    if (!_showCartReview &&
+                        (!_showBundleView || _selectedGroupName == null))
+                      _buildDockedOrderActions(),
+                  ],
+                ),
               ),
-            ),
+      ),
     );
   }
 
@@ -12913,26 +12828,64 @@ class _ReceiptPrintActionsState extends State<_ReceiptPrintActions> {
         ? 'Receipt Sent to Printer'
         : 'Order Saved, but Receipt Printing Failed';
     final color = _printing
-        ? const Color(0xFF1565C0)
+        ? const Color(0xFFFFB020)
         : _printed
-        ? const Color(0xFF2E7D32)
-        : const Color(0xFFE65100);
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 4, 20, 10),
-      child: Column(
-        children: [
-          Row(
+        ? const Color(0xFF267542)
+        : const Color(0xFFFFB020);
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SizedBox(
+          width: double.infinity,
+          child: OutlinedButton(
+            onPressed: _printing ? null : _retry,
+            style: OutlinedButton.styleFrom(
+              foregroundColor: const Color(0xFF4A2300),
+              disabledForegroundColor: const Color(0xFF4A2300),
+              backgroundColor: const Color(0xFFFFB020),
+              side: const BorderSide(color: Color(0xFFFFCB62)),
+              padding: const EdgeInsets.symmetric(vertical: 12),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+            child: ValueListenableBuilder<ThermalPrinterStatus>(
+              valueListenable: ThermalPrinterService.instance.status,
+              builder: (context, status, _) => Text(
+                status.isConnected ? 'Reprint' : 'Retry Print',
+                style: const TextStyle(
+                  color: Color(0xFF4A2300),
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Container(
+          width: double.infinity,
+          constraints: const BoxConstraints(minHeight: 34),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+          decoration: BoxDecoration(
+            color: color.withOpacity(.16),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: color.withOpacity(.65)),
+          ),
+          child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               if (_printing)
-                const SizedBox(
+                SizedBox(
                   width: 15,
                   height: 15,
-                  child: CircularProgressIndicator(strokeWidth: 2),
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: color,
+                  ),
                 )
               else
                 Icon(
-                  _printed ? Icons.print_rounded : Icons.warning_rounded,
+                  _printed ? Icons.check_circle_rounded : Icons.warning_rounded,
                   size: 17,
                   color: color,
                 ),
@@ -12944,22 +12897,698 @@ class _ReceiptPrintActionsState extends State<_ReceiptPrintActions> {
                   style: TextStyle(
                     color: color,
                     fontSize: 12,
+                    height: 1.2,
                     fontWeight: FontWeight.w800,
                   ),
                 ),
               ),
             ],
           ),
-          if (!_printed && !_printing)
-            TextButton.icon(
-              onPressed: _retry,
-              icon: const Icon(Icons.refresh_rounded, size: 17),
-              label: const Text('Retry Print'),
+        ),
+      ],
+    );
+  }
+}
+
+class _ReceiptGenerationDialog extends StatefulWidget {
+  const _ReceiptGenerationDialog({
+    required this.salesId,
+    required this.timestamp,
+    required this.staffName,
+    required this.staffPublicId,
+    required this.printerName,
+    required this.items,
+    required this.subtotal,
+    required this.discountAmount,
+    required this.taxAmount,
+    required this.vatableSales,
+    required this.isVat,
+    required this.branchName,
+    required this.branchAddress,
+    required this.taxTin,
+    required this.discountType,
+    required this.total,
+    required this.paidAmount,
+    required this.change,
+    required this.printResult,
+    required this.paymentMode,
+    required this.paymentReference,
+    required this.onRetryPrint,
+  });
+
+  final String salesId;
+  final DateTime timestamp;
+  final String staffName;
+  final String staffPublicId;
+  final String printerName;
+  final List<Map<String, dynamic>> items;
+  final double subtotal;
+  final double discountAmount;
+  final double taxAmount;
+  final double vatableSales;
+  final bool isVat;
+  final String branchName;
+  final String branchAddress;
+  final String taxTin;
+  final String discountType;
+  final double total;
+  final double paidAmount;
+  final double change;
+  final Future<bool> printResult;
+  final String paymentMode;
+  final String paymentReference;
+  final Future<bool> Function() onRetryPrint;
+
+  @override
+  State<_ReceiptGenerationDialog> createState() =>
+      _ReceiptGenerationDialogState();
+}
+
+class _ReceiptGenerationDialogState extends State<_ReceiptGenerationDialog>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _paperController;
+  late final Animation<double> _paperProgress;
+
+  @override
+  void initState() {
+    super.initState();
+    _paperController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 3200),
+    );
+    _paperProgress = CurvedAnimation(
+      parent: _paperController,
+      curve: Curves.linear,
+    );
+    _paperController.forward();
+  }
+
+  @override
+  void dispose() {
+    _paperController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final screen = MediaQuery.sizeOf(context);
+    final date = MaterialLocalizations.of(context);
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      elevation: 0,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 20),
+      child: SizedBox(
+        width: min(screen.width - 28, 500),
+        height: min(screen.height - 40, 760),
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: const LinearGradient(
+              colors: [AppColors.primaryDeep, AppColors.primaryDark],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
             ),
+            borderRadius: BorderRadius.circular(26),
+            border: Border.all(color: Colors.white.withOpacity(.08)),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(.4),
+                blurRadius: 36,
+                offset: const Offset(0, 18),
+              ),
+            ],
+          ),
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 18, 20, 10),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      width: 40,
+                      height: 40,
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(.16),
+                        borderRadius: BorderRadius.circular(13),
+                      ),
+                      child: const Icon(
+                        Icons.check_circle_rounded,
+                        color: Colors.white,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Order Successful',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w800,
+                              fontSize: 18,
+                            ),
+                          ),
+                          const SizedBox(height: 3),
+                          Text(
+                            'Receipt ${widget.salesId}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Colors.white70,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons.print_outlined,
+                      size: 15,
+                      color: Color(0xFF9B9BA4),
+                    ),
+                    const SizedBox(width: 7),
+                    Expanded(
+                      child: ValueListenableBuilder<ThermalPrinterStatus>(
+                        valueListenable: ThermalPrinterService.instance.status,
+                        builder: (context, status, _) => Text(
+                          status.isConnected
+                              ? 'Connected to ${status.name ?? widget.printerName}'
+                              : 'Printer not connected',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Color(0xFFFFE8EF),
+                            fontSize: 11,
+                          ),
+                        ),
+                      ),
+                    ),
+                    const _PrinterReadyIndicator(),
+                  ],
+                ),
+              ),
+              Expanded(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.fromLTRB(22, 0, 22, 8),
+                  child: Column(
+                    children: [
+                      const _ReceiptPrinterGraphic(),
+                      ClipRect(
+                        child: AnimatedBuilder(
+                          animation: _paperProgress,
+                          builder: (context, child) {
+                            final progress = _paperProgress.value;
+                            final swing =
+                                sin(progress * pi * 8) * (1 - progress);
+                            return Align(
+                              alignment: Alignment.topCenter,
+                              heightFactor: progress,
+                              child: Transform.rotate(
+                                angle: swing * .018,
+                                alignment: Alignment.topCenter,
+                                child: Transform.translate(
+                                  offset: Offset(
+                                    swing * 2.5,
+                                    -24 * (1 - progress) + swing * 1.5,
+                                  ),
+                                  child: child,
+                                ),
+                              ),
+                            );
+                          },
+                          child: _buildReceipt(date),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(18, 4, 18, 16),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    SizedBox(
+                      width: double.infinity,
+                      child: FilledButton(
+                        onPressed: () =>
+                            Navigator.of(context, rootNavigator: true).pop(),
+                        style: FilledButton.styleFrom(
+                          backgroundColor: Colors.white,
+                          foregroundColor: AppColors.primaryDark,
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                        child: const Text(
+                          'Done',
+                          style: TextStyle(fontWeight: FontWeight.w800),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 7),
+                    _ReceiptPrintActions(
+                      initialResult: widget.printResult,
+                      onRetry: widget.onRetryPrint,
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildReceipt(MaterialLocalizations localizations) {
+    final time = widget.timestamp.toLocal();
+    final dateTime =
+        '${localizations.formatMediumDate(time)} · '
+        '${localizations.formatTimeOfDay(TimeOfDay.fromDateTime(time))}';
+    return ClipPath(
+      clipper: const _ReceiptTearClipper(),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.fromLTRB(20, 18, 20, 26),
+        decoration: BoxDecoration(
+          color: const Color(0xFFFFFEFA),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(.24),
+              blurRadius: 16,
+              offset: const Offset(0, 8),
+            ),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Text(
+              "ANGEL'Z BITES",
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Color(0xFF27252A),
+                fontSize: 18,
+                letterSpacing: 2.4,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+            const SizedBox(height: 2),
+            const Text(
+              'CUPCAKES  ·  SALES RECEIPT',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Color(0xFF727078),
+                fontSize: 9,
+                letterSpacing: 1.3,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 14),
+            _receiptMeta('RECEIPT ID', widget.salesId),
+            _receiptMeta('DATE', dateTime),
+            _receiptMeta(
+              'CASHIER',
+              widget.staffName.isEmpty ? 'Staff' : widget.staffName,
+            ),
+            _receiptMeta(
+              'STAFF ID',
+              widget.staffPublicId.isEmpty
+                  ? 'Not recorded'
+                  : widget.staffPublicId,
+            ),
+            if (widget.branchName.trim().isNotEmpty)
+              _receiptMeta('BRANCH', widget.branchName),
+            if (widget.branchAddress.trim().isNotEmpty)
+              _receiptMeta('ADDRESS', widget.branchAddress),
+            if (widget.printerName.trim().isNotEmpty)
+              _receiptMeta('PRINTER', widget.printerName),
+            const SizedBox(height: 10),
+            const _ReceiptDottedRule(),
+            const SizedBox(height: 10),
+            for (final item in widget.items) _receiptItem(item),
+            const SizedBox(height: 8),
+            const _ReceiptDottedRule(),
+            const SizedBox(height: 10),
+            _receiptAmount('Subtotal', formatMoney(widget.subtotal)),
+            if (widget.discountAmount > 0)
+              _receiptAmount(
+                '${widget.discountType} discount',
+                '- ${formatMoney(widget.discountAmount)}',
+                valueColor: const Color(0xFF267542),
+              ),
+            _receiptAmount(
+              widget.isVat ? 'VAT (12%, included)' : 'Non-VAT',
+              formatMoney(widget.taxAmount),
+            ),
+            if (widget.isVat && widget.taxTin.trim().isNotEmpty)
+              _receiptAmount('BIR TIN', widget.taxTin),
+            _receiptAmount(
+              widget.isVat ? 'VATable sales' : 'Net sales',
+              formatMoney(widget.vatableSales),
+            ),
+            const SizedBox(height: 6),
+            _receiptAmount(
+              'TOTAL',
+              formatMoney(widget.total),
+              bold: true,
+              fontSize: 16,
+            ),
+            const SizedBox(height: 3),
+            _receiptMeta('PAYMENT', widget.paymentMode),
+            _receiptAmount(
+              widget.paymentMode.toLowerCase() == 'cash'
+                  ? 'Cash tendered'
+                  : 'Amount paid',
+              formatMoney(widget.paidAmount),
+            ),
+            if (widget.paymentMode.toLowerCase() == 'cash')
+              _receiptAmount(
+                'Change',
+                formatMoney(widget.change),
+                valueColor: const Color(0xFF267542),
+              ),
+            if (widget.paymentMode.toLowerCase() != 'cash' &&
+                widget.paymentReference.trim().isNotEmpty)
+              _receiptMeta('REFERENCE', widget.paymentReference),
+            const SizedBox(height: 10),
+            const _ReceiptDottedRule(),
+            const SizedBox(height: 11),
+            const Text(
+              'Thank you for your purchase!',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Color(0xFF444149),
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 6),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _receiptItem(Map<String, dynamic> item) {
+    final quantity = item['quantity'] is num
+        ? (item['quantity'] as num).toInt()
+        : int.tryParse('${item['quantity'] ?? 0}') ?? 0;
+    final name = item['name']?.toString() ?? 'Item';
+    final variant = (item['variant'] ?? item['coffeeSize'] ?? '')
+        .toString()
+        .trim();
+    final displayName = variant.isEmpty ? name : '$name ($variant)';
+    final lineTotal = item['lineTotal'] is num
+        ? (item['lineTotal'] as num).toDouble()
+        : quantity *
+              (item['price'] is num
+                  ? (item['price'] as num).toDouble()
+                  : double.tryParse('${item['price'] ?? 0}') ?? 0);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 32,
+            child: Text(
+              '${quantity}x',
+              style: const TextStyle(
+                color: Color(0xFF67636B),
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              displayName,
+              style: const TextStyle(color: Color(0xFF343139), fontSize: 11),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            formatMoney(lineTotal),
+            style: const TextStyle(
+              color: Color(0xFF343139),
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
         ],
       ),
     );
   }
+
+  Widget _receiptMeta(String label, String value) => Padding(
+    padding: const EdgeInsets.only(bottom: 4),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: 88,
+          child: Text(
+            label,
+            style: const TextStyle(
+              color: Color(0xFF817D85),
+              fontSize: 9,
+              fontWeight: FontWeight.w700,
+              letterSpacing: .4,
+            ),
+          ),
+        ),
+        Expanded(
+          child: Text(
+            value,
+            textAlign: TextAlign.right,
+            style: const TextStyle(
+              color: Color(0xFF454149),
+              fontSize: 10,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+      ],
+    ),
+  );
+
+  Widget _receiptAmount(
+    String label,
+    String value, {
+    Color valueColor = const Color(0xFF454149),
+    bool bold = false,
+    double fontSize = 11,
+  }) => Padding(
+    padding: const EdgeInsets.only(bottom: 6),
+    child: Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Expanded(
+          child: Text(
+            label,
+            style: TextStyle(
+              color: const Color(0xFF77727A),
+              fontSize: fontSize,
+              fontWeight: bold ? FontWeight.w800 : FontWeight.w500,
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Text(
+          value,
+          style: TextStyle(
+            color: valueColor,
+            fontSize: fontSize,
+            fontWeight: bold ? FontWeight.w900 : FontWeight.w700,
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+class _PrinterReadyIndicator extends StatelessWidget {
+  const _PrinterReadyIndicator();
+
+  @override
+  Widget build(BuildContext context) =>
+      ValueListenableBuilder<ThermalPrinterStatus>(
+        valueListenable: ThermalPrinterService.instance.status,
+        builder: (context, status, _) => Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            DecoratedBox(
+              decoration: BoxDecoration(
+                color: status.isConnected
+                    ? const Color(0xFF9DF0BC)
+                    : const Color(0xFFFFC5D4),
+                shape: BoxShape.circle,
+              ),
+              child: const SizedBox(width: 7, height: 7),
+            ),
+            const SizedBox(width: 6),
+            Text(
+              status.isConnected ? 'CONNECTED' : 'OFFLINE',
+              style: const TextStyle(
+                color: Color(0xFFFFE8EF),
+                fontSize: 9,
+                letterSpacing: 1,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+        ),
+      );
+}
+
+class _ReceiptPrinterGraphic extends StatelessWidget {
+  const _ReceiptPrinterGraphic();
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+    height: 76,
+    width: double.infinity,
+    child: Container(
+      width: double.infinity,
+      height: 66,
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          colors: [Color(0xFF45454C), Color(0xFF29292F)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(15),
+        border: Border.all(color: Colors.white.withOpacity(.28)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(.34),
+            blurRadius: 16,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Stack(
+        children: [
+          Positioned(
+            left: 14,
+            right: 14,
+            top: 9,
+            child: Container(
+              height: 6,
+              decoration: BoxDecoration(
+                color: const Color(0xFF151519),
+                borderRadius: BorderRadius.circular(5),
+              ),
+            ),
+          ),
+          Positioned(
+            top: 23,
+            left: 24,
+            right: 24,
+            child: Container(
+              height: 16,
+              decoration: BoxDecoration(
+                color: const Color(0xFF17171B),
+                borderRadius: BorderRadius.circular(4),
+                border: Border.all(color: Colors.black.withOpacity(.5)),
+              ),
+              child: Align(
+                alignment: Alignment.centerRight,
+                child: Container(
+                  margin: const EdgeInsets.only(right: 7),
+                  width: 5,
+                  height: 5,
+                  decoration: const BoxDecoration(
+                    color: Color(0xFF67D99B),
+                    shape: BoxShape.circle,
+                  ),
+                ),
+              ),
+            ),
+          ),
+          const Positioned(
+            bottom: 7,
+            left: 0,
+            right: 0,
+            child: Text(
+              'THERMAL RECEIPT PRINTER',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Color(0xFFFFE8EF),
+                fontSize: 8,
+                letterSpacing: 1.2,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+class _ReceiptDottedRule extends StatelessWidget {
+  const _ReceiptDottedRule();
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+    height: 1,
+    child: LayoutBuilder(
+      builder: (context, constraints) => Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          for (var i = 0; i < (constraints.maxWidth / 5).floor(); i++)
+            const SizedBox(
+              width: 2,
+              height: 1,
+              child: ColoredBox(color: Color(0xFFD6D2D7)),
+            ),
+        ],
+      ),
+    ),
+  );
+}
+
+class _ReceiptTearClipper extends CustomClipper<Path> {
+  const _ReceiptTearClipper();
+
+  @override
+  Path getClip(Size size) {
+    const corner = 8.0;
+    const toothStep = 5.0;
+    const toothDepth = 3.0;
+    final path = Path()
+      ..moveTo(corner, 0)
+      ..lineTo(size.width - corner, 0)
+      ..quadraticBezierTo(size.width, 0, size.width, corner)
+      ..lineTo(size.width, size.height - toothDepth);
+    var x = size.width;
+    var upward = true;
+    while (x > 0) {
+      x = max(0, x - toothStep);
+      path.lineTo(x, size.height - (upward ? 0 : toothDepth));
+      upward = !upward;
+    }
+    path
+      ..lineTo(0, corner)
+      ..quadraticBezierTo(0, 0, corner, 0)
+      ..close();
+    return path;
+  }
+
+  @override
+  bool shouldReclip(covariant _ReceiptTearClipper oldClipper) => false;
 }
 
 class _SummaryRow extends StatelessWidget {

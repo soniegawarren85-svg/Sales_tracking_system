@@ -1,6 +1,10 @@
+import 'dart:async';
+import '../../services/verified_email_sync.dart';
 import '../../widgets/admin_change_password_dialog.dart';
 import '../../widgets/account_profile_editor_sheet.dart';
 import '../../widgets/transaction_settings_dialog.dart';
+import '../../widgets/account_activity_logs_dialog.dart';
+import '../../services/account_login_session.dart';
 import '../../services/catalog_image_service.dart';
 import '../../services/admin_profile_identity.dart';
 import '../../services/verified_profile_email_change.dart';
@@ -31,18 +35,48 @@ class SettingsPage extends StatefulWidget {
   State<SettingsPage> createState() => _SettingsPageState();
 }
 
-class _SettingsPageState extends State<SettingsPage> {
+class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver {
   bool _isUploadingProfilePhoto = false;
   String? _lastProfilePhotoUrl;
   Uint8List? _profilePreview;
   String _adminId = 'ADM-001';
   String _profileId = 'ADM-001';
   bool _profileReady = false;
+  Timer? _emailRefresh;
+  bool _syncingEmail = false;
+
+  Future<void> _refreshVerifiedEmail() async {
+    if (_syncingEmail || !_profileReady) return;
+    _syncingEmail = true;
+    try {
+      await syncVerifiedProfileEmail(
+        profile: FirebaseFirestore.instance.collection('staff_requests').doc(_profileId),
+        user: FirebaseAuth.instance.currentUser,
+      );
+    } catch (error) { debugPrint('Email status refresh: $error'); }
+    finally { _syncingEmail = false; }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _refreshVerifiedEmail();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _emailRefresh?.cancel();
+    super.dispose();
+  }
 
   @override
   void initState() {
     super.initState();
-    _loadAdminId();
+    _loadAdminId().then((_) => _refreshVerifiedEmail());
+    WidgetsBinding.instance.addObserver(this);
+    _emailRefresh = Timer.periodic(const Duration(seconds: 15), (_) {
+      if (WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) _refreshVerifiedEmail();
+    });
   }
 
   Future<void> _loadAdminId() async {
@@ -342,6 +376,18 @@ class _SettingsPageState extends State<SettingsPage> {
                     iconColor: const Color(0xFF8E24AA),
                     iconBg: const Color(0xFFF3E5F5),
                     onTap: () => _showChangePassword(context),
+                  ),
+                  _settingItem(
+                    icon: Icons.history_rounded,
+                    title: "Activity Logs",
+                    subtitle: "Review sign-ins and account activity",
+                    iconColor: const Color(0xFF00897B),
+                    iconBg: const Color(0xFFE0F2F1),
+                    onTap: () => showDialog<void>(
+                      context: context,
+                      builder: (_) =>
+                          AccountActivityLogsDialog(actorId: _profileId),
+                    ),
                   ),
 
                   _sectionLabel("Transaction settings"),
@@ -1102,6 +1148,20 @@ class _LogoutButtonState extends State<_LogoutButton>
                     child: GestureDetector(
                       onTap: () async {
                         Navigator.pop(context);
+                        try {
+                          await AccountLoginSession.close();
+                        } catch (error) {
+                          if (context.mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text(
+                                  'Unable to save logout activity: $error',
+                                ),
+                              ),
+                            );
+                          }
+                          return;
+                        }
                         final prefs = await SharedPreferences.getInstance();
                         await clearPersistedAccountSession(prefs);
                         await FirebaseAuth.instance.signOut();

@@ -4,6 +4,17 @@ double receiptTaxAmount(Map<String, dynamic> sale) =>
     ) ??
     0;
 
+double receiptVatableSales(Map<String, dynamic> sale) {
+  final total = double.tryParse('${sale['total'] ?? 0}') ?? 0;
+  final recordedVatableSales = double.tryParse('${sale['vatableSales'] ?? ''}');
+  final rate = double.tryParse('${sale['taxRate'] ?? 0}') ?? 0;
+  final tax = receiptTaxAmount(sale);
+  if (recordedVatableSales != null && (rate > 0 || tax > 0)) {
+    return recordedVatableSales;
+  }
+  return tax == 0 ? total : total - tax;
+}
+
 String receiptTaxLabel(Map<String, dynamic> sale) {
   final classification = '${sale['taxClassification'] ?? ''}'
       .toLowerCase()
@@ -13,7 +24,8 @@ String receiptTaxLabel(Map<String, dynamic> sale) {
   if (classification == 'non_vat' ||
       classification == 'nonvat' ||
       sale.containsKey('tax') ||
-      sale.containsKey('vatAmount'))
+      sale.containsKey('vatAmount')) {
     return 'Non-VAT';
+  }
   return 'Not recorded';
 }

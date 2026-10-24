@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:sales_tracking/services/receipt_tax.dart';
 import 'package:sales_tracking/services/transaction_settings.dart';
 
 void main() {
@@ -75,20 +76,35 @@ void main() {
       final defaults = settingsForBranch({}, 'lingayen');
       expect(defaults['taxEnabled'], isFalse);
       expect(defaults['taxClassification'], 'nonVat');
-      expect(transactionTaxAmount(defaults, taxableAmount: 100), 0);
+      expect(transactionTaxAmount(defaults, grossAmount: 100), 0);
 
       final vat = settingsForBranch({
         'branchSettings': {
           'lingayen': {'taxEnabled': true, 'taxClassification': 'vat'},
         },
       }, 'lingayen');
+      for (final example in [
+        (total: 85.50, vatable: 76.34, vat: 9.16),
+        (total: 100.0, vatable: 89.29, vat: 10.71),
+        (total: 1000.0, vatable: 892.86, vat: 107.14),
+      ]) {
+        final breakdown = transactionTaxBreakdown(
+          vat,
+          grossAmount: example.total,
+        );
+        expect(breakdown.total, example.total);
+        expect(breakdown.vatableSales, example.vatable);
+        expect(breakdown.vatAmount, example.vat);
+        expect(breakdown.vatableSales + breakdown.vatAmount, breakdown.total);
+        expect(
+          transactionTaxAmount(vat, grossAmount: example.total),
+          example.vat,
+        );
+      }
+      expect(transactionTaxBreakdown(vat, grossAmount: 79.992).total, 79.99);
       expect(
-        transactionTaxAmount(vat, taxableAmount: 100),
-        closeTo(10.7142857, 0.0001),
-      );
-      expect(
-        transactionTaxAmount(vat, taxableAmount: 99),
-        closeTo(10.6071429, 0.0001),
+        transactionTaxBreakdown(vat, grossAmount: 79.992).vatableSales,
+        71.42,
       );
 
       final disabledVat = settingsForBranch({
@@ -96,7 +112,51 @@ void main() {
           'lingayen': {'taxEnabled': false, 'taxClassification': 'vat'},
         },
       }, 'lingayen');
-      expect(transactionTaxAmount(disabledVat, taxableAmount: 100), 0);
+      expect(transactionTaxAmount(disabledVat, grossAmount: 100), 0);
+    });
+
+    test('does not extract VAT for exempt and non-VAT sales', () {
+      for (final settings in [
+        {'taxEnabled': true, 'taxClassification': 'vatExempt'},
+        {'taxEnabled': false, 'taxClassification': 'vat'},
+        {'taxEnabled': true, 'taxClassification': 'nonVat'},
+      ]) {
+        final breakdown = transactionTaxBreakdown(settings, grossAmount: 100);
+        expect(breakdown.total, 100);
+        expect(breakdown.vatAmount, 0);
+        expect(breakdown.vatableSales, 0);
+      }
+    });
+
+    test('receipt net sales use saved breakdown and support old records', () {
+      expect(
+        receiptVatableSales({
+          'total': 100,
+          'vatableSales': 89.29,
+          'tax': 10.71,
+        }),
+        closeTo(89.29, 0.001),
+      );
+      expect(
+        receiptVatableSales({'total': 100, 'tax': 10.71}),
+        closeTo(89.29, 0.001),
+      );
+      expect(
+        receiptVatableSales({'total': 100, 'vat': 10.71}),
+        closeTo(89.29, 0.001),
+      );
+      expect(
+        receiptVatableSales({'total': 85.50, 'tax': 9.16}),
+        closeTo(76.34, 0.001),
+      );
+      expect(
+        receiptVatableSales({
+          'total': 100,
+          'vatableSales': 0,
+          'taxClassification': 'nonVat',
+        }),
+        100,
+      );
     });
   });
 }

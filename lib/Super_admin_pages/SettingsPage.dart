@@ -1,9 +1,14 @@
+import 'dart:async';
+import '../services/verified_email_sync.dart';
 import 'dart:convert';
 import '../services/super_admin.dart';
 import '../services/session_actor.dart';
 import '../services/password_policy.dart';
 import '../services/verified_profile_email_change.dart';
+import '../services/profile_email.dart';
 import '../widgets/transaction_settings_dialog.dart';
+import '../widgets/account_activity_logs_dialog.dart';
+import '../services/account_login_session.dart';
 import '../widgets/password_strength_checklist.dart';
 import '../widgets/account_profile_editor_sheet.dart';
 import '../services/catalog_image_service.dart';
@@ -37,18 +42,48 @@ class SuperAdminSettingsPage extends StatefulWidget {
   State<SuperAdminSettingsPage> createState() => _SuperAdminSettingsPageState();
 }
 
-class _SuperAdminSettingsPageState extends State<SuperAdminSettingsPage> {
+class _SuperAdminSettingsPageState extends State<SuperAdminSettingsPage> with WidgetsBindingObserver {
   bool _isUploadingProfilePhoto = false;
   String? _lastProfilePhotoUrl;
   Uint8List? _profilePreview;
   String _adminId = 'ADM-001';
   String _profileId = 'ADM-001';
   bool _profileReady = false;
+  Timer? _emailRefresh;
+  bool _syncingEmail = false;
+
+  Future<void> _refreshVerifiedEmail() async {
+    if (_syncingEmail || !_profileReady) return;
+    _syncingEmail = true;
+    try {
+      await syncVerifiedProfileEmail(
+        profile: (widget.firestore ?? FirebaseFirestore.instance).collection('super_admin_profiles').doc(_profileId),
+        user: FirebaseAuth.instance.currentUser,
+      );
+    } catch (error) { debugPrint('Email status refresh: $error'); }
+    finally { _syncingEmail = false; }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _refreshVerifiedEmail();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _emailRefresh?.cancel();
+    super.dispose();
+  }
 
   @override
   void initState() {
     super.initState();
-    _loadAdminId();
+    _loadAdminId().then((_) => _refreshVerifiedEmail());
+    WidgetsBinding.instance.addObserver(this);
+    _emailRefresh = Timer.periodic(const Duration(seconds: 15), (_) {
+      if (WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) _refreshVerifiedEmail();
+    });
   }
 
   Future<void> _loadAdminId() async {
@@ -157,8 +192,16 @@ class _SuperAdminSettingsPageState extends State<SuperAdminSettingsPage> {
                             builder: (context, snapshot) {
                               final data = snapshot.data?.data();
                               final fullName = _getFullName(data);
-                              final email =
-                                  data?['email']?.toString() ?? 'No email';
+                              final confirmedEmail = confirmedProfileEmail(
+                                data ?? {},
+                              );
+                              final pendingEmail =
+                                  '${data?['pendingAuthEmail'] ?? ''}'.trim();
+                              final email = confirmedEmail.isNotEmpty
+                                  ? confirmedEmail
+                                  : pendingEmail.isNotEmpty
+                                  ? '$pendingEmail (Pending)'
+                                  : 'No email';
                               final adminId =
                                   data?['adminId']?.toString() ??
                                   data?['staffId']?.toString() ??
@@ -214,6 +257,8 @@ class _SuperAdminSettingsPageState extends State<SuperAdminSettingsPage> {
                                         const SizedBox(height: 3),
                                         Text(
                                           email,
+                                          maxLines: 2,
+                                          overflow: TextOverflow.ellipsis,
                                           style: TextStyle(
                                             fontSize: 13.5,
                                             color: Colors.white.withOpacity(
@@ -337,6 +382,19 @@ class _SuperAdminSettingsPageState extends State<SuperAdminSettingsPage> {
                     iconColor: const Color(0xFF3949AB),
                     iconBg: const Color(0xFFE8EAF6),
                     onTap: () => _showChangePassword(context),
+                  ),
+                  _settingItem(
+                    icon: Icons.history_rounded,
+                    title: "Activity Logs",
+                    subtitle: "Review sign-ins and account activity",
+                    iconColor: const Color(0xFF00897B),
+                    iconBg: const Color(0xFFE0F2F1),
+                    onTap: () => showDialog<void>(
+                      context: context,
+                      builder: (_) => const AccountActivityLogsDialog(
+                        actorId: SuperAdmin.id,
+                      ),
+                    ),
                   ),
 
                   const SizedBox(height: 6),
@@ -629,7 +687,10 @@ class _SuperAdminSettingsPageState extends State<SuperAdminSettingsPage> {
               profileData: data,
               newEmail: values.email,
               currentPassword: values.currentPassword,
+              allowInitialEmailSetup: true,
             );
+            // Keep the linked session available for automatic verification refresh.
+            await SuperAdmin.verifyPassword(values.currentPassword, database: db);
           }
 
           await profile.set({
@@ -1088,6 +1149,20 @@ class _LogoutButtonState extends State<_LogoutButton>
                     child: GestureDetector(
                       onTap: () async {
                         Navigator.pop(context);
+                        try {
+                          await AccountLoginSession.close();
+                        } catch (error) {
+                          if (context.mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text(
+                                  'Unable to save logout activity: $error',
+                                ),
+                              ),
+                            );
+                          }
+                          return;
+                        }
                         final prefs = await SharedPreferences.getInstance();
                         await clearPersistedAccountSession(prefs);
                         await FirebaseAuth.instance.signOut();

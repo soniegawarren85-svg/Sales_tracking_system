@@ -378,7 +378,7 @@ void main() {
   }
 
   testWidgets(
-    'branch checklist count, search, type filter and required issue reason',
+    'branch checklist count, search, type filter and required issue quantity',
     (tester) async {
       final db = FakeFirebaseFirestore();
       for (final row in [
@@ -386,8 +386,9 @@ void main() {
           'staffId': 'branch',
           'status': 'pending',
           'name': 'Cookies',
+          'targetDocId': 'target',
           'items': [
-            {'name': 'Chocolate', 'stock': 3},
+            {'id': 'chocolate', 'name': 'Chocolate', 'stock': 3},
           ],
         },
         {
@@ -404,6 +405,23 @@ void main() {
           'createdAt': Timestamp.fromDate(DateUtils.dateOnly(DateTime.now())),
         });
       }
+      await db.doc('staff_requests/staff-one').set({
+        'role': 'staff',
+        'status': 'accepted',
+        'staffId': 'STF-001',
+        'firstName': 'Test',
+        'lastName': 'Staff',
+        'branchIds': ['branch'],
+      });
+      await db.doc('staff_inventory/target').set({
+        'staffId': 'branch',
+        'items': [
+          {'id': 'chocolate', 'name': 'Chocolate', 'stock': 0},
+        ],
+      });
+      final preferences = await SharedPreferences.getInstance();
+      await preferences.setString('lastRole', 'staff');
+      await preferences.setString('lastUserId', 'staff-one');
       await tester.binding.setSurfaceSize(const Size(420, 780));
       addTearDown(() => tester.binding.setSurfaceSize(null));
       await tester.pumpWidget(
@@ -445,9 +463,22 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.text('Report Issue'));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Submit report'));
+      await tester.tap(find.text('Continue'));
       await tester.pumpAndSettle();
-      expect(find.text('A reason is required'), findsOneWidget);
+      expect(
+        find.text('Enter a whole number greater than zero'),
+        findsOneWidget,
+      );
+      await tester.enterText(find.byType(TextFormField).first, '1');
+      await tester.tap(find.text('Continue'));
+      await tester.pumpAndSettle();
+      expect(find.text('Confirm Issue Report'), findsOneWidget);
+      expect(find.textContaining('Only 2 Chocolate'), findsOneWidget);
+      await tester.tap(find.text('Confirm and receive'));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      final received = (await db.doc('staff_inventory/target').get()).data()!;
+      expect((received['items'] as List).single['stock'], 2);
       expect(tester.takeException(), isNull);
     },
   );

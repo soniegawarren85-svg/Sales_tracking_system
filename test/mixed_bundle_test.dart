@@ -38,6 +38,27 @@ void main() {
       'quantity': 1,
     },
   ];
+  test('bundle display includes the current allocated instance recipe', () {
+    final visibleNames = bundleDisplayItemNames({
+      'items': [
+        {'name': 'Pistachio Dubai Chewy'},
+        {'name': 'Og Cookies'},
+      ],
+      'bundleInstances': [
+        {
+          'status': 'available',
+          'items': [
+            {'name': 'Pistachio Dubai Chewy', 'expirationDate': '2099-12-31'},
+            {'name': 'Og Cookies', 'expirationDate': '2099-12-31'},
+            {'name': 'Red Velvet', 'expirationDate': '2099-12-31'},
+          ],
+        },
+      ],
+    });
+
+    expect(visibleNames, ['Pistachio Dubai Chewy', 'Og Cookies', 'Red Velvet']);
+  });
+
   test(
     'create and restock mixed bundle preserves beverage size and total price',
     () async {

@@ -1,6 +1,7 @@
 import '../../services/account_password_service.dart';
 import '../../services/profile_email.dart';
 import '../../services/account_session_control.dart';
+import '../../services/account_login_session.dart';
 import '../../services/password_policy.dart';
 import 'dart:async';
 import '../../services/super_admin.dart';
@@ -33,6 +34,26 @@ class LoginScreen extends StatefulWidget {
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
+}
+
+Future<void> _startElevatedLoginSession({
+  required String role,
+  required String userId,
+  required String actorId,
+  required String publicId,
+  required String name,
+}) async {
+  try {
+    await AccountLoginSession.start(
+      userId: userId,
+      actorId: actorId,
+      publicId: publicId,
+      name: name,
+      role: role,
+    );
+  } catch (error) {
+    debugPrint('Unable to record $role login session: $error');
+  }
 }
 
 class _LoginScreenState extends State<LoginScreen>
@@ -342,6 +363,15 @@ class _LoginScreenState extends State<LoginScreen>
             debugPrint('Login status queued: $error');
           }),
     );
+    if (isAdmin) {
+      await _startElevatedLoginSession(
+        role: 'admin',
+        userId: accountDoc.id,
+        actorId: accountDoc.id,
+        publicId: publicId,
+        name: _welcomeName(data, 'Admin'),
+      );
+    }
     if (!isAdmin && mounted) {
       await StaffLoginSession.start(context, accountDoc.id, data);
     }
@@ -519,13 +549,22 @@ class _LoginScreenState extends State<LoginScreen>
     setState(() => _isLoading = true);
     try {
       if (SuperAdmin.matchesId(username)) {
-        if (!await SuperAdmin.verifyPassword(password)) {
+        if (!await SuperAdmin.verifyPassword(
+          password,
+          database: FirebaseFirestore.instance,
+        )) {
           _showMessage(invalidLoginCredentialsMessage(), isError: true);
           return;
         }
-        await FirebaseAuth.instance.signOut();
         final prefs = await SharedPreferences.getInstance();
         await SuperAdmin.startSession(prefs);
+        await _startElevatedLoginSession(
+          role: 'super_admin',
+          userId: 'super-admin',
+          actorId: SuperAdmin.id,
+          publicId: SuperAdmin.id,
+          name: SuperAdmin.name,
+        );
         if (!mounted) return;
         _showMessage('Welcome super admin');
         Navigator.of(context).pushReplacement(
@@ -538,6 +577,10 @@ class _LoginScreenState extends State<LoginScreen>
                   ? _findAccountsByUsername(username)
                   : _findAccountsByEmail(username))
               .timeout(const Duration(seconds: 5));
+      final activeMatches = accountDocs
+          .where((doc) => loginAccountStatusError(doc.data()) == null)
+          .toList();
+      if (activeMatches.isNotEmpty) accountDocs = activeMatches;
       final unavailableMessage = accountDocs
           .map((doc) => loginAccountStatusError(doc.data()))
           .whereType<String>()
@@ -618,6 +661,13 @@ class _LoginScreenState extends State<LoginScreen>
               await prefs.setString('adminId', adminId);
               await prefs.setString('lastRole', 'admin');
               await prefs.setString('lastUserId', accountDoc.id);
+              await _startElevatedLoginSession(
+                role: 'admin',
+                userId: accountDoc.id,
+                actorId: accountDoc.id,
+                publicId: adminId,
+                name: _welcomeName(accountData, 'Admin'),
+              );
               await _rememberOfflineAccount(
                 username: username,
                 password: password,
@@ -780,6 +830,7 @@ class _LoginScreenState extends State<LoginScreen>
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString('lastRole', isAdmin ? 'admin' : 'staff');
         await prefs.setString('lastUserId', uid);
+        await prefs.setString('lastStaffDocId', signedInDoc.id);
         if (isAdmin) {
           await prefs.setString(
             'adminId',
@@ -788,6 +839,9 @@ class _LoginScreenState extends State<LoginScreen>
         }
         final publicId = (data[isAdmin ? 'adminId' : 'staffId'] ?? username)
             .toString();
+        if (!isAdmin) {
+          await prefs.setString('lastStaffPublicId', publicId);
+        }
         final signedInAuthEmail = credential.user?.email;
         final pendingAuthEmail = data['pendingAuthEmail']?.toString().trim();
         await _rememberOfflineAccount(
@@ -821,6 +875,14 @@ class _LoginScreenState extends State<LoginScreen>
         );
         if (!isAdmin && mounted) {
           await StaffLoginSession.start(context, uid, data);
+        } else if (isAdmin) {
+          await _startElevatedLoginSession(
+            role: 'admin',
+            userId: prefs.getString('lastUserId') ?? uid,
+            actorId: signedInDoc.id,
+            publicId: publicId,
+            name: _welcomeName(data, 'Admin'),
+          );
         }
         _showMessage(
           'Welcome, ${_welcomeName(data, isAdmin ? 'Admin' : 'Staff')}!',

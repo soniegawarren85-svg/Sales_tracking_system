@@ -28,6 +28,7 @@ const _branchScopedKeys = [
   'discountsEnabled',
   'taxEnabled',
   'taxClassification',
+  'taxTin',
   'allowRefunds',
   'allowHoldOrders',
   'allowReceiptHistory',
@@ -68,6 +69,8 @@ Map<String, dynamic> settingsForBranch(
       result[key] = false;
     } else if (key == 'taxClassification') {
       result[key] = 'nonVat';
+    } else if (key == 'taxTin') {
+      result[key] = '';
     } else {
       result[key] = true;
     }
@@ -83,14 +86,43 @@ double transactionTaxRate(Map<String, dynamic> settings) {
   return 0.12;
 }
 
+double roundTransactionMoney(double amount) => (amount * 100).round() / 100;
+
+class TransactionTaxBreakdown {
+  const TransactionTaxBreakdown({
+    required this.total,
+    required this.vatableSales,
+    required this.vatAmount,
+  });
+
+  final double total;
+  final double vatableSales;
+  final double vatAmount;
+}
+
+TransactionTaxBreakdown transactionTaxBreakdown(
+  Map<String, dynamic> settings, {
+  required double grossAmount,
+}) {
+  final total = roundTransactionMoney(grossAmount);
+  final rate = transactionTaxRate(settings);
+  if (rate == 0 || total <= 0) {
+    return TransactionTaxBreakdown(total: total, vatableSales: 0, vatAmount: 0);
+  }
+
+  final vatableSales = roundTransactionMoney(total / (1 + rate));
+  final vatAmount = roundTransactionMoney(total - vatableSales);
+  return TransactionTaxBreakdown(
+    total: total,
+    vatableSales: vatableSales,
+    vatAmount: vatAmount,
+  );
+}
+
 double transactionTaxAmount(
   Map<String, dynamic> settings, {
-  required double taxableAmount,
-}) {
-  final rate = transactionTaxRate(settings);
-  if (rate == 0) return 0;
-  return taxableAmount - taxableAmount / (1 + rate);
-}
+  required double grossAmount,
+}) => transactionTaxBreakdown(settings, grossAmount: grossAmount).vatAmount;
 
 List<Map<String, dynamic>> settingRows(Map<String, dynamic> data, String key) =>
     (data[key] as List? ??

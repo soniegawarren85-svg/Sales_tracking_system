@@ -18,6 +18,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../services/inventory_service.dart';
 import '../services/number_format.dart';
 import '../widgets/top_notification.dart';
+import '../widgets/top_edge_refresh.dart';
 
 class AllCategPage extends StatefulWidget {
   final String? selectedCategoryName;
@@ -130,6 +131,58 @@ class _AllCategPageState extends State<AllCategPage>
         _staffInventoryIds = ids.toList();
         _staffInventoryStreamCache = null;
       });
+    }
+  }
+
+  Future<void> _refreshInventory() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final uid =
+          FirebaseAuth.instance.currentUser?.uid ??
+          prefs.getString('lastStaffDocId') ??
+          prefs.getString('lastUserId');
+      if (uid != null && uid.isNotEmpty) {
+        await _loadStaffInventoryIds(uid);
+      }
+      final ids = _staffInventoryIds
+          .where((id) => id.trim().isNotEmpty)
+          .toSet()
+          .take(10)
+          .toList();
+      final inventory = FirebaseFirestore.instance.collection(
+        'staff_inventory',
+      );
+      await Future.wait([
+        FirebaseFirestore.instance
+            .collection('sales_inventory')
+            .get(const GetOptions(source: Source.server)),
+        if (ids.isEmpty)
+          inventory
+              .where('staffId', isEqualTo: '')
+              .get(const GetOptions(source: Source.server))
+        else if (ids.length == 1)
+          inventory
+              .where('staffId', isEqualTo: ids.first)
+              .get(const GetOptions(source: Source.server))
+        else
+          inventory
+              .where('staffId', whereIn: ids)
+              .get(const GetOptions(source: Source.server)),
+      ]).timeout(const Duration(seconds: 15));
+      if (mounted) {
+        setState(() => _staffInventoryStreamCache = null);
+      }
+    } catch (error) {
+      debugPrint('Unable to refresh staff inventory: $error');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Unable to refresh inventory. Check your connection.',
+            ),
+          ),
+        );
+      }
     }
   }
 
@@ -5833,561 +5886,583 @@ class _AllCategPageState extends State<AllCategPage>
     final tabletLayout = MediaQuery.sizeOf(context).width >= 600;
     return Scaffold(
       backgroundColor: AppColors.surfaceTint,
-      body: NestedScrollView(
-        headerSliverBuilder: (context, innerBoxIsScrolled) => [
-          SliverAppBar(
-            automaticallyImplyLeading: false,
-            expandedHeight: tabletLayout ? 120 : 160,
-            floating: false,
-            pinned: true,
-            elevation: 0,
-            backgroundColor: AppColors.primaryDark,
-            flexibleSpace: FlexibleSpaceBar(
-              background: Container(
-                decoration: const BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [
-                      AppColors.primaryDeep,
-                      AppColors.primaryDark,
-                      AppColors.primary,
-                    ],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
+      body: TopEdgeRefresh(
+        displacement: 24,
+        color: AppColors.primary,
+        onRefresh: _refreshInventory,
+        notificationPredicate: (notification) => notification.depth <= 1,
+        child: NestedScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          headerSliverBuilder: (context, innerBoxIsScrolled) => [
+            SliverAppBar(
+              automaticallyImplyLeading: false,
+              expandedHeight: tabletLayout ? 120 : 160,
+              floating: false,
+              pinned: true,
+              elevation: 0,
+              backgroundColor: AppColors.primaryDark,
+              flexibleSpace: FlexibleSpaceBar(
+                background: Container(
+                  decoration: const BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [
+                        AppColors.primaryDeep,
+                        AppColors.primaryDark,
+                        AppColors.primary,
+                      ],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
                   ),
-                ),
-                child: Stack(
-                  children: [
-                    // Decorative circles
-                    Positioned(
-                      top: -30,
-                      right: -20,
-                      child: Container(
-                        width: 150,
-                        height: 150,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: Colors.white.withOpacity(0.06),
-                        ),
-                      ),
-                    ),
-                    Positioned(
-                      bottom: -40,
-                      left: -30,
-                      child: Container(
-                        width: 180,
-                        height: 180,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: Colors.white.withOpacity(0.05),
-                        ),
-                      ),
-                    ),
-                    Positioned(
-                      top: 30,
-                      right: 80,
-                      child: Container(
-                        width: 60,
-                        height: 60,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: Colors.white.withOpacity(0.08),
-                        ),
-                      ),
-                    ),
-
-                    // Header content
-                    Positioned(
-                      bottom: 22,
-                      left: 20,
-                      right: 20,
-                      child: FadeTransition(
-                        opacity: _headerFadeAnim,
-                        child: SlideTransition(
-                          position: _headerSlideAnim,
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const SizedBox(height: 8),
-                              Row(
-                                crossAxisAlignment: CrossAxisAlignment.center,
-                                children: [
-                                  Expanded(
-                                    child: Text(
-                                      _isFilteredCategory
-                                          ? widget.selectedIsBundle
-                                                ? (widget.selectedCategoryName ??
-                                                      'Selected Bundle')
-                                                : _isCoffeeView
-                                                ? '${widget.selectedCategoryName ?? 'Selected'} Beverages'
-                                                : '${widget.selectedCategoryName ?? 'Selected'} Categories'
-                                          : 'Inventory',
-                                      style: const TextStyle(
-                                        color: Colors.white,
-                                        fontSize: 28,
-                                        fontWeight: FontWeight.w900,
-                                        letterSpacing: 0.5,
-                                      ),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  AllocationChecklistButton(
-                                    scopeIds: _staffInventoryIds,
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 4),
-                              Text(
-                                _isFilteredCategory
-                                    ? widget.selectedIsBundle
-                                          ? 'Manage this bundle inventory'
-                                          : _isCoffeeView
-                                          ? 'Manage this beverage flavor'
-                                          : 'Manage this category inventory'
-                                    : 'Manage your product inventory',
-                                style: TextStyle(
-                                  color: Colors.white.withOpacity(0.75),
-                                  fontSize: 13,
-                                ),
-                              ),
-                            ],
+                  child: Stack(
+                    children: [
+                      // Decorative circles
+                      Positioned(
+                        top: -30,
+                        right: -20,
+                        child: Container(
+                          width: 150,
+                          height: 150,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: Colors.white.withOpacity(0.06),
                           ),
                         ),
                       ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            leadingWidth: widget.embedded ? 0 : 72,
-            leading: widget.embedded
-                ? null
-                : IconButton(
-                    constraints: const BoxConstraints(
-                      minWidth: 56,
-                      minHeight: 56,
-                    ),
-                    icon: Container(
-                      width: 44,
-                      height: 44,
-                      decoration: BoxDecoration(
-                        color: Colors.white.withOpacity(0.22),
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                      child: const Center(
-                        child: Icon(
-                          Icons.arrow_back_ios_new_rounded,
-                          color: Colors.white,
-                          size: 22,
+                      Positioned(
+                        bottom: -40,
+                        left: -30,
+                        child: Container(
+                          width: 180,
+                          height: 180,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: Colors.white.withOpacity(0.05),
+                          ),
                         ),
                       ),
-                    ),
-                    onPressed: () => Navigator.of(context).pop(),
+                      Positioned(
+                        top: 30,
+                        right: 80,
+                        child: Container(
+                          width: 60,
+                          height: 60,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: Colors.white.withOpacity(0.08),
+                          ),
+                        ),
+                      ),
+
+                      // Header content
+                      Positioned(
+                        bottom: 22,
+                        left: 20,
+                        right: 20,
+                        child: FadeTransition(
+                          opacity: _headerFadeAnim,
+                          child: SlideTransition(
+                            position: _headerSlideAnim,
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const SizedBox(height: 8),
+                                Row(
+                                  crossAxisAlignment: CrossAxisAlignment.center,
+                                  children: [
+                                    Expanded(
+                                      child: Text(
+                                        _isFilteredCategory
+                                            ? widget.selectedIsBundle
+                                                  ? (widget.selectedCategoryName ??
+                                                        'Selected Bundle')
+                                                  : _isCoffeeView
+                                                  ? '${widget.selectedCategoryName ?? 'Selected'} Beverages'
+                                                  : '${widget.selectedCategoryName ?? 'Selected'} Categories'
+                                            : 'Inventory',
+                                        style: const TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 28,
+                                          fontWeight: FontWeight.w900,
+                                          letterSpacing: 0.5,
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    AllocationChecklistButton(
+                                      scopeIds: _staffInventoryIds,
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  _isFilteredCategory
+                                      ? widget.selectedIsBundle
+                                            ? 'Manage this bundle inventory'
+                                            : _isCoffeeView
+                                            ? 'Manage this beverage flavor'
+                                            : 'Manage this category inventory'
+                                      : 'Manage your product inventory',
+                                  style: TextStyle(
+                                    color: Colors.white.withOpacity(0.75),
+                                    fontSize: 13,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
-          ),
-        ],
-        body: StreamBuilder<QuerySnapshot>(
-          stream: _staffInventoryStream(),
-          builder: (context, snapshot) {
-            if (snapshot.hasError) {
-              return Center(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(
-                      Icons.error_outline_rounded,
-                      size: 56,
-                      color: AppColors.primaryDark.withOpacity(0.4),
-                    ),
-                    const SizedBox(height: 12),
-                    const Text(
-                      'Error loading items',
-                      style: TextStyle(color: AppColors.primaryDark),
-                    ),
-                  ],
                 ),
-              );
-            }
-            if (snapshot.connectionState == ConnectionState.waiting) {
-              return _buildInventoryLoadingState();
-            }
+              ),
+              leadingWidth: widget.embedded ? 0 : 72,
+              leading: widget.embedded
+                  ? null
+                  : IconButton(
+                      constraints: const BoxConstraints(
+                        minWidth: 56,
+                        minHeight: 56,
+                      ),
+                      icon: Container(
+                        width: 44,
+                        height: 44,
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.22),
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        child: const Center(
+                          child: Icon(
+                            Icons.arrow_back_ios_new_rounded,
+                            color: Colors.white,
+                            size: 22,
+                          ),
+                        ),
+                      ),
+                      onPressed: () => Navigator.of(context).pop(),
+                    ),
+            ),
+          ],
+          body: StreamBuilder<QuerySnapshot>(
+            stream: _staffInventoryStream(),
+            builder: (context, snapshot) {
+              if (snapshot.hasError) {
+                return Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        Icons.error_outline_rounded,
+                        size: 56,
+                        color: AppColors.primaryDark.withOpacity(0.4),
+                      ),
+                      const SizedBox(height: 12),
+                      const Text(
+                        'Error loading items',
+                        style: TextStyle(color: AppColors.primaryDark),
+                      ),
+                    ],
+                  ),
+                );
+              }
+              if (snapshot.connectionState == ConnectionState.waiting) {
+                return _buildInventoryLoadingState();
+              }
 
-            final docs = snapshot.data?.docs ?? [];
-            return StreamBuilder<QuerySnapshot>(
-              stream: _rootInventoryStream,
-              builder: (context, rootSnapshot) {
-                if (rootSnapshot.connectionState == ConnectionState.waiting) {
-                  return _buildInventoryLoadingState();
-                }
-
-                final activeRootById = <String, Map<String, dynamic>>{};
-                final activeRootByName = <String, Map<String, dynamic>>{};
-                for (final rootDoc in rootSnapshot.data?.docs ?? []) {
-                  final rootData = rootDoc.data() as Map<String, dynamic>?;
-                  if (rootData == null || rootData['isDeleted'] == true) {
-                    continue;
+              final docs = snapshot.data?.docs ?? [];
+              return StreamBuilder<QuerySnapshot>(
+                stream: _rootInventoryStream,
+                builder: (context, rootSnapshot) {
+                  if (rootSnapshot.connectionState == ConnectionState.waiting) {
+                    return _buildInventoryLoadingState();
                   }
-                  activeRootById[rootDoc.id] = rootData;
-                  final rootName =
-                      rootData['name']?.toString().trim().toLowerCase() ?? '';
-                  if (rootName.isNotEmpty) {
-                    activeRootByName[rootName] = rootData;
-                  }
-                }
 
-                String itemKey(Map<String, dynamic> item) =>
-                    '${item['id'] ?? item['variantId'] ?? item['name'] ?? ''}'
-                        .toLowerCase();
-
-                final visibleDocs = <Map<String, dynamic>>[];
-                for (final doc in docs) {
-                  final data = doc.data() as Map<String, dynamic>?;
-                  if (data == null || data['isDeleted'] == true) continue;
-                  if (data['isAddon'] == true) {
-                    if (bundleExpired(data, DateTime.now())) continue;
-                    visibleDocs.add({...data, 'sourceDocId': doc.id});
-                    continue;
+                  final activeRootById = <String, Map<String, dynamic>>{};
+                  final activeRootByName = <String, Map<String, dynamic>>{};
+                  for (final rootDoc in rootSnapshot.data?.docs ?? []) {
+                    final rootData = rootDoc.data() as Map<String, dynamic>?;
+                    if (rootData == null || rootData['isDeleted'] == true) {
+                      continue;
+                    }
+                    activeRootById[rootDoc.id] = rootData;
+                    final rootName =
+                        rootData['name']?.toString().trim().toLowerCase() ?? '';
+                    if (rootName.isNotEmpty) {
+                      activeRootByName[rootName] = rootData;
+                    }
                   }
-                  final sourceId = data['sourceInventoryId']?.toString() ?? '';
-                  final name =
-                      data['name']?.toString().trim().toLowerCase() ?? '';
-                  final selectedSourceId =
-                      widget.selectedSourceInventoryId?.trim() ?? '';
-                  final selectedName =
-                      widget.selectedCategoryName?.trim().toLowerCase() ?? '';
-                  if (_isFilteredCategory) {
-                    final matchesSource =
-                        selectedSourceId.isNotEmpty &&
-                        (sourceId == selectedSourceId ||
-                            doc.id == selectedSourceId);
-                    final matchesName =
-                        selectedSourceId.isEmpty &&
-                        selectedName.isNotEmpty &&
-                        name == selectedName;
-                    if (!matchesSource && !matchesName) continue;
-                  }
-                  final isCoffee = data['isCoffee'] == true;
-                  final rootData =
-                      activeRootById[sourceId] ??
-                      activeRootByName[name] ??
-                      (isCoffee ? data : null);
-                  if (rootData == null) continue;
 
-                  if (isCoffee) {
-                    final coffeeItems = _coffeeItemsFromData(
+                  String itemKey(Map<String, dynamic> item) =>
+                      '${item['id'] ?? item['variantId'] ?? item['name'] ?? ''}'
+                          .toLowerCase();
+
+                  final visibleDocs = <Map<String, dynamic>>[];
+                  for (final doc in docs) {
+                    final data = doc.data() as Map<String, dynamic>?;
+                    if (data == null || data['isDeleted'] == true) continue;
+                    if (data['isAddon'] == true) {
+                      if (bundleExpired(data, DateTime.now())) continue;
+                      visibleDocs.add({...data, 'sourceDocId': doc.id});
+                      continue;
+                    }
+                    final sourceId =
+                        data['sourceInventoryId']?.toString() ?? '';
+                    final name =
+                        data['name']?.toString().trim().toLowerCase() ?? '';
+                    final selectedSourceId =
+                        widget.selectedSourceInventoryId?.trim() ?? '';
+                    final selectedName =
+                        widget.selectedCategoryName?.trim().toLowerCase() ?? '';
+                    if (_isFilteredCategory) {
+                      final matchesSource =
+                          selectedSourceId.isNotEmpty &&
+                          (sourceId == selectedSourceId ||
+                              doc.id == selectedSourceId);
+                      final matchesName =
+                          selectedSourceId.isEmpty &&
+                          selectedName.isNotEmpty &&
+                          name == selectedName;
+                      if (!matchesSource && !matchesName) continue;
+                    }
+                    final isCoffee = data['isCoffee'] == true;
+                    final rootData =
+                        activeRootById[sourceId] ??
+                        activeRootByName[name] ??
+                        (isCoffee ? data : null);
+                    if (rootData == null) continue;
+
+                    if (isCoffee) {
+                      final coffeeItems = _coffeeItemsFromData(
+                        data,
+                        rootData: rootData,
+                      );
+                      if (coffeeItems.isEmpty) continue;
+                      visibleDocs.add({
+                        ...data,
+                        'name': data['name'] ?? 'Beverages',
+                        'publicId':
+                            rootData['publicId'] ??
+                            rootData['coffeeId'] ??
+                            data['publicId'],
+                        'coffeeId':
+                            rootData['coffeeId'] ??
+                            rootData['publicId'] ??
+                            data['coffeeId'],
+                        'imageUrl': rootData['imageUrl'] ?? data['imageUrl'],
+                        'items': coffeeItems,
+                        'addonOptions': coffeeItems
+                            .expand(
+                              (item) => item['addons'] as List<dynamic>? ?? [],
+                            )
+                            .whereType<Map>()
+                            .map((addon) => Map<String, dynamic>.from(addon))
+                            .toList(),
+                        'sourceDocId': doc.id,
+                        'isCoffee': true,
+                      });
+                      continue;
+                    }
+
+                    if (data['isBundle'] == true) {
+                      if (rootData['isBundle'] != true) continue;
+
+                      if (_hasExpiredBundleItem(data)) continue;
+                      if (_bundleStockForData(data) <= 0) continue;
+                      visibleDocs.add({
+                        ...data,
+                        'name': rootData['name'] ?? data['name'],
+                        'publicId': rootData['publicId'] ?? data['publicId'],
+                        'imageUrl': rootData['imageUrl'] ?? data['imageUrl'],
+                        'sourceDocId': doc.id,
+                      });
+                      continue;
+                    }
+
+                    final rootItems =
+                        ((rootData['items'] as List<dynamic>?) ?? [])
+                            .whereType<Map>()
+                            .map((item) => Map<String, dynamic>.from(item))
+                            .toList();
+                    final rootKeys = rootItems.map(itemKey).toSet();
+                    final alignedData = alignInventoryDisplayIds(
                       data,
-                      rootData: rootData,
+                      rootData,
                     );
-                    if (coffeeItems.isEmpty) continue;
-                    visibleDocs.add({
-                      ...data,
-                      'name': data['name'] ?? 'Beverages',
-                      'publicId':
-                          rootData['publicId'] ??
-                          rootData['coffeeId'] ??
-                          data['publicId'],
-                      'coffeeId':
-                          rootData['coffeeId'] ??
-                          rootData['publicId'] ??
-                          data['coffeeId'],
-                      'imageUrl': rootData['imageUrl'] ?? data['imageUrl'],
-                      'items': coffeeItems,
-                      'addonOptions': coffeeItems
-                          .expand(
-                            (item) => item['addons'] as List<dynamic>? ?? [],
-                          )
-                          .whereType<Map>()
-                          .map((addon) => Map<String, dynamic>.from(addon))
-                          .toList(),
-                      'sourceDocId': doc.id,
-                      'isCoffee': true,
-                    });
-                    continue;
-                  }
-
-                  if (data['isBundle'] == true) {
-                    if (rootData['isBundle'] != true) continue;
-
-                    if (_hasExpiredBundleItem(data)) continue;
-                    if (_bundleStockForData(data) <= 0) continue;
+                    final activeItems =
+                        ((alignedData['items'] as List<dynamic>?) ?? [])
+                            .whereType<Map>()
+                            .map((item) => Map<String, dynamic>.from(item))
+                            .where((item) {
+                              final expirationDate =
+                                  item['expirationDate']?.toString() ?? '';
+                              return !_isExpiredItem(expirationDate) &&
+                                  (rootKeys.isEmpty ||
+                                      rootKeys.contains(itemKey(item)));
+                            })
+                            .toList();
+                    if (activeItems.isEmpty) continue;
                     visibleDocs.add({
                       ...data,
                       'name': rootData['name'] ?? data['name'],
                       'publicId': rootData['publicId'] ?? data['publicId'],
                       'imageUrl': rootData['imageUrl'] ?? data['imageUrl'],
+                      'items': activeItems,
                       'sourceDocId': doc.id,
                     });
-                    continue;
                   }
 
-                  final rootItems =
-                      ((rootData['items'] as List<dynamic>?) ?? [])
-                          .whereType<Map>()
-                          .map((item) => Map<String, dynamic>.from(item))
-                          .toList();
-                  final rootKeys = rootItems.map(itemKey).toSet();
-                  final alignedData = alignInventoryDisplayIds(data, rootData);
-                  final activeItems =
-                      ((alignedData['items'] as List<dynamic>?) ?? [])
-                          .whereType<Map>()
-                          .map((item) => Map<String, dynamic>.from(item))
-                          .where((item) {
-                            final expirationDate =
-                                item['expirationDate']?.toString() ?? '';
-                            return !_isExpiredItem(expirationDate) &&
-                                (rootKeys.isEmpty ||
-                                    rootKeys.contains(itemKey(item)));
-                          })
-                          .toList();
-                  if (activeItems.isEmpty) continue;
-                  visibleDocs.add({
-                    ...data,
-                    'name': rootData['name'] ?? data['name'],
-                    'publicId': rootData['publicId'] ?? data['publicId'],
-                    'imageUrl': rootData['imageUrl'] ?? data['imageUrl'],
-                    'items': activeItems,
-                    'sourceDocId': doc.id,
-                  });
-                }
-
-                final groupedCategories = <String, Map<String, dynamic>>{};
-                for (final data in visibleDocs) {
-                  if (data['isBundle'] == true || data['isAddon'] == true) {
-                    continue;
-                  }
-                  final categoryName =
-                      data['name']?.toString() ?? 'Unknown Category';
-                  final items =
-                      (data['items'] as List?)?.cast<Map<String, dynamic>>() ??
-                      [];
-                  final itemRecords = items.map((item) {
-                    final itemData = Map<String, dynamic>.from(item);
-                    itemData['sourceDocId'] = data['sourceDocId'];
-                    itemData['categoryName'] = categoryName;
-                    itemData['allocatedAt'] =
-                        itemData['assignedAt'] ?? data['assignedAt'];
-                    return itemData;
-                  }).toList();
-                  if (itemRecords.isEmpty) continue;
-                  final categoryKey =
-                      data['sourceInventoryId']?.toString().trim().isNotEmpty ==
-                          true
-                      ? data['sourceInventoryId'].toString()
-                      : data['sourceDocId']?.toString() ?? categoryName;
-                  groupedCategories[categoryKey] = {
-                    'categoryName': categoryName,
-                    'categoryId':
+                  final groupedCategories = <String, Map<String, dynamic>>{};
+                  for (final data in visibleDocs) {
+                    if (data['isBundle'] == true || data['isAddon'] == true) {
+                      continue;
+                    }
+                    final categoryName =
+                        data['name']?.toString() ?? 'Unknown Category';
+                    final items =
+                        (data['items'] as List?)
+                            ?.cast<Map<String, dynamic>>() ??
+                        [];
+                    final itemRecords = items.map((item) {
+                      final itemData = Map<String, dynamic>.from(item);
+                      itemData['sourceDocId'] = data['sourceDocId'];
+                      itemData['categoryName'] = categoryName;
+                      itemData['allocatedAt'] =
+                          itemData['assignedAt'] ?? data['assignedAt'];
+                      return itemData;
+                    }).toList();
+                    if (itemRecords.isEmpty) continue;
+                    final categoryKey =
                         data['sourceInventoryId']
                                 ?.toString()
                                 .trim()
                                 .isNotEmpty ==
                             true
-                        ? data['sourceInventoryId']
-                        : data['sourceDocId'],
-                    'imageUrl': data['imageUrl'],
-                    'items': [
-                      ...aggregateCategoryAllocationItems([
-                        ...?groupedCategories[categoryKey]?['items'] as List?,
-                        ...itemRecords,
-                      ]),
-                    ],
-                    'addonOptions': data['addonOptions'] ?? const [],
-                    'isCoffee': data['isCoffee'] == true,
-                    'sourceDocId': data['sourceDocId'],
-                    'publicId': data['publicId'],
-                    'coffeeId': data['coffeeId'],
-                    'allocatedAt': data['assignedAt'] ?? data['allocatedAt'],
-                    'isLowStock': data['isLowStock'] == true,
-                  };
-                }
-
-                final allCategoryDocs = groupedCategories.values.toList();
-                final categoryDocs = allCategoryDocs
-                    .where((data) => data['isCoffee'] != true)
-                    .toList();
-                final coffeeDocs = allCategoryDocs
-                    .where((data) => data['isCoffee'] == true)
-                    .toList();
-                final bundleDocs = _groupBundleAllocations(
-                  visibleDocs.where((data) => data['isBundle'] == true),
-                );
-                final addonByName = <String, Map<String, dynamic>>{};
-                for (final data in visibleDocs) {
-                  if (data['isAddon'] == true) {
-                    final name = data['name']?.toString().trim() ?? '';
-                    if (name.isEmpty) continue;
-                    addonByName.putIfAbsent(name, () => data);
-                    continue;
+                        ? data['sourceInventoryId'].toString()
+                        : data['sourceDocId']?.toString() ?? categoryName;
+                    groupedCategories[categoryKey] = {
+                      'categoryName': categoryName,
+                      'categoryId':
+                          data['sourceInventoryId']
+                                  ?.toString()
+                                  .trim()
+                                  .isNotEmpty ==
+                              true
+                          ? data['sourceInventoryId']
+                          : data['sourceDocId'],
+                      'imageUrl': data['imageUrl'],
+                      'items': [
+                        ...aggregateCategoryAllocationItems([
+                          ...?groupedCategories[categoryKey]?['items'] as List?,
+                          ...itemRecords,
+                        ]),
+                      ],
+                      'addonOptions': data['addonOptions'] ?? const [],
+                      'isCoffee': data['isCoffee'] == true,
+                      'sourceDocId': data['sourceDocId'],
+                      'publicId': data['publicId'],
+                      'coffeeId': data['coffeeId'],
+                      'allocatedAt': data['assignedAt'] ?? data['allocatedAt'],
+                      'isLowStock': data['isLowStock'] == true,
+                    };
                   }
-                  for (final addon
-                      in (data['addonOptions'] as List<dynamic>? ?? [])
-                          .whereType<Map>()) {
-                    final name = addon['name']?.toString().trim() ?? '';
-                    if (name.isEmpty) continue;
-                    addonByName.putIfAbsent(name, () {
-                      final addonData = Map<String, dynamic>.from(addon);
-                      addonData['isAddon'] = true;
-                      addonData['sourceDocId'] = data['sourceDocId'];
-                      return addonData;
-                    });
-                  }
-                }
-                final addonDocs = addonByName.values.toList();
 
-                bool matchesVisibleFields(Map<String, dynamic> data) {
-                  final query = _tableSearchQuery.trim().toLowerCase();
-                  if (query.isEmpty) return true;
-                  final visibleValues = <String>[
-                    data['id']?.toString() ?? '',
-                    data['itemId']?.toString() ?? '',
-                    data['variantId']?.toString() ?? '',
-                    data['coffeeId']?.toString() ?? '',
-                    data['name']?.toString() ?? '',
-                    data['price']?.toString() ?? '',
-                    data['stock']?.toString() ?? '',
-                    data['startingStock']?.toString() ?? '',
-                    data['expirationDate']?.toString() ?? '',
-                    data['expiryDate']?.toString() ?? '',
-                  ].join(' ').toLowerCase();
-                  return visibleValues.contains(query);
-                }
-
-                List<Map<String, dynamic>> searchedCategoryData(
-                  List<Map<String, dynamic>> docs,
-                ) {
-                  final query = _tableSearchQuery.trim().toLowerCase();
-                  if (query.isEmpty) return docs;
-                  return docs
-                      .map((data) {
-                        final categoryMatches = matchesVisibleFields({
-                          'id': data['categoryId'],
-                          'name': data['categoryName'],
-                          'publicId': data['publicId'],
-                          'coffeeId': data['coffeeId'],
-                        });
-                        final items =
-                            (data['items'] as List?)
-                                ?.whereType<Map>()
-                                .map((item) => Map<String, dynamic>.from(item))
-                                .toList() ??
-                            [];
-                        final matchingItems = items
-                            .where(matchesVisibleFields)
-                            .toList();
-                        if (categoryMatches) return data;
-                        if (matchingItems.isEmpty) return null;
-                        return {...data, 'items': matchingItems};
-                      })
-                      .whereType<Map<String, dynamic>>()
+                  final allCategoryDocs = groupedCategories.values.toList();
+                  final categoryDocs = allCategoryDocs
+                      .where((data) => data['isCoffee'] != true)
                       .toList();
-                }
-
-                bool matchesSearch(Map<String, dynamic> data) {
-                  if (matchesVisibleFields(data)) return true;
-                  final nestedItems = (data['items'] as List?) ?? [];
-                  return nestedItems.whereType<Map>().any(
-                    (item) =>
-                        matchesVisibleFields(Map<String, dynamic>.from(item)),
+                  final coffeeDocs = allCategoryDocs
+                      .where((data) => data['isCoffee'] == true)
+                      .toList();
+                  final bundleDocs = _groupBundleAllocations(
+                    visibleDocs.where((data) => data['isBundle'] == true),
                   );
-                }
+                  final addonByName = <String, Map<String, dynamic>>{};
+                  for (final data in visibleDocs) {
+                    if (data['isAddon'] == true) {
+                      final name = data['name']?.toString().trim() ?? '';
+                      if (name.isEmpty) continue;
+                      addonByName.putIfAbsent(name, () => data);
+                      continue;
+                    }
+                    for (final addon
+                        in (data['addonOptions'] as List<dynamic>? ?? [])
+                            .whereType<Map>()) {
+                      final name = addon['name']?.toString().trim() ?? '';
+                      if (name.isEmpty) continue;
+                      addonByName.putIfAbsent(name, () {
+                        final addonData = Map<String, dynamic>.from(addon);
+                        addonData['isAddon'] = true;
+                        addonData['sourceDocId'] = data['sourceDocId'];
+                        return addonData;
+                      });
+                    }
+                  }
+                  final addonDocs = addonByName.values.toList();
 
-                final searchedCategoryDocs = searchedCategoryData(categoryDocs);
-                final searchedCoffeeDocs = searchedCategoryData(coffeeDocs);
-                final searchedBundleDocs = bundleDocs
-                    .where(matchesSearch)
-                    .toList();
-                final searchedAddonDocs = addonDocs
-                    .where(matchesSearch)
-                    .toList();
+                  bool matchesVisibleFields(Map<String, dynamic> data) {
+                    final query = _tableSearchQuery.trim().toLowerCase();
+                    if (query.isEmpty) return true;
+                    final visibleValues = <String>[
+                      data['id']?.toString() ?? '',
+                      data['itemId']?.toString() ?? '',
+                      data['variantId']?.toString() ?? '',
+                      data['coffeeId']?.toString() ?? '',
+                      data['name']?.toString() ?? '',
+                      data['price']?.toString() ?? '',
+                      data['stock']?.toString() ?? '',
+                      data['startingStock']?.toString() ?? '',
+                      data['expirationDate']?.toString() ?? '',
+                      data['expiryDate']?.toString() ?? '',
+                    ].join(' ').toLowerCase();
+                    return visibleValues.contains(query);
+                  }
 
-                if (!_isFilteredCategory &&
-                    categoryDocs.isEmpty &&
-                    (bundleDocs.isNotEmpty ||
-                        coffeeDocs.isNotEmpty ||
-                        addonDocs.isNotEmpty) &&
-                    _showCategories) {
-                  WidgetsBinding.instance.addPostFrameCallback((_) {
-                    if (!mounted) return;
-                    setState(() {
-                      _showCategories = false;
-                      _showCoffee = coffeeDocs.isNotEmpty && bundleDocs.isEmpty;
-                      _showAddons = false;
+                  List<Map<String, dynamic>> searchedCategoryData(
+                    List<Map<String, dynamic>> docs,
+                  ) {
+                    final query = _tableSearchQuery.trim().toLowerCase();
+                    if (query.isEmpty) return docs;
+                    return docs
+                        .map((data) {
+                          final categoryMatches = matchesVisibleFields({
+                            'id': data['categoryId'],
+                            'name': data['categoryName'],
+                            'publicId': data['publicId'],
+                            'coffeeId': data['coffeeId'],
+                          });
+                          final items =
+                              (data['items'] as List?)
+                                  ?.whereType<Map>()
+                                  .map(
+                                    (item) => Map<String, dynamic>.from(item),
+                                  )
+                                  .toList() ??
+                              [];
+                          final matchingItems = items
+                              .where(matchesVisibleFields)
+                              .toList();
+                          if (categoryMatches) return data;
+                          if (matchingItems.isEmpty) return null;
+                          return {...data, 'items': matchingItems};
+                        })
+                        .whereType<Map<String, dynamic>>()
+                        .toList();
+                  }
+
+                  bool matchesSearch(Map<String, dynamic> data) {
+                    if (matchesVisibleFields(data)) return true;
+                    final nestedItems = (data['items'] as List?) ?? [];
+                    return nestedItems.whereType<Map>().any(
+                      (item) =>
+                          matchesVisibleFields(Map<String, dynamic>.from(item)),
+                    );
+                  }
+
+                  final searchedCategoryDocs = searchedCategoryData(
+                    categoryDocs,
+                  );
+                  final searchedCoffeeDocs = searchedCategoryData(coffeeDocs);
+                  final searchedBundleDocs = bundleDocs
+                      .where(matchesSearch)
+                      .toList();
+                  final searchedAddonDocs = addonDocs
+                      .where(matchesSearch)
+                      .toList();
+
+                  if (!_isFilteredCategory &&
+                      categoryDocs.isEmpty &&
+                      (bundleDocs.isNotEmpty ||
+                          coffeeDocs.isNotEmpty ||
+                          addonDocs.isNotEmpty) &&
+                      _showCategories) {
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      if (!mounted) return;
+                      setState(() {
+                        _showCategories = false;
+                        _showCoffee =
+                            coffeeDocs.isNotEmpty && bundleDocs.isEmpty;
+                        _showAddons = false;
+                      });
                     });
-                  });
-                }
+                  }
 
-                if (categoryDocs.isEmpty &&
-                    bundleDocs.isEmpty &&
-                    coffeeDocs.isEmpty &&
-                    addonDocs.isEmpty) {
-                  return _buildEmptyInventoryState(
-                    icon: Icons.category_outlined,
-                    message: 'No items found.',
-                  );
-                }
+                  if (categoryDocs.isEmpty &&
+                      bundleDocs.isEmpty &&
+                      coffeeDocs.isEmpty &&
+                      addonDocs.isEmpty) {
+                    return _buildEmptyInventoryState(
+                      icon: Icons.category_outlined,
+                      message: 'No items found.',
+                    );
+                  }
 
-                return Column(
-                  children: [
-                    if (!_isFilteredCategory)
-                      _buildInventoryToggle(
-                        categoryCount: categoryDocs.length,
-                        bundleCount: bundleDocs.length,
-                        coffeeCount: coffeeDocs.length,
-                        addonCount: addonDocs.length,
-                      ),
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(20, 10, 20, 12),
-                      child: TextField(
-                        onChanged: (value) =>
-                            setState(() => _tableSearchQuery = value),
-                        decoration: InputDecoration(
-                          hintText: 'Search',
-                          prefixIcon: const Icon(
-                            Icons.search_rounded,
-                            color: AppColors.primaryDark,
-                          ),
-                          filled: true,
-                          fillColor: Colors.white,
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(16),
-                            borderSide: const BorderSide(color: AppColors.rose),
+                  return Column(
+                    children: [
+                      if (!_isFilteredCategory)
+                        _buildInventoryToggle(
+                          categoryCount: categoryDocs.length,
+                          bundleCount: bundleDocs.length,
+                          coffeeCount: coffeeDocs.length,
+                          addonCount: addonDocs.length,
+                        ),
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(20, 10, 20, 12),
+                        child: TextField(
+                          onChanged: (value) =>
+                              setState(() => _tableSearchQuery = value),
+                          decoration: InputDecoration(
+                            hintText: 'Search',
+                            prefixIcon: const Icon(
+                              Icons.search_rounded,
+                              color: AppColors.primaryDark,
+                            ),
+                            filled: true,
+                            fillColor: Colors.white,
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(16),
+                              borderSide: const BorderSide(
+                                color: AppColors.rose,
+                              ),
+                            ),
                           ),
                         ),
                       ),
-                    ),
-                    Expanded(
-                      child: widget.selectedIsCoffee
-                          ? _buildCategoryList(
-                              searchedCoffeeDocs,
-                              emptyMessage: 'No beverage items found.',
-                            )
-                          : widget.selectedIsBundle
-                          ? _buildBundleList(searchedBundleDocs)
-                          : _isFilteredCategory
-                          ? _buildCategoryList(
-                              widget.selectedIsCoffee
-                                  ? searchedCoffeeDocs
-                                  : searchedCategoryDocs,
-                              emptyMessage: widget.selectedIsCoffee
-                                  ? 'No beverage items found.'
-                                  : 'No items found.',
-                            )
-                          : _showCoffee
-                          ? _buildCategoryList(
-                              searchedCoffeeDocs,
-                              emptyMessage: 'No beverage items found.',
-                            )
-                          : _showCategories
-                          ? _buildCategoryList(
-                              searchedCategoryDocs,
-                              emptyMessage: 'No items found.',
-                            )
-                          : _buildBundleList(searchedBundleDocs),
-                    ),
-                  ],
-                );
-              },
-            );
-          },
+                      Expanded(
+                        child: widget.selectedIsCoffee
+                            ? _buildCategoryList(
+                                searchedCoffeeDocs,
+                                emptyMessage: 'No beverage items found.',
+                              )
+                            : widget.selectedIsBundle
+                            ? _buildBundleList(searchedBundleDocs)
+                            : _isFilteredCategory
+                            ? _buildCategoryList(
+                                widget.selectedIsCoffee
+                                    ? searchedCoffeeDocs
+                                    : searchedCategoryDocs,
+                                emptyMessage: widget.selectedIsCoffee
+                                    ? 'No beverage items found.'
+                                    : 'No items found.',
+                              )
+                            : _showCoffee
+                            ? _buildCategoryList(
+                                searchedCoffeeDocs,
+                                emptyMessage: 'No beverage items found.',
+                              )
+                            : _showCategories
+                            ? _buildCategoryList(
+                                searchedCategoryDocs,
+                                emptyMessage: 'No items found.',
+                              )
+                            : _buildBundleList(searchedBundleDocs),
+                      ),
+                    ],
+                  );
+                },
+              );
+            },
+          ),
         ),
       ),
     );

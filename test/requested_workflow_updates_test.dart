@@ -104,7 +104,9 @@ void main() {
     },
   );
 
-  testWidgets('create branch asks only for its name', (tester) async {
+  testWidgets('create branch accepts an optional receipt address', (
+    tester,
+  ) async {
     Map<String, dynamic>? saved;
     await tester.pumpWidget(
       MaterialApp(
@@ -127,13 +129,51 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Opening time'), findsNothing);
     expect(find.text('Closing time'), findsNothing);
-    await tester.enterText(find.byType(TextField), 'Dagupan');
+    expect(find.text('Branch address (optional)'), findsOneWidget);
+    await tester.enterText(find.byType(TextField).first, 'Dagupan');
+    await tester.enterText(find.byType(TextField).last, '123 Main Street');
     await tester.tap(find.text('Create'));
     await tester.pumpAndSettle();
     expect(saved, {
       'name': 'Dagupan',
+      'address': '123 Main Street',
       'openingMinutes': 0,
       'closingMinutes': 1440,
     });
+  });
+
+  testWidgets('edit branch pre-fills and can clear the optional address', (
+    tester,
+  ) async {
+    Map<String, dynamic>? saved;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Builder(
+            builder: (context) => TextButton(
+              onPressed: () async {
+                saved = await showDialog<Map<String, dynamic>>(
+                  context: context,
+                  builder: (_) => const BranchEditorDialog(
+                    initial: {'name': 'Dagupan', 'address': '123 Main Street'},
+                  ),
+                );
+              },
+              child: const Text('Open'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('Open'));
+    await tester.pumpAndSettle();
+    expect(find.text('Edit Branch'), findsOneWidget);
+    expect(find.text('123 Main Street'), findsOneWidget);
+    await tester.enterText(find.byType(TextField).last, '');
+    await tester.tap(find.text('Save'));
+    await tester.pumpAndSettle();
+    expect(saved?['address'], '');
+    expect(saved?['name'], 'Dagupan');
+    expect(tester.takeException(), isNull);
   });
 }

@@ -51,6 +51,31 @@ void main() {
       },
     );
 
+    test(
+      'prioritizes an active Admin sharing a Super Admin contact email',
+      () async {
+        final firestore = FakeFirebaseFirestore();
+        await firestore.collection('staff_requests').doc('admin').set({
+          'email': 'owner@gmail.com',
+          'authEmail': 'owner@gmail.com',
+          'authUid': 'admin-auth',
+          'role': 'admin',
+        });
+        await firestore
+            .collection('super_admin_profiles')
+            .doc(SuperAdmin.id)
+            .set({'email': 'owner@gmail.com'});
+
+        final result = await lookupPasswordResetAccount(
+          firestore: firestore,
+          email: 'owner@gmail.com',
+        );
+
+        expect(result.status, PasswordResetAccountStatus.ready);
+        expect(result.authEmail, 'owner@gmail.com');
+      },
+    );
+
     test('uses the immediately updated Firebase Auth email', () async {
       final firestore = FakeFirebaseFirestore();
       await firestore.collection('staff_requests').doc('staff').set({
@@ -85,8 +110,8 @@ void main() {
         email: 'new-address@gmail.com',
       );
 
-      expect(result.status, PasswordResetAccountStatus.ready);
-      expect(result.authEmail, 'new-address@gmail.com');
+      expect(result.status, PasswordResetAccountStatus.emailChangePending);
+      expect(result.authEmail, isNull);
       expect(result.emailChangePending, isTrue);
     });
 
@@ -129,7 +154,30 @@ void main() {
     });
 
     test(
-      'does not send Firebase reset links for the local Super Admin',
+      'allows password reset for a Super Admin with linked Firebase email',
+      () async {
+        final firestore = FakeFirebaseFirestore();
+        await firestore
+            .collection('super_admin_profiles')
+            .doc(SuperAdmin.id)
+            .set({
+              'email': 'superadmin@gmail.com',
+              'authEmail': 'superadmin@gmail.com',
+              'authUid': 'super-admin-auth',
+            });
+
+        final result = await lookupPasswordResetAccount(
+          firestore: firestore,
+          email: 'superadmin@gmail.com',
+        );
+
+        expect(result.status, PasswordResetAccountStatus.ready);
+        expect(result.authEmail, 'superadmin@gmail.com');
+      },
+    );
+
+    test(
+      'keeps local Super Admin without linked Firebase email unavailable',
       () async {
         final firestore = FakeFirebaseFirestore();
         await firestore

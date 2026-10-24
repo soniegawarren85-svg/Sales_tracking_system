@@ -44,8 +44,16 @@ Future<PasswordResetAccountLookup> lookupPasswordResetAccount({
   }
 
   var contactEmailOnly = false;
+  var unavailableAccount = false;
+  PasswordResetAccountLookup? linkedSuperAdmin;
   for (final account in accounts.values) {
     final data = account.data();
+    if (loginAccountStatusError(data) != null ||
+        data['isDeleted'] == true ||
+        data['isVoided'] == true) {
+      unavailableAccount = true;
+      continue;
+    }
     final profileEmail = data['email']?.toString().trim().toLowerCase() ?? '';
     final authEmail = data['authEmail']?.toString().trim().toLowerCase() ?? '';
     final pendingAuthEmail =
@@ -57,9 +65,22 @@ Future<PasswordResetAccountLookup> lookupPasswordResetAccount({
     }
 
     if ((data['role']?.toString().toLowerCase() ?? '') == 'super_admin') {
-      return const PasswordResetAccountLookup(
-        PasswordResetAccountStatus.superAdmin,
-      );
+      final authEmail = data['authEmail']?.toString().trim();
+      final authUid = data['authUid']?.toString().trim() ?? '';
+      if (authEmail != null &&
+          authEmail.isNotEmpty &&
+          authEmail.toLowerCase() == normalizedEmail &&
+          authUid.isNotEmpty) {
+        linkedSuperAdmin = PasswordResetAccountLookup(
+          PasswordResetAccountStatus.ready,
+          authEmail: authEmail,
+        );
+      } else {
+        linkedSuperAdmin = const PasswordResetAccountLookup(
+          PasswordResetAccountStatus.superAdmin,
+        );
+      }
+      continue;
     }
 
     if (pendingAuthEmail.isNotEmpty &&
@@ -99,6 +120,7 @@ Future<PasswordResetAccountLookup> lookupPasswordResetAccount({
       emailChangePending: isPendingEmail,
     );
   }
+  if (linkedSuperAdmin != null) return linkedSuperAdmin;
 
   final superAdminProfile = await firestore
       .collection('super_admin_profiles')
@@ -106,9 +128,18 @@ Future<PasswordResetAccountLookup> lookupPasswordResetAccount({
       .get();
   final profile = superAdminProfile.data();
   if (profile != null) {
-    final profileEmail = profile['email']?.toString().trim().toLowerCase();
-    final authEmail = profile['authEmail']?.toString().trim().toLowerCase();
-    if (profileEmail == normalizedEmail || authEmail == normalizedEmail) {
+    final authEmail = profile['authEmail']?.toString().trim();
+    final profileEmail = profile['email']?.toString().trim();
+    final matchesAuthEmail = authEmail?.toLowerCase() == normalizedEmail;
+    final authUid = profile['authUid']?.toString().trim() ?? '';
+    if (matchesAuthEmail && authUid.isNotEmpty) {
+      return PasswordResetAccountLookup(
+        PasswordResetAccountStatus.ready,
+        authEmail: authEmail,
+      );
+    }
+    if (profileEmail?.toLowerCase() == normalizedEmail ||
+        matchesAuthEmail == true) {
       return const PasswordResetAccountLookup(
         PasswordResetAccountStatus.superAdmin,
       );
@@ -116,7 +147,9 @@ Future<PasswordResetAccountLookup> lookupPasswordResetAccount({
   }
 
   return PasswordResetAccountLookup(
-    contactEmailOnly
+    unavailableAccount
+        ? PasswordResetAccountStatus.unavailable
+        : contactEmailOnly
         ? PasswordResetAccountStatus.contactEmailOnly
         : PasswordResetAccountStatus.notFound,
   );

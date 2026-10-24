@@ -1,6 +1,7 @@
 import 'refund_value.dart';
 import 'bundle_stock_service.dart';
 import 'transaction_settings.dart';
+import 'receipt_tax.dart';
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
@@ -354,18 +355,7 @@ class BranchReportData {
           .fold(0, (sum, row) => sum + reportValue(row['total'])),
       'Total net sales': selected
           .where((row) => !reportRefund(row))
-          .fold<double>(
-            0,
-            (sum, row) =>
-                sum +
-                reportValue(row['total']) -
-                reportValue(
-                  row['tax'] ??
-                      row['vatAmount'] ??
-                      row['taxAmount'] ??
-                      row['vat'],
-                ),
-          ),
+          .fold<double>(0, (sum, row) => sum + receiptVatableSales(row)),
       'Total cash drawer today': todayCashDrawer(branch),
       'Refunds': selected
           .where(reportRefund)

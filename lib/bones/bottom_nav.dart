@@ -249,7 +249,7 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
       bottomNavigationBar: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          if (_selectedIndex != 3 || hasTabletCanvas)
+          if (_selectedIndex != 2 && (_selectedIndex != 3 || hasTabletCanvas))
             _buildPendingOrdersBadge(),
           isTabletLandscape
               ? _buildLandscapeNav()

@@ -24,6 +24,7 @@ Future<void> clearPersistedAccountSession(SharedPreferences preferences) async {
     'lastStaffPublicId',
     'adminId',
     'superAdminId',
+    'accountLoginSessionId',
   ]) {
     await preferences.remove(key);
   }

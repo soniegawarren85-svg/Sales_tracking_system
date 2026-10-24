@@ -264,7 +264,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen>
           return;
         case PasswordResetAccountStatus.superAdmin:
           _snack(
-            'Password reset by email is not available for the Super Admin account.',
+            'This account does not have a linked Firebase email login. Contact an administrator to set up its email first.',
             error: true,
           );
           return;

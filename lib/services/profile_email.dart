@@ -18,12 +18,14 @@ bool usesLinkedAuthentication(Map<String, dynamic> data) =>
 
 bool profileReservesEmail(Map<String, dynamic> data, String email) {
   if (data['isDeleted'] == true ||
+      data['isDeactivated'] == true ||
       data['isVoided'] == true ||
       data['deletedAt'] != null ||
       [
         'deleted',
         'removed',
         'rejected',
+        'deactivated',
       ].contains('${data['status']}'.toLowerCase())) {
     return false;
   }

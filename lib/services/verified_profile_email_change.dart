@@ -82,8 +82,18 @@ Future<bool> requestVerifiedProfileEmailChange({
   required Map<String, dynamic> profileData,
   required String newEmail,
   required String currentPassword,
+  bool allowInitialEmailSetup = false,
+  FirebaseAuth? authentication,
 }) async {
   final db = profile.firestore;
+  if (allowInitialEmailSetup) {
+    // A previous attempt may have linked the account before email delivery
+    // failed. Read that link so retrying never creates a second Auth account.
+    profileData = {
+      ...profileData,
+      ...?(await profile.get(const GetOptions(source: Source.server))).data(),
+    };
+  }
   if (await profileEmailTaken(
     db,
     newEmail,
@@ -94,28 +104,56 @@ Future<bool> requestVerifiedProfileEmailChange({
   }
 
   final currentEmail = confirmedProfileEmail(profileData);
-  if (currentEmail.isEmpty) {
-    throw StateError('A current account email is not set.');
+  final isInitialSetup = currentEmail.isEmpty;
+  if (isInitialSetup && !allowInitialEmailSetup) {
+    throw StateError(
+      'Please ask your administrator to set up your account email.',
+    );
   }
 
-  final app = await Firebase.initializeApp(
-    name: 'profileEmailChange${DateTime.now().microsecondsSinceEpoch}',
-    options: Firebase.app().options,
-  );
-  final auth = FirebaseAuth.instanceFor(app: app);
+  final app = authentication == null
+      ? await Firebase.initializeApp(
+          name: 'profileEmailChange${DateTime.now().microsecondsSinceEpoch}',
+          options: Firebase.app().options,
+        )
+      : null;
+  final auth = authentication ?? FirebaseAuth.instanceFor(app: app!);
 
   try {
     UserCredential? credential;
     FirebaseAuthException? lastAuthError;
+    final linkedUid = '${profileData['authUid'] ?? ''}'.trim();
+    // The caller has checked the local Super Admin password. There is no old
+    // email to sign in with on first setup, and an existing email must never
+    // be silently adopted as this account.
+    if (isInitialSetup && linkedUid.isEmpty) {
+      credential = await auth.createUserWithEmailAndPassword(
+        email: newEmail.trim(),
+        password: currentPassword,
+      );
+      try {
+        await profile.set({
+          'authUid': credential.user!.uid,
+          'pendingAuthEmail': newEmail.trim(),
+          'initialEmailVerificationPending': true,
+          'updatedAt': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+      } catch (_) {
+        // Roll back only the account this request just created.
+        await credential.user!.delete();
+        rethrow;
+      }
+    }
     final candidates = <String>{
       if ('${profileData['pendingAuthEmail'] ?? ''}'.trim().isNotEmpty)
         '${profileData['pendingAuthEmail']}'.trim(),
-      currentEmail,
+      if (currentEmail.isNotEmpty) currentEmail,
       if ('${profileData['email'] ?? ''}'.trim().isNotEmpty)
         '${profileData['email']}'.trim(),
     };
 
     for (final email in candidates) {
+      if (credential != null) break;
       try {
         credential = await auth.signInWithEmailAndPassword(
           email: email,
@@ -134,7 +172,9 @@ Future<bool> requestVerifiedProfileEmailChange({
       }
     }
 
-    if (credential == null && lastAuthError?.code == 'user-not-found') {
+    if (!isInitialSetup &&
+        credential == null &&
+        lastAuthError?.code == 'user-not-found') {
       try {
         credential = await auth.createUserWithEmailAndPassword(
           email: currentEmail,
@@ -155,7 +195,6 @@ Future<bool> requestVerifiedProfileEmailChange({
       throw StateError('The current password is incorrect.');
     }
 
-    final linkedUid = '${profileData['authUid'] ?? ''}'.trim();
     if (linkedUid.isNotEmpty && user.uid != linkedUid) {
       throw StateError(
         'This email is linked to a different account. Contact support before changing it.',
@@ -181,11 +220,18 @@ Future<bool> requestVerifiedProfileEmailChange({
 
     if (normalizedProfileEmail(actualCurrentEmail) ==
         normalizedProfileEmail(newEmail)) {
+      if ((isInitialSetup ||
+              profileData['initialEmailVerificationPending'] == true) &&
+          !user.emailVerified) {
+        await user.sendEmailVerification();
+        return true;
+      }
       await profile.set({
         'email': actualCurrentEmail,
         'authEmail': actualCurrentEmail,
         'authUid': user.uid,
         'pendingAuthEmail': FieldValue.delete(),
+        'initialEmailVerificationPending': FieldValue.delete(),
         'passwordAuthMode': 'firebase',
         'passwordCredential': FieldValue.delete(),
         for (final field in legacyPasswordFields) field: FieldValue.delete(),
@@ -196,8 +242,8 @@ Future<bool> requestVerifiedProfileEmailChange({
 
     await user.verifyBeforeUpdateEmail(newEmail);
     await profile.set({
-      'email': actualCurrentEmail,
-      'authEmail': actualCurrentEmail,
+      'email': isInitialSetup ? '' : actualCurrentEmail,
+      'authEmail': isInitialSetup ? '' : actualCurrentEmail,
       'authUid': user.uid,
       'pendingAuthEmail': newEmail.trim(),
       'passwordAuthMode': 'firebase',
@@ -224,6 +270,6 @@ Future<bool> requestVerifiedProfileEmailChange({
     throw StateError(message);
   } finally {
     await auth.signOut();
-    await app.delete();
+    await app?.delete();
   }
 }

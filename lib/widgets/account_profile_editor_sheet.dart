@@ -200,8 +200,8 @@ class _AccountProfileEditorSheetState extends State<AccountProfileEditorSheet> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text(
-                          'Edit Profile',
+                        Text(
+                          widget.readOnly ? 'Account Information' : 'Edit Profile',
                           style: TextStyle(
                             color: AppColors.primaryDark,
                             fontSize: 20,
@@ -338,7 +338,9 @@ class _AccountProfileEditorSheetState extends State<AccountProfileEditorSheet> {
                                     ),
                                     const SizedBox(height: 7),
                                     Text(
-                                      'Required to verify that you own this account.',
+                                      _initialEmail.isEmpty
+                                          ? 'Use your current account password to set up your first Gmail.'
+                                          : 'Required to verify that you own this account.',
                                       style: TextStyle(
                                         color: Colors.blueGrey.shade600,
                                         fontSize: 12,
@@ -436,7 +438,8 @@ class _AccountProfileEditorSheetState extends State<AccountProfileEditorSheet> {
       child: TextFormField(
         controller: controller,
         readOnly: widget.readOnly,
-        enabled: !widget.readOnly && !_saving,
+        enabled: !_saving,
+        style: const TextStyle(color: AppColors.primaryDark, fontSize: 16, fontWeight: FontWeight.w600),
         keyboardType: keyboardType,
         maxLines: maxLines,
         validator: validator,

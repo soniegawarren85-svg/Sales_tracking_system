@@ -2,14 +2,30 @@ import 'dart:convert';
 import 'dart:typed_data';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+class BackupManifest {
+  const BackupManifest({
+    required this.backupId,
+    required this.createdAt,
+    required this.documentCount,
+    required this.collectionCounts,
+    required this.byteLength,
+  });
+
+  final String backupId;
+  final DateTime createdAt;
+  final int documentCount;
+  final Map<String, int> collectionCounts;
+  final int byteLength;
+}
+
 class DatabaseBackup {
+  static const maxBackupBytes = 50 * 1024 * 1024;
   static const collections = [
     '_metadata',
     'admin_notifications',
     'admin_settings',
+    'activity_logs',
     'allocation_checklist',
-    'mail',
-    'password_reset_otps',
     'branches',
     'budget_history',
     'coffee_flavors',
@@ -64,6 +80,31 @@ class DatabaseBackup {
     return value;
   }
 
+  static bool _isSensitiveField(String key) {
+    final normalized = key.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
+    return normalized.contains('password') ||
+        normalized.contains('credential') ||
+        normalized.contains('secret') ||
+        normalized.contains('apikey') ||
+        normalized.contains('accesstoken') ||
+        normalized.contains('refreshtoken') ||
+        normalized.contains('resettoken') ||
+        normalized == 'otp' ||
+        normalized.endsWith('otp');
+  }
+
+  static dynamic _sanitize(dynamic value) {
+    if (value is Map) {
+      return {
+        for (final entry in value.entries)
+          if (!_isSensitiveField('${entry.key}'))
+            '${entry.key}': _sanitize(entry.value),
+      };
+    }
+    if (value is List) return value.map(_sanitize).toList();
+    return value;
+  }
+
   static dynamic decode(dynamic value) {
     if (value is List) return value.map(decode).toList();
     if (value is Map) {
@@ -99,13 +140,15 @@ class DatabaseBackup {
             .collection(name)
             .get(const GetOptions(source: Source.server));
         for (final doc in snapshot.docs) {
-          records[doc.reference.path] = encode(doc.data());
+          records[doc.reference.path] = encode(_sanitize(doc.data()));
           if (name == 'messages') {
             final messages = await doc.reference
                 .collection('items')
                 .get(const GetOptions(source: Source.server));
             for (final message in messages.docs) {
-              records[message.reference.path] = encode(message.data());
+              records[message.reference.path] = encode(
+                _sanitize(message.data()),
+              );
             }
           }
         }
@@ -115,20 +158,31 @@ class DatabaseBackup {
         );
       }
     }
+    final createdAt = DateTime.now().toUtc();
+    final counts = <String, int>{};
+    for (final path in records.keys) {
+      final collection = path.split('/').first;
+      counts.update(collection, (total) => total + 1, ifAbsent: () => 1);
+    }
     return Uint8List.fromList(
       utf8.encode(
         jsonEncode({
           'format': 'sales-tracking-backup',
           'version': 1,
-          'createdAt': DateTime.now().toIso8601String(),
+          'backupId': 'manual-${createdAt.microsecondsSinceEpoch}',
+          'createdAt': createdAt.toIso8601String(),
           'documentCount': records.length,
+          'collectionCounts': counts,
           'documents': records,
         }),
       ),
     );
   }
 
-  static Map<String, Map<String, dynamic>> validate(Uint8List bytes) {
+  static BackupManifest inspect(Uint8List bytes) {
+    if (bytes.isEmpty || bytes.length > maxBackupBytes) {
+      throw const FormatException('Backup file is empty or exceeds 50 MB.');
+    }
     final data = jsonDecode(utf8.decode(bytes));
     if (data is! Map ||
         data['format'] != 'sales-tracking-backup' ||
@@ -136,8 +190,13 @@ class DatabaseBackup {
         data['documents'] is! Map) {
       throw const FormatException('Invalid backup file');
     }
-    final result = <String, Map<String, dynamic>>{};
-    for (final entry in (data['documents'] as Map).entries) {
+    final createdAt = DateTime.tryParse('${data['createdAt'] ?? ''}');
+    if (createdAt == null) {
+      throw const FormatException('Backup date is missing or invalid.');
+    }
+    final documents = data['documents'] as Map;
+    final counts = <String, int>{};
+    for (final entry in documents.entries) {
       final path = entry.key.toString();
       final parts = path.split('/');
       if (!(parts.length == 2 ||
@@ -149,23 +208,50 @@ class DatabaseBackup {
           entry.value is! Map) {
         throw FormatException('Invalid document: $path');
       }
-      result[path] = Map<String, dynamic>.from(decode(entry.value) as Map);
+      if (_containsSensitiveField(entry.value)) {
+        throw FormatException(
+          'Backup contains sensitive credential fields: $path',
+        );
+      }
+      counts.update(parts.first, (total) => total + 1, ifAbsent: () => 1);
     }
-    return result;
+    final declaredCount = data['documentCount'];
+    if (declaredCount is! int || declaredCount != documents.length) {
+      throw const FormatException('Backup document count does not match.');
+    }
+    return BackupManifest(
+      backupId:
+          '${data['backupId'] ?? 'legacy-${createdAt.microsecondsSinceEpoch}'}',
+      createdAt: createdAt,
+      documentCount: documents.length,
+      collectionCounts: counts,
+      byteLength: bytes.length,
+    );
   }
 
-  static Future<void> restore(
-    Map<String, Map<String, dynamic>> records, {
-    FirebaseFirestore? firestore,
-  }) async {
-    final db = firestore ?? FirebaseFirestore.instance;
-    final entries = records.entries.toList();
-    for (var offset = 0; offset < entries.length; offset += 20) {
-      final batch = db.batch();
-      for (final entry in entries.skip(offset).take(20)) {
-        batch.set(db.doc(entry.key), entry.value);
+  static bool _containsSensitiveField(dynamic value) {
+    if (value is Map) {
+      for (final entry in value.entries) {
+        if (_isSensitiveField('${entry.key}') ||
+            _containsSensitiveField(entry.value)) {
+          return true;
+        }
       }
-      await batch.commit();
+    } else if (value is List) {
+      return value.any(_containsSensitiveField);
     }
+    return false;
+  }
+
+  static Map<String, Map<String, dynamic>> validate(Uint8List bytes) {
+    inspect(bytes);
+    final data = jsonDecode(utf8.decode(bytes));
+    final result = <String, Map<String, dynamic>>{};
+    for (final entry in (data['documents'] as Map).entries) {
+      result[entry.key.toString()] = Map<String, dynamic>.from(
+        decode(entry.value) as Map,
+      );
+    }
+    return result;
   }
 }

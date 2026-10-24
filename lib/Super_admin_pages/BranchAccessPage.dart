@@ -489,19 +489,45 @@ class _BranchAccessPageState extends State<BranchAccessPage> {
     super.dispose();
   }
 
-  Future<void> _createBranch() async {
-    final controller = TextEditingController();
-    final name = await showDialog<String>(
+  Future<Map<String, String>?> _showBranchEditor({
+    required String title,
+    required String action,
+    String initialName = '',
+    String initialAddress = '',
+  }) async {
+    final nameController = TextEditingController(text: initialName);
+    final addressController = TextEditingController(text: initialAddress);
+    final result = await showDialog<Map<String, String>>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: const Text('Create Branch'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          textCapitalization: TextCapitalization.words,
-          decoration: const InputDecoration(
-            labelText: 'Branch name',
-            hintText: 'SM Dagupan',
+        title: Text(title),
+        content: SizedBox(
+          width: 440,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: nameController,
+                autofocus: true,
+                textCapitalization: TextCapitalization.words,
+                decoration: const InputDecoration(
+                  labelText: 'Branch name',
+                  hintText: 'SM Dagupan',
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: addressController,
+                textCapitalization: TextCapitalization.sentences,
+                minLines: 1,
+                maxLines: 3,
+                decoration: const InputDecoration(
+                  labelText: 'Branch address (optional)',
+                  hintText: 'Enter the address to show on receipts',
+                  alignLabelWithHint: true,
+                ),
+              ),
+            ],
           ),
         ),
         actions: [
@@ -511,20 +537,35 @@ class _BranchAccessPageState extends State<BranchAccessPage> {
           ),
           FilledButton(
             onPressed: () {
-              final value = controller.text.trim();
-              if (value.isNotEmpty) Navigator.pop(dialogContext, value);
+              final name = nameController.text.trim();
+              if (name.isNotEmpty) {
+                Navigator.pop(dialogContext, {
+                  'name': name,
+                  'address': addressController.text.trim(),
+                });
+              }
             },
-            child: const Text('Create'),
+            child: Text(action),
           ),
         ],
       ),
     );
-    controller.dispose();
-    if (name == null || name.isEmpty) return;
+    nameController.dispose();
+    addressController.dispose();
+    return result;
+  }
+
+  Future<void> _createBranch() async {
+    final details = await _showBranchEditor(
+      title: 'Create Branch',
+      action: 'Create',
+    );
+    if (details == null) return;
 
     final user = FirebaseAuth.instance.currentUser;
     await _firestore.collection('branches').add({
-      'name': name,
+      'name': details['name'],
+      if (details['address']!.isNotEmpty) 'address': details['address'],
       'staffIds': <String>[],
       'staffNames': <String>[],
       'createdByUid': user?.uid,
@@ -636,37 +677,24 @@ class _BranchAccessPageState extends State<BranchAccessPage> {
       );
   }
 
-  Future<void> _editBranch(String branchId, String currentName) async {
-    final controller = TextEditingController(text: currentName);
-    final name = await showDialog<String>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Edit Branch'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          textCapitalization: TextCapitalization.words,
-          decoration: const InputDecoration(labelText: 'Branch name'),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () {
-              final value = controller.text.trim();
-              if (value.isNotEmpty) Navigator.pop(dialogContext, value);
-            },
-            child: const Text('Save'),
-          ),
-        ],
-      ),
+  Future<void> _editBranch(
+    String branchId,
+    String currentName, {
+    String currentAddress = '',
+  }) async {
+    final details = await _showBranchEditor(
+      title: 'Edit Branch',
+      action: 'Save',
+      initialName: currentName,
+      initialAddress: currentAddress,
     );
-    controller.dispose();
-    if (name == null || name.isEmpty || name == currentName) return;
+    if (details == null) return;
+    final name = details['name']!;
+    final address = details['address']!;
+    if (name == currentName && address == currentAddress) return;
     await _firestore.collection('branches').doc(branchId).update({
       'name': name,
+      'address': address.isEmpty ? FieldValue.delete() : address,
       'updatedAt': FieldValue.serverTimestamp(),
     });
   }
@@ -901,6 +929,11 @@ class _BranchAccessPageState extends State<BranchAccessPage> {
                           visibleDocs[index].id,
                           visibleDocs[index].data()['name']?.toString() ??
                               'Branch',
+                          currentAddress:
+                              visibleDocs[index]
+                                  .data()['address']
+                                  ?.toString() ??
+                              '',
                         ),
                         onVoid: () => _voidBranch(
                           visibleDocs[index].id,

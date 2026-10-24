@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import '../theme/app_colors.dart';
 import 'package:flutter/material.dart';
@@ -62,6 +63,7 @@ class _TransactionSettingsDialogState extends State<TransactionSettingsDialog> {
   }
 
   bool voided = false, busy = false;
+  String? _taxTinDraft;
   late String? selectedBranchId;
   late final reference = (widget.firestore ?? FirebaseFirestore.instance)
       .collection('admin_settings')
@@ -92,11 +94,15 @@ class _TransactionSettingsDialogState extends State<TransactionSettingsDialog> {
   ) async {
     setState(() => busy = true);
     try {
-      final currentSettings = (await reference.get()).data() ?? {};
+      final preservePaymentQr =
+          widget.kind == 'payments' &&
+          patch['payments'] is List &&
+          branchIds.length > 1;
+      final currentSettings = preservePaymentQr
+          ? (await reference.get()).data() ?? {}
+          : <String, dynamic>{};
       Map<String, dynamic> patchForBranch(String branchId) {
-        if (widget.kind != 'payments' ||
-            patch['payments'] is! List ||
-            branchIds.length < 2) {
+        if (!preservePaymentQr) {
           return patch;
         }
         final sourceRows = settingRows(
@@ -135,12 +141,14 @@ class _TransactionSettingsDialogState extends State<TransactionSettingsDialog> {
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
       for (final branchId in branchIds) {
-        await ActivityLog.record(
-          'settings_updated',
-          message,
-          database: reference.firestore,
-          branchId: branchId,
-          details: {'kind': widget.kind, 'fields': patch.keys.toList()},
+        unawaited(
+          ActivityLog.record(
+            'settings_updated',
+            message,
+            database: reference.firestore,
+            branchId: branchId,
+            details: {'kind': widget.kind, 'fields': patch.keys.toList()},
+          ),
         );
       }
       if (mounted) notify(message);
@@ -367,6 +375,7 @@ class _TransactionSettingsDialogState extends State<TransactionSettingsDialog> {
             if (value == null) return;
             setState(() {
               selectedBranchId = value;
+              _taxTinDraft = null;
               voided = false;
             });
           },
@@ -528,10 +537,60 @@ class _TransactionSettingsDialogState extends State<TransactionSettingsDialog> {
                                 );
                               },
                       ),
+                      if (taxEnabled) ...[
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+                          child: TextFormField(
+                            key: ValueKey('tax-tin-$selectedBranchId'),
+                            initialValue:
+                                isAllBranches &&
+                                    branchTaxSettings
+                                            .map(
+                                              (settings) =>
+                                                  '${settings['taxTin'] ?? ''}',
+                                            )
+                                            .toSet()
+                                            .length >
+                                        1
+                                ? ''
+                                : '${data['taxTin'] ?? ''}',
+                            keyboardType: TextInputType.text,
+                            textCapitalization: TextCapitalization.characters,
+                            onChanged: (value) => _taxTinDraft = value,
+                            onFieldSubmitted: (value) => saveBranches(
+                              targetBranches,
+                              {'taxTin': value.trim()},
+                              'BIR TIN updated for $branchName.',
+                            ),
+                            decoration: InputDecoration(
+                              labelText: 'BIR TIN (optional)',
+                              hintText: isAllBranches
+                                  ? 'Apply the same TIN to all branches'
+                                  : 'Enter branch TIN for receipts',
+                              suffixIcon: IconButton(
+                                tooltip: 'Save TIN',
+                                onPressed: busy
+                                    ? null
+                                    : () => saveBranches(
+                                        targetBranches,
+                                        {
+                                          'taxTin':
+                                              (_taxTinDraft ??
+                                                      '${data['taxTin'] ?? ''}')
+                                                  .trim(),
+                                        },
+                                        'BIR TIN updated for $branchName.',
+                                      ),
+                                icon: const Icon(Icons.save_outlined),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
                       const Padding(
                         padding: EdgeInsets.symmetric(horizontal: 16),
                         child: Text(
-                          'VAT is added to the discounted order amount in the staff cashier when tax is enabled.',
+                          'Displayed item prices already include VAT. The cashier shows the VAT breakdown without adding tax to the total.',
                           style: TextStyle(color: AppColors.textMuted),
                         ),
                       ),

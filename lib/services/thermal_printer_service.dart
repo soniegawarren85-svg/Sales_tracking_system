@@ -7,6 +7,8 @@ import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'receipt_tax.dart';
+
 class ThermalPrinterDevice {
   final String name;
   final String address;
@@ -249,7 +251,11 @@ class ThermalPrinterService {
     if (!status.value.isConnected || !await _connectionStatus) {
       await reconnect();
     }
-    final bytes = await _buildReceipt(receipt, status.value.paperWidth);
+    final connectedPrinterName = status.value.name?.trim() ?? '';
+    final bytes = await _buildReceipt({
+      ...receipt,
+      if (connectedPrinterName.isNotEmpty) 'printerName': connectedPrinterName,
+    }, status.value.paperWidth);
     final sent = await _channel
         .invokeMethod<bool>('writeBytes', {'bytes': bytes})
         .timeout(_timeout);
@@ -321,6 +327,15 @@ class ThermalPrinterService {
         styles: const PosStyles(align: PosAlign.center, bold: true),
       ),
     );
+    final branchAddress = receipt['branchAddress']?.toString().trim() ?? '';
+    if (branchAddress.isNotEmpty) {
+      bytes.addAll(
+        generator.text(
+          _ascii(branchAddress),
+          styles: const PosStyles(align: PosAlign.center),
+        ),
+      );
+    }
     bytes.addAll(generator.hr());
     bytes.addAll(
       generator.text(
@@ -380,6 +395,13 @@ class ThermalPrinterService {
             (tax > 0 || _number(receipt['taxRate']) > 0));
     if (isVat) {
       final taxRate = _number(receipt['taxRate']) * 100;
+      final taxTin = receipt['taxTin']?.toString().trim() ?? '';
+      if (taxTin.isNotEmpty) {
+        bytes.addAll(generator.text('BIR TIN: ${_ascii(taxTin)}'));
+      }
+      bytes.addAll(
+        _receiptRow(generator, 'VATable sales', receiptVatableSales(receipt)),
+      );
       bytes.addAll(
         _receiptRow(
           generator,
@@ -406,6 +428,15 @@ class ThermalPrinterService {
       }
     }
     bytes.addAll(generator.hr());
+    final printerName = receipt['printerName']?.toString().trim() ?? '';
+    if (printerName.isNotEmpty) {
+      bytes.addAll(
+        generator.text(
+          'Printer: ${_ascii(printerName)}',
+          styles: const PosStyles(align: PosAlign.center),
+        ),
+      );
+    }
     bytes.addAll(
       generator.text(
         'Thank you for your purchase!',

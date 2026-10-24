@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 import 'branch_report_data.dart';
+import 'receipt_tax.dart';
 import '../widgets/historical_cash_drawer.dart';
 
 String csvCell(dynamic value) {
@@ -243,15 +244,7 @@ List<List<dynamic>> branchReportRows(
         ),
         'Total net sales': completed.fold<double>(
           0,
-          (total, sale) =>
-              total +
-              reportValue(sale['total']) -
-              reportValue(
-                sale['tax'] ??
-                    sale['vatAmount'] ??
-                    sale['taxAmount'] ??
-                    sale['vat'],
-              ),
+          (total, sale) => total + receiptVatableSales(sale),
         ),
         'Total discount': sum(completed, 'discount'),
         'Refunds': selectedSales

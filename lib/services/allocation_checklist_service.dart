@@ -60,6 +60,22 @@ class AllocationChecklistService {
           'createdAt': FieldValue.serverTimestamp(),
         },
       });
+      if (!admin) {
+        tx.set(db.collection('admin_notifications').doc('allocation_issue_$id'), {
+          'title': 'Allocation issue reported',
+          'message':
+              '${data['staffName'] ?? 'Branch'} reported an issue with ${data['name'] ?? 'allocated items'}: ${reason.trim()}',
+          'type': 'allocation_issue',
+          'category': 'Inventory',
+          'allocationId': id,
+          'branchId': data['staffId'],
+          'staffId': actorId,
+          'reason': reason.trim(),
+          'isRead': false,
+          'toastShown': false,
+          'createdAt': FieldValue.serverTimestamp(),
+        });
+      }
       return true;
     });
   }
@@ -384,9 +400,7 @@ class AllocationChecklistService {
                   doc.data()?['itemName'] ??
                   'Inventory item',
               'quantity':
-                  doc.data()?['quantity'] ??
-                  doc.data()?['returnQuantity'] ??
-                  1,
+                  doc.data()?['quantity'] ?? doc.data()?['returnQuantity'] ?? 1,
               'returnId': doc.id,
               'reason': accept
                   ? (doc.data()?['returnReason'] ?? '')
@@ -425,6 +439,10 @@ class AllocationChecklistService {
     required bool accept,
     required String staffId,
     String reason = '',
+    String? issueType,
+    int issueQuantity = 0,
+    String issueItemId = '',
+    String issueItemName = '',
     String actorName = '',
     String actorPublicId = '',
     String actorRole = '',
@@ -434,6 +452,16 @@ class AllocationChecklistService {
     if (!accept && reason.trim().isEmpty) {
       throw ArgumentError('Please enter a decline reason.');
     }
+    const quantityIssues = {'Missing', 'Extra', 'Incorrect', 'Damaged'};
+    if (issueType != null &&
+        (!accept ||
+            !quantityIssues.contains(issueType) ||
+            issueQuantity <= 0)) {
+      throw ArgumentError('Choose a valid issue and positive quantity.');
+    }
+    final savedIssueReason = issueType != null && reason.trim().isEmpty
+        ? issueType
+        : reason.trim();
     return db.runTransaction<bool>((tx) async {
       final ref = db.collection('allocation_checklist').doc(id);
       final snap = await tx.get(ref);
@@ -456,12 +484,60 @@ class AllocationChecklistService {
       final current = target.data() ?? <String, dynamic>{};
       final bundle = pending['isBundle'] == true;
       final beverage = type(pending) == 'Beverages';
+      final incoming = rows(pending['items']);
+      final issueItemIndex = issueType == null || bundle
+          ? -1
+          : incoming.indexWhere(
+              (item) => issueItemId.isNotEmpty
+                  ? '${item['id'] ?? ''}' == issueItemId
+                  : '${item['name'] ?? ''}' == issueItemName,
+            );
+      if (issueType != null && beverage) {
+        throw ArgumentError(
+          'Beverage allocations do not track physical stock.',
+        );
+      }
+      if (issueType != null && !bundle && issueItemIndex < 0) {
+        throw ArgumentError('Select an item from this allocation.');
+      }
+      final issueBaseQuantity = issueType == null
+          ? 0
+          : bundle
+          ? quantity(pending['bundleCount'])
+          : quantity(
+              incoming[issueItemIndex]['stock'] ??
+                  incoming[issueItemIndex]['startingStock'],
+            );
+      if (issueType != null &&
+          issueType != 'Extra' &&
+          issueQuantity > issueBaseQuantity) {
+        throw ArgumentError(
+          'Issue quantity cannot exceed the allocated quantity.',
+        );
+      }
       if (!accept && !target.exists) {
         throw StateError(
           'Source inventory is missing. Ask the administrator to restore it before declining.',
         );
       }
-      final incoming = rows(pending['items']);
+      final resolvedIncoming = incoming
+          .map((item) => Map<String, dynamic>.from(item))
+          .toList();
+      if (issueType != null && !bundle) {
+        final item = resolvedIncoming[issueItemIndex];
+        final oldQuantity = quantity(item['stock'] ?? item['startingStock']);
+        final adjustedQuantity = issueType == 'Extra'
+            ? oldQuantity + issueQuantity
+            : oldQuantity - issueQuantity;
+        item['stock'] = adjustedQuantity;
+        item['startingStock'] = adjustedQuantity;
+        item['assignedStartingStock'] = adjustedQuantity;
+      }
+      final resolvedBundleCount = issueType == null
+          ? quantity(pending['bundleCount'])
+          : issueType == 'Extra'
+          ? issueBaseQuantity + issueQuantity
+          : issueBaseQuantity - issueQuantity;
       final payload = Map<String, dynamic>.from(pending)
         ..remove('targetDocId')
         ..remove('status')
@@ -486,8 +562,35 @@ class AllocationChecklistService {
               },
             )
             .toList();
+        if (issueType != null && instances.length != issueBaseQuantity) {
+          throw StateError(
+            'Bundle instance records do not match the allocated quantity. Ask the administrator to review this allocation.',
+          );
+        }
+        if (issueType == 'Extra') {
+          if (instances.isEmpty) {
+            throw StateError(
+              'Bundle details are unavailable. Ask the administrator to review this allocation.',
+            );
+          }
+          final template = Map<String, dynamic>.from(instances.first);
+          for (var index = 0; index < issueQuantity; index++) {
+            instances.add({
+              ...template,
+              'id': db.collection('allocation_checklist').doc().id,
+              'status': 'available',
+              'batchId': pending['deliveryId'] ?? id,
+              'extraReported': true,
+            });
+          }
+        } else if (issueType != null && issueQuantity > 0) {
+          instances.removeRange(
+            instances.length - issueQuantity,
+            instances.length,
+          );
+        }
         result['bundleCount'] =
-            quantity(current['bundleCount']) + quantity(pending['bundleCount']);
+            quantity(current['bundleCount']) + resolvedBundleCount;
         result['bundleInstances'] = [
           ...rows(current['bundleInstances']),
           ...instances,
@@ -497,17 +600,18 @@ class AllocationChecklistService {
               quantity(
                 current['assignedStartingStock'] ?? current['bundleCount'],
               ) +
-              quantity(pending['bundleCount']);
+              resolvedBundleCount;
         }
       } else if (!beverage) {
         final items = rows(current['items']);
-        for (final item in incoming) {
+        for (final item in resolvedIncoming) {
           final index = items.indexWhere(
             (old) => (item['id']?.toString().isNotEmpty ?? false)
                 ? old['id'] == item['id']
                 : old['name'] == item['name'],
           );
           final count = quantity(item['stock'] ?? item['startingStock']);
+          if (count == 0) continue;
           if (index < 0) {
             items.add({
               ...item,
@@ -555,7 +659,17 @@ class AllocationChecklistService {
         if (accept && actorRole.isNotEmpty)
           'confirmedByRole': actorRole == 'staff' ? 'Cashier' : 'Admin',
         if (accept) 'confirmedAt': FieldValue.serverTimestamp(),
-        'reason': reason.trim(),
+        if (issueType != null) ...{
+          'issueType': issueType,
+          'issueQuantity': issueQuantity,
+          'issueItemId': issueItemId,
+          'issueItemName': issueItemName,
+          'issueReason': savedIssueReason,
+          'reportedBy': staffId,
+          'reportedByName': actorName,
+          'reportedAt': FieldValue.serverTimestamp(),
+        },
+        'reason': savedIssueReason,
         'decidedBy': staffId,
         'decidedAt': FieldValue.serverTimestamp(),
       });
@@ -570,14 +684,17 @@ class AllocationChecklistService {
           'allocatedByName': pending['allocatedByName'],
           'allocatedByAdminId': pending['allocatedByAdminId'],
           'createdAt': FieldValue.serverTimestamp(),
+          'issueType': issueType,
+          'issueQuantity': issueType == null ? null : issueQuantity,
           'items': bundle || beverage
               ? [
-                  {
-                    ...payload,
-                    'quantity': bundle ? quantity(pending['bundleCount']) : 1,
-                  },
+                  {...payload, 'quantity': bundle ? resolvedBundleCount : 1},
                 ]
-              : incoming
+              : resolvedIncoming
+                    .where(
+                      (item) =>
+                          quantity(item['stock'] ?? item['startingStock']) > 0,
+                    )
                     .map(
                       (item) => {
                         ...item,
@@ -587,6 +704,64 @@ class AllocationChecklistService {
                     )
                     .toList(),
         });
+        if (issueType != null) {
+          final issueDescription =
+              '$issueType: $issueItemName × $issueQuantity';
+          final eventId = ref.collection('events').doc().id;
+          tx.update(ref, {
+            'reports.$eventId': {
+              'status': ChecklistStatus.received,
+              'reason': issueDescription,
+              'actorId': staffId,
+              'actorName': actorName,
+              'createdAt': FieldValue.serverTimestamp(),
+            },
+          });
+          tx.set(
+            db.collection('admin_notifications').doc('allocation_issue_$id'),
+            {
+              'title': 'Allocation discrepancy reported',
+              'message':
+                  '${pending['staffName'] ?? 'Branch'} reported $issueDescription for ${pending['name'] ?? 'allocated items'}.',
+              'type': 'allocation_issue',
+              'category': 'Inventory',
+              'allocationId': id,
+              'branchId': pending['staffId'],
+              'staffId': staffId,
+              'issueType': issueType,
+              'issueQuantity': issueQuantity,
+              'issueItemName': issueItemName,
+              'reason': savedIssueReason,
+              'isRead': false,
+              'toastShown': false,
+              'createdAt': FieldValue.serverTimestamp(),
+            },
+          );
+          if (issueType == 'Damaged' || issueType == 'Incorrect') {
+            final returnId = '${id}_issue_return';
+            tx.set(db.collection('allocation_checklist').doc(returnId), {
+              'kind': 'return',
+              'status': ChecklistStatus.awaitingAdmin,
+              'staffId': pending['staffId'],
+              'branchId': pending['staffId'],
+              'staffName': pending['staffName'],
+              'branchName': pending['branchName'] ?? pending['staffName'],
+              'name': issueItemName,
+              'itemName': issueItemName,
+              'quantity': issueQuantity,
+              'returnQuantity': issueQuantity,
+              'returnSourceCollection': 'allocation_checklist',
+              'returnSourceId': id,
+              'returnReason': savedIssueReason,
+              'issueType': issueType,
+              'allocationId': id,
+              'submittedBy': staffId,
+              'submittedByName': actorName,
+              'createdAt': FieldValue.serverTimestamp(),
+              'updatedAt': FieldValue.serverTimestamp(),
+            });
+          }
+        }
       } else {
         tx.set(
           db.collection('admin_notifications').doc('allocation_declined_$id'),

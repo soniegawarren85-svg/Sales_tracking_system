@@ -8,6 +8,8 @@ import '../../services/short_id_service.dart';
 import '../../Login/Login/Login.dart';
 import '../../widgets/admin_sales_overview.dart';
 import '../../widgets/admin_recent_sales.dart';
+import '../../widgets/login_session_alert_watcher.dart';
+import '../../services/account_login_session.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -320,35 +322,40 @@ class _AdminDashboardState extends State<AdminDashboard>
     return Scaffold(
       resizeToAvoidBottomInset: false,
       backgroundColor: kCreamWhite,
-      body: SafeArea(
-        child: Row(
-          children: [
-            if (MediaQuery.sizeOf(context).width >= 600) _buildSidebar(),
-            Expanded(
-              child: ScreenLoadingRegion(
-                child: AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 320),
-                  switchInCurve: Curves.easeOut,
-                  switchOutCurve: Curves.easeIn,
-                  transitionBuilder: (child, animation) => FadeTransition(
-                    opacity: animation,
-                    child: SlideTransition(
-                      position: Tween<Offset>(
-                        begin: const Offset(0, 0.02),
-                        end: Offset.zero,
-                      ).animate(animation),
-                      child: child,
+      body: Stack(
+        children: [
+          SafeArea(
+            child: Row(
+              children: [
+                if (MediaQuery.sizeOf(context).width >= 600) _buildSidebar(),
+                Expanded(
+                  child: ScreenLoadingRegion(
+                    child: AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 320),
+                      switchInCurve: Curves.easeOut,
+                      switchOutCurve: Curves.easeIn,
+                      transitionBuilder: (child, animation) => FadeTransition(
+                        opacity: animation,
+                        child: SlideTransition(
+                          position: Tween<Offset>(
+                            begin: const Offset(0, 0.02),
+                            end: Offset.zero,
+                          ).animate(animation),
+                          child: child,
+                        ),
+                      ),
+                      child: KeyedSubtree(
+                        key: ValueKey(_selectedIndex),
+                        child: _buildBody(),
+                      ),
                     ),
                   ),
-                  child: KeyedSubtree(
-                    key: ValueKey(_selectedIndex),
-                    child: _buildBody(),
-                  ),
                 ),
-              ),
+              ],
             ),
-          ],
-        ),
+          ),
+          const LoginSessionAlertWatcher(),
+        ],
       ),
       bottomNavigationBar: MediaQuery.sizeOf(context).width >= 600
           ? null
@@ -722,6 +729,16 @@ class _AdminDashboardState extends State<AdminDashboard>
       ),
     );
     if (confirmed != true || !mounted) return;
+    try {
+      await AccountLoginSession.close();
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Unable to save logout activity: $error')),
+        );
+      }
+      return;
+    }
     final prefs = await SharedPreferences.getInstance();
     await clearPersistedAccountSession(prefs);
     await FirebaseAuth.instance.signOut();

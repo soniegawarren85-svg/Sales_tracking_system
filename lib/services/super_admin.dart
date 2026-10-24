@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'account_password_service.dart';
+import 'verified_email_sync.dart';
 
 /// Dedicated super-admin identity and session, separate from ordinary admins.
 class SuperAdmin {
@@ -27,9 +28,35 @@ class SuperAdmin {
     String password, {
     SharedPreferences? preferences,
     FirebaseFirestore? database,
+    FirebaseAuth? authentication,
   }) async {
     final prefs = preferences ?? await SharedPreferences.getInstance();
     if (database != null) {
+      final profileRef = database.collection('super_admin_profiles').doc(id);
+      final profile = (await profileRef.get(const GetOptions(source: Source.server))).data();
+      final linkedUid = '${profile?['authUid'] ?? ''}'.trim();
+      if (linkedUid.isNotEmpty) {
+        final auth = authentication ?? FirebaseAuth.instance;
+        for (final email in <String>{
+          for (final key in ['pendingAuthEmail', 'authEmail', 'email'])
+            if ('${profile?[key] ?? ''}'.trim().isNotEmpty)
+              '${profile![key]}'.trim(),
+        }) {
+          try {
+            final credential = await auth.signInWithEmailAndPassword(email: email, password: password);
+            if (credential.user?.uid != linkedUid) {
+              await auth.signOut();
+              return false;
+            }
+            await syncVerifiedProfileEmail(profile: profileRef, user: credential.user, reload: false);
+            return true;
+          } on FirebaseAuthException catch (error) {
+            if (!['invalid-credential', 'wrong-password', 'user-not-found', 'invalid-email'].contains(error.code)) rethrow;
+          }
+        }
+        // Once linked, old local/default passwords must never bypass Auth.
+        return false;
+      }
       final ref = database.collection('super_admin_credentials').doc(id);
       final data = (await ref.get(
         const GetOptions(source: Source.server),

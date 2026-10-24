@@ -12,10 +12,14 @@ class _BranchEditorDialogState extends State<BranchEditorDialog> {
   late final name = TextEditingController(
     text: '${widget.initial['name'] ?? ''}',
   );
+  late final address = TextEditingController(
+    text: '${widget.initial['address'] ?? ''}',
+  );
   String? error;
   @override
   void dispose() {
     name.dispose();
+    address.dispose();
     super.dispose();
   }
 
@@ -38,6 +42,18 @@ class _BranchEditorDialogState extends State<BranchEditorDialog> {
               textCapitalization: TextCapitalization.words,
               decoration: const InputDecoration(labelText: 'Branch name'),
             ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: address,
+              textCapitalization: TextCapitalization.sentences,
+              minLines: 1,
+              maxLines: 3,
+              decoration: const InputDecoration(
+                labelText: 'Branch address (optional)',
+                hintText: 'Enter the address to show on receipts',
+                alignLabelWithHint: true,
+              ),
+            ),
             if (error != null)
               Text(error!, style: const TextStyle(color: Colors.red)),
           ],
@@ -58,6 +74,7 @@ class _BranchEditorDialogState extends State<BranchEditorDialog> {
           }
           Navigator.pop(context, <String, dynamic>{
             'name': name.text.trim(),
+            'address': address.text.trim(),
             'openingMinutes': 0,
             'closingMinutes': 1440,
           });

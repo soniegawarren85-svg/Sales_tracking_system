@@ -493,6 +493,8 @@ class _ReceiptIdentityState extends State<_ReceiptIdentity> {
           ),
 
           details._line('Branch', sale['branchName'] ?? resolved['branch']),
+          if ('${sale['branchAddress'] ?? ''}'.trim().isNotEmpty)
+            details._line('Address', sale['branchAddress']),
           details._line(
             'Branch ID',
             sale['branchCode'] ?? resolved['branchCode'],
@@ -576,7 +578,12 @@ class ReceiptInlineDetails extends StatelessWidget {
       ),
       _line('Subtotal', _money(sale['subtotal'])),
       _line('Tax classification', receiptTaxLabel(sale)),
+      if (receiptTaxLabel(sale) == 'VAT')
+        _line('VATable sales', _money(receiptVatableSales(sale))),
       _line('VAT / tax', _money(receiptTaxAmount(sale))),
+      if (receiptTaxLabel(sale) == 'VAT' &&
+          '${sale['taxTin'] ?? ''}'.trim().isNotEmpty)
+        _line('BIR TIN', sale['taxTin']),
       if (saleNumber(sale['taxRate']) > 0)
         _line(
           'VAT rate',

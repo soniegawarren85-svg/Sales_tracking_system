@@ -7,46 +7,84 @@ import 'package:sales_tracking/services/password_reset_service.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  test('screen expires after ten minutes without forgetting the resend deadline', () async {
-    SharedPreferences.setMockInitialValues({});
-    final sentAt = DateTime.utc(2026, 10, 23, 10);
-    final session = PasswordResetSession(email: 'staff@example.com', resendAvailableAt: sentAt.add(passwordResetWindow));
-    await session.persist();
-    expect(session.shouldResumeAt(sentAt.add(const Duration(minutes: 9))), isTrue);
-    expect(session.shouldResumeAt(sentAt.add(const Duration(minutes: 10))), isFalse);
-    expect((await PasswordResetSession.restore())?.resendAvailableAt, sentAt.add(const Duration(minutes: 3)));
-  });
+  test(
+    'screen expires after ten minutes without forgetting the resend deadline',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      final sentAt = DateTime.utc(2026, 10, 23, 10);
+      final session = PasswordResetSession(
+        email: 'staff@example.com',
+        resendAvailableAt: sentAt.add(passwordResetWindow),
+      );
+      await session.persist();
+      expect(
+        session.shouldResumeAt(sentAt.add(const Duration(minutes: 9))),
+        isTrue,
+      );
+      expect(
+        session.shouldResumeAt(sentAt.add(const Duration(minutes: 10))),
+        isFalse,
+      );
+      expect(
+        (await PasswordResetSession.restore())
+            ?.resendAvailableAt
+            .millisecondsSinceEpoch,
+        sentAt.add(const Duration(minutes: 3)).millisecondsSinceEpoch,
+      );
+    },
+  );
 
   test('only the matching reset request can show completion', () async {
     SharedPreferences.setMockInitialValues({});
-    await PasswordResetSession(email: 'staff@example.com', resendAvailableAt: DateTime.now(), requestId: 'current-request').persist();
+    await PasswordResetSession(
+      email: 'staff@example.com',
+      resendAvailableAt: DateTime.now(),
+      requestId: 'current-request',
+    ).persist();
     expect(await PasswordResetSession.markCompleted('older-request'), isFalse);
     expect((await PasswordResetSession.restore())?.completed, isFalse);
     expect(await PasswordResetSession.markCompleted('current-request'), isTrue);
     expect((await PasswordResetSession.restore())?.completed, isTrue);
   });
 
-  testWidgets('old request opens email entry and same email resumes without a new timer', (tester) async {
-    SharedPreferences.setMockInitialValues({});
-    final deadline = DateTime.now().subtract(const Duration(minutes: 12));
-    await PasswordResetSession(email: 'staff@example.com', resendAvailableAt: deadline).persist();
-    await tester.pumpWidget(const MaterialApp(home: ForgotPasswordScreen()));
-    await tester.pump();
-    await tester.pump(const Duration(seconds: 1));
-    expect(find.text('Forgot password?'), findsOneWidget);
-    await tester.enterText(find.byType(TextField), 'staff@example.com');
-    await tester.tap(find.text('Send reset link'));
-    await tester.pump();
-    await tester.pump(const Duration(seconds: 1));
-    expect(find.text('You can resend now'), findsOneWidget);
-    expect(find.text('Return to Login'), findsNothing);
-    expect((await PasswordResetSession.restore())?.resendAvailableAt.millisecondsSinceEpoch, deadline.millisecondsSinceEpoch);
-    await tester.pumpWidget(const SizedBox.shrink());
-  });
+  testWidgets(
+    'old request opens email entry and same email resumes without a new timer',
+    (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      final deadline = DateTime.now().subtract(const Duration(minutes: 12));
+      await PasswordResetSession(
+        email: 'staff@example.com',
+        resendAvailableAt: deadline,
+      ).persist();
+      await tester.pumpWidget(const MaterialApp(home: ForgotPasswordScreen()));
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
+      expect(find.text('Forgot password?'), findsOneWidget);
+      await tester.enterText(find.byType(TextField), 'staff@example.com');
+      await tester.tap(find.text('Send reset link'));
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
+      expect(find.text('You can resend now'), findsOneWidget);
+      expect(find.text('Return to Login'), findsNothing);
+      expect(
+        (await PasswordResetSession.restore())
+            ?.resendAvailableAt
+            .millisecondsSinceEpoch,
+        deadline.millisecondsSinceEpoch,
+      );
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
 
-  testWidgets('confirmed completion shows the check mark and login button', (tester) async {
+  testWidgets('confirmed completion shows the check mark and login button', (
+    tester,
+  ) async {
     SharedPreferences.setMockInitialValues({});
-    await PasswordResetSession(email: 'staff@example.com', resendAvailableAt: DateTime.now(), completed: true).persist();
+    await PasswordResetSession(
+      email: 'staff@example.com',
+      resendAvailableAt: DateTime.now(),
+      completed: true,
+    ).persist();
     await tester.pumpWidget(const MaterialApp(home: ForgotPasswordScreen()));
     await tester.pump();
     await tester.pump(const Duration(seconds: 1));
