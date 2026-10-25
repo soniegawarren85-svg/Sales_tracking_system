@@ -8638,10 +8638,7 @@ class _DailyStockPageState extends State<DailyStockPage>
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 // ── Section title
-                KeyedSubtree(
-                  key: widget.salesTourKey,
-                  child: _buildInventoryModeToggle(),
-                ),
+                _buildInventoryModeToggle(),
                 const SizedBox(height: 12),
 
                 // ── Discount toggles
@@ -8823,10 +8820,7 @@ class _DailyStockPageState extends State<DailyStockPage>
               ),
             ),
           ),
-        KeyedSubtree(
-          key: widget.salesTourKey,
-          child: _buildInventoryModeToggle(),
-        ),
+        _buildInventoryModeToggle(),
         const SizedBox(height: 14),
         _buildOrderSearchField(),
         const SizedBox(height: 14),
@@ -8972,19 +8966,22 @@ class _DailyStockPageState extends State<DailyStockPage>
             ),
           ),
           const SizedBox(width: 14),
-          const Expanded(
+          Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  'Sales Process',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 22,
-                    fontWeight: FontWeight.w900,
-                    color: Colors.white,
-                    letterSpacing: 0.3,
+                KeyedSubtree(
+                  key: widget.salesTourKey,
+                  child: const Text(
+                    'Sales Process',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.w900,
+                      color: Colors.white,
+                      letterSpacing: 0.3,
+                    ),
                   ),
                 ),
                 SizedBox(height: 3),
@@ -12377,6 +12374,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                 onBack: () => setState(() => _showCartReview = false),
                 onTools: () =>
                     _showTabletToolsDrawer(_knownOrderItems(_latestOrderItems)),
+                titleTourKey: widget.salesTourKey,
                 body: _buildOrderSection(),
                 actions:
                     !_showCartReview &&

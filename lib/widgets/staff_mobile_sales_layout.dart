@@ -8,6 +8,7 @@ class StaffMobileSalesLayout extends StatelessWidget {
     required this.onBack,
     required this.onTools,
     required this.body,
+    this.titleTourKey,
     this.actions,
   });
 
@@ -15,6 +16,7 @@ class StaffMobileSalesLayout extends StatelessWidget {
   final VoidCallback onBack;
   final VoidCallback onTools;
   final Widget body;
+  final GlobalKey? titleTourKey;
   final Widget? actions;
 
   @override
@@ -37,11 +39,14 @@ class StaffMobileSalesLayout extends StatelessWidget {
                       icon: const Icon(Icons.arrow_back_rounded),
                     )
                   : const Icon(Icons.point_of_sale_rounded),
-              title: Text(
-                reviewing ? 'Order Review' : 'Sales Process',
-                style: const TextStyle(
-                  fontSize: 19,
-                  fontWeight: FontWeight.w800,
+              title: KeyedSubtree(
+                key: titleTourKey,
+                child: Text(
+                  reviewing ? 'Order Review' : 'Sales Process',
+                  style: const TextStyle(
+                    fontSize: 19,
+                    fontWeight: FontWeight.w800,
+                  ),
                 ),
               ),
               actions: [

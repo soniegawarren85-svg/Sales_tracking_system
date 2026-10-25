@@ -1,6 +1,7 @@
 import '../widgets/staff_inventory_badge.dart';
 import 'package:sales_tracking/theme/app_colors.dart';
 import 'dart:async';
+import 'dart:math' as math;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../widgets/branch_staff_activity_dialog.dart';
 import 'package:flutter/material.dart';
@@ -43,6 +44,7 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
   final GlobalKey _salesCartTourKey = GlobalKey();
   final GlobalKey _salesTourKey = GlobalKey();
   final GlobalKey _profileEditTourKey = GlobalKey();
+  final GlobalKey _profileInfoTourKey = GlobalKey();
   final GlobalKey _profileNavTourKey = GlobalKey();
   int _prevEntryCount = 0;
   int _salesLaunchToken = 0;
@@ -254,6 +256,7 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
     return ProfilePage(
       onMessage: _onMessagePressed,
       onReplayTutorial: () => _startStaffTutorial(isReplay: true),
+      tourTargetKey: _profileInfoTourKey,
       editProfileTourKey: _profileEditTourKey,
     );
   }
@@ -375,7 +378,7 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
       title: 'Dashboard Categories',
       description:
           'Use these buttons to browse your dashboard categories, bundles, and beverages.',
-      contentAlign: ContentAlign.top,
+      contentAlign: ContentAlign.bottom,
     ),
     _StaffTourStep(
       key: _allocatedInventoryTourKey,
@@ -383,7 +386,15 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
       title: 'Admin Allocations',
       description:
           'Items allocated by your Admin appear here. Review the items assigned to your staff account.',
-      contentAlign: ContentAlign.top,
+      contentAlign: ContentAlign.bottom,
+    ),
+    _StaffTourStep(
+      key: _cashDrawerTourKey,
+      pageIndex: 0,
+      title: 'Cash Drawer',
+      description:
+          'Check the cash allocated to your staff account and monitor your drawer balance here.',
+      contentAlign: ContentAlign.bottom,
     ),
     _StaffTourStep(
       key: _performanceTourKey,
@@ -391,7 +402,7 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
       title: 'Performance',
       description:
           'Review your performance summary and sales activity cards here.',
-      contentAlign: ContentAlign.top,
+      contentAlign: ContentAlign.bottom,
     ),
     _StaffTourStep(
       key: _inventoryChecklistTourKey,
@@ -399,14 +410,14 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
       title: 'Allocation Checklist',
       description:
           'Open Checklist to review items allocated to your staff inventory and confirm receipt.',
-      contentAlign: ContentAlign.top,
+      contentAlign: ContentAlign.bottom,
     ),
     _StaffTourStep(
       key: _inventoryReturnsTourKey,
       pageIndex: 1,
       title: 'Inventory Returns',
       description: 'Use Returns to review and manage inventory return records.',
-      contentAlign: ContentAlign.top,
+      contentAlign: ContentAlign.bottom,
     ),
     _StaffTourStep(
       key: _inventoryTableTourKey,
@@ -425,12 +436,20 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
       contentAlign: ContentAlign.bottom,
     ),
     _StaffTourStep(
+      key: _profileInfoTourKey,
+      pageIndex: 2,
+      title: 'Personal Information',
+      description:
+          'Review the personal details saved on your Staff profile in this section.',
+      contentAlign: ContentAlign.top,
+    ),
+    _StaffTourStep(
       key: _salesProcessTourKey,
       pageIndex: 3,
       title: 'Sales Process',
       description:
           'Choose the appropriate order type and browse the available items for a customer order.',
-      contentAlign: ContentAlign.top,
+      contentAlign: ContentAlign.bottom,
     ),
     _StaffTourStep(
       key: _salesCartTourKey,
@@ -470,6 +489,8 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
                   isSaving: cardState.isSaving,
                   isConfirmingSkip: cardState.isConfirmingSkip,
                   errorMessage: cardState.errorMessage,
+                  retryLabel: cardState.retryLabel,
+                  onRetry: cardState.retryAction,
                   onBack: index == 0
                       ? null
                       : () => unawaited(
@@ -517,6 +538,9 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
       _updateTutorialCard(
         isSaving: false,
         errorMessage: 'This section is still loading. Please try Next again.',
+        retryLabel: 'Retry',
+        retryAction: () =>
+            unawaited(_moveTutorial(controller, targetIndex, goBack: goBack)),
       );
     }
   }
@@ -543,13 +567,32 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
     if (targetContext == null || !targetContext.mounted) {
       throw StateError('The requested staff tutorial target is not available.');
     }
-    await Scrollable.ensureVisible(
-      targetContext,
-      alignment: 0.35,
-      duration: const Duration(milliseconds: 350),
-      curve: Curves.easeInOut,
-    );
-    await WidgetsBinding.instance.endOfFrame;
+    final renderObject = targetContext.findRenderObject();
+    if (renderObject is RenderBox && renderObject.hasSize) {
+      final targetTop = renderObject.localToGlobal(Offset.zero).dy;
+      final targetBottom = targetTop + renderObject.size.height;
+      if (!mounted) return;
+      final mediaQuery = MediaQuery.of(context);
+      final safeTop = mediaQuery.padding.top + 12;
+      final safeBottom =
+          mediaQuery.size.height - mediaQuery.padding.bottom - 12;
+      final tooltipSpace = math.min(280.0, (safeBottom - safeTop) * 0.38);
+      final isTooltipBelow = step.contentAlign == ContentAlign.bottom;
+      final tooltipNeedsRoom = isTooltipBelow
+          ? safeBottom - targetBottom < tooltipSpace
+          : targetTop - safeTop < tooltipSpace;
+      if (targetTop < safeTop ||
+          targetBottom > safeBottom ||
+          tooltipNeedsRoom) {
+        await Scrollable.ensureVisible(
+          targetContext,
+          alignment: isTooltipBelow ? 0.22 : 0.68,
+          duration: const Duration(milliseconds: 350),
+          curve: Curves.easeInOut,
+        );
+        await WidgetsBinding.instance.endOfFrame;
+      }
+    }
   }
 
   Future<void> _finishStaffTutorial() async {
@@ -578,6 +621,8 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
         isSaving: false,
         errorMessage:
             'Could not save your progress. Check your connection and retry; the tutorial will stay open.',
+        retryLabel: 'Retry save',
+        retryAction: () => unawaited(_finishStaffTutorial()),
       );
     }
   }
@@ -586,12 +631,16 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
     bool? isSaving,
     bool? isConfirmingSkip,
     String? errorMessage,
+    String? retryLabel,
+    VoidCallback? retryAction,
     bool clearError = false,
   }) {
     _tutorialCardState.value = _tutorialCardState.value.copyWith(
       isSaving: isSaving,
       isConfirmingSkip: isConfirmingSkip,
       errorMessage: errorMessage,
+      retryLabel: retryLabel,
+      retryAction: retryAction,
       clearError: clearError,
     );
   }
@@ -841,22 +890,30 @@ class _TutorialCardState {
     this.isSaving = false,
     this.isConfirmingSkip = false,
     this.errorMessage,
+    this.retryLabel,
+    this.retryAction,
   });
 
   final bool isSaving;
   final bool isConfirmingSkip;
   final String? errorMessage;
+  final String? retryLabel;
+  final VoidCallback? retryAction;
 
   _TutorialCardState copyWith({
     bool? isSaving,
     bool? isConfirmingSkip,
     String? errorMessage,
+    String? retryLabel,
+    VoidCallback? retryAction,
     bool clearError = false,
   }) {
     return _TutorialCardState(
       isSaving: isSaving ?? this.isSaving,
       isConfirmingSkip: isConfirmingSkip ?? this.isConfirmingSkip,
       errorMessage: clearError ? null : errorMessage ?? this.errorMessage,
+      retryLabel: clearError ? null : retryLabel ?? this.retryLabel,
+      retryAction: clearError ? null : retryAction ?? this.retryAction,
     );
   }
 }

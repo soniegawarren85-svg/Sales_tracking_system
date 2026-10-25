@@ -1426,14 +1426,19 @@ class _DashboardPageState extends State<DashboardPage>
                     alignment: Alignment.centerLeft,
                     child: ConstrainedBox(
                       constraints: BoxConstraints(maxWidth: contentMaxWidth),
-                      child: Row(
-                        children: [
-                          Expanded(child: _SectionLabel(title: 'Performance')),
-                          _HistoryButton(
-                            key: widget.salesHistoryTourKey,
-                            onTap: _showHistory,
-                          ),
-                        ],
+                      child: KeyedSubtree(
+                        key: widget.performanceTourKey,
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: _SectionLabel(title: 'Performance'),
+                            ),
+                            _HistoryButton(
+                              key: widget.salesHistoryTourKey,
+                              onTap: _showHistory,
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                   ),
@@ -1456,10 +1461,7 @@ class _DashboardPageState extends State<DashboardPage>
                       alignment: Alignment.topCenter,
                       child: ConstrainedBox(
                         constraints: BoxConstraints(maxWidth: contentMaxWidth),
-                        child: RepaintBoundary(
-                          key: widget.performanceTourKey,
-                          child: _buildPerformanceData(),
-                        ),
+                        child: RepaintBoundary(child: _buildPerformanceData()),
                       ),
                     ),
                   ),
@@ -3250,7 +3252,38 @@ class _Header extends StatelessWidget {
                                 onTap: () async {
                                   final replayTutorial = onReplayTutorial;
                                   if (replayTutorial != null) {
-                                    await replayTutorial();
+                                    final shouldStart = await showDialog<bool>(
+                                      context: context,
+                                      builder: (dialogContext) => AlertDialog(
+                                        icon: const Icon(
+                                          Icons.lightbulb_outline_rounded,
+                                          color: _C.primary,
+                                        ),
+                                        title: const Text(
+                                          'Start the Staff Guide?',
+                                        ),
+                                        content: const Text(
+                                          'Take a short, step-by-step tour of your dashboard, inventory, profile, and sales tools.',
+                                        ),
+                                        actions: [
+                                          TextButton(
+                                            onPressed: () => Navigator.of(
+                                              dialogContext,
+                                            ).pop(false),
+                                            child: const Text('Not now'),
+                                          ),
+                                          FilledButton(
+                                            onPressed: () => Navigator.of(
+                                              dialogContext,
+                                            ).pop(true),
+                                            child: const Text('Start guide'),
+                                          ),
+                                        ],
+                                      ),
+                                    );
+                                    if (shouldStart == true) {
+                                      await replayTutorial();
+                                    }
                                   } else {
                                     await _showHelpSheet(context);
                                   }
