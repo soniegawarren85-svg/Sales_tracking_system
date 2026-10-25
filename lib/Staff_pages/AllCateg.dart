@@ -6,6 +6,8 @@ import 'package:sales_tracking/theme/app_colors.dart';
 import '../services/inventory_display_ids.dart';
 import '../services/public_item_id.dart';
 import '../services/beverage_sales_summary.dart';
+import '../services/local_database_sync_service.dart';
+import '../services/sale_stock.dart';
 import 'dart:async';
 import 'dart:convert';
 
@@ -26,6 +28,8 @@ class AllCategPage extends StatefulWidget {
   final bool selectedIsBundle;
   final bool selectedIsCoffee;
   final bool embedded;
+  final GlobalKey? inventoryActionsTourKey;
+  final GlobalKey? inventoryTourKey;
 
   const AllCategPage({
     super.key,
@@ -34,6 +38,8 @@ class AllCategPage extends StatefulWidget {
     this.selectedIsBundle = false,
     this.selectedIsCoffee = false,
     this.embedded = false,
+    this.inventoryActionsTourKey,
+    this.inventoryTourKey,
   });
 
   @override
@@ -58,6 +64,8 @@ class _AllCategPageState extends State<AllCategPage>
   // waiting state, which replaced the search field with the loading layout.
   Stream<QuerySnapshot>? _staffInventoryStreamCache;
   late final Stream<QuerySnapshot> _rootInventoryStream;
+  StreamSubscription<String>? _offlineSalesSubscription;
+  List<Map<String, dynamic>> _pendingOfflineSales = const [];
 
   bool get _isFilteredCategory =>
       (widget.selectedCategoryName?.trim().isNotEmpty ?? false) ||
@@ -73,6 +81,10 @@ class _AllCategPageState extends State<AllCategPage>
     _rootInventoryStream = FirebaseFirestore.instance
         .collection('sales_inventory')
         .snapshots();
+    _offlineSalesSubscription = LocalDatabaseSyncService().collectionUpdates
+        .where((collection) => collection == 'completed_sales')
+        .listen((_) => _loadPendingOfflineSales());
+    unawaited(_loadPendingOfflineSales());
     _initStaffIdentity();
     _headerAnimController = AnimationController(
       vsync: this,
@@ -209,8 +221,46 @@ class _AllCategPageState extends State<AllCategPage>
 
   @override
   void dispose() {
+    _offlineSalesSubscription?.cancel();
     _headerAnimController.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadPendingOfflineSales() async {
+    try {
+      final sales = await LocalDatabaseSyncService().getCachedCollection(
+        'completed_sales',
+      );
+      final pending = sales
+          .where((sale) => sale['stockSyncRequired'] == true)
+          .toList(growable: false);
+      if (!mounted) return;
+      setState(() => _pendingOfflineSales = pending);
+    } catch (error) {
+      debugPrint('Unable to load pending offline stock sales: $error');
+    }
+  }
+
+  Map<String, dynamic> _inventoryDataWithPendingSales(
+    QueryDocumentSnapshot document,
+  ) {
+    final rawData = document.data();
+    var data = <String, dynamic>{
+      if (rawData is Map<String, dynamic>) ...rawData,
+      '_localDocId': document.id,
+    };
+    for (final sale in _pendingOfflineSales) {
+      final saleId = sale['salesId']?.toString() ?? '';
+      if (saleId.isEmpty) continue;
+      final lines = expandSaleStockLines(
+        (sale['items'] as List? ?? []).whereType<Map>().map(
+          (item) => Map<String, dynamic>.from(item),
+        ),
+      ).where((line) => line['staffInventoryDocId'] == document.id).toList();
+      if (lines.isEmpty) continue;
+      data = applySaleStock(data, saleId, lines);
+    }
+    return data;
   }
 
   int _stockForItem(Map<String, dynamic> item) {
@@ -4365,37 +4415,9 @@ class _AllCategPageState extends State<AllCategPage>
           publicId: category['publicId']?.toString() ?? '',
         );
         void showBeverageHistory() {
-          final coffeeName =
-              category['categoryName']?.toString() ?? 'Beverages';
-          final items =
-              (category['items'] as List?)?.whereType<Map>() ?? const [];
           _showStaffActivityHistory(
             kind: 'beverages',
-            categoryName: coffeeName,
-            categoryId:
-                category['sourceDocId']?.toString() ??
-                category['coffeeId']?.toString(),
-            itemIds: {
-              for (final key in ['sourceDocId', 'coffeeId', 'itemId', 'id'])
-                if (category[key]?.toString().trim().isNotEmpty == true)
-                  category[key].toString().trim(),
-              for (final item in items)
-                for (final key in [
-                  'sourceDocId',
-                  'coffeeId',
-                  'itemId',
-                  'id',
-                  'publicId',
-                ])
-                  if (item[key]?.toString().trim().isNotEmpty == true)
-                    item[key].toString().trim(),
-            },
-            itemNames: {
-              coffeeName,
-              for (final item in items)
-                if (item['name']?.toString().trim().isNotEmpty == true)
-                  item['name'].toString().trim(),
-            },
+            categoryName: 'Beverages',
           );
         }
 
@@ -6125,8 +6147,11 @@ class _AllCategPageState extends State<AllCategPage>
                                       ),
                                     ),
                                     const SizedBox(width: 8),
-                                    AllocationChecklistButton(
-                                      scopeIds: _staffInventoryIds,
+                                    KeyedSubtree(
+                                      key: widget.inventoryActionsTourKey,
+                                      child: AllocationChecklistButton(
+                                        scopeIds: _staffInventoryIds,
+                                      ),
                                     ),
                                   ],
                                 ),
@@ -6207,6 +6232,19 @@ class _AllCategPageState extends State<AllCategPage>
               }
 
               final docs = snapshot.data?.docs ?? [];
+              if (snapshot.hasData &&
+                  (!snapshot.data!.metadata.isFromCache || docs.isNotEmpty)) {
+                unawaited(
+                  LocalDatabaseSyncService().cacheStaffInventorySnapshot(
+                    _staffInventoryIds,
+                    docs.map((doc) {
+                      final data = doc.data() as Map<String, dynamic>;
+                      return {...data, '_localDocId': doc.id};
+                    }),
+                    authoritative: !snapshot.data!.metadata.isFromCache,
+                  ),
+                );
+              }
               return StreamBuilder<QuerySnapshot>(
                 stream: _rootInventoryStream,
                 builder: (context, rootSnapshot) {
@@ -6235,8 +6273,8 @@ class _AllCategPageState extends State<AllCategPage>
 
                   final visibleDocs = <Map<String, dynamic>>[];
                   for (final doc in docs) {
-                    final data = doc.data() as Map<String, dynamic>?;
-                    if (data == null || data['isDeleted'] == true) continue;
+                    final data = _inventoryDataWithPendingSales(doc);
+                    if (data['isDeleted'] == true) continue;
                     if (data['isAddon'] == true) {
                       if (bundleExpired(data, DateTime.now())) continue;
                       visibleDocs.add({...data, 'sourceDocId': doc.id});
@@ -6527,9 +6565,12 @@ class _AllCategPageState extends State<AllCategPage>
                       bundleDocs.isEmpty &&
                       coffeeDocs.isEmpty &&
                       addonDocs.isEmpty) {
-                    return _buildEmptyInventoryState(
-                      icon: Icons.category_outlined,
-                      message: 'No items found.',
+                    return KeyedSubtree(
+                      key: widget.inventoryTourKey,
+                      child: _buildEmptyInventoryState(
+                        icon: Icons.category_outlined,
+                        message: 'No items found.',
+                      ),
                     );
                   }
 
@@ -6565,33 +6606,36 @@ class _AllCategPageState extends State<AllCategPage>
                         ),
                       ),
                       Expanded(
-                        child: widget.selectedIsCoffee
-                            ? _buildCategoryList(
-                                searchedCoffeeDocs,
-                                emptyMessage: 'No beverage items found.',
-                              )
-                            : widget.selectedIsBundle
-                            ? _buildBundleList(searchedBundleDocs)
-                            : _isFilteredCategory
-                            ? _buildCategoryList(
-                                widget.selectedIsCoffee
-                                    ? searchedCoffeeDocs
-                                    : searchedCategoryDocs,
-                                emptyMessage: widget.selectedIsCoffee
-                                    ? 'No beverage items found.'
-                                    : 'No items found.',
-                              )
-                            : _showCoffee
-                            ? _buildCategoryList(
-                                searchedCoffeeDocs,
-                                emptyMessage: 'No beverage items found.',
-                              )
-                            : _showCategories
-                            ? _buildCategoryList(
-                                searchedCategoryDocs,
-                                emptyMessage: 'No items found.',
-                              )
-                            : _buildBundleList(searchedBundleDocs),
+                        child: KeyedSubtree(
+                          key: widget.inventoryTourKey,
+                          child: widget.selectedIsCoffee
+                              ? _buildCategoryList(
+                                  searchedCoffeeDocs,
+                                  emptyMessage: 'No beverage items found.',
+                                )
+                              : widget.selectedIsBundle
+                              ? _buildBundleList(searchedBundleDocs)
+                              : _isFilteredCategory
+                              ? _buildCategoryList(
+                                  widget.selectedIsCoffee
+                                      ? searchedCoffeeDocs
+                                      : searchedCategoryDocs,
+                                  emptyMessage: widget.selectedIsCoffee
+                                      ? 'No beverage items found.'
+                                      : 'No items found.',
+                                )
+                              : _showCoffee
+                              ? _buildCategoryList(
+                                  searchedCoffeeDocs,
+                                  emptyMessage: 'No beverage items found.',
+                                )
+                              : _showCategories
+                              ? _buildCategoryList(
+                                  searchedCategoryDocs,
+                                  emptyMessage: 'No items found.',
+                                )
+                              : _buildBundleList(searchedBundleDocs),
+                        ),
                       ),
                     ],
                   );

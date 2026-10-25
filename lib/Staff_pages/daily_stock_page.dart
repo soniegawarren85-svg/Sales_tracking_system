@@ -25,10 +25,12 @@ import '../services/inventory_service.dart';
 import '../services/number_format.dart';
 import '../services/branch_report_schedule.dart';
 import '../services/local_database_sync_service.dart';
+import '../services/held_order_store.dart';
 import '../services/thermal_printer_service.dart';
 import '../widgets/top_notification.dart';
 import '../widgets/thermal_printer_settings_sheet.dart';
 import '../widgets/top_edge_refresh.dart';
+import '../widgets/raspberry_cupcake_loader.dart';
 
 // ─── Theme Constants ─────────────────────────────────────────────────────────
 class _AppColors {
@@ -105,6 +107,7 @@ class DailyStockPage extends StatefulWidget {
   final String? initialView;
   final String? initialGroupName;
   final int launchToken;
+  final GlobalKey? salesTourKey;
 
   const DailyStockPage({
     super.key,
@@ -113,6 +116,7 @@ class DailyStockPage extends StatefulWidget {
     this.initialView,
     this.initialGroupName,
     this.launchToken = 0,
+    this.salesTourKey,
   });
 
   @override
@@ -718,16 +722,14 @@ class _DailyStockPageState extends State<DailyStockPage>
 
   void _subscribeToPendingOrders(String uid) {
     _pendingOrdersSubscription?.cancel();
-    _pendingOrdersSubscription = FirebaseFirestore.instance
-        .collection('pending_orders')
-        .where('userId', isEqualTo: uid)
-        .snapshots()
+    _pendingOrdersSubscription = HeldOrderStore.instance
+        .watch(uid)
         .listen(
-          (snapshot) {
-            unawaited(_removeExpiredPendingOrders(snapshot.docs));
+          (orders) {
+            unawaited(_expireInvalidHeldOrders(uid, orders));
             if (!mounted) return;
             setState(() {
-              _pendingOrderCount = snapshot.docs.length;
+              _pendingOrderCount = orders.length;
               _hasPendingOrders = _pendingOrderCount > 0;
             });
           },
@@ -742,47 +744,34 @@ class _DailyStockPageState extends State<DailyStockPage>
         );
   }
 
-  Future<void> _removeExpiredPendingOrders(
-    List<QueryDocumentSnapshot<Map<String, dynamic>>> orders,
+  Future<void> _expireInvalidHeldOrders(
+    String userId,
+    List<HeldOrder> orders,
   ) async {
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
+    final today = DateUtils.dateOnly(DateTime.now());
     for (final order in orders) {
-      final rawItems = order.data()['items'] as List<dynamic>? ?? const [];
-      final invalid = rawItems.whereType<Map>().any((item) {
-        final expiry = DateTime.tryParse(
-          item['expirationDate']?.toString().trim() ?? '',
-        );
-        if (expiry != null && !expiry.isAfter(today)) return true;
-        // If inventory has already loaded, also remove a hold whose product
-        // was deleted/removed from the current staff menu.
+      final items = (order.data()['items'] as List? ?? []).whereType<Map>();
+      final invalid = items.any((item) {
+        final expiry = DateTime.tryParse('${item['expirationDate'] ?? ''}');
+        if (expiry != null && !DateUtils.dateOnly(expiry).isAfter(today))
+          return true;
         if (_latestOrderItems.isEmpty) return false;
-        final sourceId = item['sourceInventoryId']?.toString() ?? '';
-        final name = item['name']?.toString() ?? '';
-        final variant = item['variant']?.toString() ?? '';
-        return !_latestOrderItems.any((available) {
-          final sameSource =
-              sourceId.isNotEmpty &&
-              available['sourceInventoryId']?.toString() == sourceId;
-          final sameItem =
-              available['name']?.toString() == name &&
-              available['variant']?.toString() == variant;
-          return sameSource || sameItem;
-        });
-      });
-      if (!invalid) continue;
-      final items = rawItems
-          .whereType<Map>()
-          .map((item) => Map<String, dynamic>.from(item))
-          .toList();
-      try {
-        await _recordPendingOrderHistory(
-          action: 'expired',
-          orderId: order.id,
-          items: items,
+        final source = '${item['sourceInventoryId'] ?? ''}';
+        final name = '${item['name'] ?? ''}';
+        final variant = '${item['variant'] ?? ''}';
+        return !_latestOrderItems.any(
+          (available) =>
+              (source.isNotEmpty &&
+                  available['sourceInventoryId']?.toString() == source) ||
+              (available['name']?.toString() == name &&
+                  available['variant']?.toString() == variant),
         );
-        await order.reference.delete();
-      } catch (_) {}
+      });
+      if (invalid) {
+        try {
+          await HeldOrderStore.instance.consume(userId, order.id, 'expired');
+        } catch (_) {}
+      }
     }
   }
 
@@ -4717,28 +4706,8 @@ class _DailyStockPageState extends State<DailyStockPage>
                     ),
                   ],
                 ),
-                child: const Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    SizedBox(
-                      width: 34,
-                      height: 34,
-                      child: CircularProgressIndicator(
-                        color: _AppColors.primary,
-                        strokeWidth: 3,
-                      ),
-                    ),
-                    SizedBox(height: 16),
-                    Text(
-                      'Processing order...',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        color: _AppColors.textMid,
-                        fontSize: 14,
-                        fontWeight: FontWeight.w900,
-                      ),
-                    ),
-                  ],
+                child: const RaspberryCupcakeLoader(
+                  message: 'Processing your order...',
                 ),
               ),
             ),
@@ -4875,22 +4844,12 @@ class _DailyStockPageState extends State<DailyStockPage>
       return;
     }
     try {
-      final pendingRef = FirebaseFirestore.instance
-          .collection('pending_orders')
-          .doc();
-      await pendingRef.set({
-        'userId': userId,
+      await HeldOrderStore.instance.hold(userId, {
         'items': pendingItems,
         'discountType': _discountName,
         'discountId': _selectedDiscountId,
         'discountApplied': _seniorDiscount || _pwdDiscount,
-        'createdAt': FieldValue.serverTimestamp(),
       });
-      await _recordPendingOrderHistory(
-        action: 'held',
-        orderId: pendingRef.id,
-        items: pendingItems,
-      );
       setState(() {
         _cart.clear();
         _cartItemLookup.clear();
@@ -4915,40 +4874,11 @@ class _DailyStockPageState extends State<DailyStockPage>
     }
   }
 
-  Future<void> _recordPendingOrderHistory({
-    required String action,
-    required String orderId,
-    required List<Map<String, dynamic>> items,
-  }) async {
-    final userId = await _activeStaffUserId();
-    if (userId == null) return;
-    await FirebaseFirestore.instance.collection('pending_order_history').add({
-      'userId': userId,
-      'action': action,
-      'orderId': orderId,
-      'items': items,
-      'createdAt': FieldValue.serverTimestamp(),
-    });
-  }
-
   Future<void> _showPendingOrderHistory() async {
     final userId = await _activeStaffUserId();
     if (userId == null) return;
     try {
-      final snapshot = await FirebaseFirestore.instance
-          .collection('pending_order_history')
-          .where('userId', isEqualTo: userId)
-          .get();
-      final docs = snapshot.docs.toList()
-        ..sort((a, b) {
-          final aTime =
-              (a.data()['createdAt'] as Timestamp?)?.millisecondsSinceEpoch ??
-              0;
-          final bTime =
-              (b.data()['createdAt'] as Timestamp?)?.millisecondsSinceEpoch ??
-              0;
-          return bTime.compareTo(aTime);
-        });
+      final docs = await HeldOrderStore.instance.history(userId);
       if (!mounted) return;
       if (docs.isEmpty) {
         _showStyledSnackBar('No pending order history yet');
@@ -5045,202 +4975,149 @@ class _DailyStockPageState extends State<DailyStockPage>
       );
       return;
     }
-    try {
-      final snapshot = await FirebaseFirestore.instance
-          .collection('pending_orders')
-          .where('userId', isEqualTo: userId)
-          .get();
-      final docs = snapshot.docs.toList()
-        ..sort((a, b) {
-          final aTime =
-              (a.data()['createdAt'] as Timestamp?)?.millisecondsSinceEpoch ??
-              0;
-          final bTime =
-              (b.data()['createdAt'] as Timestamp?)?.millisecondsSinceEpoch ??
-              0;
-          return bTime.compareTo(aTime);
-        });
-      if (!mounted) return;
-      if (docs.isEmpty) {
-        _showStyledSnackBar('No pending orders found');
-        return;
-      }
-      await showDialog<void>(
-        context: context,
-        builder: (dialogContext) {
-          return _buildStyledDialog(
-            title: 'Pending Orders',
-            icon: Icons.bookmark_rounded,
-            dialogContext: dialogContext,
-            child: Column(
-              children: docs.map((doc) {
-                final order = doc.data();
-                final items = List<Map<String, dynamic>>.from(
-                  order['items'] ?? [],
-                );
-                final createdAt = order['createdAt'] as Timestamp?;
-                final timeStr = createdAt != null
-                    ? '${createdAt.toDate().hour}:${createdAt.toDate().minute.toString().padLeft(2, '0')}'
-                    : 'Unknown';
-                return Container(
-                  margin: const EdgeInsets.only(bottom: 12),
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: _AppColors.cardBg,
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(
-                      color: _AppColors.primary.withOpacity(0.15),
-                      width: 1,
-                    ),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Expanded(
-                            child: Row(
+    if (!mounted) return;
+    final store = HeldOrderStore.instance;
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => StreamBuilder<List<HeldOrder>>(
+        stream: store.watch(userId),
+        builder: (context, snapshot) {
+          final orders = snapshot.data ?? const <HeldOrder>[];
+          return AlertDialog(
+            title: const Text('Pending Orders'),
+            content: SizedBox(
+              width: 520,
+              height: MediaQuery.sizeOf(context).height * .62,
+              child: snapshot.hasError
+                  ? const Center(child: Text('Unable to load saved orders.'))
+                  : !snapshot.hasData
+                  ? const Center(child: CircularProgressIndicator())
+                  : orders.isEmpty
+                  ? const Center(child: Text('No pending orders found'))
+                  : ListView.builder(
+                      itemCount: orders.length,
+                      itemBuilder: (context, index) {
+                        final order = orders[index];
+                        final data = order.data();
+                        final items = (data['items'] as List? ?? [])
+                            .whereType<Map>()
+                            .map((item) => Map<String, dynamic>.from(item))
+                            .toList();
+                        final created = data['createdAt'] is Timestamp
+                            ? (data['createdAt'] as Timestamp).toDate()
+                            : DateTime.tryParse('${data['createdAt']}');
+                        return Card(
+                          margin: const EdgeInsets.only(bottom: 10),
+                          child: Padding(
+                            padding: const EdgeInsets.all(12),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Container(
-                                  padding: const EdgeInsets.all(6),
-                                  decoration: BoxDecoration(
-                                    color: _AppColors.primary.withOpacity(0.12),
-                                    borderRadius: BorderRadius.circular(8),
+                                Row(
+                                  children: [
+                                    const Expanded(
+                                      child: Text(
+                                        'Held order',
+                                        style: TextStyle(
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                    ),
+                                    if (data['_pendingSync'] == true)
+                                      const Chip(
+                                        label: Text(
+                                          'Saved offline',
+                                          style: TextStyle(fontSize: 11),
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                                if (created != null)
+                                  Text(
+                                    MaterialLocalizations.of(
+                                      context,
+                                    ).formatShortDate(created),
                                   ),
-                                  child: const Icon(
-                                    Icons.access_time_rounded,
-                                    size: 14,
-                                    color: _AppColors.primary,
+                                ...items.map(
+                                  (item) => Text(
+                                    '${item['name']} ${item['variant'] ?? ''} ×${item['quantity'] ?? 0}',
                                   ),
                                 ),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                  child: Text(
-                                    'Order at $timeStr',
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(
-                                      fontSize: 13,
-                                      fontWeight: FontWeight.w700,
-                                      color: _AppColors.primary,
+                                const SizedBox(height: 8),
+                                Row(
+                                  mainAxisAlignment: MainAxisAlignment.end,
+                                  children: [
+                                    TextButton(
+                                      onPressed: () async {
+                                        try {
+                                          await store.consume(
+                                            userId,
+                                            order.id,
+                                            'voided',
+                                          );
+                                          if (dialogContext.mounted)
+                                            showTopNotification(
+                                              dialogContext,
+                                              'Held order voided',
+                                            );
+                                        } catch (error) {
+                                          if (dialogContext.mounted)
+                                            ScaffoldMessenger.of(
+                                              dialogContext,
+                                            ).showSnackBar(
+                                              SnackBar(content: Text('$error')),
+                                            );
+                                        }
+                                      },
+                                      child: const Text('Void'),
                                     ),
-                                  ),
+                                    FilledButton(
+                                      onPressed: () async {
+                                        try {
+                                          _restorePendingOrder(
+                                            items,
+                                            discountType:
+                                                data['discountType']
+                                                    ?.toString() ??
+                                                'None',
+                                          );
+                                          await store.consume(
+                                            userId,
+                                            order.id,
+                                            'restored',
+                                          );
+                                          if (!dialogContext.mounted) return;
+                                          Navigator.pop(dialogContext);
+                                        } catch (error) {
+                                          if (dialogContext.mounted)
+                                            ScaffoldMessenger.of(
+                                              dialogContext,
+                                            ).showSnackBar(
+                                              SnackBar(content: Text('$error')),
+                                            );
+                                        }
+                                      },
+                                      child: const Text('Restore'),
+                                    ),
+                                  ],
                                 ),
                               ],
                             ),
                           ),
-                          ElevatedButton(
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: _AppColors.primary,
-                              foregroundColor: Colors.white,
-                              elevation: 0,
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 14,
-                                vertical: 8,
-                              ),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(10),
-                              ),
-                              textStyle: const TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                            onPressed: () async {
-                              _restorePendingOrder(
-                                items,
-                                discountType:
-                                    order['discountType']?.toString() ?? 'None',
-                              );
-                              await _recordPendingOrderHistory(
-                                action: 'restored',
-                                orderId: doc.id,
-                                items: items,
-                              );
-                              await doc.reference.delete();
-                              Navigator.pop(dialogContext);
-                            },
-                            child: const Text('Restore'),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 10),
-                      ...items.map(
-                        (item) => Padding(
-                          padding: const EdgeInsets.only(bottom: 4),
-                          child: Row(
-                            children: [
-                              Container(
-                                width: 4,
-                                height: 4,
-                                margin: const EdgeInsets.only(right: 8, top: 2),
-                                decoration: const BoxDecoration(
-                                  color: _AppColors.accent,
-                                  shape: BoxShape.circle,
-                                ),
-                              ),
-                              Expanded(
-                                child: Text(
-                                  '${item['name']} ${item['variant']} x${item['quantity']}',
-                                  maxLines: 2,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
-                                    fontSize: 13,
-                                    color: _AppColors.textSoft,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                      Align(
-                        alignment: Alignment.centerRight,
-                        child: TextButton.icon(
-                          onPressed: () async {
-                            await _recordPendingOrderHistory(
-                              action: 'voided',
-                              orderId: doc.id,
-                              items: items,
-                            );
-                            await doc.reference.delete();
-                            if (!mounted) return;
-                            Navigator.pop(dialogContext);
-                            _showPendingOrders();
-                          },
-                          icon: const Icon(
-                            Icons.assignment_return_outlined,
-                            size: 14,
-                            color: Color(0xFFB71C1C),
-                          ),
-                          label: const Text(
-                            'Void',
-                            style: TextStyle(
-                              color: Color(0xFFB71C1C),
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                          style: TextButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 8,
-                              vertical: 4,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                );
-              }).toList(),
+                        );
+                      },
+                    ),
             ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: const Text('Close'),
+              ),
+            ],
           );
         },
-      );
-    } catch (e) {
-      _showStyledSnackBar('Error loading pending orders: $e', isError: true);
-    }
+      ),
+    );
   }
 
   Future<void> _restoreLatestPendingOrder() async {
@@ -5254,35 +5131,21 @@ class _DailyStockPageState extends State<DailyStockPage>
       return;
     }
     try {
-      final snapshot = await FirebaseFirestore.instance
-          .collection('pending_orders')
-          .where('userId', isEqualTo: userId)
-          .get();
-      final docs = snapshot.docs.toList()
-        ..sort((a, b) {
-          final aTime =
-              (a.data()['createdAt'] as Timestamp?)?.millisecondsSinceEpoch ??
-              0;
-          final bTime =
-              (b.data()['createdAt'] as Timestamp?)?.millisecondsSinceEpoch ??
-              0;
-          return bTime.compareTo(aTime);
-        });
+      final docs = await HeldOrderStore.instance.list(userId);
       if (!mounted) return;
       if (docs.isEmpty) {
         _showStyledSnackBar('No pending orders found');
         return;
       }
 
-      final order = docs.first.data();
+      final latest = docs.first;
+      final order = latest.data();
       final items = List<Map<String, dynamic>>.from(order['items'] ?? []);
       _restorePendingOrder(
         items,
         discountType: order['discountType']?.toString() ?? 'None',
       );
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _showCartPreviewSheet();
-      });
+      await HeldOrderStore.instance.consume(userId, latest.id, 'restored');
     } catch (e) {
       _showStyledSnackBar('Error loading pending order: $e', isError: true);
     }
@@ -8767,7 +8630,10 @@ class _DailyStockPageState extends State<DailyStockPage>
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 // ── Section title
-                _buildInventoryModeToggle(),
+                KeyedSubtree(
+                  key: widget.salesTourKey,
+                  child: _buildInventoryModeToggle(),
+                ),
                 const SizedBox(height: 12),
 
                 // ── Discount toggles
@@ -8943,7 +8809,10 @@ class _DailyStockPageState extends State<DailyStockPage>
               ),
             ),
           ),
-        _buildInventoryModeToggle(),
+        KeyedSubtree(
+          key: widget.salesTourKey,
+          child: _buildInventoryModeToggle(),
+        ),
         const SizedBox(height: 14),
         _buildOrderSearchField(),
         const SizedBox(height: 14),

@@ -28,8 +28,15 @@ import '../Login/Login/Login.dart';
 
 class ProfilePage extends StatefulWidget {
   final VoidCallback onMessage;
+  final VoidCallback onReplayTutorial;
+  final GlobalKey? tourTargetKey;
 
-  const ProfilePage({super.key, required this.onMessage});
+  const ProfilePage({
+    super.key,
+    required this.onMessage,
+    required this.onReplayTutorial,
+    this.tourTargetKey,
+  });
 
   @override
   State<ProfilePage> createState() => _ProfilePageState();
@@ -52,6 +59,8 @@ class _ProfilePageState extends State<ProfilePage>
   static const Color _textSoft = AppColors.textMuted;
   String? _staffDocId;
   Map<String, dynamic>? _loadedProfile;
+  String? _profileSnapshotUid;
+  Stream<DocumentSnapshot<Map<String, dynamic>>>? _profileSnapshotStream;
   String? _verifiedSessionEmail;
   bool _refreshingEmail = false;
   bool _hasPendingEmail = false;
@@ -95,7 +104,14 @@ class _ProfilePageState extends State<ProfilePage>
           prefs.getString('lastStaffDocId') ??
           prefs.getString('lastUserId');
       if (!mounted) return;
-      if (_staffDocId != uid) setState(() => _staffDocId = uid);
+      if (_staffDocId != uid) {
+        setState(() {
+          _staffDocId = uid;
+          _loadedProfile = null;
+          _profileSnapshotUid = null;
+          _profileSnapshotStream = null;
+        });
+      }
       final user = FirebaseAuth.instance.currentUser;
       if (user == null || user.uid != uid) return;
       try {
@@ -172,6 +188,17 @@ class _ProfilePageState extends State<ProfilePage>
     return pending.isNotEmpty
         ? pending
         : data['email']?.toString() ?? 'No email';
+  }
+
+  Stream<DocumentSnapshot<Map<String, dynamic>>> _profileStream(String uid) {
+    if (_profileSnapshotUid != uid || _profileSnapshotStream == null) {
+      _profileSnapshotUid = uid;
+      _profileSnapshotStream = FirebaseFirestore.instance
+          .collection('staff_requests')
+          .doc(uid)
+          .snapshots();
+    }
+    return _profileSnapshotStream!;
   }
 
   bool _emailPending(Map<String, dynamic> data) {
@@ -632,6 +659,8 @@ class _ProfilePageState extends State<ProfilePage>
                       const SizedBox(height: 0),
                       _buildInfoCard(),
                       const SizedBox(height: 24),
+                      _buildReplayTutorial(),
+                      const SizedBox(height: 12),
                       _buildChangePassword(),
                       const SizedBox(height: 12),
                       _buildLogout(),
@@ -647,249 +676,287 @@ class _ProfilePageState extends State<ProfilePage>
     );
   }
 
+  Widget _buildReplayTutorial() {
+    return Align(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 520),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: widget.onReplayTutorial,
+              icon: const Icon(Icons.lightbulb_outline_rounded),
+              label: const Text('Replay Staff Tutorial'),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: _pinkDark,
+                side: const BorderSide(color: _border),
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(18),
+                ),
+                textStyle: const TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   // ─── HEADER ──────────────────────────────────────────────────────────────
   Widget _buildHeader() {
     final currentUser = FirebaseAuth.instance.currentUser;
     final uid = currentUser?.uid ?? _staffDocId;
     if (uid == null || uid.isEmpty) return _buildHeaderError();
 
-    return StreamBuilder<DocumentSnapshot>(
-      stream: FirebaseFirestore.instance
-          .collection('staff_requests')
-          .doc(uid)
-          .snapshots(),
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: _profileStream(uid),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
-          return _buildHeaderLoading();
+          final cachedProfile = _loadedProfile;
+          if (cachedProfile == null) return _buildHeaderLoading();
         }
         if (!snapshot.hasData || !snapshot.data!.exists) {
+          if (_loadedProfile != null) {
+            return _buildHeaderFromData(context, uid, _loadedProfile!);
+          }
           return _buildHeaderError();
         }
 
-        final staffData = snapshot.data!.data() as Map<String, dynamic>? ?? {};
+        final staffData = snapshot.data!.data() ?? {};
         _loadedProfile = Map<String, dynamic>.from(staffData);
-        final firstName = staffData['firstName'] ?? 'Staff';
-        final lastName = staffData['lastName'] ?? 'Member';
-        final email = _verifiedSessionEmail ?? confirmedProfileEmail(staffData);
-        final staffId = publicItemId('${staffData['staffId'] ?? 'N/A'}');
-        final photoUrl =
-            staffData['photoUrl']?.toString() ??
-            staffData['profileImageUrl']?.toString() ??
-            '';
+        return _buildHeaderFromData(context, uid, staffData);
+      },
+    );
+  }
 
-        return Container(
-          decoration: const BoxDecoration(
-            gradient: LinearGradient(
-              colors: [
-                AppColors.primaryDeep,
-                _pinkDark,
-                _pinkMid,
-                AppColors.accent,
-              ],
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
+  Widget _buildHeaderFromData(
+    BuildContext context,
+    String uid,
+    Map<String, dynamic> staffData,
+  ) {
+    final firstName = staffData['firstName'] ?? 'Staff';
+    final lastName = staffData['lastName'] ?? 'Member';
+    final email = _verifiedSessionEmail ?? confirmedProfileEmail(staffData);
+    final staffId = publicItemId('${staffData['staffId'] ?? 'N/A'}');
+    final photoUrl =
+        staffData['photoUrl']?.toString() ??
+        staffData['profileImageUrl']?.toString() ??
+        '';
+
+    return Container(
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          colors: [
+            AppColors.primaryDeep,
+            _pinkDark,
+            _pinkMid,
+            AppColors.accent,
+          ],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+      ),
+      child: Stack(
+        children: [
+          Positioned(
+            top: -30,
+            right: -30,
+            child: Container(
+              width: 160,
+              height: 160,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: _accent.withOpacity(0.08),
+              ),
             ),
           ),
-          child: Stack(
-            children: [
-              Positioned(
-                top: -30,
-                right: -30,
-                child: Container(
-                  width: 160,
-                  height: 160,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: _accent.withOpacity(0.08),
-                  ),
-                ),
+          Positioned(
+            top: 20,
+            right: 60,
+            child: Container(
+              width: 80,
+              height: 80,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: _accent.withOpacity(0.07),
               ),
-              Positioned(
-                top: 20,
-                right: 60,
-                child: Container(
-                  width: 80,
-                  height: 80,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: _accent.withOpacity(0.07),
-                  ),
-                ),
+            ),
+          ),
+          Positioned(
+            bottom: 30,
+            left: -20,
+            child: Container(
+              width: 100,
+              height: 100,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: Colors.white.withOpacity(0.05),
               ),
-              Positioned(
-                bottom: 30,
-                left: -20,
-                child: Container(
-                  width: 100,
-                  height: 100,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: Colors.white.withOpacity(0.05),
-                  ),
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 52, 20, 28),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    LayoutBuilder(
-                      builder: (context, constraints) {
-                        final isCompact = constraints.maxWidth < 500;
-                        final identity = Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          mainAxisAlignment: MainAxisAlignment.end,
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 52, 20, 28),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                LayoutBuilder(
+                  builder: (context, constraints) {
+                    final isCompact = constraints.maxWidth < 500;
+                    final identity = Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        Text(
+                          '$firstName $lastName',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: isCompact ? 18 : 20,
+                            fontWeight: FontWeight.w800,
+                            color: Colors.white,
+                            letterSpacing: 0.3,
+                          ),
+                        ),
+                        const SizedBox(height: 3),
+                        Text(
+                          email,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.white.withOpacity(0.60),
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Row(
                           children: [
-                            Text(
-                              '$firstName $lastName',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                fontSize: isCompact ? 18 : 20,
-                                fontWeight: FontWeight.w800,
-                                color: Colors.white,
-                                letterSpacing: 0.3,
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 10,
+                                vertical: 4,
                               ),
-                            ),
-                            const SizedBox(height: 3),
-                            Text(
-                              email,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: Colors.white.withOpacity(0.60),
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                            Row(
-                              children: [
-                                Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 10,
-                                    vertical: 4,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: _accent.withOpacity(0.18),
-                                    borderRadius: BorderRadius.circular(20),
-                                    border: Border.all(
-                                      color: _accent.withOpacity(0.60),
-                                      width: 1,
-                                    ),
-                                  ),
-                                  child: const Text(
-                                    'Staff Member',
-                                    style: TextStyle(
-                                      fontSize: 11,
-                                      color: _accentLight,
-                                      fontWeight: FontWeight.w600,
-                                      letterSpacing: 0.3,
-                                    ),
-                                  ),
+                              decoration: BoxDecoration(
+                                color: _accent.withOpacity(0.18),
+                                borderRadius: BorderRadius.circular(20),
+                                border: Border.all(
+                                  color: _accent.withOpacity(0.60),
+                                  width: 1,
                                 ),
-                                if (isCompact) ...[
-                                  const Spacer(),
-                                  _buildEditButton(compact: true),
-                                ],
-                              ],
+                              ),
+                              child: const Text(
+                                'Staff Member',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: _accentLight,
+                                  fontWeight: FontWeight.w600,
+                                  letterSpacing: 0.3,
+                                ),
+                              ),
                             ),
-                          ],
-                        );
-
-                        if (isCompact) {
-                          return Row(
-                            crossAxisAlignment: CrossAxisAlignment.center,
-                            children: [
-                              _buildAvatar(photoUrl),
-                              const SizedBox(width: 14),
-                              Expanded(child: identity),
+                            if (isCompact) ...[
+                              const Spacer(),
+                              _buildEditButton(compact: true),
                             ],
-                          );
-                        }
-                        return Row(
-                          crossAxisAlignment: CrossAxisAlignment.end,
-                          children: [
-                            _buildAvatar(photoUrl),
-                            const SizedBox(width: 16),
-                            Expanded(child: identity),
-                            const SizedBox(width: 10),
-                            _buildEditButton(),
                           ],
-                        );
-                      },
+                        ),
+                      ],
+                    );
+
+                    if (isCompact) {
+                      return Row(
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          _buildAvatar(photoUrl),
+                          const SizedBox(width: 14),
+                          Expanded(child: identity),
+                        ],
+                      );
+                    }
+                    return Row(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        _buildAvatar(photoUrl),
+                        const SizedBox(width: 16),
+                        Expanded(child: identity),
+                        const SizedBox(width: 10),
+                        _buildEditButton(),
+                      ],
+                    );
+                  },
+                ),
+                const SizedBox(height: 20),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 10,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.07),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: _accent.withOpacity(0.25),
+                      width: 1,
                     ),
-                    const SizedBox(height: 20),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 14,
-                        vertical: 10,
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        Icons.badge_outlined,
+                        size: 15,
+                        color: _accentLight.withOpacity(0.75),
                       ),
-                      decoration: BoxDecoration(
-                        color: Colors.white.withOpacity(0.07),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(
-                          color: _accent.withOpacity(0.25),
-                          width: 1,
+                      const SizedBox(width: 8),
+                      Text(
+                        'ID: ',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.white.withOpacity(0.50),
+                          fontWeight: FontWeight.w500,
                         ),
                       ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            Icons.badge_outlined,
-                            size: 15,
-                            color: _accentLight.withOpacity(0.75),
-                          ),
-                          const SizedBox(width: 8),
-                          Text(
-                            'ID: ',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: Colors.white.withOpacity(0.50),
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                          Text(
-                            staffId,
-                            style: const TextStyle(
-                              fontSize: 12,
-                              color: Colors.white,
-                              fontWeight: FontWeight.w600,
-                              letterSpacing: 0.8,
-                            ),
-                          ),
-                        ],
+                      Text(
+                        staffId,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: Colors.white,
+                          fontWeight: FontWeight.w600,
+                          letterSpacing: 0.8,
+                        ),
                       ),
-                    ),
-                    StreamBuilder<DocumentSnapshot>(
-                      stream: FirebaseFirestore.instance
-                          .collection('staff_budget')
-                          .doc(uid)
-                          .snapshots(),
-                      builder: (context, budgetSnapshot) {
-                        final data =
-                            budgetSnapshot.data?.data()
-                                as Map<String, dynamic>?;
-                        final start =
-                            data?['dutyStartTime']?.toString().trim() ?? '';
-                        final end =
-                            data?['dutyEndTime']?.toString().trim() ?? '';
-                        if (start.isEmpty && end.isEmpty) {
-                          return const SizedBox.shrink();
-                        }
-                        return Padding(
-                          padding: const EdgeInsets.only(top: 10),
-                          child: _buildWorkHoursChip(start, end),
-                        );
-                      },
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
-              ),
-            ],
+                StreamBuilder<DocumentSnapshot>(
+                  stream: FirebaseFirestore.instance
+                      .collection('staff_budget')
+                      .doc(uid)
+                      .snapshots(),
+                  builder: (context, budgetSnapshot) {
+                    final data =
+                        budgetSnapshot.data?.data() as Map<String, dynamic>?;
+                    final start =
+                        data?['dutyStartTime']?.toString().trim() ?? '';
+                    final end = data?['dutyEndTime']?.toString().trim() ?? '';
+                    if (start.isEmpty && end.isEmpty) {
+                      return const SizedBox.shrink();
+                    }
+                    return Padding(
+                      padding: const EdgeInsets.only(top: 10),
+                      child: _buildWorkHoursChip(start, end),
+                    );
+                  },
+                ),
+              ],
+            ),
           ),
-        );
-      },
+        ],
+      ),
     );
   }
 
@@ -1168,11 +1235,8 @@ class _ProfilePageState extends State<ProfilePage>
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
-      child: StreamBuilder<DocumentSnapshot>(
-        stream: FirebaseFirestore.instance
-            .collection('staff_requests')
-            .doc(uid)
-            .snapshots(),
+      child: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+        stream: _profileStream(uid),
         builder: (context, snapshot) {
           if (!snapshot.hasData || !snapshot.data!.exists) {
             return Container(
@@ -1192,8 +1256,7 @@ class _ProfilePageState extends State<ProfilePage>
             );
           }
 
-          final staffData =
-              snapshot.data!.data() as Map<String, dynamic>? ?? {};
+          final staffData = snapshot.data!.data() ?? {};
           final email = _profileEmail(staffData);
           final firstName = staffData['firstName'] ?? 'N/A';
           final lastName = staffData['lastName'] ?? 'N/A';
@@ -1244,6 +1307,7 @@ class _ProfilePageState extends State<ProfilePage>
                                 ),
                               );
                         return Row(
+                          key: widget.tourTargetKey,
                           children: [
                             Container(
                               width: 4,
@@ -1621,7 +1685,6 @@ class _ProfilePageState extends State<ProfilePage>
     );
   }
 
-  // ─── LOGOUT BUTTON ────────────────────────────────────────────────────────
   Widget _buildChangePassword() {
     return Align(
       child: ConstrainedBox(

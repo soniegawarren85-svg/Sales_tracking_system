@@ -225,6 +225,7 @@ class _SignupScreenState extends State<SignupScreen>
         'username': staffId,
         'loginPassword': password,
         'mustChangePassword': false,
+        'onboardingCompleted': false,
         'createdAt': FieldValue.serverTimestamp(),
       };
 

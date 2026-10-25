@@ -467,7 +467,6 @@ class _BatchDialogState extends State<_BatchDialog> {
         '${record['_id']}': allocationInstanceBatches(
           record,
           '${record['_id']}',
-          availableOnly: false,
         ),
     };
     final visibleRecords = (records ?? <Map<String, dynamic>>[])
@@ -945,11 +944,19 @@ class _RequestsDialogState extends State<_RequestsDialog> {
   Widget build(BuildContext context) => PopScope(
     canPop: !busy,
     child: Dialog(
-      insetPadding: const EdgeInsets.all(20),
+      insetPadding: EdgeInsets.all(
+        MediaQuery.sizeOf(context).width < 600 ? 8 : 20,
+      ),
       clipBehavior: Clip.antiAlias,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 760, maxHeight: 760),
+        constraints: BoxConstraints(
+          maxWidth: 760,
+          maxHeight:
+              MediaQuery.sizeOf(context).height -
+              MediaQuery.viewInsetsOf(context).bottom -
+              32,
+        ),
         child: Column(
           children: [
             Container(
@@ -1091,8 +1098,8 @@ class _RequestsDialogState extends State<_RequestsDialog> {
                       ),
                       child: Row(
                         children: [
-                          _requestTab('Pending Requests', 0),
-                          _requestTab('Completed Requests', 1),
+                          _requestTab('Pending', 0),
+                          _requestTab('Completed', 1),
                         ],
                       ),
                     ),
@@ -1192,10 +1199,37 @@ class _RequestsDialogState extends State<_RequestsDialog> {
                               ),
                             );
                           }
+                          final searchedQuantity = docs.fold<int>(0, (
+                            total,
+                            doc,
+                          ) {
+                            final preview = doc.data()['preview'] as Map? ?? {};
+                            return total +
+                                aggregateUnbundlePreviewItems(
+                                  preview['loose'],
+                                ).fold<int>(
+                                  0,
+                                  (sum, item) =>
+                                      sum + bundleQuantity(item['quantity']),
+                                );
+                          });
                           return ListView.builder(
-                            itemCount: docs.length,
+                            itemCount: docs.length + (search.isEmpty ? 0 : 1),
                             itemBuilder: (context, index) {
-                              final doc = docs[index];
+                              if (search.isNotEmpty && index == 0) {
+                                return Padding(
+                                  padding: const EdgeInsets.only(bottom: 10),
+                                  child: Text(
+                                    'Search results: ${docs.length} requests • $searchedQuantity items',
+                                    style: const TextStyle(
+                                      color: AppColors.primaryDark,
+                                      fontWeight: FontWeight.w800,
+                                    ),
+                                  ),
+                                );
+                              }
+                              final doc =
+                                  docs[index - (search.isEmpty ? 0 : 1)];
                               return _requestCard(doc.id, doc.data());
                             },
                           );

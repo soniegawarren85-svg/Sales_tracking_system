@@ -78,19 +78,29 @@ class _AdminAddonsTableState extends State<AdminAddonsTable> {
           )
           .toList();
       return LayoutBuilder(
-        builder: (context, constraints) {
+        builder: (context, _) {
           return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               InventoryRecordsTable(
                 headings: const [
                   'ID',
+                  'Image',
                   'Add-on',
+                  'Allocation date',
                   'Price',
                   'Expiry date',
                   'Actions',
                 ],
-                flex: const {0: 1.3, 1: 2.5, 2: 1.2, 3: 1.7, 4: 1.3},
+                flex: const {
+                  0: 1.0,
+                  1: 1.0,
+                  2: 2.1,
+                  3: 1.5,
+                  4: 1.1,
+                  5: 1.2,
+                  6: 1.1,
+                },
                 rows: rows.map((doc) {
                   final data = doc.data();
                   final publicId =
@@ -98,6 +108,12 @@ class _AdminAddonsTableState extends State<AdminAddonsTable> {
                       ? data['publicId'].toString().trim()
                       : 'Assigning ID…';
                   final expiry = DateTime.tryParse('${data['expirationDate']}');
+                  final allocatedValue = data['allocationDate'] ?? data['createdAt'];
+                  final allocated = allocatedValue is Timestamp
+                      ? allocatedValue.toDate()
+                      : allocatedValue is DateTime
+                      ? allocatedValue
+                      : DateTime.tryParse('$allocatedValue');
                   final expired =
                       expiry != null &&
                       expiry.isBefore(DateUtils.dateOnly(DateTime.now()));
@@ -109,19 +125,16 @@ class _AdminAddonsTableState extends State<AdminAddonsTable> {
                         color: AppColors.textMuted,
                       ),
                     ),
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: SizedBox(
+                        width: 42,
+                        height: 42,
+                        child: _photo('${data['imageUrl'] ?? ''}'),
+                      ),
+                    ),
                     Row(
                       children: [
-                        if (constraints.maxWidth > 600) ...[
-                          ClipRRect(
-                            borderRadius: BorderRadius.circular(10),
-                            child: SizedBox(
-                              width: 40,
-                              height: 40,
-                              child: _photo('${data['imageUrl'] ?? ''}'),
-                            ),
-                          ),
-                          const SizedBox(width: 10),
-                        ],
                         Expanded(
                           child: Text(
                             '${data['name'] ?? ''}',
@@ -130,6 +143,7 @@ class _AdminAddonsTableState extends State<AdminAddonsTable> {
                         ),
                       ],
                     ),
+                    Text(allocated == null ? 'Not recorded' : MaterialLocalizations.of(context).formatShortDate(allocated)),
                     Text(
                       '₱${(num.tryParse('${data['priceDelta']}') ?? 0).toStringAsFixed(2)}',
                     ),
@@ -257,6 +271,23 @@ class _AddonEditorState extends State<_AddonEditor> {
         'updatedAt': Timestamp.now(),
         if (widget.record == null) 'createdAt': Timestamp.now(),
       }, SetOptions(merge: true));
+      if (widget.record != null) {
+        final db = FirebaseFirestore.instance;
+        final allocations = await db
+            .collection('staff_inventory')
+            .where('sourceInventoryId', isEqualTo: ref.id)
+            .get();
+        for (var offset = 0; offset < allocations.docs.length; offset += 450) {
+          final batch = db.batch();
+          for (final allocation in allocations.docs.skip(offset).take(450)) {
+            batch.update(allocation.reference, {
+              'expirationDate': expiry.text,
+              'updatedAt': Timestamp.now(),
+            });
+          }
+          await batch.commit();
+        }
+      }
       if (mounted) Navigator.pop(context);
     } catch (_) {
       if (mounted) {

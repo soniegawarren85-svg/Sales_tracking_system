@@ -1,8 +1,11 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'activity_log.dart';
 import 'account_presence.dart';
+import 'login_ip.dart';
 
 class AccountLoginSession {
   static const _sessionPreference = 'accountLoginSessionId';
@@ -18,6 +21,9 @@ class AccountLoginSession {
     final prefs = await SharedPreferences.getInstance();
     final db = database ?? FirebaseFirestore.instance;
     final ref = db.collection('staff_login_sessions').doc();
+    final ipFuture = loginIp()
+        .timeout(const Duration(seconds: 3), onTimeout: () => null)
+        .catchError((Object _) => null);
     final deviceId =
         prefs.getString('accountDeviceId') ??
         db.collection('staff_login_sessions').doc().id;
@@ -34,6 +40,17 @@ class AccountLoginSession {
       'logoutAt': null,
     });
     await prefs.setString(_sessionPreference, ref.id);
+    unawaited(
+      ipFuture
+          .then((ip) async {
+            if (ip != null) {
+              await ref.set({'ipAddress': ip}, SetOptions(merge: true));
+            }
+          })
+          .catchError((Object error) {
+            // IP lookup is best effort and must not block account sign-in.
+          }),
+    );
     await ActivityLog.record(
       'account_login',
       '$role account signed in.',

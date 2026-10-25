@@ -1,4 +1,3 @@
-import '../widgets/screen_loading_region.dart';
 import 'package:flutter/material.dart';
 import '../services/branch_report_data.dart';
 import '../widgets/admin_sales_overview.dart';
@@ -14,14 +13,19 @@ int currentAllocatedQuantity(BranchReportData report, DateTime day) {
       .where((id) => id.isNotEmpty)
       .toSet();
 
-  return branchIds.fold<int>(0, (total, branchId) {
-    final stock = report.currentInventory(branchId, day);
-    return total +
-        stock.fold<int>(
-          0,
-          (subtotal, item) => subtotal + reportValue(item['remaining']).round(),
-        );
-  });
+  final start = DateUtils.dateOnly(day);
+  final end = start.add(const Duration(days: 1));
+  return branchIds.fold<int>(
+    0,
+    (total, branchId) =>
+        total +
+        report
+            .items(branchId, start, end)
+            .fold<int>(
+              0,
+              (sum, item) => sum + reportValue(item['added']).round(),
+            ),
+  );
 }
 
 class SuperAdminTotals extends StatelessWidget {
@@ -34,7 +38,7 @@ class SuperAdminTotals extends StatelessWidget {
       if (snapshot.hasError) {
         return const Text('Unable to load overall totals.');
       }
-      if (!snapshot.hasData) return const ScreenLoadingIndicator();
+      if (!snapshot.hasData) return _totalsSkeleton(context);
 
       final report = snapshot.data!;
       final today = DateUtils.dateOnly(DateTime.now());
@@ -120,5 +124,52 @@ class SuperAdminTotals extends StatelessWidget {
         },
       );
     },
+  );
+
+  Widget _totalsSkeleton(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) {
+      final columns = constraints.maxWidth < 600 ? 1 : 3;
+      final width = (constraints.maxWidth - (columns - 1) * 12) / columns;
+      return Wrap(
+        spacing: 12,
+        runSpacing: 12,
+        children: List.generate(
+          3,
+          (_) => SizedBox(
+            width: width,
+            child: Container(
+              height: 128,
+              padding: const EdgeInsets.all(18),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: AppColors.blush),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _skeletonBar(24, 24),
+                  const SizedBox(height: 12),
+                  _skeletonBar(90, 24),
+                  const SizedBox(height: 8),
+                  _skeletonBar(120, 12),
+                  const Spacer(),
+                  _skeletonBar(45, 10),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    },
+  );
+
+  Widget _skeletonBar(double width, double height) => Container(
+    width: width,
+    height: height,
+    decoration: BoxDecoration(
+      color: const Color(0xFFF3E4E9),
+      borderRadius: BorderRadius.circular(height / 2),
+    ),
   );
 }

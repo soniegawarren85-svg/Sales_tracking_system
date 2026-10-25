@@ -1,7 +1,7 @@
 import 'sales_report_dashboard.dart';
 import 'package:flutter/foundation.dart';
 import 'package:file_picker/file_picker.dart';
-import '../services/branch_report_csv.dart';
+import '../services/branch_report_excel.dart';
 import '../services/save_bytes.dart';
 import '../services/report_current_allocations.dart';
 import 'report_sales_timeline.dart';
@@ -18,6 +18,7 @@ import '../services/receipt_tax.dart';
 import '../services/report_pdf_theme.dart';
 import '../theme/app_colors.dart';
 import 'inventory_records_table.dart';
+import 'admin_page_skeleton.dart';
 
 class DailySalesReport extends StatefulWidget {
   const DailySalesReport({
@@ -25,10 +26,12 @@ class DailySalesReport extends StatefulWidget {
     this.data,
     this.branchId,
     this.branchName,
+    this.onBack,
   });
   final Stream<BranchReportData>? data;
   final String? branchId;
   final String? branchName;
+  final VoidCallback? onBack;
   @override
   State<DailySalesReport> createState() => _DailySalesReportState();
 }
@@ -191,6 +194,12 @@ class _DailySalesReportState extends State<DailySalesReport> {
   @override
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(
+      leading: widget.onBack != null && MediaQuery.sizeOf(context).width < 600
+          ? IconButton(
+              icon: const Icon(Icons.arrow_back),
+              onPressed: widget.onBack,
+            )
+          : null,
       backgroundColor: AppColors.primaryDeep,
       foregroundColor: Colors.white,
       title: Text(
@@ -211,7 +220,7 @@ class _DailySalesReportState extends State<DailySalesReport> {
           );
         }
         if (!snapshot.hasData) {
-          return const Center(child: CircularProgressIndicator());
+          return const AdminPageSkeleton(kind: AdminSkeletonKind.reports);
         }
         final data = snapshot.data!;
         final start = range.$1, end = range.$2;
@@ -688,21 +697,21 @@ class _DailySalesReportState extends State<DailySalesReport> {
                               : () async {
                                   setState(() => printing = true);
                                   try {
-                                    final bytes = branchReportCsv(
+                                    final bytes = branchReportExcel(
                                       data,
                                       start,
                                       end,
                                       branchId: widget.branchId,
                                     );
                                     final filename =
-                                        'sales-report-${start.year}-${start.month}-${start.day}.csv';
+                                        'sales-report-${start.year}-${start.month}-${start.day}.xlsx';
                                     final path = kIsWeb
                                         ? filename
                                         : await FilePicker.platform.saveFile(
                                             bytes: bytes,
                                             fileName: filename,
                                             type: FileType.custom,
-                                            allowedExtensions: ['csv'],
+                                            allowedExtensions: ['xlsx'],
                                           );
                                     if (path != null) {
                                       await saveBytes(path, bytes);
@@ -714,7 +723,7 @@ class _DailySalesReportState extends State<DailySalesReport> {
                                       ).showSnackBar(
                                         const SnackBar(
                                           content: Text(
-                                            'Unable to save CSV. Please try again.',
+                                            'Unable to save Excel file. Please try again.',
                                           ),
                                         ),
                                       );
@@ -726,7 +735,7 @@ class _DailySalesReportState extends State<DailySalesReport> {
                                   }
                                 },
                           icon: const Icon(Icons.download_outlined),
-                          label: const Text('Save CSV file'),
+                          label: const Text('Save Excel file'),
                         ),
                         FilledButton.icon(
                           onPressed: printing

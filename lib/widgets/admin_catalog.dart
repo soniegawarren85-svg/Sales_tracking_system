@@ -452,370 +452,344 @@ class _AdminCatalogState extends State<AdminCatalog> {
     BuildContext context,
   ) => StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
     stream: _products,
-    builder: (context, products) =>
-        StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-          stream: _coffees,
-          builder: (context, coffees) {
-            if (products.hasError || coffees.hasError) {
-              return const Center(child: Text('Unable to load items.'));
-            }
-            if (!products.hasData || !coffees.hasData) {
-              return const Center(
-                child: Padding(
-                  padding: EdgeInsets.all(24),
-                  child: CircularProgressIndicator(),
-                ),
-              );
-            }
-            final all = adminCatalogEntries(
-              products.data!.docs
-                  .map((doc) => {...doc.data(), 'id': doc.id})
-                  .toList(),
-              coffees.data!.docs
-                  .map((doc) => {...doc.data(), 'id': doc.id})
-                  .toList(),
-              gallery: widget.gallery,
-            );
-            final filter = widget.gallery && widget.type == 'All'
-                ? _filter
-                : widget.type;
-            final categories = currentCatalogCategories(
-              products.data!.docs
-                  .map((doc) => {...doc.data(), 'id': doc.id})
-                  .toList(),
-            );
-            final selected =
-                categories
-                    .where(
-                      (category) => catalogCategoryKey(category) == _category,
-                    )
-                    .firstOrNull ??
-                categories.firstOrNull;
-            if (widget.type == 'Categories') {
-              _category = selected == null
-                  ? null
-                  : catalogCategoryKey(selected);
-              WidgetsBinding.instance.addPostFrameCallback((_) {
-                if (mounted) widget.onCategorySelected?.call(selected);
-              });
-            }
-            final entries = all
-                .where(
-                  (entry) =>
-                      (filter == 'All' || entry.type == filter) &&
-                      (_query.isNotEmpty ||
-                          widget.type != 'Categories' ||
-                          catalogCategoryKey(entry.source) == _category) &&
-                      '${entry.id} ${entry.name} ${catalogExpiryLabel(entry)} ${_low(entry) ? 'low stock' : ''} ${_near(entry) ? 'near expiry expiring soon malapit ma expire' : ''}'
-                          .toLowerCase()
-                          .contains(_query),
-                )
-                .toList();
-            final searchField = TextField(
-              key: const ValueKey('inventory-search'),
-              onChanged: (value) =>
-                  setState(() => _query = value.trim().toLowerCase()),
-              decoration: const InputDecoration(
-                hintText: 'Search items',
-                prefixIcon: Icon(Icons.search),
-                border: OutlineInputBorder(),
-              ),
-            );
-            final categorySelector = SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: widget.type == 'Categories'
-                  ? Row(
-                      spacing: 8,
-                      children: categories
-                          .map(
-                            (doc) => ChoiceChip(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 16,
-                                vertical: 8,
-                              ),
-                              selectedColor: AppColors.primaryDark,
-                              checkmarkColor: Colors.white,
-                              labelStyle: TextStyle(
-                                color: catalogCategoryKey(doc) == _category
-                                    ? Colors.white
-                                    : AppColors.primaryDark,
-                                fontWeight: FontWeight.w700,
-                              ),
-                              label: Text('${doc['name'] ?? 'Category'}'),
-                              selected: catalogCategoryKey(doc) == _category,
-                              onSelected: (_) {
-                                setState(
-                                  () => _category = catalogCategoryKey(doc),
-                                );
-                                widget.onCategorySelected?.call(doc);
-                              },
-                            ),
-                          )
-                          .toList(),
-                    )
-                  : Row(
-                      spacing: 8,
-                      children: [
-                        if (!widget.gallery && widget.type == 'Beverages')
-                          for (final addon in [false, true])
-                            ChoiceChip(
-                              label: Text(addon ? 'Add-ons' : 'Beverages'),
-                              selected: _showAddons == addon,
-                              selectedColor: AppColors.primaryDark,
-                              checkmarkColor: Colors.white,
-                              labelStyle: TextStyle(
-                                color: _showAddons == addon
-                                    ? Colors.white
-                                    : AppColors.primaryDark,
-                                fontWeight: FontWeight.w700,
-                              ),
-                              onSelected: (_) => setState(() {
-                                _showAddons = addon;
-                                widget.onBeverageTabChanged?.call(addon);
-                              }),
-                            ),
-                      ],
-                    ),
-            );
-            final categoryAndActions = Flex(
-              direction: MediaQuery.sizeOf(context).width < 600
-                  ? Axis.vertical
-                  : Axis.horizontal,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Flexible(
-                  fit: MediaQuery.sizeOf(context).width < 600
-                      ? FlexFit.loose
-                      : FlexFit.tight,
-                  flex: MediaQuery.sizeOf(context).width < 600 ? 0 : 1,
-                  child: categorySelector,
-                ),
-                if (widget.actions != null && _branch.isEmpty)
-                  InventoryHeaderTransition(
-                    collapsed: widget.compactHeader,
-                    child: Align(
-                      alignment: Alignment.centerRight,
-                      child: widget.actions!,
-                    ),
-                  ),
-              ],
-            );
-            final alerts =
-                !widget.gallery &&
-                    _branch.isEmpty &&
-                    inventoryAlertSearch(_query)
-                ? Wrap(
-                    spacing: 12,
-                    children: [
-                      Chip(
-                        avatar: const Icon(
-                          Icons.warning_amber,
-                          color: Colors.orange,
-                        ),
-                        label: Text('Low stock: ${entries.where(_low).length}'),
-                      ),
-                      Chip(
-                        avatar: const Icon(
-                          Icons.event_busy,
-                          color: Colors.deepOrange,
-                        ),
-                        label: Text(
-                          'Near expiry: ${entries.where(_near).length}',
-                        ),
-                      ),
-                    ],
-                  )
-                : null;
-            final sections = <Widget>[
-              if (!widget.gallery && widget.lockedBranchId == null)
-                InventoryHeaderTransition(
-                  collapsed: widget.compactHeader,
-                  child: _branchPicker(),
-                ),
-              if (!widget.gallery && widget.lockedBranchId != null)
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: Chip(
-                    avatar: const Icon(Icons.storefront_rounded, size: 18),
-                    label: Text(
-                      'Branch: ${widget.lockedBranchName ?? widget.lockedBranchId}',
-                    ),
-                  ),
-                ),
-              if (widget.gallery)
-                Wrap(
+    builder: (context, products) => StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: _coffees,
+      builder: (context, coffees) {
+        if (products.hasError || coffees.hasError) {
+          return const Center(child: Text('Unable to load items.'));
+        }
+        if (!products.hasData || !coffees.hasData) {
+          return const Center(
+            child: Padding(
+              padding: EdgeInsets.all(24),
+              child: CircularProgressIndicator(),
+            ),
+          );
+        }
+        final all = adminCatalogEntries(
+          products.data!.docs
+              .map((doc) => {...doc.data(), 'id': doc.id})
+              .toList(),
+          coffees.data!.docs
+              .map((doc) => {...doc.data(), 'id': doc.id})
+              .toList(),
+          gallery: widget.gallery,
+        );
+        final filter = widget.gallery && widget.type == 'All'
+            ? _filter
+            : widget.type;
+        final categories = currentCatalogCategories(
+          products.data!.docs
+              .map((doc) => {...doc.data(), 'id': doc.id})
+              .toList(),
+        );
+        final selected =
+            categories
+                .where((category) => catalogCategoryKey(category) == _category)
+                .firstOrNull ??
+            categories.firstOrNull;
+        if (widget.type == 'Categories') {
+          _category = selected == null ? null : catalogCategoryKey(selected);
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) widget.onCategorySelected?.call(selected);
+          });
+        }
+        final entries = all
+            .where(
+              (entry) =>
+                  (filter == 'All' || entry.type == filter) &&
+                  (_query.isNotEmpty ||
+                      widget.type != 'Categories' ||
+                      catalogCategoryKey(entry.source) == _category) &&
+                  '${entry.id} ${entry.name} ${catalogExpiryLabel(entry)} ${_low(entry) ? 'low stock' : ''} ${_near(entry) ? 'near expiry expiring soon malapit ma expire' : ''}'
+                      .toLowerCase()
+                      .contains(_query),
+            )
+            .toList();
+        final searchField = TextField(
+          key: const ValueKey('inventory-search'),
+          onChanged: (value) =>
+              setState(() => _query = value.trim().toLowerCase()),
+          decoration: const InputDecoration(
+            hintText: 'Search items',
+            prefixIcon: Icon(Icons.search),
+            border: OutlineInputBorder(),
+          ),
+        );
+        final categorySelector = SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: widget.type == 'Categories'
+              ? Row(
                   spacing: 8,
-                  runSpacing: 6,
-                  children: ['All', 'Categories', 'Bundle', 'Beverages']
+                  children: categories
                       .map(
-                        (type) => ChoiceChip(
-                          label: Text(
-                            type == 'Beverages' ? 'Beverages items' : type,
+                        (doc) => ChoiceChip(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 8,
                           ),
-                          selected: _filter == type,
-                          onSelected: (_) => setState(() => _filter = type),
+                          selectedColor: AppColors.primaryDark,
+                          checkmarkColor: Colors.white,
+                          labelStyle: TextStyle(
+                            color: catalogCategoryKey(doc) == _category
+                                ? Colors.white
+                                : AppColors.primaryDark,
+                            fontWeight: FontWeight.w700,
+                          ),
+                          label: Text('${doc['name'] ?? 'Category'}'),
+                          selected: catalogCategoryKey(doc) == _category,
+                          onSelected: (_) {
+                            setState(() => _category = catalogCategoryKey(doc));
+                            widget.onCategorySelected?.call(doc);
+                          },
                         ),
                       )
                       .toList(),
-                ),
-              const SizedBox(height: 10),
-              searchField,
-              const SizedBox(height: 12),
-              ?alerts,
-              categoryAndActions,
-              const SizedBox(key: ValueKey('catalog-results'), height: 16),
-              if (!widget.gallery && widget.type == 'Beverages' && !_showAddons)
-                const Padding(
-                  padding: EdgeInsets.only(bottom: 12),
-                  child: Text(
-                    'Beverages',
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w800,
-                      color: AppColors.primaryDark,
-                    ),
-                  ),
-                ),
-              if (!widget.gallery && _branch.isNotEmpty)
-                BranchInventoryMonitor(
-                  key: ValueKey(_branch),
-                  branchId: _branch,
-                  type: widget.type,
-                  query: _query,
-                  firestore: widget.firestore,
-                  showBatchHistory: widget.showBatchHistory,
                 )
-              else if (!widget.gallery &&
-                  widget.type == 'Beverages' &&
-                  _showAddons)
-                AdminAddonsTable(query: _query, firestore: widget.firestore)
-              else if (entries.isEmpty)
-                const Padding(
-                  padding: EdgeInsets.all(24),
-                  child: Text('No items found.'),
-                )
-              else if (widget.gallery)
-                LayoutBuilder(
-                  builder: (context, constraints) {
-                    final columns = constraints.maxWidth >= 900
-                        ? 3
-                        : constraints.maxWidth >= 600
-                        ? 2
-                        : 1;
-                    return GridView.builder(
-                      shrinkWrap: true,
-                      physics: const NeverScrollableScrollPhysics(),
-                      itemCount: entries.length,
-                      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                        crossAxisCount: columns,
-                        crossAxisSpacing: 16,
-                        mainAxisSpacing: 16,
-                        mainAxisExtent: 300,
-                      ),
-                      itemBuilder: (context, index) =>
-                          _galleryCard(entries[index]),
-                    );
-                  },
-                )
-              else
-                _table(entries),
-            ];
-            if (!widget.pinnedControls) {
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: sections,
-              );
-            }
-            final split =
-                sections.indexWhere(
-                  (section) => section.key == const ValueKey('catalog-results'),
-                ) +
-                1;
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                GestureDetector(
-                  behavior: HitTestBehavior.translucent,
-                  onVerticalDragUpdate: _dragInventoryFromControls,
-                  child: Listener(
-                    onPointerSignal: (event) {
-                      if (event is PointerScrollEvent &&
-                          event.scrollDelta.dy.abs() >
-                              event.scrollDelta.dx.abs()) {
-                        GestureBinding.instance.pointerSignalResolver.register(
-                          event,
-                          (_) => _smoothWheel(event),
-                        );
-                      }
-                    },
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: sections.take(split).toList(),
-                    ),
-                  ),
-                ),
-                Expanded(
-                  child: NotificationListener<ScrollNotification>(
-                    onNotification: (notification) {
-                      if (notification.depth != 0 ||
-                          notification.metrics.axis != Axis.vertical) {
-                        return false;
-                      }
-                      if (notification is ScrollStartNotification &&
-                          notification.dragDetails != null) {
-                        _wheelAnimation++;
-                        _wheelTarget = null;
-                      }
-                      if (notification is ScrollUpdateNotification &&
-                          notification.dragDetails != null) {
-                        _updateHeader(
-                          notification.scrollDelta ?? 0,
-                          notification.metrics,
-                        );
-                      }
-                      if (notification is OverscrollNotification &&
-                          notification.dragDetails != null) {
-                        _updateHeader(
-                          notification.overscroll,
-                          notification.metrics,
-                        );
-                      }
-                      return false;
-                    },
-                    child: SingleChildScrollView(
-                      controller: _scrollController,
-                      physics: const BouncingScrollPhysics(
-                        parent: AlwaysScrollableScrollPhysics(),
-                      ),
-                      key: const ValueKey('inventory-table-scroll'),
-                      padding: const EdgeInsets.only(bottom: 100),
-                      child: Builder(
-                        builder: (context) => Listener(
-                          // A short list cannot move, but wheel/trackpad input
-                          // must still be able to collapse or restore the header.
-                          onPointerSignal: (event) {
-                            if (event is PointerScrollEvent &&
-                                event.scrollDelta.dy.abs() >
-                                    event.scrollDelta.dx.abs()) {
-                              // Claim the event before Scrollable handles it,
-                              // so the wheel does not also jump immediately.
-                              GestureBinding.instance.pointerSignalResolver
-                                  .register(event, (_) => _smoothWheel(event));
-                            }
-                          },
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: sections.skip(split).toList(),
+              : Row(
+                  spacing: 8,
+                  children: [
+                    if (!widget.gallery && widget.type == 'Beverages')
+                      for (final addon in [false, true])
+                        ChoiceChip(
+                          label: Text(addon ? 'Add-ons' : 'Beverages'),
+                          selected: _showAddons == addon,
+                          selectedColor: AppColors.primaryDark,
+                          checkmarkColor: Colors.white,
+                          labelStyle: TextStyle(
+                            color: _showAddons == addon
+                                ? Colors.white
+                                : AppColors.primaryDark,
+                            fontWeight: FontWeight.w700,
                           ),
+                          onSelected: (_) => setState(() {
+                            _showAddons = addon;
+                            widget.onBeverageTabChanged?.call(addon);
+                          }),
                         ),
+                  ],
+                ),
+        );
+        final categoryAndActions = Flex(
+          direction: MediaQuery.sizeOf(context).width < 600
+              ? Axis.vertical
+              : Axis.horizontal,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Flexible(
+              fit: MediaQuery.sizeOf(context).width < 600
+                  ? FlexFit.loose
+                  : FlexFit.tight,
+              flex: MediaQuery.sizeOf(context).width < 600 ? 0 : 1,
+              child: categorySelector,
+            ),
+            if (widget.actions != null && _branch.isEmpty)
+              InventoryHeaderTransition(
+                collapsed: widget.compactHeader,
+                child: Align(
+                  alignment: Alignment.centerRight,
+                  child: widget.actions!,
+                ),
+              ),
+          ],
+        );
+        final alerts =
+            !widget.gallery && _branch.isEmpty && inventoryAlertSearch(_query)
+            ? Wrap(
+                spacing: 12,
+                children: [
+                  Chip(
+                    avatar: const Icon(
+                      Icons.warning_amber,
+                      color: Colors.orange,
+                    ),
+                    label: Text('Low stock: ${entries.where(_low).length}'),
+                  ),
+                  Chip(
+                    avatar: const Icon(
+                      Icons.event_busy,
+                      color: Colors.deepOrange,
+                    ),
+                    label: Text('Near expiry: ${entries.where(_near).length}'),
+                  ),
+                ],
+              )
+            : null;
+        final sections = <Widget>[
+          if (!widget.gallery && widget.lockedBranchId == null)
+            InventoryHeaderTransition(
+              collapsed: widget.compactHeader,
+              child: _branchPicker(),
+            ),
+          if (!widget.gallery && widget.lockedBranchId != null)
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Chip(
+                avatar: const Icon(Icons.storefront_rounded, size: 18),
+                label: Text(
+                  'Branch: ${widget.lockedBranchName ?? widget.lockedBranchId}',
+                ),
+              ),
+            ),
+          if (widget.gallery)
+            Wrap(
+              spacing: 8,
+              runSpacing: 6,
+              children: ['All', 'Categories', 'Bundle', 'Beverages']
+                  .map(
+                    (type) => ChoiceChip(
+                      label: Text(
+                        type == 'Beverages' ? 'Beverages items' : type,
+                      ),
+                      selected: _filter == type,
+                      onSelected: (_) => setState(() => _filter = type),
+                    ),
+                  )
+                  .toList(),
+            ),
+          const SizedBox(height: 10),
+          searchField,
+          const SizedBox(height: 12),
+          ?alerts,
+          categoryAndActions,
+          const SizedBox(key: ValueKey('catalog-results'), height: 16),
+          if (!widget.gallery && _branch.isNotEmpty)
+            BranchInventoryMonitor(
+              key: ValueKey(_branch),
+              branchId: _branch,
+              type: widget.type,
+              query: _query,
+              firestore: widget.firestore,
+              showBatchHistory: widget.showBatchHistory,
+              addons: widget.type == 'Beverages' && _showAddons,
+            )
+          else if (!widget.gallery && widget.type == 'Beverages' && _showAddons)
+            AdminAddonsTable(query: _query, firestore: widget.firestore)
+          else if (entries.isEmpty)
+            const Padding(
+              padding: EdgeInsets.all(24),
+              child: Text('No items found.'),
+            )
+          else if (widget.gallery)
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final columns = constraints.maxWidth >= 900
+                    ? 3
+                    : constraints.maxWidth >= 600
+                    ? 2
+                    : 1;
+                return GridView.builder(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  itemCount: entries.length,
+                  gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: columns,
+                    crossAxisSpacing: 16,
+                    mainAxisSpacing: 16,
+                    mainAxisExtent: 300,
+                  ),
+                  itemBuilder: (context, index) => _galleryCard(entries[index]),
+                );
+              },
+            )
+          else
+            _table(entries),
+        ];
+        if (!widget.pinnedControls) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: sections,
+          );
+        }
+        final split =
+            sections.indexWhere(
+              (section) => section.key == const ValueKey('catalog-results'),
+            ) +
+            1;
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onVerticalDragUpdate: _dragInventoryFromControls,
+              child: Listener(
+                onPointerSignal: (event) {
+                  if (event is PointerScrollEvent &&
+                      event.scrollDelta.dy.abs() > event.scrollDelta.dx.abs()) {
+                    GestureBinding.instance.pointerSignalResolver.register(
+                      event,
+                      (_) => _smoothWheel(event),
+                    );
+                  }
+                },
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: sections.take(split).toList(),
+                ),
+              ),
+            ),
+            Expanded(
+              child: NotificationListener<ScrollNotification>(
+                onNotification: (notification) {
+                  if (notification.depth != 0 ||
+                      notification.metrics.axis != Axis.vertical) {
+                    return false;
+                  }
+                  if (notification is ScrollStartNotification &&
+                      notification.dragDetails != null) {
+                    _wheelAnimation++;
+                    _wheelTarget = null;
+                  }
+                  if (notification is ScrollUpdateNotification &&
+                      notification.dragDetails != null) {
+                    _updateHeader(
+                      notification.scrollDelta ?? 0,
+                      notification.metrics,
+                    );
+                  }
+                  if (notification is OverscrollNotification &&
+                      notification.dragDetails != null) {
+                    _updateHeader(
+                      notification.overscroll,
+                      notification.metrics,
+                    );
+                  }
+                  return false;
+                },
+                child: SingleChildScrollView(
+                  controller: _scrollController,
+                  physics: const BouncingScrollPhysics(
+                    parent: AlwaysScrollableScrollPhysics(),
+                  ),
+                  key: const ValueKey('inventory-table-scroll'),
+                  padding: const EdgeInsets.only(bottom: 100),
+                  child: Builder(
+                    builder: (context) => Listener(
+                      // A short list cannot move, but wheel/trackpad input
+                      // must still be able to collapse or restore the header.
+                      onPointerSignal: (event) {
+                        if (event is PointerScrollEvent &&
+                            event.scrollDelta.dy.abs() >
+                                event.scrollDelta.dx.abs()) {
+                          // Claim the event before Scrollable handles it,
+                          // so the wheel does not also jump immediately.
+                          GestureBinding.instance.pointerSignalResolver
+                              .register(event, (_) => _smoothWheel(event));
+                        }
+                      },
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: sections.skip(split).toList(),
                       ),
                     ),
                   ),
                 ),
-              ],
-            );
-          },
-        ),
+              ),
+            ),
+          ],
+        );
+      },
+    ),
   );
 
   Widget _table(List<AdminCatalogEntry> entries) => LayoutBuilder(
@@ -947,9 +921,11 @@ class _AdminCatalogState extends State<AdminCatalog> {
                           cell(const Text('Item'), 3),
                           if (!beverages) cell(const Text('Cost price')),
                           if (beverages)
-                            ...['Small', 'Medium', 'Large'].map(
-                              (size) => cell(Text('$size\nCost / Sell')),
-                            )
+                            ...[
+                              'Small',
+                              'Medium',
+                              'Large',
+                            ].map((size) => cell(Text('$size\nCost / Sell')))
                           else ...[
                             cell(const Text('Price')),
                             cell(const Text('Expiry'), 2),

@@ -699,8 +699,10 @@ class LocalDatabaseSyncService {
 
     await _ensureSaleDrawer(local);
     if (payload['stockSyncRequired'] == true) {
-      final stock = await getCachedCollection('staff_inventory');
-      await cacheCollectionDocs('staff_inventory', stock);
+      await _inventoryLock.run(() async {
+        final stock = await getCachedCollection('staff_inventory');
+        await cacheCollectionDocs('staff_inventory', stock);
+      });
     }
 
     final cloudPayload = Map<String, dynamic>.from(payload);

@@ -12,9 +12,8 @@ DateTime? _historyDate(dynamic value) {
 int _historyQuantity(dynamic value) =>
     value is num ? value.toInt() : int.tryParse('$value') ?? 0;
 
-List<Map> _historyMapRows(dynamic value) => value is Iterable
-    ? value.whereType<Map>().toList()
-    : const [];
+List<Map> _historyMapRows(dynamic value) =>
+    value is Iterable ? value.whereType<Map>().toList() : const [];
 
 List<Map<String, dynamic>> staffInventoryHistoryEntries({
   required String staffId,
@@ -323,6 +322,15 @@ class _StaffInventoryHistoryDialogState
                 : widget.scopeIds.take(30).toList(),
           )
           .snapshots();
+  late final Stream<QuerySnapshot<Map<String, dynamic>>> adjustmentStream =
+      widget.db
+          .collection('stock_adjustments')
+          .where('userId', isEqualTo: widget.staffId)
+          .snapshots();
+  late final Stream<QuerySnapshot<Map<String, dynamic>>> salesStream = widget.db
+      .collection('completed_sales')
+      .where('userId', isEqualTo: widget.staffId)
+      .snapshots();
   late final Stream<QuerySnapshot<Map<String, dynamic>>> returnStream = widget
       .db
       .collection('allocation_checklist')
@@ -459,7 +467,7 @@ class _StaffInventoryHistoryDialogState
           ),
           Expanded(
             child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-              stream: widget.db.collection('stock_adjustments').snapshots(),
+              stream: adjustmentStream,
               builder: (context, adjustmentsSnapshot) {
                 if (adjustmentsSnapshot.hasError) {
                   return const Center(
@@ -474,7 +482,7 @@ class _StaffInventoryHistoryDialogState
                   );
                 }
                 return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                  stream: widget.db.collection('completed_sales').snapshots(),
+                  stream: salesStream,
                   builder: (context, salesSnapshot) {
                     if (salesSnapshot.hasError) {
                       return const Center(

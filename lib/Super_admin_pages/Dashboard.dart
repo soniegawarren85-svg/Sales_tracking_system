@@ -8,6 +8,7 @@ import '../services/short_id_service.dart';
 import '../Login/Login/Login.dart';
 import '../widgets/admin_sales_overview.dart';
 import '../widgets/activity_feed.dart';
+import '../widgets/admin_page_skeleton.dart';
 import '../widgets/login_session_alert_watcher.dart';
 import '../services/account_login_session.dart';
 import 'dashboard_totals.dart';
@@ -48,6 +49,8 @@ class SuperAdminDashboard extends StatefulWidget {
 class _SuperAdminDashboardState extends State<SuperAdminDashboard>
     with TickerProviderStateMixin {
   int _selectedIndex = 0;
+  bool _returnReportToMore = false;
+  int _pageRefreshVersion = 0;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _allocationNotices;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _checklistUpdates;
   int _pendingReturnCount = 0;
@@ -261,16 +264,67 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard>
         // Inventory is part of the main admin navigation.
         return const InventoryPage(embedded: true);
       case 3:
-        return const StaffPage();
+        return _refreshablePage(
+          StaffPage(onBack: () => setState(() => _selectedIndex = 5)),
+        );
       case 4:
-        return const ReportsPage();
+        return _refreshablePage(
+          ReportsPage(
+            onBack: _returnReportToMore
+                ? () => setState(() {
+                    _selectedIndex = 5;
+                    _returnReportToMore = false;
+                  })
+                : null,
+          ),
+        );
       case 5:
-        return SuperAdminSettingsPage(
-          onOpenStaff: () => setState(() => _selectedIndex = 3),
-          onOpenReports: () => setState(() => _selectedIndex = 4),
+        return _refreshablePage(
+          SuperAdminSettingsPage(
+            onOpenStaff: () => setState(() => _selectedIndex = 3),
+            onOpenReports: () => setState(() {
+              _returnReportToMore = true;
+              _selectedIndex = 4;
+            }),
+          ),
         );
       default:
         return _buildHomePage();
+    }
+  }
+
+  Widget _refreshablePage(Widget child) => TopEdgeRefresh(
+    notificationPredicate: (notification) =>
+        notification.depth == 0 && notification.metrics.axis == Axis.vertical,
+    onRefresh: _refreshCurrentPage,
+    child: KeyedSubtree(key: ValueKey(_pageRefreshVersion), child: child),
+  );
+
+  Future<void> _refreshCurrentPage() async {
+    final names = switch (_selectedIndex) {
+      3 => ['staff_requests', 'branches'],
+      4 => ['completed_sales', 'staff_inventory_history', 'stock_adjustments'],
+      5 => ['admin_settings', 'staff_requests', 'branches'],
+      _ => const <String>[],
+    };
+    try {
+      await Future.wait(
+        names.map(
+          (name) => FirebaseFirestore.instance
+              .collection(name)
+              .get(const GetOptions(source: Source.server)),
+        ),
+      ).timeout(const Duration(seconds: 15));
+      if (mounted) setState(() => _pageRefreshVersion++);
+    } catch (_) {
+      if (mounted)
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Unable to refresh this page. Check your connection.',
+            ),
+          ),
+        );
     }
   }
 
@@ -728,7 +782,10 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard>
                   item: _navItems[index],
                   selected: _selectedIndex == index,
                   badgeCount: _navigationBadgeCount(index),
-                  onTap: () => setState(() => _selectedIndex = index),
+                  onTap: () => setState(() {
+                    _selectedIndex = index;
+                    if (index == 4) _returnReportToMore = false;
+                  }),
                 ),
               ),
             ),
@@ -1060,7 +1117,10 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard>
     final selected =
         _selectedIndex == index || (index == 5 && _selectedIndex >= 3);
     return GestureDetector(
-      onTap: () => setState(() => _selectedIndex = index),
+      onTap: () => setState(() {
+        _selectedIndex = index;
+        if (index == 4) _returnReportToMore = false;
+      }),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 220),
         curve: Curves.easeInOut,

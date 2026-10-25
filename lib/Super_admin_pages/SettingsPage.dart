@@ -10,6 +10,7 @@ import '../widgets/transaction_settings_dialog.dart';
 import '../widgets/account_activity_logs_dialog.dart';
 import '../services/account_login_session.dart';
 import '../widgets/password_strength_checklist.dart';
+import '../widgets/admin_page_skeleton.dart';
 import '../widgets/account_profile_editor_sheet.dart';
 import '../services/catalog_image_service.dart';
 import 'package:sales_tracking/theme/app_colors.dart';
@@ -42,7 +43,8 @@ class SuperAdminSettingsPage extends StatefulWidget {
   State<SuperAdminSettingsPage> createState() => _SuperAdminSettingsPageState();
 }
 
-class _SuperAdminSettingsPageState extends State<SuperAdminSettingsPage> with WidgetsBindingObserver {
+class _SuperAdminSettingsPageState extends State<SuperAdminSettingsPage>
+    with WidgetsBindingObserver {
   bool _isUploadingProfilePhoto = false;
   String? _lastProfilePhotoUrl;
   Uint8List? _profilePreview;
@@ -57,11 +59,16 @@ class _SuperAdminSettingsPageState extends State<SuperAdminSettingsPage> with Wi
     _syncingEmail = true;
     try {
       await syncVerifiedProfileEmail(
-        profile: (widget.firestore ?? FirebaseFirestore.instance).collection('super_admin_profiles').doc(_profileId),
+        profile: (widget.firestore ?? FirebaseFirestore.instance)
+            .collection('super_admin_profiles')
+            .doc(_profileId),
         user: FirebaseAuth.instance.currentUser,
       );
-    } catch (error) { debugPrint('Email status refresh: $error'); }
-    finally { _syncingEmail = false; }
+    } catch (error) {
+      debugPrint('Email status refresh: $error');
+    } finally {
+      _syncingEmail = false;
+    }
   }
 
   @override
@@ -82,7 +89,8 @@ class _SuperAdminSettingsPageState extends State<SuperAdminSettingsPage> with Wi
     _loadAdminId().then((_) => _refreshVerifiedEmail());
     WidgetsBinding.instance.addObserver(this);
     _emailRefresh = Timer.periodic(const Duration(seconds: 15), (_) {
-      if (WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) _refreshVerifiedEmail();
+      if (WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed)
+        _refreshVerifiedEmail();
     });
   }
 
@@ -98,14 +106,16 @@ class _SuperAdminSettingsPageState extends State<SuperAdminSettingsPage> with Wi
   @override
   Widget build(BuildContext context) {
     if (!_profileReady) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+      return const Scaffold(
+        body: AdminPageSkeleton(kind: AdminSkeletonKind.settings),
+      );
     }
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: SystemUiOverlayStyle.light,
       child: Scaffold(
         backgroundColor: AppColors.background,
         body: CustomScrollView(
-          physics: const BouncingScrollPhysics(),
+          physics: const ClampingScrollPhysics(),
           slivers: [
             /// ===== PREMIUM HEADER =====
             SliverAppBar(
@@ -690,7 +700,10 @@ class _SuperAdminSettingsPageState extends State<SuperAdminSettingsPage> with Wi
               allowInitialEmailSetup: true,
             );
             // Keep the linked session available for automatic verification refresh.
-            await SuperAdmin.verifyPassword(values.currentPassword, database: db);
+            await SuperAdmin.verifyPassword(
+              values.currentPassword,
+              database: db,
+            );
           }
 
           await profile.set({

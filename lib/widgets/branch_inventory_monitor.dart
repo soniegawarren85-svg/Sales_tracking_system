@@ -36,9 +36,11 @@ class BranchInventoryMonitor extends StatefulWidget {
     this.query = '',
     this.firestore,
     this.showBatchHistory = true,
+    this.addons = false,
   });
   final FirebaseFirestore? firestore;
   final bool showBatchHistory;
+  final bool addons;
   final String branchId, type, query;
   @override
   State<BranchInventoryMonitor> createState() => _BranchInventoryMonitorState();
@@ -67,7 +69,9 @@ class _BranchInventoryMonitorState extends State<BranchInventoryMonitor> {
       final rows = all
           .where(
             (row) =>
-                (widget.type == 'All' || row['type'] == widget.type) &&
+                (widget.addons
+                    ? row['type'] == 'Add-ons'
+                    : widget.type == 'All' || row['type'] == widget.type) &&
                 '${row['id']} ${row['name']} ${row['expirationDate']} ${low(row) ? 'low stock' : ''} ${inventoryNearExpiry(row['expirationDate']) ? 'near expiry expiring soon malapit ma expire' : ''}'
                     .toLowerCase()
                     .contains(widget.query.trim().toLowerCase()),
@@ -126,12 +130,11 @@ class _BranchInventoryMonitorState extends State<BranchInventoryMonitor> {
               ),
             ],
           ),
-        if (widget.showBatchHistory)
-          Align(alignment: Alignment.centerRight, child: TextButton.icon(onPressed: () => showBranchBatchHistory(context, widget.branchId, widget.firestore ?? FirebaseFirestore.instance), icon: const Icon(Icons.history), label: const Text('Batch history'))),
         BranchAllocationTable(
           rows: rows,
           beverages: widget.type == 'Beverages',
           inventory: true,
+          addons: widget.addons,
           actions: (row) => Row(
             mainAxisSize: MainAxisSize.min,
             children: [

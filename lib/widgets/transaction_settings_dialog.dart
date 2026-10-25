@@ -140,17 +140,20 @@ class _TransactionSettingsDialogState extends State<TransactionSettingsDialog> {
         },
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
-      for (final branchId in branchIds) {
-        unawaited(
-          ActivityLog.record(
-            'settings_updated',
-            message,
-            database: reference.firestore,
-            branchId: branchId,
-            details: {'kind': widget.kind, 'fields': patch.keys.toList()},
-          ),
-        );
-      }
+      unawaited(
+        ActivityLog.record(
+          'settings_updated',
+          message,
+          database: reference.firestore,
+          branchId: branchIds.length == 1 ? branchIds.first : null,
+          branchIds: branchIds.toSet(),
+          details: {
+            'kind': widget.kind,
+            'fields': patch.keys.toList(),
+            'scope': branchIds.length > 1 ? 'All branches' : branchIds.first,
+          },
+        ),
+      );
       if (mounted) notify(message);
     } catch (e) {
       if (mounted) notify('Unable to save: $e');

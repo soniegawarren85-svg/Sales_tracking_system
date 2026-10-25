@@ -401,4 +401,49 @@ void main() {
     expect(labels['delivery-new'], 'Batch - 002');
     expect(allocationInstanceBatches(record, 'staff-bundle'), hasLength(2));
   });
+
+  test(
+    'bundle batch dialog list includes only currently available instances',
+    () {
+      final record = {
+        '_id': 'staff-bundle',
+        'assignedAt': Timestamp.fromDate(DateTime(2026, 10, 15)),
+        'bundleCount': 4,
+        'bundleInstances': [
+          {
+            'id': 'available',
+            'batchId': 'available-batch',
+            'assignedAt': Timestamp.fromDate(DateTime(2026, 10, 15)),
+            'status': 'available',
+          },
+          {
+            'id': 'returned',
+            'batchId': 'returned-batch',
+            'assignedAt': Timestamp.fromDate(DateTime(2026, 10, 14)),
+            'status': 'returned',
+          },
+          {
+            'id': 'converted',
+            'batchId': 'converted-batch',
+            'assignedAt': Timestamp.fromDate(DateTime(2026, 10, 13)),
+            'status': 'reconciled',
+          },
+          {
+            'id': 'pending-return',
+            'batchId': 'pending-return-batch',
+            'assignedAt': Timestamp.fromDate(DateTime(2026, 10, 12)),
+            'status': 'return_pending',
+          },
+        ],
+      };
+
+      final batches = allocationInstanceBatches(record, 'staff-bundle');
+
+      expect(batches.map((batch) => batch['batchId']), ['available-batch']);
+      expect(
+        (batches.single['instances'] as List).map((instance) => instance['id']),
+        ['available'],
+      );
+    },
+  );
 }

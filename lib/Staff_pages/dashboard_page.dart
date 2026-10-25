@@ -150,7 +150,8 @@ class _C {
 class DashboardPage extends StatefulWidget {
   final ScrollController scrollController;
   final VoidCallback onMessage;
-  final VoidCallback? onNotification;
+  final VoidCallback onNotification;
+  final Future<void> Function()? onReplayTutorial;
   final void Function({
     required String view,
     required String groupName,
@@ -158,14 +159,29 @@ class DashboardPage extends StatefulWidget {
   })?
   onOpenSalesGroup;
   final VoidCallback? onOpenAllItems;
+  final GlobalKey? dashboardTourKey;
+  final GlobalKey? dashboardFiltersTourKey;
+  final GlobalKey? allocatedItemsTourKey;
+  final GlobalKey? performanceTourKey;
+  final GlobalKey? cashDrawerTourKey;
+  final GlobalKey? guideTourKey;
+  final GlobalKey? salesHistoryTourKey;
 
   const DashboardPage({
     super.key,
     required this.scrollController,
     required this.onMessage,
-    this.onNotification,
+    required this.onNotification,
+    this.onReplayTutorial,
     this.onOpenSalesGroup,
     this.onOpenAllItems,
+    this.dashboardTourKey,
+    this.dashboardFiltersTourKey,
+    this.allocatedItemsTourKey,
+    this.performanceTourKey,
+    this.cashDrawerTourKey,
+    this.guideTourKey,
+    this.salesHistoryTourKey,
   });
 
   @override
@@ -1313,6 +1329,9 @@ class _DashboardPageState extends State<DashboardPage>
                   background: _Header(
                     onMessage: widget.onMessage,
                     onNotification: widget.onNotification,
+                    onReplayTutorial: widget.onReplayTutorial,
+                    guideTourKey: widget.guideTourKey,
+                    cashDrawerTourKey: widget.cashDrawerTourKey,
                     // A cash-drawer document is keyed by the assigned branch ID.
                     // Do not add every cached drawer here: that made a staff member's
                     // dashboard total include other staff/branch cash drawers.
@@ -1340,9 +1359,10 @@ class _DashboardPageState extends State<DashboardPage>
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
-                          const Align(
+                          Align(
+                            key: widget.dashboardTourKey,
                             alignment: Alignment.centerLeft,
-                            child: _SectionLabel(title: 'Dashboard'),
+                            child: const _SectionLabel(title: 'Dashboard'),
                           ),
                           const SizedBox(height: 12),
                           Align(
@@ -1350,6 +1370,7 @@ class _DashboardPageState extends State<DashboardPage>
                                 ? Alignment.centerLeft
                                 : Alignment.center,
                             child: _InventoryViewSelector(
+                              key: widget.dashboardFiltersTourKey,
                               selected: _inventoryView,
                               onSelected: (value) => setState(() {
                                 _inventoryView = value;
@@ -1385,7 +1406,10 @@ class _DashboardPageState extends State<DashboardPage>
                     alignment: Alignment.topCenter,
                     child: ConstrainedBox(
                       constraints: BoxConstraints(maxWidth: inventoryMaxWidth),
-                      child: _buildAdminInventoryList(),
+                      child: KeyedSubtree(
+                        key: widget.allocatedItemsTourKey,
+                        child: _buildAdminInventoryList(),
+                      ),
                     ),
                   ),
                 ),
@@ -1407,10 +1431,16 @@ class _DashboardPageState extends State<DashboardPage>
                       constraints: BoxConstraints(maxWidth: contentMaxWidth),
                       child: Row(
                         children: [
-                          const Expanded(
-                            child: _SectionLabel(title: 'Performance'),
+                          Expanded(
+                            child: _SectionLabel(
+                              key: widget.performanceTourKey,
+                              title: 'Performance',
+                            ),
                           ),
-                          _HistoryButton(onTap: _showHistory),
+                          _HistoryButton(
+                            key: widget.salesHistoryTourKey,
+                            onTap: _showHistory,
+                          ),
                         ],
                       ),
                     ),
@@ -1434,7 +1464,7 @@ class _DashboardPageState extends State<DashboardPage>
                       alignment: Alignment.topCenter,
                       child: ConstrainedBox(
                         constraints: BoxConstraints(maxWidth: contentMaxWidth),
-                        child: _buildPerformanceData(),
+                        child: RepaintBoundary(child: _buildPerformanceData()),
                       ),
                     ),
                   ),
@@ -2004,9 +2034,14 @@ class _DashboardPageState extends State<DashboardPage>
           stream: _receiptStream(),
           builder: (context, snapshot) {
             final localSales = localSnapshot.data ?? const [];
-            final firestoreSales = (snapshot.data?.docs ?? [])
-                .map((doc) => doc.data())
-                .toList();
+            final firestoreDocs = snapshot.data?.docs ?? const [];
+            Iterable<Map<String, dynamic>> allSales() sync* {
+              yield* localSales;
+              for (final doc in firestoreDocs) {
+                yield doc.data();
+              }
+            }
+
             final now = DateTime.now();
             final today = DateTime(now.year, now.month, now.day);
             final tomorrow = today.add(const Duration(days: 1));
@@ -2029,13 +2064,20 @@ class _DashboardPageState extends State<DashboardPage>
               return !dt.isBefore(today) && dt.isBefore(tomorrow);
             }
 
-            for (final data in [...localSales, ...firestoreSales]) {
-              if (!isVisibleReceipt(data)) continue;
+            void addReceipt(Map<String, dynamic> data) {
+              if (!isVisibleReceipt(data)) return;
               final salesId = data['salesId']?.toString() ?? '';
               final key = salesId.isNotEmpty
                   ? salesId
                   : 'local-${data['localId'] ?? bySalesId.length}';
               bySalesId[key] = data;
+            }
+
+            for (final data in localSales) {
+              addReceipt(data);
+            }
+            for (final doc in firestoreDocs) {
+              addReceipt(doc.data());
             }
 
             final receipts = bySalesId.values.toList()
@@ -2072,13 +2114,19 @@ class _DashboardPageState extends State<DashboardPage>
 
             return Column(
               children: [
-                ...visibleReceipts.map(
-                  (data) => _ReceiptCard(
-                    data: refundReceiptDisplayData(data, [
-                      ...localSales,
-                      ...firestoreSales,
-                    ]),
-                    compact: false,
+                ...visibleReceipts.asMap().entries.map(
+                  (entry) => RepaintBoundary(
+                    // Older cached receipts may not include either identifier.
+                    // Include the visible row index so they never share a null key.
+                    key: ValueKey(
+                      'receipt-$currentPage-${entry.key}-'
+                      '${entry.value['salesId'] ?? ''}-'
+                      '${entry.value['localId'] ?? ''}',
+                    ),
+                    child: _ReceiptCard(
+                      data: refundReceiptDisplayData(entry.value, allSales()),
+                      compact: false,
+                    ),
                   ),
                 ),
                 if (pageCount > 1)
@@ -2187,6 +2235,7 @@ class _InventoryViewSelector extends StatelessWidget {
   final ValueChanged<String> onSelected;
 
   const _InventoryViewSelector({
+    super.key,
     required this.selected,
     required this.onSelected,
   });
@@ -2236,7 +2285,7 @@ class _InventoryViewSelector extends StatelessWidget {
 
 class _SectionLabel extends StatelessWidget {
   final String title;
-  const _SectionLabel({required this.title});
+  const _SectionLabel({super.key, required this.title});
 
   @override
   Widget build(BuildContext context) {
@@ -2276,7 +2325,7 @@ class _SectionLabel extends StatelessWidget {
 
 class _HistoryButton extends StatelessWidget {
   final VoidCallback onTap;
-  const _HistoryButton({required this.onTap});
+  const _HistoryButton({super.key, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -2694,16 +2743,22 @@ class _ReceiptLine extends StatelessWidget {
 
 class _Header extends StatelessWidget {
   final VoidCallback onMessage;
-  final VoidCallback? onNotification;
+  final VoidCallback onNotification;
+  final Future<void> Function()? onReplayTutorial;
   final List<String> drawerIds;
   final List<_CachedDoc> cachedDrawerDocs;
   final String? staffDocId;
+  final GlobalKey? cashDrawerTourKey;
+  final GlobalKey? guideTourKey;
   const _Header({
     required this.onMessage,
-    this.onNotification,
+    required this.onNotification,
+    this.onReplayTutorial,
     required this.drawerIds,
     required this.cachedDrawerDocs,
     this.staffDocId,
+    this.cashDrawerTourKey,
+    this.guideTourKey,
   });
 
   Stream<QuerySnapshot<Map<String, dynamic>>> _cashDrawerStream() {
@@ -2765,8 +2820,8 @@ class _Header extends StatelessWidget {
     );
   }
 
-  void _showHelpSheet(BuildContext context) {
-    showModalBottomSheet(
+  Future<void> _showHelpSheet(BuildContext context) async {
+    await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
@@ -2794,9 +2849,7 @@ class _Header extends StatelessWidget {
                     .collection('staff_requests')
                     .snapshots(),
                 builder: (context, accountSnapshot) {
-                  return StreamBuilder<
-                    DocumentSnapshot<Map<String, dynamic>>
-                  >(
+                  return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
                     stream: FirebaseFirestore.instance
                         .collection('super_admin_profiles')
                         .doc(SuperAdmin.id)
@@ -2806,264 +2859,287 @@ class _Header extends StatelessWidget {
                           superAdminSnapshot.data?.data() ??
                           <String, dynamic>{};
                       return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                    stream: FirebaseFirestore.instance
-                        .collection('messages')
-                        .where('participantIds', arrayContains: me['id'])
-                        .snapshots(),
-                    builder: (context, chatSnapshot) {
-                      final rows = <String, Map<String, dynamic>>{};
-                      if (me['role'] != SuperAdmin.role) {
-                        rows[SuperAdmin.id] = {
-                          'id': SuperAdmin.id,
-                          'name': _displayName({
-                            ...superAdminData,
-                            'name': superAdminData['name'] ?? 'Super Admin',
-                          }),
-                          'role': SuperAdmin.role,
-                          'online': _isOnline(superAdminData),
-                          'statusText':
-                              AccountPresenceService.offlineStatus(
+                        stream: FirebaseFirestore.instance
+                            .collection('messages')
+                            .where('participantIds', arrayContains: me['id'])
+                            .snapshots(),
+                        builder: (context, chatSnapshot) {
+                          final rows = <String, Map<String, dynamic>>{};
+                          if (me['role'] != SuperAdmin.role) {
+                            rows[SuperAdmin.id] = {
+                              'id': SuperAdmin.id,
+                              'name': _displayName({
+                                ...superAdminData,
+                                'name': superAdminData['name'] ?? 'Super Admin',
+                              }),
+                              'role': SuperAdmin.role,
+                              'online': _isOnline(superAdminData),
+                              'statusText':
+                                  AccountPresenceService.offlineStatus(
+                                    superAdminData,
+                                  ),
+                              'lastSeenAt': AccountPresenceService.lastSeen(
                                 superAdminData,
                               ),
-                          'lastSeenAt': AccountPresenceService.lastSeen(
-                            superAdminData,
-                          ),
-                          'unread': 0,
-                          'lastMessage': '',
-                          'updatedAt': 0,
-                        };
-                      }
+                              'unread': 0,
+                              'lastMessage': '',
+                              'updatedAt': 0,
+                            };
+                          }
 
-                      for (final doc
-                          in accountSnapshot.data?.docs ??
-                              <QueryDocumentSnapshot<Map<String, dynamic>>>[]) {
-                        final data = doc.data();
-                        final status =
-                            data['status']?.toString().toLowerCase() ?? '';
-                        if (doc.id == me['id'] || status == 'rejected') {
-                          continue;
-                        }
-                        rows[doc.id] = {
-                          'id': doc.id,
-                          'name': _displayName(data),
-                          'role': data['role']?.toString() ?? 'staff',
-                          'online': _isOnline(data),
-                          'statusText':
-                              AccountPresenceService.offlineStatus(data),
-                          'lastSeenAt': AccountPresenceService.lastSeen(data),
-                          'unread': 0,
-                          'lastMessage': '',
-                          'updatedAt': 0,
-                        };
-                      }
+                          for (final doc
+                              in accountSnapshot.data?.docs ??
+                                  <
+                                    QueryDocumentSnapshot<Map<String, dynamic>>
+                                  >[]) {
+                            final data = doc.data();
+                            final status =
+                                data['status']?.toString().toLowerCase() ?? '';
+                            if (doc.id == me['id'] || status == 'rejected') {
+                              continue;
+                            }
+                            rows[doc.id] = {
+                              'id': doc.id,
+                              'name': _displayName(data),
+                              'role': data['role']?.toString() ?? 'staff',
+                              'online': _isOnline(data),
+                              'statusText':
+                                  AccountPresenceService.offlineStatus(data),
+                              'lastSeenAt': AccountPresenceService.lastSeen(
+                                data,
+                              ),
+                              'unread': 0,
+                              'lastMessage': '',
+                              'updatedAt': 0,
+                            };
+                          }
 
-                      for (final doc
-                          in chatSnapshot.data?.docs ??
-                              <QueryDocumentSnapshot<Map<String, dynamic>>>[]) {
-                        final chat = doc.data();
-                        final ids = (chat['participantIds'] as List? ?? [])
-                            .map((id) => id.toString())
-                            .toList();
-                        final otherId = ids.firstWhere(
-                          (id) => id != me['id'],
-                          orElse: () => '',
-                        );
-                        if (otherId.isEmpty) continue;
-                        final names = chat['participantNames'];
-                        final unreadBy = chat['unreadBy'];
-                        final updatedAt = chat['updatedAt'];
-                        final existingRow = rows[otherId];
-                        final fallbackName = existingRow == null
-                            ? 'User'
-                            : existingRow['name']?.toString() ?? 'User';
-                        final existingRole = existingRow == null
-                            ? null
-                            : existingRow['role'];
-                        final existingOnline = existingRow == null
-                            ? false
-                            : existingRow['online'] ?? false;
-                        final existingStatus = existingRow == null
-                            ? 'Offline'
-                            : existingRow['statusText'] ?? 'Offline';
-                        final unread = unreadBy is Map
-                            ? _parseStockValue(unreadBy[me['id']])
-                            : 0;
-                        rows[otherId] = {
-                          ...?rows[otherId],
-                          'id': otherId,
-                          'name': names is Map
-                              ? names[otherId]?.toString() ?? fallbackName
-                              : fallbackName,
-                          'role':
-                              existingRole ??
-                              (otherId == SuperAdmin.id
-                                  ? SuperAdmin.role
-                                  : otherId.startsWith('ADM-')
-                                  ? 'admin'
-                                  : 'staff'),
-                          'online': existingOnline,
-                          'statusText': existingStatus,
-                          'unread': unread,
-                          'lastMessage': chat['lastMessage']?.toString() ?? '',
-                          'updatedAt': updatedAt is Timestamp
-                              ? updatedAt.millisecondsSinceEpoch
-                              : 0,
-                        };
-                      }
+                          for (final doc
+                              in chatSnapshot.data?.docs ??
+                                  <
+                                    QueryDocumentSnapshot<Map<String, dynamic>>
+                                  >[]) {
+                            final chat = doc.data();
+                            final ids = (chat['participantIds'] as List? ?? [])
+                                .map((id) => id.toString())
+                                .toList();
+                            final otherId = ids.firstWhere(
+                              (id) => id != me['id'],
+                              orElse: () => '',
+                            );
+                            if (otherId.isEmpty) continue;
+                            final names = chat['participantNames'];
+                            final unreadBy = chat['unreadBy'];
+                            final updatedAt = chat['updatedAt'];
+                            final existingRow = rows[otherId];
+                            final fallbackName = existingRow == null
+                                ? 'User'
+                                : existingRow['name']?.toString() ?? 'User';
+                            final existingRole = existingRow == null
+                                ? null
+                                : existingRow['role'];
+                            final existingOnline = existingRow == null
+                                ? false
+                                : existingRow['online'] ?? false;
+                            final existingStatus = existingRow == null
+                                ? 'Offline'
+                                : existingRow['statusText'] ?? 'Offline';
+                            final unread = unreadBy is Map
+                                ? _parseStockValue(unreadBy[me['id']])
+                                : 0;
+                            rows[otherId] = {
+                              ...?rows[otherId],
+                              'id': otherId,
+                              'name': names is Map
+                                  ? names[otherId]?.toString() ?? fallbackName
+                                  : fallbackName,
+                              'role':
+                                  existingRole ??
+                                  (otherId == SuperAdmin.id
+                                      ? SuperAdmin.role
+                                      : otherId.startsWith('ADM-')
+                                      ? 'admin'
+                                      : 'staff'),
+                              'online': existingOnline,
+                              'statusText': existingStatus,
+                              'unread': unread,
+                              'lastMessage':
+                                  chat['lastMessage']?.toString() ?? '',
+                              'updatedAt': updatedAt is Timestamp
+                                  ? updatedAt.millisecondsSinceEpoch
+                                  : 0,
+                            };
+                          }
 
-                      final items = rows.values.toList()
-                        ..sort((a, b) {
-                          final timeCompare = (b['updatedAt'] as int).compareTo(
-                            a['updatedAt'] as int,
-                          );
-                          if (timeCompare != 0) return timeCompare;
-                          final unreadCompare = (b['unread'] as int).compareTo(
-                            a['unread'] as int,
-                          );
-                          if (unreadCompare != 0) return unreadCompare;
-                          return (a['name']?.toString() ?? '').compareTo(
-                            b['name']?.toString() ?? '',
-                          );
-                        });
-                      final preview = items.take(5).toList();
+                          final items = rows.values.toList()
+                            ..sort((a, b) {
+                              final timeCompare = (b['updatedAt'] as int)
+                                  .compareTo(a['updatedAt'] as int);
+                              if (timeCompare != 0) return timeCompare;
+                              final unreadCompare = (b['unread'] as int)
+                                  .compareTo(a['unread'] as int);
+                              if (unreadCompare != 0) return unreadCompare;
+                              return (a['name']?.toString() ?? '').compareTo(
+                                b['name']?.toString() ?? '',
+                              );
+                            });
+                          final preview = items.take(5).toList();
 
-                      return Column(
-                        children: [
-                          Container(
-                            margin: const EdgeInsets.only(top: 10, bottom: 8),
-                            width: 46,
-                            height: 5,
-                            decoration: BoxDecoration(
-                              color: _C.primaryLight.withOpacity(0.55),
-                              borderRadius: BorderRadius.circular(999),
-                            ),
-                          ),
-                          Padding(
-                            padding: const EdgeInsets.fromLTRB(20, 8, 14, 12),
-                            child: Row(
-                              children: [
-                                Container(
-                                  width: 44,
-                                  height: 44,
-                                  decoration: BoxDecoration(
-                                    color: _C.primary.withOpacity(0.10),
-                                    borderRadius: BorderRadius.circular(15),
-                                  ),
-                                  child: const Icon(
-                                    Icons.mail_outline_rounded,
-                                    color: _C.primaryDark,
-                                  ),
+                          return Column(
+                            children: [
+                              Container(
+                                margin: const EdgeInsets.only(
+                                  top: 10,
+                                  bottom: 8,
                                 ),
-                                const SizedBox(width: 12),
-                                const Expanded(
-                                  child: Text(
-                                    'Messages',
-                                    style: TextStyle(
-                                      color: _C.primaryDark,
-                                      fontSize: 22,
-                                      fontWeight: FontWeight.w900,
-                                    ),
-                                  ),
+                                width: 46,
+                                height: 5,
+                                decoration: BoxDecoration(
+                                  color: _C.primaryLight.withOpacity(0.55),
+                                  borderRadius: BorderRadius.circular(999),
                                 ),
-                                IconButton(
-                                  onPressed: () => Navigator.pop(sheetContext),
-                                  icon: const Icon(Icons.close_rounded),
-                                  color: _C.primary,
+                              ),
+                              Padding(
+                                padding: const EdgeInsets.fromLTRB(
+                                  20,
+                                  8,
+                                  14,
+                                  12,
                                 ),
-                              ],
-                            ),
-                          ),
-                          Expanded(
-                            child: preview.isEmpty
-                                ? const Center(
-                                    child: Text(
-                                      'No people available.',
-                                      style: TextStyle(
+                                child: Row(
+                                  children: [
+                                    Container(
+                                      width: 44,
+                                      height: 44,
+                                      decoration: BoxDecoration(
+                                        color: _C.primary.withOpacity(0.10),
+                                        borderRadius: BorderRadius.circular(15),
+                                      ),
+                                      child: const Icon(
+                                        Icons.mail_outline_rounded,
                                         color: _C.primaryDark,
-                                        fontWeight: FontWeight.w700,
                                       ),
                                     ),
-                                  )
-                                : ListView.separated(
-                                    padding: const EdgeInsets.fromLTRB(
-                                      20,
-                                      2,
-                                      20,
-                                      10,
+                                    const SizedBox(width: 12),
+                                    const Expanded(
+                                      child: Text(
+                                        'Messages',
+                                        style: TextStyle(
+                                          color: _C.primaryDark,
+                                          fontSize: 22,
+                                          fontWeight: FontWeight.w900,
+                                        ),
+                                      ),
                                     ),
-                                    itemCount: preview.length,
-                                    separatorBuilder: (_, _) =>
-                                        const SizedBox(height: 10),
-                                    itemBuilder: (context, index) {
-                                      final row = preview[index];
-                                      return _MessagePreviewTile(
-                                        name: row['name']?.toString() ?? 'User',
-                                        role:
-                                            row['role']?.toString() ?? 'staff',
-                                        lastMessage:
-                                            row['lastMessage']?.toString() ??
-                                            '',
-                                        online: row['online'] == true,
-                                        statusText:
-                                            row['statusText']?.toString() ??
-                                            'Offline',
-                                        unread: row['unread'] as int? ?? 0,
-                                        onTap: () {
-                                          Navigator.pop(sheetContext);
-                                          _openThread(
-                                            context,
-                                            me: me,
-                                            otherId:
-                                                row['id']?.toString() ?? '',
-                                            otherName:
+                                    IconButton(
+                                      onPressed: () =>
+                                          Navigator.pop(sheetContext),
+                                      icon: const Icon(Icons.close_rounded),
+                                      color: _C.primary,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              Expanded(
+                                child: preview.isEmpty
+                                    ? const Center(
+                                        child: Text(
+                                          'No people available.',
+                                          style: TextStyle(
+                                            color: _C.primaryDark,
+                                            fontWeight: FontWeight.w700,
+                                          ),
+                                        ),
+                                      )
+                                    : ListView.separated(
+                                        padding: const EdgeInsets.fromLTRB(
+                                          20,
+                                          2,
+                                          20,
+                                          10,
+                                        ),
+                                        itemCount: preview.length,
+                                        separatorBuilder: (_, _) =>
+                                            const SizedBox(height: 10),
+                                        itemBuilder: (context, index) {
+                                          final row = preview[index];
+                                          return _MessagePreviewTile(
+                                            name:
                                                 row['name']?.toString() ??
                                                 'User',
+                                            role:
+                                                row['role']?.toString() ??
+                                                'staff',
+                                            lastMessage:
+                                                row['lastMessage']
+                                                    ?.toString() ??
+                                                '',
+                                            online: row['online'] == true,
+                                            statusText:
+                                                row['statusText']?.toString() ??
+                                                'Offline',
+                                            unread: row['unread'] as int? ?? 0,
+                                            onTap: () {
+                                              Navigator.pop(sheetContext);
+                                              _openThread(
+                                                context,
+                                                me: me,
+                                                otherId:
+                                                    row['id']?.toString() ?? '',
+                                                otherName:
+                                                    row['name']?.toString() ??
+                                                    'User',
+                                              );
+                                            },
                                           );
                                         },
-                                      );
+                                      ),
+                              ),
+                              Padding(
+                                padding: const EdgeInsets.fromLTRB(
+                                  20,
+                                  0,
+                                  20,
+                                  14,
+                                ),
+                                child: SizedBox(
+                                  width: double.infinity,
+                                  child: OutlinedButton.icon(
+                                    onPressed: () {
+                                      Navigator.pop(sheetContext);
+                                      _openFullMessages(context);
                                     },
-                                  ),
-                          ),
-                          Padding(
-                            padding: const EdgeInsets.fromLTRB(20, 0, 20, 14),
-                            child: SizedBox(
-                              width: double.infinity,
-                              child: OutlinedButton.icon(
-                                onPressed: () {
-                                  Navigator.pop(sheetContext);
-                                  _openFullMessages(context);
-                                },
-                                icon: const Icon(Icons.forum_rounded),
-                                label: const Text('View all messages'),
-                                style: OutlinedButton.styleFrom(
-                                  foregroundColor: _C.primaryDark,
-                                  side: const BorderSide(
-                                    color: _C.primaryLight,
-                                  ),
-                                  padding: const EdgeInsets.symmetric(
-                                    vertical: 13,
-                                  ),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(16),
-                                  ),
-                                  textStyle: const TextStyle(
-                                    fontWeight: FontWeight.w800,
+                                    icon: const Icon(Icons.forum_rounded),
+                                    label: const Text('View all messages'),
+                                    style: OutlinedButton.styleFrom(
+                                      foregroundColor: _C.primaryDark,
+                                      side: const BorderSide(
+                                        color: _C.primaryLight,
+                                      ),
+                                      padding: const EdgeInsets.symmetric(
+                                        vertical: 13,
+                                      ),
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(16),
+                                      ),
+                                      textStyle: const TextStyle(
+                                        fontWeight: FontWeight.w800,
+                                      ),
+                                    ),
                                   ),
                                 ),
                               ),
-                            ),
-                          ),
-                        ],
+                            ],
+                          );
+                        },
                       );
                     },
                   );
                 },
-              );
-              },
+              ),
             ),
           ),
-        ),
-      );
+        );
       },
     );
   }
@@ -3143,7 +3219,8 @@ class _Header extends StatelessWidget {
             // ── Main content ──────────────────────────────────────────────
             SafeArea(
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(20, 10, 20, 28),
+                // Keep the profile card inside the compact mobile SliverAppBar.
+                padding: const EdgeInsets.fromLTRB(20, 10, 20, 4),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -3170,9 +3247,29 @@ class _Header extends StatelessWidget {
                           ),
                         ),
 
-                        // Message button
+                        // Guide and Messages
                         Row(
                           children: [
+                            Tooltip(
+                              message: 'Staff guide',
+                              child: _GuideButton(
+                                key: guideTourKey,
+                                onTap: () async {
+                                  final replayTutorial = onReplayTutorial;
+                                  if (replayTutorial != null) {
+                                    await replayTutorial();
+                                  } else {
+                                    await _showHelpSheet(context);
+                                  }
+                                },
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Tooltip(
+                              message: 'Notifications',
+                              child: _NotificationButton(onTap: onNotification),
+                            ),
+                            const SizedBox(width: 8),
                             if ((uid ?? '').isEmpty)
                               _MessageButton(onTap: onMessage)
                             else
@@ -3269,6 +3366,7 @@ class _Header extends StatelessWidget {
                           photoUrl: photoUrl,
                           cashDrawerBalance: cashDrawerBalance,
                           gcashDrawerBalance: gcashDrawerBalance,
+                          cashDrawerTourKey: cashDrawerTourKey,
                         );
                       },
                     ),
@@ -3387,33 +3485,36 @@ class _BrandTitle extends StatelessWidget {
 }
 
 // ── Message button ────────────────────────────────────────────────────────────
+// ── Message button ────────────────────────────────────────────────────────────
 class _NotificationButton extends StatelessWidget {
-  final VoidCallback onTap;
   const _NotificationButton({required this.onTap});
+
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        width: 40,
-        height: 40,
-        decoration: BoxDecoration(
-          color: Colors.white.withOpacity(0.14),
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: Colors.white.withOpacity(0.28), width: 1.5),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.15),
-              blurRadius: 10,
-              offset: const Offset(0, 4),
+    return Material(
+      color: Colors.transparent,
+      borderRadius: BorderRadius.circular(14),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(14),
+        child: Container(
+          width: 40,
+          height: 40,
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.14),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: Colors.white.withOpacity(0.28),
+              width: 1.5,
             ),
-          ],
-        ),
-        child: const Icon(
-          Icons.notifications_none_rounded,
-          color: Colors.white,
-          size: 19,
+          ),
+          child: const Icon(
+            Icons.notifications_none_rounded,
+            color: Colors.white,
+            size: 19,
+          ),
         ),
       ),
     );
@@ -3421,10 +3522,116 @@ class _NotificationButton extends StatelessWidget {
 }
 
 // ── Message button ────────────────────────────────────────────────────────────
+class _GuideButton extends StatefulWidget {
+  const _GuideButton({super.key, required this.onTap});
+
+  final Future<void> Function() onTap;
+
+  @override
+  State<_GuideButton> createState() => _GuideButtonState();
+}
+
+class _GuideButtonState extends State<_GuideButton>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 360),
+  );
+  late final Animation<double> _scale = TweenSequence<double>([
+    TweenSequenceItem(
+      tween: Tween(
+        begin: 1.0,
+        end: 0.84,
+      ).chain(CurveTween(curve: Curves.easeOut)),
+      weight: 25,
+    ),
+    TweenSequenceItem(
+      tween: Tween(
+        begin: 0.84,
+        end: 1.08,
+      ).chain(CurveTween(curve: Curves.easeOutBack)),
+      weight: 40,
+    ),
+    TweenSequenceItem(
+      tween: Tween(
+        begin: 1.08,
+        end: 1.0,
+      ).chain(CurveTween(curve: Curves.easeOut)),
+      weight: 35,
+    ),
+  ]).animate(_controller);
+  bool _openingGuide = false;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _openGuide() async {
+    if (_openingGuide) return;
+    _openingGuide = true;
+    try {
+      await _controller.forward(from: 0);
+      if (!mounted) return;
+      await widget.onTap();
+    } finally {
+      if (mounted) {
+        _controller.reset();
+        _openingGuide = false;
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ScaleTransition(
+      scale: _scale,
+      child: Material(
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(14),
+        child: InkWell(
+          onTap: _openGuide,
+          borderRadius: BorderRadius.circular(14),
+          child: Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.14),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(
+                color: Colors.white.withOpacity(0.28),
+                width: 1.5,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.15),
+                  blurRadius: 10,
+                  offset: const Offset(0, 4),
+                ),
+              ],
+            ),
+            child: const Icon(
+              Icons.help_outline_rounded,
+              color: Colors.white,
+              size: 19,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _MessageButton extends StatelessWidget {
   final VoidCallback onTap;
   final int badgeCount;
-  const _MessageButton({required this.onTap, this.badgeCount = 0});
+  final IconData icon;
+  const _MessageButton({
+    required this.onTap,
+    this.badgeCount = 0,
+    this.icon = Icons.mail_outline_rounded,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -3451,11 +3658,7 @@ class _MessageButton extends StatelessWidget {
                 ),
               ],
             ),
-            child: const Icon(
-              Icons.mail_outline_rounded,
-              color: Colors.white,
-              size: 19,
-            ),
+            child: Icon(icon, color: Colors.white, size: 19),
           ),
           if (badgeCount > 0)
             Positioned(
@@ -3833,6 +4036,7 @@ class _StaffProfileCard extends StatefulWidget {
   final String? photoUrl;
   final double cashDrawerBalance;
   final double gcashDrawerBalance;
+  final GlobalKey? cashDrawerTourKey;
 
   const _StaffProfileCard({
     required this.name,
@@ -3841,6 +4045,7 @@ class _StaffProfileCard extends StatefulWidget {
     this.photoUrl,
     required this.cashDrawerBalance,
     required this.gcashDrawerBalance,
+    this.cashDrawerTourKey,
   });
 
   @override
@@ -3917,6 +4122,7 @@ class _StaffProfileCardState extends State<_StaffProfileCard> {
                     SizedBox(
                       width: double.infinity,
                       child: Container(
+                        key: widget.cashDrawerTourKey,
                         padding: const EdgeInsets.symmetric(
                           horizontal: 12,
                           vertical: 10,
@@ -3996,6 +4202,7 @@ class _StaffProfileCardState extends State<_StaffProfileCard> {
                     ),
 
                     Container(
+                      key: widget.cashDrawerTourKey,
                       width: 136,
                       padding: const EdgeInsets.symmetric(
                         horizontal: 12,

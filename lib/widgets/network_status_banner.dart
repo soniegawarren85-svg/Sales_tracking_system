@@ -3,7 +3,9 @@ import 'dart:async';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
+import '../services/held_order_store.dart';
 import '../services/local_database_sync_service.dart';
 
 class NetworkStatusBanner extends StatefulWidget {
@@ -38,10 +40,12 @@ class _NetworkStatusBannerState extends State<NetworkStatusBanner> {
       final results = await Connectivity().checkConnectivity();
       _update(results);
       if (!results.contains(ConnectivityResult.none) &&
-          (_lastSync == null || DateTime.now().difference(_lastSync!).inSeconds >= 20)) {
+          (_lastSync == null ||
+              DateTime.now().difference(_lastSync!).inSeconds >= 20)) {
         _lastSync = DateTime.now();
         unawaited(LocalDatabaseSyncService().syncPendingSales());
         unawaited(LocalDatabaseSyncService().syncPendingCashDrawerChanges());
+        unawaited(_syncPendingHeldOrders());
       }
     } catch (_) {}
   }
@@ -68,6 +72,18 @@ class _NetworkStatusBannerState extends State<NetworkStatusBanner> {
     } else {
       unawaited(LocalDatabaseSyncService().syncPendingSales());
       unawaited(LocalDatabaseSyncService().syncPendingCashDrawerChanges());
+      unawaited(_syncPendingHeldOrders());
+    }
+  }
+
+  Future<void> _syncPendingHeldOrders() async {
+    try {
+      final preferences = await SharedPreferences.getInstance();
+      if (preferences.getString('lastRole')?.toLowerCase() != 'staff') return;
+      final userId = preferences.getString('lastUserId')?.trim() ?? '';
+      if (userId.isNotEmpty) await HeldOrderStore.instance.sync(userId);
+    } catch (error) {
+      debugPrint('Held orders will sync when the connection is ready: $error');
     }
   }
 

@@ -61,4 +61,55 @@ void main() {
       expect(tester.takeException(), isNull);
     });
   }
+
+  testWidgets('grid remains scrollable when inventory changes', (tester) async {
+    tester.view.physicalSize = const Size(360, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    var items = List<int>.generate(12, (index) => index);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: StatefulBuilder(
+          builder: (context, setState) => Scaffold(
+            body: CustomScrollView(
+              slivers: [
+                SliverToBoxAdapter(
+                  child: StaffSalesItemGrid(
+                    itemCount: items.length,
+                    itemBuilder: (context, index, compact) => Container(
+                      key: ValueKey('product-${items[index]}'),
+                      alignment: Alignment.center,
+                      color: Colors.pink.shade100,
+                      child: Text('Product ${items[index]}'),
+                    ),
+                  ),
+                ),
+                const SliverToBoxAdapter(child: SizedBox(height: 300)),
+              ],
+            ),
+            floatingActionButton: FloatingActionButton(
+              onPressed: () => setState(() => items = items.skip(1).toList()),
+              child: const Icon(Icons.refresh),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.drag(find.byType(CustomScrollView), const Offset(0, -260));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byType(FloatingActionButton));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Product 0'), findsNothing);
+    expect(find.text('Product 1'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+
+    await tester.drag(find.byType(CustomScrollView), const Offset(0, 320));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+  });
 }

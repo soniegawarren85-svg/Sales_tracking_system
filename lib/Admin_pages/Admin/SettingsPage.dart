@@ -14,6 +14,7 @@ import '../../services/session_actor.dart';
 import '../../services/public_item_id.dart';
 import 'dart:convert';
 import '../../widgets/backup_restore_dialog.dart';
+import '../../widgets/admin_page_skeleton.dart';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -35,7 +36,8 @@ class SettingsPage extends StatefulWidget {
   State<SettingsPage> createState() => _SettingsPageState();
 }
 
-class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver {
+class _SettingsPageState extends State<SettingsPage>
+    with WidgetsBindingObserver {
   bool _isUploadingProfilePhoto = false;
   String? _lastProfilePhotoUrl;
   Uint8List? _profilePreview;
@@ -50,11 +52,16 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
     _syncingEmail = true;
     try {
       await syncVerifiedProfileEmail(
-        profile: FirebaseFirestore.instance.collection('staff_requests').doc(_profileId),
+        profile: FirebaseFirestore.instance
+            .collection('staff_requests')
+            .doc(_profileId),
         user: FirebaseAuth.instance.currentUser,
       );
-    } catch (error) { debugPrint('Email status refresh: $error'); }
-    finally { _syncingEmail = false; }
+    } catch (error) {
+      debugPrint('Email status refresh: $error');
+    } finally {
+      _syncingEmail = false;
+    }
   }
 
   @override
@@ -75,7 +82,8 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
     _loadAdminId().then((_) => _refreshVerifiedEmail());
     WidgetsBinding.instance.addObserver(this);
     _emailRefresh = Timer.periodic(const Duration(seconds: 15), (_) {
-      if (WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) _refreshVerifiedEmail();
+      if (WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed)
+        _refreshVerifiedEmail();
     });
   }
 
@@ -98,14 +106,16 @@ class _SettingsPageState extends State<SettingsPage> with WidgetsBindingObserver
   @override
   Widget build(BuildContext context) {
     if (!_profileReady) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+      return const Scaffold(
+        body: AdminPageSkeleton(kind: AdminSkeletonKind.settings),
+      );
     }
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: SystemUiOverlayStyle.light,
       child: Scaffold(
         backgroundColor: AppColors.background,
         body: CustomScrollView(
-          physics: const BouncingScrollPhysics(),
+          physics: const ClampingScrollPhysics(),
           slivers: [
             /// ===== PREMIUM HEADER =====
             SliverAppBar(

@@ -22,6 +22,7 @@ import 'services/login_validation.dart';
 import 'services/password_reset_service.dart';
 import 'services/account_session_control.dart';
 import 'widgets/network_status_banner.dart';
+import 'widgets/raspberry_cupcake_loader.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -330,7 +331,12 @@ class _SessionGateState extends State<SessionGate> {
             snapshot.hasData) {
           return snapshot.data!;
         }
-        return const Scaffold(body: Center(child: CircularProgressIndicator()));
+        return const Scaffold(
+          body: RaspberryCupcakeLoader(
+            fullScreen: true,
+            message: 'Loading your workspace...',
+          ),
+        );
       },
     );
   }

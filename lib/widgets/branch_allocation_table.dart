@@ -59,10 +59,11 @@ class BranchAllocationTable extends StatelessWidget {
     required this.beverages,
     required this.actions,
     this.inventory = false,
+    this.addons = false,
     this.allowRefunds = true,
   });
   final List<Map<String, dynamic>> rows;
-  final bool beverages, inventory, allowRefunds;
+  final bool beverages, inventory, addons, allowRefunds;
   final Widget Function(Map<String, dynamic>) actions;
   String money(dynamic v) => formatMoney(reportValue(v));
   String qty(dynamic v) => v == null ? '—' : reportValue(v).toStringAsFixed(0);
@@ -70,9 +71,16 @@ class BranchAllocationTable extends StatelessWidget {
   Widget build(BuildContext context) {
     final columns = <(String, String)>[
       ('id', 'ID'),
+      if (addons) ('image', 'Image'),
       ('allocationDate', 'Allocation date'),
       ('name', 'Item'),
-      if (inventory) ...[
+      if (inventory && addons) ...[
+        ('costPrice', 'Cost price'),
+        ('price', 'Price'),
+        ('expirationDate', 'Expiry'),
+        ('remaining', 'Stock'),
+        ('status', 'Availability'),
+      ] else if (inventory) ...[
         ('costPrice', 'Cost price'),
         if (!beverages) ('price', 'Price'),
         if (beverages)
@@ -129,6 +137,25 @@ class BranchAllocationTable extends StatelessWidget {
 
     Widget value(Map<String, dynamic> row, String key) {
       if (key == 'actions') return actions(row);
+      if (key == 'image')
+        return ClipRRect(
+          borderRadius: BorderRadius.circular(8),
+          child: SizedBox(
+            width: 42,
+            height: 42,
+            child:
+                (row['imageUrl']?.toString().startsWith('data:image/') ?? false)
+                ? const Icon(Icons.extension_outlined)
+                : (row['imageUrl']?.toString().isNotEmpty ?? false)
+                ? Image.network(
+                    '${row['imageUrl']}',
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, _, _) =>
+                        const Icon(Icons.extension_outlined),
+                  )
+                : const Icon(Icons.extension_outlined),
+          ),
+        );
       if (key == 'allocationDate' || key == 'expirationDate') {
         final at = cashRecordDate(row[key]);
         return Row(

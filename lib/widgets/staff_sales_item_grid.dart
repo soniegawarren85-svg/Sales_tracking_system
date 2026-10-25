@@ -18,30 +18,31 @@ class StaffSalesItemGrid extends StatelessWidget {
   Widget build(BuildContext context) => LayoutBuilder(
     builder: (context, constraints) {
       final size = MediaQuery.sizeOf(context);
+      final availableWidth = constraints.maxWidth.isFinite
+          ? constraints.maxWidth
+          : size.width;
       final tablet =
           size.shortestSide >= 600 || (size.width >= 900 && size.height >= 520);
       final columns = tablet
-          ? (constraints.maxWidth / 240).floor().clamp(3, 8)
+          ? (availableWidth / 240).floor().clamp(3, 8)
           : bundles
-          ? (constraints.maxWidth / 230).ceil().clamp(1, 8)
-          : constraints.maxWidth < 600
+          ? (availableWidth / 230).ceil().clamp(1, 8)
+          : availableWidth < 600
           ? 2
-          : (constraints.maxWidth / 240).floor().clamp(3, 8);
-      final compact =
-          (constraints.maxWidth - (columns - 1) * 12) / columns < 140;
-      return GridView.builder(
-        shrinkWrap: true,
-        physics: const NeverScrollableScrollPhysics(),
-        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: columns,
-          mainAxisExtent:
-              (bundles ? 290 : 230) +
-              (MediaQuery.textScalerOf(context).scale(14) - 14) * 6,
-          crossAxisSpacing: 12,
-          mainAxisSpacing: 12,
-        ),
-        itemCount: itemCount,
-        itemBuilder: (context, index) => itemBuilder(context, index, compact),
+          : (availableWidth / 240).floor().clamp(3, 8);
+      const spacing = 12.0;
+      final itemWidth = (availableWidth - (columns - 1) * spacing) / columns;
+      final itemHeight =
+          (bundles ? 290.0 : 230.0) +
+          (MediaQuery.textScalerOf(context).scale(14) - 14) * 6;
+      final compact = itemWidth < 140;
+      return Wrap(
+        spacing: spacing,
+        runSpacing: spacing,
+        children: List<Widget>.generate(itemCount, (index) {
+          final child = itemBuilder(context, index, compact);
+          return SizedBox(width: itemWidth, height: itemHeight, child: child);
+        }),
       );
     },
   );

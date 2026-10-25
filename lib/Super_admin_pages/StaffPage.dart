@@ -1,4 +1,5 @@
 import '../services/profile_email.dart';
+import '../services/password_policy.dart';
 import '../services/activity_log.dart';
 import '../services/super_admin.dart';
 import '../widgets/profile_avatar.dart';
@@ -7,6 +8,8 @@ import '../widgets/inventory_records_table.dart';
 import 'package:sales_tracking/theme/app_colors.dart';
 import '../services/public_item_id.dart';
 import '../widgets/admin_staff_branches.dart';
+import '../widgets/password_strength_checklist.dart';
+import '../widgets/admin_page_skeleton.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -75,16 +78,9 @@ String? validateStaffEmail(String? value) {
 }
 
 String? validateStaffPassword(String? value) {
-  final password = (value ?? '').trim();
-  final hasNumber = RegExp(r'\d').hasMatch(password);
-  final hasUppercase = RegExp(r'[A-Z]').hasMatch(password);
-  final hasSpecialCharacter = RegExp(r'[^A-Za-z0-9\s]').hasMatch(password);
-  if (password.length < 7 ||
-      !hasNumber ||
-      (!hasUppercase && !hasSpecialCharacter)) {
-    return 'Use at least 7 characters, a number, and an uppercase letter or special character.';
-  }
-  return null;
+  return PasswordStrength(value ?? '').isAcceptable
+      ? null
+      : 'Meet at least 3 password requirements to make it fair or strong.';
 }
 
 String? validateStaffPasswordConfirmation(String? value, String password) {
@@ -94,7 +90,8 @@ String? validateStaffPasswordConfirmation(String? value, String password) {
 }
 
 class StaffPage extends StatefulWidget {
-  const StaffPage({super.key});
+  const StaffPage({super.key, this.onBack});
+  final VoidCallback? onBack;
 
   @override
   State<StaffPage> createState() => _StaffPageState();
@@ -129,6 +126,8 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
   final _passwordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
   final _confirmPasswordFieldKey = GlobalKey<FormFieldState<String>>();
+  bool _showCreatePassword = false;
+  bool _showConfirmPassword = false;
 
   // ─── STREAMS ──────────────────────────────────────────────
   Stream<QuerySnapshot<Map<String, dynamic>>> get _staffStream =>
@@ -236,24 +235,28 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
       isScrollControlled: true,
       useSafeArea: true,
       showDragHandle: true,
-      builder: (sheetContext) {
-        _createSheetContext = sheetContext;
-        return ValueListenableBuilder<bool>(
-          valueListenable: _creating,
-          builder: (context, creating, _) => SizedBox(
-            height: MediaQuery.sizeOf(context).height * .7,
-            child: SingleChildScrollView(
-              padding: EdgeInsets.fromLTRB(
-                16,
-                0,
-                16,
-                MediaQuery.viewInsetsOf(context).bottom + 24,
+      builder: (sheetContext) => StatefulBuilder(
+        builder: (context, setSheetState) {
+          _createSheetContext = sheetContext;
+          return ValueListenableBuilder<bool>(
+            valueListenable: _creating,
+            builder: (context, creating, _) => SizedBox(
+              height: MediaQuery.sizeOf(context).height * .7,
+              child: SingleChildScrollView(
+                padding: EdgeInsets.fromLTRB(
+                  16,
+                  0,
+                  16,
+                  MediaQuery.viewInsetsOf(context).bottom + 24,
+                ),
+                child: _buildCreateStaffForm(
+                  refreshForm: () => setSheetState(() {}),
+                ),
               ),
-              child: _buildCreateStaffForm(),
             ),
-          ),
-        );
-      },
+          );
+        },
+      ),
     );
     _createSheetContext = null;
   }
@@ -276,7 +279,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
           return const Center(child: Text('Unable to load staff.'));
         }
         if (!snapshot.hasData) {
-          return const Center(child: CircularProgressIndicator());
+          return const AdminPageSkeleton(kind: AdminSkeletonKind.staff);
         }
         final staff = snapshot.data!.docs
             .map(AdminModel.fromDoc)
@@ -300,6 +303,15 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
             SliverAppBar(
               pinned: true,
               automaticallyImplyLeading: false,
+              leading:
+                  widget.onBack != null &&
+                      MediaQuery.sizeOf(context).width < 600
+                  ? IconButton(
+                      tooltip: 'Back to More',
+                      onPressed: widget.onBack,
+                      icon: const Icon(Icons.arrow_back_rounded),
+                    )
+                  : null,
               expandedHeight: 125,
               backgroundColor: AppColors.primaryDeep,
               foregroundColor: Colors.white,
@@ -1449,7 +1461,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
     );
   }
 
-  Widget _buildCreateStaffForm() {
+  Widget _buildCreateStaffForm({VoidCallback? refreshForm}) {
     return AutofillGroup(
       child: Form(
         key: _createStaffFormKey,
@@ -1547,9 +1559,11 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                 _passwordController,
                 'Password',
                 obscureText: true,
+                refreshForm: refreshForm,
                 autofillHints: const [AutofillHints.newPassword],
                 validator: validateStaffPassword,
                 onChanged: (_) {
+                  (refreshForm ?? () => setState(() {}))();
                   if (_confirmPasswordFieldKey
                           .currentState
                           ?.hasInteractedByUser ==
@@ -1558,10 +1572,12 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                   }
                 },
               ),
+              PasswordStrengthChecklist(password: _passwordController.text),
               _buildCreateField(
                 _confirmPasswordController,
                 'Confirm Password',
                 obscureText: true,
+                refreshForm: refreshForm,
                 fieldKey: _confirmPasswordFieldKey,
                 autofillHints: const [AutofillHints.newPassword],
                 validator: (value) => validateStaffPasswordConfirmation(
@@ -1611,6 +1627,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
     String label, {
     bool requiredField = true,
     bool obscureText = false,
+    VoidCallback? refreshForm,
     int maxLines = 1,
     TextInputType keyboardType = TextInputType.text,
     String? Function(String?)? validator,
@@ -1629,7 +1646,9 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
       child: TextFormField(
         key: fieldKey ?? PageStorageKey<String>('staff_create_field_$label'),
         controller: controller,
-        obscureText: obscureText,
+        obscureText:
+            obscureText &&
+            !(label == 'Password' ? _showCreatePassword : _showConfirmPassword),
         maxLines: effectiveMaxLines,
         keyboardType: effectiveKeyboardType,
         autofillHints: autofillHints,
@@ -1648,6 +1667,31 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
             },
         decoration: InputDecoration(
           labelText: label,
+          suffixIcon: obscureText
+              ? IconButton(
+                  tooltip:
+                      (label == 'Password'
+                          ? _showCreatePassword
+                          : _showConfirmPassword)
+                      ? 'Hide password'
+                      : 'Show password',
+                  onPressed: () {
+                    if (label == 'Password') {
+                      _showCreatePassword = !_showCreatePassword;
+                    } else {
+                      _showConfirmPassword = !_showConfirmPassword;
+                    }
+                    (refreshForm ?? () => setState(() {}))();
+                  },
+                  icon: Icon(
+                    (label == 'Password'
+                            ? _showCreatePassword
+                            : _showConfirmPassword)
+                        ? Icons.visibility_off_outlined
+                        : Icons.visibility_outlined,
+                  ),
+                )
+              : null,
           filled: true,
           fillColor: const Color(0xFFFFF8FA),
           border: OutlineInputBorder(
@@ -2267,6 +2311,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
             'username': staffId,
             'loginPassword': password,
             'mustChangePassword': false,
+            if (role == 'staff') 'onboardingCompleted': false,
             'createdBy': SuperAdmin.id,
             'createdAt': FieldValue.serverTimestamp(),
           });

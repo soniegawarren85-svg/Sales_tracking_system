@@ -16,6 +16,7 @@ class ActivityFeed extends StatefulWidget {
     this.cardRows = false,
     this.includeBranchActivity = false,
     this.includeReceipts = false,
+    this.hideSessionEvents = false,
   });
   final String? actorId, branchId;
   final Set<String>? actorIds;
@@ -26,6 +27,7 @@ class ActivityFeed extends StatefulWidget {
   final bool cardRows;
   final bool includeBranchActivity;
   final bool includeReceipts;
+  final bool hideSessionEvents;
 
   @override
   State<ActivityFeed> createState() => _ActivityFeedState();
@@ -192,6 +194,11 @@ class _ActivityFeedState extends State<ActivityFeed> {
                 ]
                 .where(
                   (r) =>
+                      (!widget.hideSessionEvents ||
+                          !{
+                            'account_login',
+                            'account_logout',
+                          }.contains('${r['action']}')) &&
                       (actors.isEmpty ||
                           actors.contains('${r['actorId']}') ||
                           (includeBranchActivity &&
@@ -519,6 +526,7 @@ class _RecentActivityPanelState extends State<RecentActivityPanel> {
         range: range,
         compact: true,
         cardRows: true,
+        hideSessionEvents: true,
       ),
     ],
   );

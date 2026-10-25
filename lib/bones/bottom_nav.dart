@@ -7,13 +7,17 @@ import 'package:flutter/material.dart';
 import 'package:curved_navigation_bar/curved_navigation_bar.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:tutorial_coach_mark/tutorial_coach_mark.dart';
 import '../services/inventory_service.dart';
+import '../services/staff_onboarding_service.dart';
+import '../services/held_order_store.dart';
 import '../Staff_pages/Staff_notifcation.dart';
 import '../Staff_pages/dashboard_page.dart';
 import '../Staff_pages/AllCateg.dart';
 import '../Staff_pages/profile_page.dart';
 import '../Staff_pages/daily_stock_page.dart';
 import '../Admin_pages/Admin/Message.dart';
+import '../widgets/staff_onboarding_card.dart';
 
 class BottomNav extends StatefulWidget {
   const BottomNav({super.key});
@@ -25,6 +29,15 @@ class BottomNav extends StatefulWidget {
 class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
   int _selectedIndex = 0;
   final ScrollController _scrollController = ScrollController();
+  final GlobalKey _guideTourKey = GlobalKey();
+  final GlobalKey _dashboardTourKey = GlobalKey();
+  final GlobalKey _dashboardNavTourKey = GlobalKey();
+  final GlobalKey _productsTourKey = GlobalKey();
+  final GlobalKey _cashDrawerTourKey = GlobalKey();
+  final GlobalKey _salesTourKey = GlobalKey();
+  final GlobalKey _salesHistoryTourKey = GlobalKey();
+  final GlobalKey _profileTourKey = GlobalKey();
+  final GlobalKey _profileNavTourKey = GlobalKey();
   int _prevEntryCount = 0;
   int _salesLaunchToken = 0;
   String? _salesInitialView;
@@ -32,6 +45,14 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
   bool _openPendingOnSalesLaunch = false;
   String? _sessionUserId;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _loginSubscription;
+  TutorialCoachMark? _tutorialCoachMark;
+  final ValueNotifier<_TutorialCardState> _tutorialCardState = ValueNotifier(
+    const _TutorialCardState(),
+  );
+  String? _staffDocumentId;
+  bool _onboardingCheckStarted = false;
+  bool _tutorialIsReplay = false;
+  bool _tutorialStarting = false;
 
   Future<void> _watchLogins() async {
     final prefs = await SharedPreferences.getInstance();
@@ -107,11 +128,16 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
     InventoryService().addListener(_onInventoryChanged);
     // initialize previous count so we can detect additions
     _prevEntryCount = InventoryService().entries.length;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(_checkFirstLoginOnboarding());
+    });
   }
 
   @override
   void dispose() {
     _loginSubscription?.cancel();
+    _tutorialCoachMark?.finish();
+    _tutorialCardState.dispose();
     InventoryService().removeListener(_onInventoryChanged);
     _scrollController.dispose();
     super.dispose();
@@ -148,7 +174,7 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
   void _onNotificationPressed() {
     Navigator.of(
       context,
-    ).push(MaterialPageRoute(builder: (_) => const StaffNotificationPage()));
+    ).push(MaterialPageRoute(builder: (_) => StaffNotificationPage()));
   }
 
   Widget _buildPage(int index) {
@@ -179,6 +205,11 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
       scrollController: _scrollController,
       onMessage: _onMessagePressed,
       onNotification: _onNotificationPressed,
+      onReplayTutorial: () => _startStaffTutorial(isReplay: true),
+      guideTourKey: _guideTourKey,
+      dashboardTourKey: _dashboardTourKey,
+      cashDrawerTourKey: _cashDrawerTourKey,
+      salesHistoryTourKey: _salesHistoryTourKey,
       onOpenSalesGroup:
           ({
             required String view,
@@ -212,7 +243,326 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
   }
 
   Widget _buildProfilePage() {
-    return ProfilePage(onMessage: _onMessagePressed);
+    return ProfilePage(
+      onMessage: _onMessagePressed,
+      onReplayTutorial: () => _startStaffTutorial(isReplay: true),
+      tourTargetKey: _profileTourKey,
+    );
+  }
+
+  Future<void> _checkFirstLoginOnboarding() async {
+    if (_onboardingCheckStarted) return;
+    _onboardingCheckStarted = true;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final authUid = FirebaseAuth.instance.currentUser?.uid.trim() ?? '';
+      final savedStaffId = prefs.getString('lastStaffDocId')?.trim() ?? '';
+      final staffDocumentId = authUid.isNotEmpty
+          ? authUid
+          : savedStaffId.isNotEmpty
+          ? savedStaffId
+          : prefs.getString('lastUserId')?.trim() ?? '';
+      if (staffDocumentId.isEmpty) {
+        throw StateError(
+          'The signed-in staff account could not be identified.',
+        );
+      }
+      _staffDocumentId = staffDocumentId;
+      final shouldShow = await StaffOnboardingService.shouldShowTutorial(
+        database: FirebaseFirestore.instance,
+        staffDocumentId: staffDocumentId,
+      );
+      if (mounted && shouldShow) {
+        await _startStaffTutorial();
+      }
+    } catch (error, stackTrace) {
+      _onboardingCheckStarted = false;
+      debugPrint(
+        'Unable to check staff onboarding status: $error\n$stackTrace',
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text(
+            'Unable to check your tutorial status. Please check your connection.',
+          ),
+          action: SnackBarAction(
+            label: 'Retry',
+            onPressed: () => unawaited(_checkFirstLoginOnboarding()),
+          ),
+        ),
+      );
+    }
+  }
+
+  Future<void> _startStaffTutorial({bool isReplay = false}) async {
+    if (_tutorialStarting || _tutorialCoachMark?.isShowing == true) return;
+    _tutorialStarting = true;
+    _tutorialIsReplay = isReplay;
+    _tutorialCardState.value = const _TutorialCardState();
+    try {
+      if ((_staffDocumentId ?? '').isEmpty) {
+        final prefs = await SharedPreferences.getInstance();
+        final authUid = FirebaseAuth.instance.currentUser?.uid.trim() ?? '';
+        final savedStaffId = prefs.getString('lastStaffDocId')?.trim() ?? '';
+        _staffDocumentId = authUid.isNotEmpty
+            ? authUid
+            : savedStaffId.isNotEmpty
+            ? savedStaffId
+            : prefs.getString('lastUserId')?.trim();
+      }
+      if ((_staffDocumentId ?? '').isEmpty) {
+        throw StateError(
+          'The signed-in staff account could not be identified.',
+        );
+      }
+
+      await _navigateToTutorialStep(0);
+      if (!mounted) return;
+      final tutorial = TutorialCoachMark(
+        targets: _buildTutorialTargets(),
+        colorShadow: Colors.black,
+        opacityShadow: 0.78,
+        paddingFocus: 12,
+        focusAnimationDuration: const Duration(milliseconds: 450),
+        unFocusAnimationDuration: const Duration(milliseconds: 300),
+        pulseAnimationDuration: const Duration(milliseconds: 650),
+        pulseEnable: true,
+        hideSkip: true,
+        showSkipInLastTarget: false,
+        onFinish: () {
+          if (!mounted) return;
+          _tutorialCoachMark = null;
+          _tutorialStarting = false;
+          _tutorialIsReplay = false;
+          _tutorialCardState.value = const _TutorialCardState();
+        },
+      );
+      _tutorialCoachMark = tutorial;
+      tutorial.show(context: context);
+    } catch (error, stackTrace) {
+      _tutorialStarting = false;
+      debugPrint('Unable to start staff tutorial: $error\n$stackTrace');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Unable to open the staff guide. Please try again.'),
+        ),
+      );
+    }
+  }
+
+  List<_StaffTourStep> _tutorialSteps() => [
+    _StaffTourStep(
+      key: _guideTourKey,
+      pageIndex: 0,
+      title: 'Your Staff Guide',
+      description:
+          'Use this guide icon any time to replay a quick tour of the staff tools.',
+      contentAlign: ContentAlign.bottom,
+    ),
+    _StaffTourStep(
+      key: _dashboardTourKey,
+      pageIndex: 0,
+      title: 'Dashboard Overview',
+      description:
+          'Check your dashboard for staff information, allocated items, and daily performance.',
+      contentAlign: ContentAlign.top,
+    ),
+    _StaffTourStep(
+      key: _productsTourKey,
+      pageIndex: 1,
+      title: 'Products',
+      description:
+          'Open Products to review inventory allocated to your branch.',
+      contentAlign: ContentAlign.top,
+    ),
+    _StaffTourStep(
+      key: _cashDrawerTourKey,
+      pageIndex: 0,
+      title: 'Cash Drawer',
+      description:
+          'Your dashboard shows your allocated cash drawer balance. Sales update the drawer as you process transactions.',
+      contentAlign: ContentAlign.top,
+    ),
+    _StaffTourStep(
+      key: _salesTourKey,
+      pageIndex: 3,
+      title: 'POS / Sales',
+      description:
+          'Open Sales Process to build an order, review the cart, and complete or hold a transaction.',
+      contentAlign: ContentAlign.top,
+    ),
+    _StaffTourStep(
+      key: _salesHistoryTourKey,
+      pageIndex: 0,
+      title: 'Sales History',
+      description:
+          'Use the History control in Performance to review your previous sales records.',
+      contentAlign: ContentAlign.top,
+    ),
+    _StaffTourStep(
+      key: _profileTourKey,
+      pageIndex: 2,
+      title: 'Profile & Account',
+      description:
+          'View your personal details, manage account settings, and replay this tutorial from your profile.',
+      contentAlign: ContentAlign.top,
+    ),
+  ];
+
+  List<TargetFocus> _buildTutorialTargets() {
+    final steps = _tutorialSteps();
+    return [
+      for (var index = 0; index < steps.length; index++)
+        TargetFocus(
+          identify: 'staff-tour-$index',
+          keyTarget: steps[index].key,
+          shape: ShapeLightFocus.RRect,
+          radius: 14,
+          enableTargetTab: false,
+          enableOverlayTab: false,
+          contents: [
+            TargetContent(
+              align: steps[index].contentAlign,
+              padding: const EdgeInsets.fromLTRB(12, 16, 12, 16),
+              builder: (context, controller) => ValueListenableBuilder(
+                valueListenable: _tutorialCardState,
+                builder: (context, cardState, _) => StaffOnboardingCard(
+                  title: steps[index].title,
+                  description: steps[index].description,
+                  step: index + 1,
+                  totalSteps: steps.length,
+                  arrowPointsUp:
+                      steps[index].contentAlign == ContentAlign.bottom,
+                  isLastStep: index == steps.length - 1,
+                  isSaving: cardState.isSaving,
+                  isConfirmingSkip: cardState.isConfirmingSkip,
+                  errorMessage: cardState.errorMessage,
+                  onBack: index == 0
+                      ? null
+                      : () => unawaited(
+                          _moveTutorial(controller, index - 1, goBack: true),
+                        ),
+                  onCancelSkip: () => _updateTutorialCard(
+                    isConfirmingSkip: false,
+                    clearError: true,
+                  ),
+                  onNext: () => unawaited(_moveTutorial(controller, index + 1)),
+                  onSkip: () => _updateTutorialCard(
+                    isConfirmingSkip: true,
+                    clearError: true,
+                  ),
+                  onFinish: () => unawaited(_finishStaffTutorial()),
+                ),
+              ),
+            ),
+          ],
+        ),
+    ];
+  }
+
+  Future<void> _moveTutorial(
+    TutorialCoachMarkController controller,
+    int targetIndex, {
+    bool goBack = false,
+  }) async {
+    if (targetIndex < 0 || targetIndex >= _tutorialSteps().length) return;
+    _updateTutorialCard(isSaving: true, clearError: true);
+    try {
+      await _navigateToTutorialStep(targetIndex);
+      if (!mounted) return;
+      _updateTutorialCard(isSaving: false);
+      if (goBack) {
+        controller.previous();
+      } else {
+        controller.next();
+      }
+    } catch (error, stackTrace) {
+      debugPrint(
+        'Unable to navigate during staff tutorial: $error\n$stackTrace',
+      );
+      if (!mounted) return;
+      _updateTutorialCard(
+        isSaving: false,
+        errorMessage: 'This section is still loading. Please try Next again.',
+      );
+    }
+  }
+
+  Future<void> _navigateToTutorialStep(int stepIndex) async {
+    final steps = _tutorialSteps();
+    final step = steps[stepIndex];
+    if (_selectedIndex != step.pageIndex) {
+      setState(() {
+        _selectedIndex = step.pageIndex;
+        if (step.pageIndex != 3) _openPendingOnSalesLaunch = false;
+      });
+    }
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted) return;
+
+    BuildContext? targetContext = step.key.currentContext;
+    for (var attempt = 0; targetContext == null && attempt < 20; attempt++) {
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      if (!mounted) return;
+      await WidgetsBinding.instance.endOfFrame;
+      targetContext = step.key.currentContext;
+    }
+    if (targetContext == null || !targetContext.mounted) {
+      throw StateError('The requested staff tutorial target is not available.');
+    }
+    await Scrollable.ensureVisible(
+      targetContext,
+      alignment: 0.35,
+      duration: const Duration(milliseconds: 350),
+      curve: Curves.easeInOut,
+    );
+    await WidgetsBinding.instance.endOfFrame;
+  }
+
+  Future<void> _finishStaffTutorial() async {
+    if (_tutorialCardState.value.isSaving) return;
+    _updateTutorialCard(isSaving: true, clearError: true);
+    try {
+      final staffDocumentId = _staffDocumentId;
+      if (staffDocumentId == null || staffDocumentId.isEmpty) {
+        throw StateError(
+          'The signed-in staff account could not be identified.',
+        );
+      }
+      await StaffOnboardingService.completeTutorial(
+        database: FirebaseFirestore.instance,
+        staffDocumentId: staffDocumentId,
+        isReplay: _tutorialIsReplay,
+      );
+      if (!mounted) return;
+      _tutorialCoachMark?.finish();
+    } catch (error, stackTrace) {
+      debugPrint(
+        'Unable to save staff tutorial completion: $error\n$stackTrace',
+      );
+      if (!mounted) return;
+      _updateTutorialCard(
+        isSaving: false,
+        errorMessage:
+            'Could not save your progress. Check your connection and retry; the tutorial will stay open.',
+      );
+    }
+  }
+
+  void _updateTutorialCard({
+    bool? isSaving,
+    bool? isConfirmingSkip,
+    String? errorMessage,
+    bool clearError = false,
+  }) {
+    _tutorialCardState.value = _tutorialCardState.value.copyWith(
+      isSaving: isSaving,
+      isConfirmingSkip: isConfirmingSkip,
+      errorMessage: errorMessage,
+      clearError: clearError,
+    );
   }
 
   @override
@@ -259,6 +609,7 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
                   items: <Widget>[
                     Icon(
                       Icons.home,
+                      key: _dashboardNavTourKey,
                       size: _selectedIndex == 0 ? 36 : 30,
                       color: _selectedIndex == 0
                           ? Colors.white
@@ -268,6 +619,7 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
                       userId: _sessionUserId,
                       child: Icon(
                         Icons.inventory_2_rounded,
+                        key: _productsTourKey,
                         size: _selectedIndex == 1 ? 32 : 26,
                         color: _selectedIndex == 1
                             ? Colors.white
@@ -276,6 +628,7 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
                     ),
                     Icon(
                       Icons.person_outline,
+                      key: _profileNavTourKey,
                       size: _selectedIndex == 2 ? 32 : 26,
                       color: _selectedIndex == 2
                           ? Colors.white
@@ -283,6 +636,7 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
                     ),
                     Icon(
                       Icons.point_of_sale_rounded,
+                      key: _salesTourKey,
                       size: _selectedIndex == 3 ? 32 : 26,
                       color: _selectedIndex == 3
                           ? Colors.white
@@ -309,13 +663,10 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
   Widget _buildPendingOrdersBadge() {
     final uid = FirebaseAuth.instance.currentUser?.uid ?? _sessionUserId;
     if (uid == null || uid.isEmpty) return const SizedBox.shrink();
-    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-      stream: FirebaseFirestore.instance
-          .collection('pending_orders')
-          .where('userId', isEqualTo: uid)
-          .snapshots(),
+    return StreamBuilder<List<HeldOrder>>(
+      stream: HeldOrderStore.instance.watch(uid),
       builder: (context, snapshot) {
-        final count = snapshot.data?.docs.length ?? 0;
+        final count = snapshot.data?.length ?? 0;
         if (count == 0) return const SizedBox.shrink();
         return Padding(
           padding: const EdgeInsets.symmetric(vertical: 8),
@@ -385,7 +736,15 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
 
   Widget _landscapeNavItem(IconData icon, int index) {
     final selected = _selectedIndex == index;
+    final targetKey = switch (index) {
+      0 => _dashboardNavTourKey,
+      1 => _productsTourKey,
+      2 => _profileNavTourKey,
+      3 => _salesTourKey,
+      _ => null,
+    };
     return IconButton(
+      key: targetKey,
       onPressed: () => setState(() => _selectedIndex = index),
       style: IconButton.styleFrom(
         backgroundColor: selected
@@ -404,6 +763,47 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
               size: selected ? 26 : 23,
               color: selected ? Colors.white : Colors.white.withOpacity(0.82),
             ),
+    );
+  }
+}
+
+class _StaffTourStep {
+  const _StaffTourStep({
+    required this.key,
+    required this.pageIndex,
+    required this.title,
+    required this.description,
+    required this.contentAlign,
+  });
+
+  final GlobalKey key;
+  final int pageIndex;
+  final String title;
+  final String description;
+  final ContentAlign contentAlign;
+}
+
+class _TutorialCardState {
+  const _TutorialCardState({
+    this.isSaving = false,
+    this.isConfirmingSkip = false,
+    this.errorMessage,
+  });
+
+  final bool isSaving;
+  final bool isConfirmingSkip;
+  final String? errorMessage;
+
+  _TutorialCardState copyWith({
+    bool? isSaving,
+    bool? isConfirmingSkip,
+    String? errorMessage,
+    bool clearError = false,
+  }) {
+    return _TutorialCardState(
+      isSaving: isSaving ?? this.isSaving,
+      isConfirmingSkip: isConfirmingSkip ?? this.isConfirmingSkip,
+      errorMessage: clearError ? null : errorMessage ?? this.errorMessage,
     );
   }
 }

@@ -146,7 +146,7 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
   String search = '', filter = 'All items';
   int tab = 0;
   DateTime selectedDay = DateUtils.dateOnly(DateTime.now());
-  DateTime? selectedEnd;
+  DateTime? selectedEnd = DateUtils.dateOnly(DateTime.now());
   bool acceptingAll = false;
   final busy = <String>{};
   late final stream = checklistQuery(
