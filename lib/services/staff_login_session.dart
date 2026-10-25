@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'login_ip.dart';
 import 'local_database_sync_service.dart';
+import 'account_presence.dart';
 
 class StaffLoginSession {
   static Future<void> _flushQueue = Future<void>.value();
@@ -145,6 +146,10 @@ class StaffLoginSession {
     final prefs = await SharedPreferences.getInstance();
     final id = prefs.getString('staffLoginSessionId');
     if (id == null) return;
+    final userId = prefs.getString('lastUserId') ?? '';
+    if (userId.isNotEmpty) {
+      await AccountPresenceService.stop(role: 'staff', userId: userId);
+    }
     final key = 'staffSessionPending.$id';
     final pending = prefs.getString(key);
     final record = pending == null

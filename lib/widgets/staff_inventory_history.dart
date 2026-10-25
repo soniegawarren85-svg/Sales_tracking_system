@@ -12,6 +12,10 @@ DateTime? _historyDate(dynamic value) {
 int _historyQuantity(dynamic value) =>
     value is num ? value.toInt() : int.tryParse('$value') ?? 0;
 
+List<Map> _historyMapRows(dynamic value) => value is Iterable
+    ? value.whereType<Map>().toList()
+    : const [];
+
 List<Map<String, dynamic>> staffInventoryHistoryEntries({
   required String staffId,
   required String kind,
@@ -21,6 +25,9 @@ List<Map<String, dynamic>> staffInventoryHistoryEntries({
   required Set<String> itemNames,
   required Iterable<Map<String, dynamic>> adjustments,
   required Iterable<Map<String, dynamic>> sales,
+  Set<String> scopeIds = const {},
+  Iterable<Map<String, dynamic>> reconciliations = const [],
+  Iterable<Map<String, dynamic>> returns = const [],
 }) {
   final result = <Map<String, dynamic>>[];
   final normalizedIds = itemIds
@@ -31,6 +38,7 @@ List<Map<String, dynamic>> staffInventoryHistoryEntries({
       .map((value) => value.trim().toLowerCase())
       .where((value) => value.isNotEmpty)
       .toSet();
+  final staffScope = {staffId, ...scopeIds};
 
   bool belongsToItem(Map row) {
     final identifiers =
@@ -39,6 +47,7 @@ List<Map<String, dynamic>> staffInventoryHistoryEntries({
               row['id'],
               row['publicId'],
               row['coffeeId'],
+              row['addonId'],
               row['variantId'],
               row['sourceInventoryId'],
             ]
@@ -54,6 +63,10 @@ List<Map<String, dynamic>> staffInventoryHistoryEntries({
   bool isRelevantAdjustment(Map<String, dynamic> row) {
     if (row['staffId'] != staffId && row['userId'] != staffId) return false;
     final type = '${row['type'] ?? ''}'.toLowerCase();
+    if (kind == 'addons') {
+      if (type != 'addon_void') return false;
+      return belongsToItem(row);
+    }
     if (kind == 'bundle') {
       if (type != 'bundle_stock_adjustment' &&
           type != 'bundle_instance_adjustment') {
@@ -70,6 +83,7 @@ List<Map<String, dynamic>> staffInventoryHistoryEntries({
           belongsToItem(row);
     }
     if (type == 'coffee_void' ||
+        type == 'addon_void' ||
         type == 'bundle_stock_adjustment' ||
         type == 'bundle_instance_adjustment') {
       return false;
@@ -97,6 +111,54 @@ List<Map<String, dynamic>> staffInventoryHistoryEntries({
     });
   }
 
+  if (kind == 'bundle') {
+    for (final row in reconciliations) {
+      if ((!staffScope.contains('${row['staffId']}') &&
+              row['submittedBy'] != staffId) ||
+          !['convert', 'unbundle'].contains('${row['action']}')) {
+        continue;
+      }
+      final date = _historyDate(row['reviewedAt'] ?? row['createdAt']);
+      if (date == null) continue;
+      final quantity = _historyQuantity(row['quantity']);
+      if (quantity <= 0) continue;
+      result.add({
+        'activity': row['action'] == 'unbundle' ? 'Unbundled' : 'Converted',
+        'name': row['name'] ?? categoryName,
+        'itemId': row['allocationId'] ?? '',
+        'quantity': quantity,
+        'price': 0,
+        'reason':
+            '${row['status'] ?? ''} ${row['targetSnapshot'] is Map ? (row['targetSnapshot'] as Map)['name'] ?? '' : ''}',
+        'comment': '',
+        'date': date,
+      });
+    }
+    for (final row in returns) {
+      if ((!staffScope.contains('${row['staffId']}') &&
+              row['submittedBy'] != staffId) ||
+          row['kind'] != 'return' ||
+          row['isBundle'] != true ||
+          row['returnSourceCollection'] != 'staff_inventory') {
+        continue;
+      }
+      final date = _historyDate(row['createdAt'] ?? row['updatedAt']);
+      if (date == null) continue;
+      final quantity = _historyQuantity(row['quantity']);
+      if (quantity <= 0) continue;
+      result.add({
+        'activity': 'Returned',
+        'name': row['name'] ?? categoryName,
+        'itemId': row['returnSourceId'] ?? '',
+        'quantity': quantity,
+        'price': row['unitPrice'] ?? 0,
+        'reason': row['reason'] ?? 'Return request',
+        'comment': '${row['status'] ?? ''}',
+        'date': date,
+      });
+    }
+  }
+
   for (final sale in sales) {
     if (sale['userId'] != staffId || sale['isVoided'] == true) continue;
     final saleType = '${sale['type'] ?? 'sale'}'.toLowerCase();
@@ -111,6 +173,51 @@ List<Map<String, dynamic>> staffInventoryHistoryEntries({
       final item = Map<String, dynamic>.from(raw);
       final isBundle = item['isBundle'] == true;
       final isCoffee = item['isCoffee'] == true;
+      if (kind == 'addons') {
+        final addonRows = [
+          ..._historyMapRows(item['addons']),
+          ..._historyMapRows(item['addOns']),
+          ..._historyMapRows(item['selectedAddons']),
+        ];
+        for (final rawAddon in addonRows) {
+          final addon = Map<String, dynamic>.from(rawAddon);
+          if (!belongsToItem(addon)) continue;
+          final quantity = _historyQuantity(
+            addon['quantity'] ?? addon['count'] ?? 1,
+          );
+          if (quantity <= 0) continue;
+          result.add({
+            'activity': refund ? 'Refund' : 'Sold',
+            'name': addon['name'] ?? categoryName,
+            'itemId': addon['addonId'] ?? addon['itemId'] ?? addon['id'] ?? '',
+            'quantity': quantity,
+            'price': addon['priceDelta'] ?? addon['price'] ?? 0,
+            'reason': sale['salesId'] ?? 'Sale',
+            'comment': '',
+            'date': date,
+          });
+        }
+        final variantAddonName = '${item['addonName'] ?? ''}'.trim();
+        if (addonRows.isEmpty && variantAddonName.isNotEmpty) {
+          final addon = {
+            'name': variantAddonName,
+            'addonId': item['addonId'] ?? item['addonItemId'],
+          };
+          if (belongsToItem(addon)) {
+            result.add({
+              'activity': refund ? 'Refund' : 'Sold',
+              'name': variantAddonName,
+              'itemId': addon['addonId'] ?? '',
+              'quantity': _historyQuantity(item['quantity'] ?? 1),
+              'price': item['addonPriceDelta'] ?? 0,
+              'reason': sale['salesId'] ?? 'Sale',
+              'comment': '',
+              'date': date,
+            });
+          }
+        }
+        continue;
+      }
       if (kind == 'bundle' && !isBundle) continue;
       if (kind == 'beverages' && !isCoffee) continue;
       if (kind == 'categories' && (isBundle || isCoffee)) continue;
@@ -156,6 +263,7 @@ Future<void> showStaffInventoryHistory(
   required String categoryName,
   Set<String> itemIds = const {},
   Set<String> itemNames = const {},
+  Set<String> scopeIds = const {},
   FirebaseFirestore? database,
 }) => showDialog<void>(
   context: context,
@@ -167,6 +275,7 @@ Future<void> showStaffInventoryHistory(
     categoryName: categoryName,
     itemIds: itemIds,
     itemNames: itemNames,
+    scopeIds: scopeIds,
   ),
 );
 
@@ -179,6 +288,7 @@ class _StaffInventoryHistoryDialog extends StatefulWidget {
     required this.categoryName,
     required this.itemIds,
     required this.itemNames,
+    required this.scopeIds,
   });
 
   final FirebaseFirestore db;
@@ -188,6 +298,7 @@ class _StaffInventoryHistoryDialog extends StatefulWidget {
   final String categoryName;
   final Set<String> itemIds;
   final Set<String> itemNames;
+  final Set<String> scopeIds;
 
   @override
   State<_StaffInventoryHistoryDialog> createState() =>
@@ -202,6 +313,26 @@ class _StaffInventoryHistoryDialogState
   );
   late DateTimeRange selectedRange = dateRange;
   String search = '';
+  late final Stream<QuerySnapshot<Map<String, dynamic>>> reconciliationStream =
+      widget.db
+          .collection('inventory_reconciliations')
+          .where(
+            'staffId',
+            whereIn: widget.scopeIds.isEmpty
+                ? [widget.staffId]
+                : widget.scopeIds.take(30).toList(),
+          )
+          .snapshots();
+  late final Stream<QuerySnapshot<Map<String, dynamic>>> returnStream = widget
+      .db
+      .collection('allocation_checklist')
+      .where(
+        'staffId',
+        whereIn: widget.scopeIds.isEmpty
+            ? [widget.staffId]
+            : widget.scopeIds.take(30).toList(),
+      )
+      .snapshots();
 
   String dayLabel(DateTime value) =>
       '${value.year}-${value.month.toString().padLeft(2, '0')}-${value.day.toString().padLeft(2, '0')}';
@@ -357,114 +488,152 @@ class _StaffInventoryHistoryDialogState
                         ),
                       );
                     }
-                    final entries =
-                        staffInventoryHistoryEntries(
-                          staffId: widget.staffId,
-                          kind: widget.kind,
-                          categoryId: widget.categoryId,
-                          categoryName: widget.categoryName,
-                          itemIds: widget.itemIds,
-                          itemNames: widget.itemNames,
-                          adjustments: adjustmentsSnapshot.data!.docs.map(
-                            (doc) => doc.data(),
-                          ),
-                          sales: salesSnapshot.data!.docs.map(
-                            (doc) => doc.data(),
-                          ),
-                        ).where((entry) {
-                          final date = entry['date'] as DateTime;
-                          final day = DateUtils.dateOnly(date);
-                          if (day.isBefore(selectedRange.start) ||
-                              day.isAfter(selectedRange.end)) {
-                            return false;
-                          }
-                          if (search.isEmpty) return true;
-                          final text = [
-                            entry['activity'],
-                            entry['name'],
-                            entry['itemId'],
-                            entry['reason'],
-                            entry['comment'],
-                            entry['quantity'],
-                            entry['price'],
-                            dayLabel(date),
-                          ].join(' ').toLowerCase();
-                          return text.contains(search);
-                        }).toList();
-                    final soldTotal = entries
-                        .where((entry) => entry['activity'] == 'Sold')
-                        .fold<int>(
-                          0,
-                          (total, entry) =>
-                              total + _historyQuantity(entry['quantity']),
-                        );
-                    final refundTotal = entries
-                        .where((entry) => entry['activity'] == 'Refund')
-                        .fold<int>(
-                          0,
-                          (total, entry) =>
-                              total + _historyQuantity(entry['quantity']),
-                        );
-                    final reducedTotal = entries
-                        .where((entry) => entry['activity'] == 'Reduce')
-                        .fold<int>(
-                          0,
-                          (total, entry) =>
-                              total + _historyQuantity(entry['quantity']),
-                        );
-                    return Column(
-                      children: [
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
-                          child: Wrap(
-                            spacing: 8,
-                            runSpacing: 8,
-                            children: [
-                              _totalChip(
-                                'Sold',
-                                soldTotal,
-                                Icons.point_of_sale,
-                              ),
-                              _totalChip(
-                                'Reduced',
-                                reducedTotal,
-                                Icons.remove_circle_outline,
-                              ),
-                              _totalChip(
-                                'Refunded',
-                                refundTotal,
-                                Icons.undo_rounded,
-                              ),
-                            ],
-                          ),
-                        ),
-                        Expanded(
-                          child: entries.isEmpty
-                              ? Center(
-                                  child: Text(
-                                    search.isEmpty
-                                        ? 'No sold or reduced items in this date range.'
-                                        : 'No matching sold or reduced items.',
-                                    style: const TextStyle(
-                                      color: AppColors.primaryDark,
+                    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                      stream: reconciliationStream,
+                      builder: (context, reconciliationSnapshot) {
+                        if (!reconciliationSnapshot.hasData) {
+                          return const Center(
+                            child: CircularProgressIndicator(
+                              color: AppColors.primaryDark,
+                            ),
+                          );
+                        }
+                        return StreamBuilder<
+                          QuerySnapshot<Map<String, dynamic>>
+                        >(
+                          stream: returnStream,
+                          builder: (context, returnSnapshot) {
+                            if (!returnSnapshot.hasData) {
+                              return const Center(
+                                child: CircularProgressIndicator(
+                                  color: AppColors.primaryDark,
+                                ),
+                              );
+                            }
+                            final entries =
+                                staffInventoryHistoryEntries(
+                                  staffId: widget.staffId,
+                                  scopeIds: widget.scopeIds,
+                                  kind: widget.kind,
+                                  categoryId: widget.categoryId,
+                                  categoryName: widget.categoryName,
+                                  itemIds: widget.itemIds,
+                                  itemNames: widget.itemNames,
+                                  adjustments: adjustmentsSnapshot.data!.docs
+                                      .map((doc) => doc.data()),
+                                  sales: salesSnapshot.data!.docs.map(
+                                    (doc) => doc.data(),
+                                  ),
+                                  reconciliations: reconciliationSnapshot
+                                      .data!
+                                      .docs
+                                      .map((doc) => doc.data()),
+                                  returns: returnSnapshot.data!.docs.map(
+                                    (doc) => doc.data(),
+                                  ),
+                                ).where((entry) {
+                                  final date = entry['date'] as DateTime;
+                                  final day = DateUtils.dateOnly(date);
+                                  if (day.isBefore(selectedRange.start) ||
+                                      day.isAfter(selectedRange.end)) {
+                                    return false;
+                                  }
+                                  if (search.isEmpty) return true;
+                                  final text = [
+                                    entry['activity'],
+                                    entry['name'],
+                                    entry['itemId'],
+                                    entry['reason'],
+                                    entry['comment'],
+                                    entry['quantity'],
+                                    entry['price'],
+                                    dayLabel(date),
+                                  ].join(' ').toLowerCase();
+                                  return text.contains(search);
+                                }).toList();
+                            final totals = <String, int>{};
+                            for (final entry in entries) {
+                              final activity = '${entry['activity']}';
+                              totals[activity] =
+                                  (totals[activity] ?? 0) +
+                                  _historyQuantity(entry['quantity']);
+                            }
+                            return Column(
+                              children: [
+                                if (search.isNotEmpty && totals.isNotEmpty)
+                                  Padding(
+                                    padding: const EdgeInsets.fromLTRB(
+                                      16,
+                                      0,
+                                      16,
+                                      10,
+                                    ),
+                                    child: SingleChildScrollView(
+                                      scrollDirection: Axis.horizontal,
+                                      child: Row(
+                                        children: [
+                                          for (final entry
+                                              in totals.entries.indexed) ...[
+                                            if (entry.$1 > 0)
+                                              const SizedBox(width: 8),
+                                            _totalChip(
+                                              entry.$2.key == 'Refund'
+                                                  ? 'Refunded'
+                                                  : entry.$2.key == 'Reduce'
+                                                  ? 'Reduced'
+                                                  : entry.$2.key,
+                                              entry.$2.value,
+                                              switch (entry.$2.key) {
+                                                'Sold' => Icons.point_of_sale,
+                                                'Refund' => Icons.undo_rounded,
+                                                'Reduce' =>
+                                                  Icons.remove_circle_outline,
+                                                'Unbundled' =>
+                                                  Icons.call_split_rounded,
+                                                'Converted' =>
+                                                  Icons.autorenew_rounded,
+                                                'Returned' =>
+                                                  Icons
+                                                      .assignment_return_rounded,
+                                                _ => Icons.history_rounded,
+                                              },
+                                            ),
+                                          ],
+                                        ],
+                                      ),
                                     ),
                                   ),
-                                )
-                              : ListView.separated(
-                                  padding: const EdgeInsets.fromLTRB(
-                                    16,
-                                    2,
-                                    16,
-                                    16,
-                                  ),
-                                  itemCount: entries.length,
-                                  separatorBuilder: (_, _) =>
-                                      const SizedBox(height: 9),
-                                  itemBuilder: (context, index) =>
-                                      _historyCard(entries[index]),
+                                Expanded(
+                                  child: entries.isEmpty
+                                      ? Center(
+                                          child: Text(
+                                            search.isEmpty
+                                                ? 'No history found Today'
+                                                : 'No matching history found.',
+                                            style: const TextStyle(
+                                              color: AppColors.primaryDark,
+                                            ),
+                                          ),
+                                        )
+                                      : ListView.separated(
+                                          padding: const EdgeInsets.fromLTRB(
+                                            16,
+                                            2,
+                                            16,
+                                            16,
+                                          ),
+                                          itemCount: entries.length,
+                                          separatorBuilder: (_, _) =>
+                                              const SizedBox(height: 9),
+                                          itemBuilder: (context, index) =>
+                                              _historyCard(entries[index]),
+                                        ),
                                 ),
-                        ),
-                      ],
+                              ],
+                            );
+                          },
+                        );
+                      },
                     );
                   },
                 );

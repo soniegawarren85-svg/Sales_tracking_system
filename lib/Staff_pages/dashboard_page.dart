@@ -3,6 +3,8 @@ import 'package:sales_tracking/theme/app_colors.dart';
 import '../services/inventory_display_ids.dart';
 import '../services/staff_allocation_scope.dart';
 import '../services/staff_sales_history_scope.dart';
+import '../services/account_presence.dart';
+import '../services/super_admin.dart';
 import '../services/receipt_tax.dart';
 import '../services/public_item_id.dart';
 import '../widgets/staff_refund_dialog.dart';
@@ -47,6 +49,15 @@ String _formatDate(DateTime dt) {
     'December',
   ];
   return '${months[dt.month - 1]} ${dt.day}, ${dt.year}';
+}
+
+List<DateTime> _historyDays(Iterable<Map<String, dynamic>> receipts) {
+  final days = <DateTime>{};
+  for (final receipt in receipts) {
+    final date = staffReceiptDate(receipt);
+    if (date != null) days.add(DateUtils.dateOnly(date));
+  }
+  return days.toList()..sort((a, b) => b.compareTo(a));
 }
 
 String _formatTime(DateTime dt) {
@@ -2725,11 +2736,7 @@ class _Header extends StatelessWidget {
   }
 
   static bool _isOnline(Map<String, dynamic> data) {
-    if (data['isOnline'] == true) return true;
-    final lastLogin = data['lastLoginAt'];
-    if (lastLogin is! Timestamp) return false;
-    return DateTime.now().difference(lastLogin.toDate()) <
-        const Duration(minutes: 15);
+    return AccountPresenceService.isOnline(data);
   }
 
   void _openFullMessages(BuildContext context) {
@@ -2787,19 +2794,40 @@ class _Header extends StatelessWidget {
                     .collection('staff_requests')
                     .snapshots(),
                 builder: (context, accountSnapshot) {
-                  return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                  return StreamBuilder<
+                    DocumentSnapshot<Map<String, dynamic>>
+                  >(
+                    stream: FirebaseFirestore.instance
+                        .collection('super_admin_profiles')
+                        .doc(SuperAdmin.id)
+                        .snapshots(),
+                    builder: (context, superAdminSnapshot) {
+                      final superAdminData =
+                          superAdminSnapshot.data?.data() ??
+                          <String, dynamic>{};
+                      return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
                     stream: FirebaseFirestore.instance
                         .collection('messages')
                         .where('participantIds', arrayContains: me['id'])
                         .snapshots(),
                     builder: (context, chatSnapshot) {
                       final rows = <String, Map<String, dynamic>>{};
-                      if (me['role'] != 'admin') {
-                        rows['ADM-0001'] = {
-                          'id': 'ADM-0001',
-                          'name': 'Admin User',
-                          'role': 'admin',
-                          'online': true,
+                      if (me['role'] != SuperAdmin.role) {
+                        rows[SuperAdmin.id] = {
+                          'id': SuperAdmin.id,
+                          'name': _displayName({
+                            ...superAdminData,
+                            'name': superAdminData['name'] ?? 'Super Admin',
+                          }),
+                          'role': SuperAdmin.role,
+                          'online': _isOnline(superAdminData),
+                          'statusText':
+                              AccountPresenceService.offlineStatus(
+                                superAdminData,
+                              ),
+                          'lastSeenAt': AccountPresenceService.lastSeen(
+                            superAdminData,
+                          ),
                           'unread': 0,
                           'lastMessage': '',
                           'updatedAt': 0,
@@ -2820,6 +2848,9 @@ class _Header extends StatelessWidget {
                           'name': _displayName(data),
                           'role': data['role']?.toString() ?? 'staff',
                           'online': _isOnline(data),
+                          'statusText':
+                              AccountPresenceService.offlineStatus(data),
+                          'lastSeenAt': AccountPresenceService.lastSeen(data),
                           'unread': 0,
                           'lastMessage': '',
                           'updatedAt': 0,
@@ -2841,6 +2872,19 @@ class _Header extends StatelessWidget {
                         final names = chat['participantNames'];
                         final unreadBy = chat['unreadBy'];
                         final updatedAt = chat['updatedAt'];
+                        final existingRow = rows[otherId];
+                        final fallbackName = existingRow == null
+                            ? 'User'
+                            : existingRow['name']?.toString() ?? 'User';
+                        final existingRole = existingRow == null
+                            ? null
+                            : existingRow['role'];
+                        final existingOnline = existingRow == null
+                            ? false
+                            : existingRow['online'] ?? false;
+                        final existingStatus = existingRow == null
+                            ? 'Offline'
+                            : existingRow['statusText'] ?? 'Offline';
                         final unread = unreadBy is Map
                             ? _parseStockValue(unreadBy[me['id']])
                             : 0;
@@ -2848,12 +2892,17 @@ class _Header extends StatelessWidget {
                           ...?rows[otherId],
                           'id': otherId,
                           'name': names is Map
-                              ? names[otherId]?.toString() ?? 'Admin User'
-                              : rows[otherId]?['name'] ?? 'Admin User',
+                              ? names[otherId]?.toString() ?? fallbackName
+                              : fallbackName,
                           'role':
-                              rows[otherId]?['role'] ??
-                              (otherId.startsWith('ADM-') ? 'admin' : 'staff'),
-                          'online': rows[otherId]?['online'] ?? false,
+                              existingRole ??
+                              (otherId == SuperAdmin.id
+                                  ? SuperAdmin.role
+                                  : otherId.startsWith('ADM-')
+                                  ? 'admin'
+                                  : 'staff'),
+                          'online': existingOnline,
+                          'statusText': existingStatus,
                           'unread': unread,
                           'lastMessage': chat['lastMessage']?.toString() ?? '',
                           'updatedAt': updatedAt is Timestamp
@@ -2955,6 +3004,9 @@ class _Header extends StatelessWidget {
                                             row['lastMessage']?.toString() ??
                                             '',
                                         online: row['online'] == true,
+                                        statusText:
+                                            row['statusText']?.toString() ??
+                                            'Offline',
                                         unread: row['unread'] as int? ?? 0,
                                         onTap: () {
                                           Navigator.pop(sheetContext);
@@ -3006,10 +3058,12 @@ class _Header extends StatelessWidget {
                     },
                   );
                 },
-              ),
+              );
+              },
             ),
           ),
-        );
+        ),
+      );
       },
     );
   }
@@ -3652,6 +3706,7 @@ class _GuideSheet extends StatelessWidget {
 class _MessagePreviewTile extends StatelessWidget {
   final String name;
   final String role;
+  final String statusText;
   final String lastMessage;
   final bool online;
   final int unread;
@@ -3660,6 +3715,7 @@ class _MessagePreviewTile extends StatelessWidget {
   const _MessagePreviewTile({
     required this.name,
     required this.role,
+    required this.statusText,
     required this.lastMessage,
     required this.online,
     required this.unread,
@@ -3729,7 +3785,7 @@ class _MessagePreviewTile extends StatelessWidget {
                     Text(
                       lastMessage.isNotEmpty
                           ? lastMessage
-                          : '${role.toUpperCase()} - ${online ? 'Online' : 'Offline'}',
+                          : '${role.replaceAll('_', ' ').toUpperCase()} · $statusText',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
@@ -4528,21 +4584,6 @@ class _HistorySheetState extends State<_HistorySheet> {
   DateTimeRange? _selectedRange;
   String _selectedPaymentMode = 'All';
 
-  Future<void> _selectDay() async {
-    final picked = await showDatePicker(
-      context: context,
-      initialDate: _selectedDay,
-      firstDate: DateTime(2020),
-      lastDate: DateTime.now(),
-    );
-    if (picked != null && mounted) {
-      setState(() {
-        _selectedDay = DateUtils.dateOnly(picked);
-        _selectedRange = null;
-      });
-    }
-  }
-
   Future<void> _selectDateRange() async {
     final picked = await showDateRangePicker(
       context: context,
@@ -4729,23 +4770,43 @@ class _HistorySheetState extends State<_HistorySheet> {
                         children: [
                           Padding(
                             padding: const EdgeInsets.symmetric(horizontal: 16),
-                            child: Align(
-                              alignment: Alignment.centerLeft,
-                              child: FilledButton.icon(
-                                onPressed: _selectDay,
-                                icon: const Icon(Icons.event_rounded, size: 17),
-                                label: Text(_formatDate(_selectedDay)),
-                                style: FilledButton.styleFrom(
-                                  backgroundColor: _C.primary,
-                                  foregroundColor: Colors.white,
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 12,
-                                    vertical: 9,
-                                  ),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(14),
-                                  ),
-                                ),
+                            child: SizedBox(
+                              height: 48,
+                              child: ListView(
+                                scrollDirection: Axis.horizontal,
+                                children: [
+                                  for (final day in _historyDays(
+                                    bySalesId.values,
+                                  ))
+                                    Padding(
+                                      padding: const EdgeInsets.only(right: 8),
+                                      child: ChoiceChip(
+                                        label: Text(_formatDate(day)),
+                                        selected: DateUtils.isSameDay(
+                                          day,
+                                          _selectedDay,
+                                        ),
+                                        onSelected: (_) => setState(() {
+                                          _selectedDay = day;
+                                          _selectedRange = null;
+                                        }),
+                                        selectedColor: _C.primary,
+                                        labelStyle: TextStyle(
+                                          color:
+                                              DateUtils.isSameDay(
+                                                day,
+                                                _selectedDay,
+                                              )
+                                              ? Colors.white
+                                              : _C.primary,
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                        side: BorderSide(
+                                          color: _C.primary.withOpacity(.25),
+                                        ),
+                                      ),
+                                    ),
+                                ],
                               ),
                             ),
                           ),

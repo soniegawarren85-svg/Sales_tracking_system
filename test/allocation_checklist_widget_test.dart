@@ -33,7 +33,7 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Checklist'));
+    await tester.tap(find.byTooltip('Checklist'));
     await tester.pumpAndSettle();
     expect(find.textContaining('pending delivery'), findsOneWidget);
     expect(find.textContaining('Received delivery'), findsNothing);
@@ -43,6 +43,43 @@ void main() {
     expect(find.text('Confirm Received'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
+  testWidgets(
+    'staff checklist action buttons stay beside each other on mobile',
+    (tester) async {
+      tester.view.physicalSize = const Size(360, 800);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final db = FakeFirebaseFirestore();
+      await db.collection('allocation_checklist').add({
+        'staffId': 'branch',
+        'status': 'pending',
+        'name': 'Bundle Cakes',
+        'isBundle': true,
+        'bundleCount': 2,
+        'createdAt': Timestamp.now(),
+      });
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: AllocationChecklistButton(
+              scopeIds: const ['branch'],
+              database: db,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Checklist'));
+      await tester.pumpAndSettle();
+      final reportButton = tester.getRect(find.text('Report Issue'));
+      final confirmButton = tester.getRect(find.text('Confirm Received'));
+
+      expect(reportButton.center.dy, closeTo(confirmButton.center.dy, 1));
+      expect(reportButton.right, lessThan(confirmButton.left));
+      expect(tester.takeException(), isNull);
+    },
+  );
   testWidgets('staff completed checklist dates by actual receive timestamp', (
     tester,
   ) async {
@@ -70,7 +107,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Checklist'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Complete'));
+    await tester.tap(find.text('Complete Items'));
     await tester.pumpAndSettle();
     expect(find.textContaining('Yesterday allocation'), findsOneWidget);
     expect(find.textContaining('Received:'), findsOneWidget);
@@ -377,109 +414,100 @@ void main() {
     });
   }
 
-  testWidgets(
-    'branch checklist count, search, type filter and required issue quantity',
-    (tester) async {
-      final db = FakeFirebaseFirestore();
-      for (final row in [
-        {
-          'staffId': 'branch',
-          'status': 'pending',
-          'name': 'Cookies',
-          'targetDocId': 'target',
-          'items': [
-            {'id': 'chocolate', 'name': 'Chocolate', 'stock': 3},
-          ],
-        },
-        {
-          'staffId': 'branch',
-          'status': 'pending',
-          'name': 'Latte',
-          'isCoffee': true,
-        },
-        {'staffId': 'other', 'status': 'pending', 'name': 'Other branch'},
-        {'staffId': 'branch', 'status': 'accepted', 'name': 'Old delivery'},
-      ]) {
-        await db.collection('allocation_checklist').add({
-          ...row,
-          'createdAt': Timestamp.fromDate(DateUtils.dateOnly(DateTime.now())),
-        });
-      }
-      await db.doc('staff_requests/staff-one').set({
-        'role': 'staff',
-        'status': 'accepted',
-        'staffId': 'STF-001',
-        'firstName': 'Test',
-        'lastName': 'Staff',
-        'branchIds': ['branch'],
-      });
-      await db.doc('staff_inventory/target').set({
+  testWidgets('branch checklist count, search and required issue quantity', (
+    tester,
+  ) async {
+    final db = FakeFirebaseFirestore();
+    for (final row in [
+      {
         'staffId': 'branch',
+        'status': 'pending',
+        'name': 'Cookies',
+        'targetDocId': 'target',
         'items': [
-          {'id': 'chocolate', 'name': 'Chocolate', 'stock': 0},
+          {'id': 'chocolate', 'name': 'Chocolate', 'stock': 3},
         ],
+      },
+      {
+        'staffId': 'branch',
+        'status': 'pending',
+        'name': 'Latte',
+        'isCoffee': true,
+      },
+      {'staffId': 'other', 'status': 'pending', 'name': 'Other branch'},
+      {'staffId': 'branch', 'status': 'accepted', 'name': 'Old delivery'},
+    ]) {
+      await db.collection('allocation_checklist').add({
+        ...row,
+        'createdAt': Timestamp.fromDate(DateUtils.dateOnly(DateTime.now())),
       });
-      final preferences = await SharedPreferences.getInstance();
-      await preferences.setString('lastRole', 'staff');
-      await preferences.setString('lastUserId', 'staff-one');
-      await tester.binding.setSurfaceSize(const Size(420, 780));
-      addTearDown(() => tester.binding.setSurfaceSize(null));
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: AllocationChecklistButton(
-              scopeIds: const ['branch'],
-              database: db,
-            ),
+    }
+    await db.doc('staff_requests/staff-one').set({
+      'role': 'staff',
+      'status': 'accepted',
+      'staffId': 'STF-001',
+      'firstName': 'Test',
+      'lastName': 'Staff',
+      'branchIds': ['branch'],
+    });
+    await db.doc('staff_inventory/target').set({
+      'staffId': 'branch',
+      'items': [
+        {'id': 'chocolate', 'name': 'Chocolate', 'stock': 0},
+      ],
+    });
+    final preferences = await SharedPreferences.getInstance();
+    await preferences.setString('lastRole', 'staff');
+    await preferences.setString('lastUserId', 'staff-one');
+    await tester.binding.setSurfaceSize(const Size(420, 780));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: AllocationChecklistButton(
+            scopeIds: const ['branch'],
+            database: db,
           ),
         ),
-      );
-      await tester.pumpAndSettle();
-      expect(find.text('Checklist'), findsOneWidget);
-      expect(find.text('Returns'), findsOneWidget);
-      await tester.tap(find.text('Checklist'));
-      await tester.pumpAndSettle();
-      expect(find.textContaining('Chocolate'), findsOneWidget);
-      expect(find.text('Other branch'), findsNothing);
-      await tester.ensureVisible(find.text('Beverages'));
-      await tester.tap(find.text('Beverages'));
-      await tester.pumpAndSettle();
-      expect(find.textContaining('Chocolate'), findsNothing);
-      expect(find.textContaining('Latte'), findsWidgets);
-      await tester.ensureVisible(find.text('All items'));
-      await tester.tap(find.text('All items'));
-      await tester.enterText(find.byType(TextField).first, 'Chocolate');
-      await tester.pumpAndSettle();
-      expect(find.textContaining('Latte'), findsNothing);
-      await tester.ensureVisible(find.text('Confirm Received'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Confirm Received'));
-      await tester.pumpAndSettle();
-      expect(find.text('Receive allocated items?'), findsOneWidget);
-      await tester.tap(find.text('Cancel'));
-      await tester.pumpAndSettle();
-      expect(find.text('Confirm Received'), findsOneWidget);
-      await tester.ensureVisible(find.text('Report Issue'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Report Issue'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Continue'));
-      await tester.pumpAndSettle();
-      expect(
-        find.text('Enter a whole number greater than zero'),
-        findsOneWidget,
-      );
-      await tester.enterText(find.byType(TextFormField).first, '1');
-      await tester.tap(find.text('Continue'));
-      await tester.pumpAndSettle();
-      expect(find.text('Confirm Issue Report'), findsOneWidget);
-      expect(find.textContaining('Only 2 Chocolate'), findsOneWidget);
-      await tester.tap(find.text('Confirm and receive'));
-      await tester.pumpAndSettle();
-      expect(tester.takeException(), isNull);
-      final received = (await db.doc('staff_inventory/target').get()).data()!;
-      expect((received['items'] as List).single['stock'], 2);
-      expect(tester.takeException(), isNull);
-    },
-  );
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Checklist'), findsOneWidget);
+    expect(find.text('Returns'), findsOneWidget);
+    await tester.tap(find.text('Checklist'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Chocolate'), findsOneWidget);
+    expect(find.text('Other branch'), findsNothing);
+    expect(find.text('All items'), findsNothing);
+    expect(find.text('Bundle'), findsNothing);
+    await tester.enterText(find.byType(TextField).first, 'Chocolate');
+    await tester.pumpAndSettle();
+    expect(find.text('Chocolate — 3'), findsOneWidget);
+    await tester.ensureVisible(find.text('Confirm Received'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Confirm Received'));
+    await tester.pumpAndSettle();
+    expect(find.text('Receive allocated items?'), findsOneWidget);
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    expect(find.text('Confirm Received'), findsOneWidget);
+    await tester.ensureVisible(find.text('Report Issue'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Report Issue'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Continue'));
+    await tester.pumpAndSettle();
+    expect(find.text('Enter a whole number greater than zero'), findsOneWidget);
+    await tester.enterText(find.byType(TextFormField).first, '1');
+    await tester.tap(find.text('Continue'));
+    await tester.pumpAndSettle();
+    expect(find.text('Confirm Issue Report'), findsOneWidget);
+    expect(find.textContaining('Only 2 Chocolate'), findsOneWidget);
+    await tester.tap(find.text('Confirm and receive'));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    final received = (await db.doc('staff_inventory/target').get()).data()!;
+    expect((received['items'] as List).single['stock'], 2);
+    expect(tester.takeException(), isNull);
+  });
 }

@@ -7,6 +7,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../../services/account_presence.dart';
+import '../../services/super_admin.dart';
 
 const _chatPink = AppColors.primary;
 const _chatDeep = AppColors.primaryDark;
@@ -136,11 +138,7 @@ class _MessagePageState extends State<MessagePage> {
   }
 
   static bool _isOnline(Map<String, dynamic> data) {
-    if (data['isOnline'] == true) return true;
-    final lastLogin = data['lastLoginAt'];
-    if (lastLogin is! Timestamp) return false;
-    return DateTime.now().difference(lastLogin.toDate()) <
-        const Duration(minutes: 15);
+    return AccountPresenceService.isOnline(data);
   }
 
   String _chatId(String otherId) {
@@ -215,7 +213,16 @@ class _MessagePageState extends State<MessagePage> {
         ),
         child: me == null
             ? const Center(child: _LoadingSpinner())
-            : StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+            : StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+                stream: FirebaseFirestore.instance
+                    .collection('super_admin_profiles')
+                    .doc(SuperAdmin.id)
+                    .snapshots(),
+                builder: (context, superAdminSnapshot) {
+                  final superAdminData =
+                      superAdminSnapshot.data?.data() ??
+                      <String, dynamic>{};
+                  return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
                 stream: FirebaseFirestore.instance
                     .collection('staff_requests')
                     .snapshots(),
@@ -236,12 +243,18 @@ class _MessagePageState extends State<MessagePage> {
                     builder: (context, chatSnapshot) {
                       final rows = <String, _InboxRow>{};
 
-                      if (me['role'] != 'admin') {
-                        rows['ADM-0001'] = const _InboxRow(
-                          id: 'ADM-0001',
-                          name: 'Admin User',
-                          role: 'admin',
-                          online: true,
+                      if (me['role'] != SuperAdmin.role) {
+                        rows[SuperAdmin.id] = _InboxRow(
+                          id: SuperAdmin.id,
+                          name: _displayName({
+                            ...superAdminData,
+                            'name': superAdminData['name'] ?? SuperAdmin.name,
+                          }),
+                          role: SuperAdmin.role,
+                          online: _isOnline(superAdminData),
+                          lastSeenAt: AccountPresenceService.lastSeen(
+                            superAdminData,
+                          ),
                         );
                       }
 
@@ -255,7 +268,7 @@ class _MessagePageState extends State<MessagePage> {
                           photoUrl:
                               data['photoUrl']?.toString() ??
                               data['profileImageUrl']?.toString(),
-                          lastSeenAt: (data['lastLoginAt'] as Timestamp?)?.toDate(),
+                          lastSeenAt: AccountPresenceService.lastSeen(data),
                         );
                       }
 
@@ -272,8 +285,10 @@ class _MessagePageState extends State<MessagePage> {
                         final names = chat['participantNames'];
                         final photos = chat['participantPhotos'];
                         final name = names is Map
-                            ? names[otherId]?.toString() ?? 'Admin User'
-                            : 'Admin User';
+                            ? names[otherId]?.toString() ??
+                                  rows[otherId]?.name ??
+                                  'User'
+                            : rows[otherId]?.name ?? 'User';
                         rows[otherId] =
                             rows[otherId]?.copyWith(
                               unread: _unreadCount(chat),
@@ -290,8 +305,17 @@ class _MessagePageState extends State<MessagePage> {
                               name: name,
                               role: otherId.startsWith('ADM-')
                                   ? 'admin'
+                                  : otherId == SuperAdmin.id
+                                  ? SuperAdmin.role
                                   : 'staff',
-                              online: false,
+                              online: otherId == SuperAdmin.id
+                                  ? _isOnline(superAdminData)
+                                  : false,
+                              lastSeenAt: otherId == SuperAdmin.id
+                                  ? AccountPresenceService.lastSeen(
+                                      superAdminData,
+                                    )
+                                  : null,
                               unread: _unreadCount(chat),
                               lastMessage: chat['lastMessage']?.toString() ?? '',
                               pinned: _pinnedIds.contains(otherId),
@@ -374,37 +398,12 @@ class _MessagePageState extends State<MessagePage> {
                     },
                   );
                 },
+                  );
+                },
               ),
       ),
     );
   }
-}
-
-String _formatRelativeTime(DateTime? value) {
-  if (value == null) return '';
-
-  final now = DateTime.now();
-  final diff = now.difference(value);
-
-  if (diff.inDays >= 365) {
-    final years = (diff.inDays / 365).floor();
-    return years <= 1 ? '1 year ago' : '$years years ago';
-  }
-  if (diff.inDays >= 30) {
-    final months = (diff.inDays / 30).floor();
-    return months <= 1 ? '1 month ago' : '$months months ago';
-  }
-  if (diff.inDays >= 1) {
-    return diff.inDays <= 1 ? '1 day ago' : '${diff.inDays} days ago';
-  }
-  if (diff.inHours >= 1) {
-    return diff.inHours <= 1 ? '1 hour ago' : '${diff.inHours} hours ago';
-  }
-  if (diff.inMinutes >= 1) {
-    return diff.inMinutes <= 1 ? '1 minute ago' : '${diff.inMinutes} minutes ago';
-  }
-
-  return 'just now';
 }
 
 class _InboxRow {
@@ -622,7 +621,10 @@ class _ConversationPanelState extends State<_ConversationPanel> {
   @override
   Widget build(BuildContext context) {
     final other = widget.other;
-    final statusText = other.online ? 'Online' : _formatRelativeTime(other.lastSeenAt);
+    final statusText = AccountPresenceService.offlineStatus({
+      'isOnline': other.online,
+      'lastSeenAt': other.lastSeenAt,
+    });
 
     return DecoratedBox(
       decoration: BoxDecoration(
@@ -964,7 +966,10 @@ class _InboxTileState extends State<_InboxTile> {
   @override
   Widget build(BuildContext context) {
     final row = widget.row;
-    final timeText = row.online ? 'Online' : _formatRelativeTime(row.lastSeenAt);
+    final timeText = AccountPresenceService.offlineStatus({
+      'isOnline': row.online,
+      'lastSeenAt': row.lastSeenAt,
+    });
 
     return AnimatedScale(
       scale: _scale,

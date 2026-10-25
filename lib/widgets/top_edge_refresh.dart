@@ -21,6 +21,7 @@ class TopEdgeRefresh extends StatefulWidget {
 }
 
 class _TopEdgeRefreshState extends State<TopEdgeRefresh> {
+  static bool _refreshInProgress = false;
   bool nearTop = false;
   final offsets = <int, double>{};
   @override
@@ -40,7 +41,15 @@ class _TopEdgeRefreshState extends State<TopEdgeRefresh> {
             (widget.notificationPredicate?.call(notification) ??
                 notification.depth == 0);
       },
-      onRefresh: widget.onRefresh,
+      onRefresh: () async {
+        if (_refreshInProgress) return;
+        _refreshInProgress = true;
+        try {
+          await widget.onRefresh();
+        } finally {
+          _refreshInProgress = false;
+        }
+      },
       child: widget.child,
     ),
   );

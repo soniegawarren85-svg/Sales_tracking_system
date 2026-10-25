@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'activity_log.dart';
+import 'account_presence.dart';
 
 class AccountLoginSession {
   static const _sessionPreference = 'accountLoginSessionId';
@@ -45,8 +46,17 @@ class AccountLoginSession {
   static Future<void> close({FirebaseFirestore? database}) async {
     final prefs = await SharedPreferences.getInstance();
     final sessionId = prefs.getString(_sessionPreference);
-    if (sessionId == null || sessionId.isEmpty) return;
     final db = database ?? FirebaseFirestore.instance;
+    final role = prefs.getString('lastRole') ?? '';
+    final userId = prefs.getString('lastUserId') ?? '';
+    if (role.isNotEmpty && userId.isNotEmpty) {
+      await AccountPresenceService.stop(
+        role: role,
+        userId: userId,
+        database: db,
+      );
+    }
+    if (sessionId == null || sessionId.isEmpty) return;
     final ref = db.collection('staff_login_sessions').doc(sessionId);
     final snapshot = await ref.get();
     final session = snapshot.data();

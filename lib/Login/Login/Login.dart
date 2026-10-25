@@ -2,6 +2,7 @@ import '../../services/account_password_service.dart';
 import '../../services/profile_email.dart';
 import '../../services/account_session_control.dart';
 import '../../services/account_login_session.dart';
+import '../../services/account_presence.dart';
 import '../../services/password_policy.dart';
 import 'dart:async';
 import '../../services/super_admin.dart';
@@ -353,16 +354,6 @@ class _LoginScreenState extends State<LoginScreen>
       firstName: _welcomeName(data, ''),
       accountData: data,
     );
-    unawaited(
-      accountDoc.reference
-          .update({
-            'lastLoginAt': FieldValue.serverTimestamp(),
-            'isOnline': true,
-          })
-          .catchError((Object error) {
-            debugPrint('Login status queued: $error');
-          }),
-    );
     if (isAdmin) {
       await _startElevatedLoginSession(
         role: 'admin',
@@ -375,6 +366,7 @@ class _LoginScreenState extends State<LoginScreen>
     if (!isAdmin && mounted) {
       await StaffLoginSession.start(context, accountDoc.id, data);
     }
+    unawaited(AccountPresenceService.start(role: role, userId: accountDoc.id));
     _showMessage(
       'Welcome, ${_welcomeName(data, isAdmin ? 'Admin' : 'Staff')}!',
     );
@@ -534,9 +526,9 @@ class _LoginScreenState extends State<LoginScreen>
     if (_isLoading) return;
     final rawInput = _usernameController.text;
     final rawPassword = _passwordController.text;
-    final inputError = loginInputError(rawInput, rawPassword);
-    if (inputError != null) {
-      _showMessage(inputError, isError: true);
+    final validationMessage = _loginValidationMessage(rawInput, rawPassword);
+    if (validationMessage != null) {
+      _showMessage(validationMessage, isError: true);
       return;
     }
     final isAccountId = isAccountIdLogin(rawInput);
@@ -556,8 +548,15 @@ class _LoginScreenState extends State<LoginScreen>
           _showMessage(invalidLoginCredentialsMessage(), isError: true);
           return;
         }
+
         final prefs = await SharedPreferences.getInstance();
         await SuperAdmin.startSession(prefs);
+        unawaited(
+          AccountPresenceService.start(
+            role: SuperAdmin.role,
+            userId: SuperAdmin.sessionId,
+          ),
+        );
         await _startElevatedLoginSession(
           role: 'super_admin',
           userId: 'super-admin',
@@ -646,6 +645,12 @@ class _LoginScreenState extends State<LoginScreen>
             }
 
             if (status == 'accepted') {
+              unawaited(
+                AccountPresenceService.start(
+                  role: 'admin',
+                  userId: accountDoc.id,
+                ),
+              );
               unawaited(
                 accountDoc.reference
                     .update({'lastLoginAt': FieldValue.serverTimestamp()})
@@ -857,6 +862,8 @@ class _LoginScreenState extends State<LoginScreen>
           signedInDoc.reference
               .update({
                 'lastLoginAt': FieldValue.serverTimestamp(),
+                'isOnline': true,
+                'lastSeenAt': FieldValue.serverTimestamp(),
                 'authEmail': ?signedInAuthEmail,
                 'passwordAuthMode': 'firebase',
                 'passwordCredential': FieldValue.delete(),
@@ -884,6 +891,12 @@ class _LoginScreenState extends State<LoginScreen>
             name: _welcomeName(data, 'Admin'),
           );
         }
+        unawaited(
+          AccountPresenceService.start(
+            role: isAdmin ? 'admin' : 'staff',
+            userId: signedInDoc.id,
+          ),
+        );
         _showMessage(
           'Welcome, ${_welcomeName(data, isAdmin ? 'Admin' : 'Staff')}!',
         );
@@ -927,6 +940,17 @@ class _LoginScreenState extends State<LoginScreen>
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
+  }
+
+  String? _loginValidationMessage(String input, String password) {
+    final normalizedInput = input.trim();
+    if (normalizedInput.isEmpty) return 'Email address is required.';
+    if (!isAccountIdLogin(normalizedInput) &&
+        !RegExp(r'^[^@\s]+@[^@\s]+(?:\.[^@\s]+)+$').hasMatch(normalizedInput)) {
+      return 'Please enter a valid email address.';
+    }
+    if (password.trim().isEmpty) return 'Password is required.';
+    return null;
   }
 
   Future<void> _offlineSignInOrMessage(String username, String password) async {
@@ -1342,7 +1366,7 @@ class _LoginScreenState extends State<LoginScreen>
           }
           return KeyEventResult.ignored;
         },
-        child: TextField(
+        child: TextFormField(
           controller: controller,
           keyboardType: keyboardType,
           obscureText: obscureText,

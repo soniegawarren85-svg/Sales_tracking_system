@@ -265,7 +265,6 @@ class _BatchDialog extends StatefulWidget {
 class _BatchDialogState extends State<_BatchDialog> {
   String search = '';
   DateTimeRange? range;
-  String dateMode = 'allocated';
   final salesByAllocation = <String, List<Map<String, dynamic>>>{};
   List<Map<String, dynamic>>? records;
   String? error;
@@ -313,14 +312,27 @@ class _BatchDialogState extends State<_BatchDialog> {
           )
           .map((d) => <String, dynamic>{...d.data(), '_id': d.id})
           .toList();
-      final sales = await widget.db.collection('completed_sales').where('branchId', isEqualTo: original['staffId']).get();
+      final sales = await widget.db
+          .collection('completed_sales')
+          .where('branchId', isEqualTo: original['staffId'])
+          .get();
       for (final saleDoc in sales.docs) {
         final sale = saleDoc.data();
         if (sale['isVoided'] == true || sale['isDeleted'] == true) continue;
         for (final line in expandSaleStockLines(bundleRows(sale['items']))) {
           final allocationId = '${line['staffInventoryDocId'] ?? ''}';
-          if (widget.itemId != null && ![line['id'], line['itemId'], line['variantId'], line['publicId']].contains(widget.itemId)) continue;
-          salesByAllocation.putIfAbsent(allocationId, () => []).add({...line, 'soldAt': sale['timestamp'] ?? sale['createdAt']});
+          if (widget.itemId != null &&
+              ![
+                line['id'],
+                line['itemId'],
+                line['variantId'],
+                line['publicId'],
+              ].contains(widget.itemId))
+            continue;
+          salesByAllocation.putIfAbsent(allocationId, () => []).add({
+            ...line,
+            'soldAt': sale['timestamp'] ?? sale['createdAt'],
+          });
         }
       }
       rows.sort(
@@ -459,14 +471,29 @@ class _BatchDialogState extends State<_BatchDialog> {
         ),
     };
     final visibleRecords = (records ?? <Map<String, dynamic>>[])
-        .where((record) => dateMode != 'sold' || bundleRows(record['_sales']).any((sale) => range == null || (!date(sale['soldAt']).isBefore(range!.start) && date(sale['soldAt']).isBefore(DateTime(range!.end.year, range!.end.month, range!.end.day + 1)))))
+        .where((record) {
+          if (search.isEmpty) return true;
+          final sales = bundleRows(record['_sales']);
+          final items = allocationBatchItemsForRecord(
+            record,
+            itemId: widget.itemId,
+          );
+          final hasSales = sales.isNotEmpty;
+          final corpus = [
+            '$record',
+            if (record['origin'] == 'unbundle') 'unbundle',
+            if (record['origin'] != 'unbundle') 'allocated',
+            if (hasSales) 'sold',
+            for (final sale in sales) '$sale',
+            for (final item in items) '$item',
+          ].join(' ').toLowerCase();
+          if (search == 'sold') return hasSales;
+          if (search == 'allocated') return record['origin'] != 'unbundle';
+          return corpus.contains(search);
+        })
         .where(
           (record) =>
-              search.isEmpty || '$record'.toLowerCase().contains(search),
-        )
-        .where(
-          (record) =>
-              dateMode == 'sold' || range == null ||
+              range == null ||
               (!date(record['assignedAt']).isBefore(range!.start) &&
                   date(record['assignedAt']).isBefore(
                     DateTime(
@@ -512,7 +539,31 @@ class _BatchDialogState extends State<_BatchDialog> {
     return PopScope(
       canPop: !busy,
       child: AlertDialog(
-        title: const Text('Allocation batches'),
+        titlePadding: EdgeInsets.zero,
+        title: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 18),
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              colors: [AppColors.primaryDeep, AppColors.primaryDark],
+            ),
+          ),
+          child: const Row(
+            children: [
+              Icon(Icons.inventory_2_outlined, color: Colors.white),
+              SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  'Allocated batches',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w800,
+                    fontSize: 20,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
         content: SizedBox(
           width: 620,
           child: SingleChildScrollView(
@@ -522,7 +573,7 @@ class _BatchDialogState extends State<_BatchDialog> {
               children: [
                 TextField(
                   decoration: InputDecoration(
-                    hintText: 'Search allocation batches',
+                    hintText: 'Search allocated, sold, item, or batch',
                     prefixIcon: const Icon(Icons.search),
                     suffixIcon: IconButton(
                       tooltip: 'Filter allocation dates',
@@ -554,21 +605,6 @@ class _BatchDialogState extends State<_BatchDialog> {
                     ],
                   ),
                 const SizedBox(height: 12),
-                DropdownButtonFormField<String>(
-                  initialValue: dateMode,
-                  decoration: const InputDecoration(
-                    labelText: 'Filter dates by',
-                  ),
-                  items: const [
-                    DropdownMenuItem(
-                      value: 'allocated',
-                      child: Text('Allocation'),
-                    ),
-                    DropdownMenuItem(value: 'sold', child: Text('Sold')),
-                  ],
-                  onChanged: (value) => setState(() => dateMode = value!),
-                ),
-                const SizedBox(height: 12),
                 if (records == null && error == null)
                   const LinearProgressIndicator(),
                 if (bundle) ...[
@@ -595,9 +631,6 @@ class _BatchDialogState extends State<_BatchDialog> {
                           }),
                   ),
                   const SizedBox(height: 12),
-                  const Text(
-                    'Select available bundles from one allocation batch. Stock is reserved until the administrator reviews your request.',
-                  ),
                   if (action == 'convert') ...[
                     DropdownButtonFormField<String>(
                       key: ValueKey('$selectedAllocation-$action'),
@@ -660,7 +693,20 @@ class _BatchDialogState extends State<_BatchDialog> {
                           final someSelected =
                               selectedCount > 0 && !allSelected;
                           return Card(
+                            color: Colors.white,
+                            elevation: 2,
+                            margin: const EdgeInsets.symmetric(vertical: 6),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(16),
+                              side: const BorderSide(color: AppColors.blush),
+                            ),
                             child: ExpansionTile(
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(16),
+                              ),
+                              collapsedShape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(16),
+                              ),
                               title: Row(
                                 children: [
                                   Expanded(
@@ -734,14 +780,32 @@ class _BatchDialogState extends State<_BatchDialog> {
                           dateLabel(record['assignedAt']),
                         ].join(' - ');
                         return Card(
+                          color: Colors.white,
+                          elevation: 2,
+                          margin: const EdgeInsets.symmetric(vertical: 6),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(16),
+                            side: const BorderSide(color: AppColors.blush),
+                          ),
                           child: ExpansionTile(
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(16),
+                            ),
+                            collapsedShape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(16),
+                            ),
                             title: Text(title),
                             subtitle: Text(
                               '${record['origin'] == 'unbundle' || items.any((item) => item['origin'] == 'unbundle') ? 'Unbundle' : 'Allocated'} | ${batchLabels['${record['_id']}'] ?? 'Batch - 001'}',
                             ),
                             children: [
                               for (final sale in bundleRows(record['_sales']))
-                                ListTile(title: Text('Sold: ${sale['quantity']}'), subtitle: Text('Sold: ${date(sale['soldAt']).toLocal()}')),
+                                ListTile(
+                                  title: Text('Sold: ${sale['quantity']}'),
+                                  subtitle: Text(
+                                    'Sold: ${date(sale['soldAt']).toLocal()}',
+                                  ),
+                                ),
                               for (final item in items)
                                 ListTile(
                                   title: Text(
@@ -1394,22 +1458,64 @@ class _RequestsDialogState extends State<_RequestsDialog> {
   );
 }
 
-Future<void> showBranchBatchHistory(BuildContext context, String branchId, FirebaseFirestore db) => showDialog<void>(context: context, builder: (context) => AlertDialog(
-  title: const Text('Batch history'),
-  content: SizedBox(width: 620, height: 420, child: FutureBuilder<QuerySnapshot<Map<String, dynamic>>>(
-    future: db.collection('staff_inventory').where('staffId', isEqualTo: branchId).get(),
-    builder: (context, snapshot) {
-      if (snapshot.hasError) return const Text('Unable to load batch history. Please try again.');
-      if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
-      final groups = <String, QueryDocumentSnapshot<Map<String, dynamic>>>{};
-      for (final doc in snapshot.data!.docs) {
-        final data = doc.data();
-        final key = data['isBundle'] == true ? bundleInventoryGroupKey(data) : '${data['sourceInventoryId']}';
-        groups.putIfAbsent(key, () => doc);
-      }
-      if (groups.isEmpty) return const Text('No allocation batches recorded.');
-      return ListView(children: [for (final doc in groups.values) ListTile(title: Text('${doc.data()['name'] ?? 'Inventory'}'), subtitle: const Text('View allocated and depleted batches'), trailing: const Icon(Icons.chevron_right), onTap: () => showInventoryBatches(context, allocationId: doc.id, scopeIds: [branchId], database: db))]);
-    },
-  )),
-  actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Close'))],
-));
+Future<void> showBranchBatchHistory(
+  BuildContext context,
+  String branchId,
+  FirebaseFirestore db,
+) => showDialog<void>(
+  context: context,
+  builder: (context) => AlertDialog(
+    title: const Text('Batch history'),
+    content: SizedBox(
+      width: 620,
+      height: 420,
+      child: FutureBuilder<QuerySnapshot<Map<String, dynamic>>>(
+        future: db
+            .collection('staff_inventory')
+            .where('staffId', isEqualTo: branchId)
+            .get(),
+        builder: (context, snapshot) {
+          if (snapshot.hasError)
+            return const Text(
+              'Unable to load batch history. Please try again.',
+            );
+          if (!snapshot.hasData)
+            return const Center(child: CircularProgressIndicator());
+          final groups =
+              <String, QueryDocumentSnapshot<Map<String, dynamic>>>{};
+          for (final doc in snapshot.data!.docs) {
+            final data = doc.data();
+            final key = data['isBundle'] == true
+                ? bundleInventoryGroupKey(data)
+                : '${data['sourceInventoryId']}';
+            groups.putIfAbsent(key, () => doc);
+          }
+          if (groups.isEmpty)
+            return const Text('No allocation batches recorded.');
+          return ListView(
+            children: [
+              for (final doc in groups.values)
+                ListTile(
+                  title: Text('${doc.data()['name'] ?? 'Inventory'}'),
+                  subtitle: const Text('View allocated and depleted batches'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => showInventoryBatches(
+                    context,
+                    allocationId: doc.id,
+                    scopeIds: [branchId],
+                    database: db,
+                  ),
+                ),
+            ],
+          );
+        },
+      ),
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.pop(context),
+        child: const Text('Close'),
+      ),
+    ],
+  ),
+);

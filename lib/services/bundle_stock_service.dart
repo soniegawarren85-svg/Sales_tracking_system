@@ -192,11 +192,18 @@ String bundleExpirationDateLabel(Map bundle, {DateTime? now}) {
   }
 
   for (final instance in batches) {
+    final datesBeforeInstance = dates.length;
     addDate(instance['expirationDate']);
-    var items = bundleRows(instance['items']);
-    if (items.isEmpty) items = bundleRows(bundle['items']);
-    for (final item in items) {
+    for (final item in bundleRows(instance['items'])) {
       addDate(item['expirationDate']);
+    }
+    if (dates.length == datesBeforeInstance) {
+      for (final item in bundleRows(bundle['items'])) {
+        addDate(item['expirationDate']);
+      }
+    }
+    if (dates.length == datesBeforeInstance) {
+      addDate(bundle['expirationDate']);
     }
   }
   if (dates.isEmpty) return '--';

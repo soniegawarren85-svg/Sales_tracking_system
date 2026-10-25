@@ -57,6 +57,40 @@ void main() {
     );
   });
 
+  test('bundle label falls back to its saved expiration date', () {
+    expect(
+      bundleExpirationDateLabel({
+        'bundleCount': 2,
+        'expirationDate': '2027-02-15',
+        'bundleInstances': [
+          {'id': 'batch-1', 'status': 'available', 'items': []},
+        ],
+      }, now: DateTime(2026, 10, 16)),
+      '2027-02-15',
+    );
+  });
+
+  test('bundle label falls back to saved recipe ingredient expiry', () {
+    expect(
+      bundleExpirationDateLabel({
+        'bundleCount': 1,
+        'items': [
+          {'name': 'Cake', 'expirationDate': '2027-03-01'},
+        ],
+        'bundleInstances': [
+          {
+            'id': 'batch-1',
+            'status': 'available',
+            'items': [
+              {'name': 'Cake'},
+            ],
+          },
+        ],
+      }, now: DateTime(2026, 10, 16)),
+      '2027-03-01',
+    );
+  });
+
   test(
     'bundle allocation version ignores batch-specific ingredient expiry',
     () {

@@ -551,7 +551,15 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
       final incomingIssue = report && !widget.admin && !widget.returnsOnly
           ? await askIncomingIssue(data)
           : null;
-      final reason = report && incomingIssue == null
+      // Dismissing the detailed staff issue form means cancel. Do not open the
+      // generic reason dialog underneath it after the user cancels.
+      if (report &&
+          !widget.admin &&
+          !widget.returnsOnly &&
+          incomingIssue == null) {
+        return;
+      }
+      final reason = report && (widget.admin || widget.returnsOnly)
           ? await askReason(widget.admin)
           : incomingIssue?.details ?? '';
       if (reason == null || !mounted) return;
@@ -683,48 +691,105 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
         : [data];
     final actionable = ChecklistStatus.pending(data, admin: widget.admin);
     return Card(
-      margin: const EdgeInsets.only(bottom: 12),
+      margin: const EdgeInsets.only(bottom: 14),
+      elevation: 1,
+      shadowColor: AppColors.primaryDark.withOpacity(0.08),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(20),
+        side: BorderSide(color: AppColors.primary.withOpacity(0.14)),
+      ),
       child: Padding(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(15),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text(
-              '${data['name'] ?? 'Delivery'} · $type',
-              style: const TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-                color: AppColors.primary,
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    data['name']?.toString() ?? 'Delivery',
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.w800,
+                      color: AppColors.primaryDark,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 9,
+                    vertical: 5,
+                  ),
+                  decoration: BoxDecoration(
+                    color: AppColors.blush,
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: Text(
+                    type,
+                    style: const TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w800,
+                      color: AppColors.primaryDark,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 5,
+                ),
+                decoration: BoxDecoration(
+                  color: ChecklistStatus.label(data) == ChecklistStatus.received
+                      ? const Color(0xFFE8F5E9)
+                      : const Color(0xFFFFF3E0),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text(
+                  ChecklistStatus.label(data) == ChecklistStatus.received
+                      ? 'Done · Received'
+                      : ChecklistStatus.label(data),
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.primaryDark,
+                  ),
+                ),
               ),
             ),
-            const SizedBox(height: 6),
-            Text(
-              ChecklistStatus.label(data) == ChecklistStatus.received
-                  ? 'Done · Received'
-                  : ChecklistStatus.label(data),
-              style: const TextStyle(fontWeight: FontWeight.w700),
-            ),
+            const SizedBox(height: 8),
             Text(
               'Branch: ${data['branchName'] ?? data['staffName'] ?? data['staffId'] ?? 'Not recorded'}',
+              style: const TextStyle(fontWeight: FontWeight.w600),
             ),
             Text(
               '${ChecklistStatus.label(data) == ChecklistStatus.received ? 'Received' : 'Assigned'}: ${date(_checklistDate(data))}',
+              style: TextStyle(color: Colors.grey.shade700, fontSize: 12),
             ),
             Text(
               returned
                   ? 'Staff: ${data['submittedByName'] ?? data['staffName'] ?? data['submittedBy'] ?? 'Not recorded'}'
                   : 'Allocated by: ${data['allocatedByName'] ?? data['allocatedBy'] ?? 'Not recorded (legacy delivery)'}',
+              style: TextStyle(color: Colors.grey.shade700, fontSize: 12),
             ),
-            const Divider(),
+            const Divider(height: 20),
             for (final item in items)
               Padding(
-                padding: const EdgeInsets.symmetric(vertical: 3),
+                padding: const EdgeInsets.symmetric(vertical: 4),
                 child: Text(
                   '${item['name'] ?? 'Item'} — ${returned
                       ? item['quantity']
                       : type == 'Beverages'
                       ? 'Catalog access'
                       : item['bundleCount'] ?? item['stock'] ?? item['startingStock'] ?? 0}',
+                  style: TextStyle(color: Colors.grey.shade800, fontSize: 14),
                 ),
               ),
             if ('${data['reason'] ?? ''}'.isNotEmpty)
@@ -769,28 +834,52 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
               ),
             if (actionable) ...[
               const SizedBox(height: 12),
-              Wrap(
-                alignment: WrapAlignment.end,
-                spacing: 8,
-                runSpacing: 8,
+              Row(
                 children: [
-                  OutlinedButton(
-                    onPressed: busy.contains(doc.id)
-                        ? null
-                        : () => act(doc.id, report: true),
-                    child: Text(
-                      widget.admin ? 'Report Discrepancy' : 'Report Issue',
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      style: OutlinedButton.styleFrom(
+                        minimumSize: const Size(0, 46),
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                        foregroundColor: AppColors.primaryDark,
+                        side: BorderSide(
+                          color: AppColors.primary.withOpacity(0.45),
+                        ),
+                      ),
+                      onPressed: busy.contains(doc.id)
+                          ? null
+                          : () => act(doc.id, report: true),
+                      icon: const Icon(Icons.flag_outlined, size: 17),
+                      label: Text(
+                        widget.admin ? 'Report Discrepancy' : 'Report Issue',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 12),
+                      ),
                     ),
                   ),
-                  FilledButton.icon(
-                    onPressed: busy.contains(doc.id) ? null : () => act(doc.id),
-                    icon: const Icon(Icons.check),
-                    label: Text(
-                      busy.contains(doc.id)
-                          ? 'Processing…'
-                          : widget.admin
-                          ? 'Confirm Return Received'
-                          : 'Confirm Received',
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: FilledButton.icon(
+                      style: FilledButton.styleFrom(
+                        minimumSize: const Size(0, 46),
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                        backgroundColor: AppColors.primaryDark,
+                      ),
+                      onPressed: busy.contains(doc.id)
+                          ? null
+                          : () => act(doc.id),
+                      icon: const Icon(Icons.check, size: 17),
+                      label: Text(
+                        busy.contains(doc.id)
+                            ? 'Processing…'
+                            : widget.admin
+                            ? 'Confirm Return'
+                            : 'Confirm Received',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 12),
+                      ),
                     ),
                   ),
                 ],
@@ -890,7 +979,7 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
                   Icons.search_rounded,
                   color: AppColors.primaryDark,
                 ),
-                hintText: 'Search',
+                hintText: 'Search items or type (Bundle, Beverages, Add-ons)',
                 suffixIcon:
                     (widget.pendingOnly ||
                         (!(widget.returnsOnly && widget.admin) &&
@@ -1002,7 +1091,7 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
                       return inTab &&
                           (filter == 'All items' ||
                               AllocationChecklistService.type(d) == filter) &&
-                          '${d['name']} ${d['items']} ${d['staffName']} ${d['branchName']} ${d['submittedByName']} ${ChecklistStatus.label(d)}'
+                          '${d['name']} ${d['items']} ${AllocationChecklistService.type(d)} ${d['staffName']} ${d['branchName']} ${d['submittedByName']} ${ChecklistStatus.label(d)}'
                               .toLowerCase()
                               .contains(search);
                     }).toList()..sort((a, b) {
@@ -1081,7 +1170,7 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
                                 'Completed Return',
                               ] else ...[
                                 'Incoming Items',
-                                'Complete',
+                                'Complete Items',
                               ],
                             ].asMap().entries)
                               Padding(
@@ -1104,32 +1193,6 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
                         ),
                       ),
                     const SizedBox(height: 8),
-                    if (!widget.pendingOnly &&
-                        !widget.returnsOnly &&
-                        !widget.admin)
-                      SingleChildScrollView(
-                        scrollDirection: Axis.horizontal,
-                        padding: const EdgeInsets.symmetric(horizontal: 12),
-                        child: Row(
-                          children: [
-                            for (final type in [
-                              'All items',
-                              'Categories',
-                              'Bundle',
-                              'Beverages',
-                            ])
-                              Padding(
-                                padding: const EdgeInsets.only(right: 8),
-                                child: ChoiceChip(
-                                  label: Text(type),
-                                  selected: filter == type,
-                                  onSelected: (_) =>
-                                      setState(() => filter = type),
-                                ),
-                              ),
-                          ],
-                        ),
-                      ),
                     Expanded(
                       child: widget.returnsOnly && tab == 0 && !widget.admin
                           ? ChecklistReturnDialog(

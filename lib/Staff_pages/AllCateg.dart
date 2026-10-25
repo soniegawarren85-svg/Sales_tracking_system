@@ -48,6 +48,7 @@ class _AllCategPageState extends State<AllCategPage>
   bool _showCategories = true;
   bool _showCoffee = false;
   bool _showAddons = false;
+  bool _showCoffeeAddonsTable = false;
   bool _showAllCategoryItems = false;
   String _tableSearchQuery = '';
   String? _selectedTableCategoryKey;
@@ -487,6 +488,8 @@ class _AllCategPageState extends State<AllCategPage>
           'assignedAt',
           'allocatedAt',
           'sourceDocId',
+          'expirationDate',
+          'items',
         ]) {
           if (record.containsKey(field)) group[field] = record[field];
         }
@@ -1094,6 +1097,7 @@ class _AllCategPageState extends State<AllCategPage>
     categoryName: categoryName,
     itemIds: itemIds,
     itemNames: itemNames,
+    scopeIds: _staffInventoryIds.toSet(),
   );
 
   Future<void> _showStockAdjustmentHistory({
@@ -4139,6 +4143,31 @@ class _AllCategPageState extends State<AllCategPage>
     );
   }
 
+  Widget _beverageViewButton(
+    String label,
+    bool selected,
+    VoidCallback onPressed,
+  ) => Padding(
+    padding: const EdgeInsets.all(2),
+    child: FilledButton.icon(
+      onPressed: onPressed,
+      icon: Icon(
+        label == 'Add-ons'
+            ? Icons.add_circle_outline_rounded
+            : Icons.local_cafe_outlined,
+        size: 17,
+      ),
+      label: Text(label),
+      style: FilledButton.styleFrom(
+        backgroundColor: selected ? AppColors.primaryDark : Colors.white,
+        foregroundColor: selected ? Colors.white : AppColors.primaryDark,
+        elevation: selected ? 1 : 0,
+        padding: const EdgeInsets.symmetric(vertical: 11, horizontal: 10),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+    ),
+  );
+
   String _displayItemId(Map<String, dynamic> item, {String? fallback}) {
     for (final key in [
       'publicId',
@@ -4225,29 +4254,11 @@ class _AllCategPageState extends State<AllCategPage>
           onView: bundleDocs.length == 1
               ? () => _showBundleItemsDialog(bundleDocs.first)
               : null,
-          onHistory: bundleDocs.length == 1
-              ? () {
-                  final bundle = bundleDocs.first;
-                  final bundleName = bundle['name']?.toString() ?? 'Bundle';
-                  _showStaffActivityHistory(
-                    kind: 'bundle',
-                    categoryName: bundleName,
-                    categoryId: bundle['sourceDocId']?.toString(),
-                    itemIds: {
-                      for (final key in [
-                        'sourceDocId',
-                        'itemId',
-                        'id',
-                        'publicId',
-                      ])
-                        if (bundle[key]?.toString().trim().isNotEmpty == true)
-                          bundle[key].toString().trim(),
-                      _displayItemId(bundle),
-                    },
-                    itemNames: {bundleName},
-                  );
-                }
-              : null,
+          onHistory: () => _showStaffActivityHistory(
+            kind: 'bundle',
+            categoryName: 'Bundle',
+            categoryId: '',
+          ),
           columns: [
             _tableColumn('ID'),
             _tableColumn('Allocated'),
@@ -4353,127 +4364,232 @@ class _AllCategPageState extends State<AllCategPage>
           coffeeName: coffeeName,
           publicId: category['publicId']?.toString() ?? '',
         );
+        void showBeverageHistory() {
+          final coffeeName =
+              category['categoryName']?.toString() ?? 'Beverages';
+          final items =
+              (category['items'] as List?)?.whereType<Map>() ?? const [];
+          _showStaffActivityHistory(
+            kind: 'beverages',
+            categoryName: coffeeName,
+            categoryId:
+                category['sourceDocId']?.toString() ??
+                category['coffeeId']?.toString(),
+            itemIds: {
+              for (final key in ['sourceDocId', 'coffeeId', 'itemId', 'id'])
+                if (category[key]?.toString().trim().isNotEmpty == true)
+                  category[key].toString().trim(),
+              for (final item in items)
+                for (final key in [
+                  'sourceDocId',
+                  'coffeeId',
+                  'itemId',
+                  'id',
+                  'publicId',
+                ])
+                  if (item[key]?.toString().trim().isNotEmpty == true)
+                    item[key].toString().trim(),
+            },
+            itemNames: {
+              coffeeName,
+              for (final item in items)
+                if (item['name']?.toString().trim().isNotEmpty == true)
+                  item['name'].toString().trim(),
+            },
+          );
+        }
+
+        void showAddonHistory() => _showStaffActivityHistory(
+          kind: 'addons',
+          categoryName: 'Beverages Add-ons',
+          categoryId: '',
+          itemIds: {
+            for (final addon in addonDocs)
+              for (final key in ['id', 'addonId', 'publicId', 'itemId'])
+                if (addon[key]?.toString().trim().isNotEmpty == true)
+                  addon[key].toString().trim(),
+          },
+          itemNames: {
+            for (final addon in addonDocs)
+              if (addon['name']?.toString().trim().isNotEmpty == true)
+                addon['name'].toString().trim(),
+          },
+        );
+
+        final beverageTable = _tableBlock(
+          title: 'Beverages',
+          subtitle: 'Available Beverages Items: ${items.length}',
+          onHistory: showBeverageHistory,
+          compact: true,
+          columns: [
+            _tableColumn('ID'),
+            _tableColumn('Allocated'),
+            _tableColumn('Beverages Name'),
+            _tableColumn('Small'),
+            _tableColumn('Medium'),
+            _tableColumn('Large'),
+            _tableColumn('Total Sold'),
+            _tableColumn('Action'),
+          ],
+          rows: [
+            if (items.isNotEmpty)
+              (() {
+                Map<String, dynamic>? itemForSize(String size) {
+                  final normalizedSize = size.toLowerCase();
+                  for (final item in items) {
+                    final name =
+                        item['name']?.toString().trim().toLowerCase() ?? '';
+                    if (name.startsWith(normalizedSize)) return item;
+                  }
+                  return null;
+                }
+
+                String priceForSize(String size) {
+                  final item = itemForSize(size);
+                  return item == null
+                      ? '--'
+                      : formatMoney(_parsePrice(item['price']));
+                }
+
+                return DataRow(
+                  cells: [
+                    _tableCell(
+                      coffeeId.isNotEmpty ? coffeeId : '--',
+                      width: 105,
+                      color: AppColors.primaryDark,
+                    ),
+                    _tableCell(
+                      _allocationDateLabel(
+                        category['assignedAt'] ?? category['allocatedAt'],
+                      ),
+                      width: 120,
+                    ),
+                    _tableCell(coffeeName, width: 145, weight: FontWeight.w900),
+                    _tableCell(
+                      priceForSize('small'),
+                      width: 88,
+                      color: const Color(0xFF2E7D32),
+                    ),
+                    _tableCell(
+                      priceForSize('medium'),
+                      width: 88,
+                      color: const Color(0xFF2E7D32),
+                    ),
+                    _tableCell(
+                      priceForSize('large'),
+                      width: 88,
+                      color: const Color(0xFF2E7D32),
+                    ),
+                    _tableCell(
+                      '$totalSold',
+                      width: 75,
+                      color: const Color(0xFF2E7D32),
+                    ),
+                    DataCell(
+                      _tableReduceButton(
+                        enabled: true,
+                        label: 'Void',
+                        onPressed: () => _showCoffeeVoidDialog(category),
+                      ),
+                    ),
+                  ],
+                );
+              })(),
+          ],
+        );
+        final addonsTable = _tableBlock(
+          title: 'Beverages Add-ons',
+          subtitle: 'Available add-ons: ${addonDocs.length}',
+          onHistory: showAddonHistory,
+          compact: true,
+          columns: [
+            _tableColumn('ID'),
+            _tableColumn('Allocated'),
+            _tableColumn('Add-on'),
+            _tableColumn('Expire date'),
+            _tableColumn('Status'),
+            _tableColumn('Price'),
+          ],
+          rows: [
+            for (final addon in addonDocs)
+              DataRow(
+                cells: [
+                  _tableCell(
+                    _displayItemId(addon),
+                    width: 110,
+                    color: AppColors.primaryDark,
+                  ),
+                  _tableCell(
+                    _allocationDateLabel(
+                      addon['allocatedAt'] ?? category['assignedAt'],
+                    ),
+                    width: 120,
+                  ),
+                  _tableCell(
+                    addon['name']?.toString() ?? 'Add-on',
+                    width: 170,
+                    weight: FontWeight.w900,
+                  ),
+                  _tableCell(
+                    addon['expirationDate']?.toString().trim().isNotEmpty ==
+                            true
+                        ? addon['expirationDate'].toString()
+                        : '--',
+                    width: 120,
+                  ),
+                  _tableCell(
+                    addon['status']?.toString() ??
+                        (addon['isAvailable'] == false
+                            ? 'Unavailable'
+                            : 'Available'),
+                    width: 110,
+                  ),
+                  _tableCell(
+                    formatMoney(
+                      _parsePrice(addon['priceDelta'] ?? addon['price']),
+                    ),
+                    width: 90,
+                    color: const Color(0xFF2E7D32),
+                  ),
+                ],
+              ),
+          ],
+        );
+
         return _AnimatedCategorySection(
           index: index,
-          child: _tableBlock(
-            title: 'Beverages',
-            subtitle: 'Available Beverages Items: 1',
-            onAddons: addonDocs.isEmpty
-                ? null
-                : () => _showCoffeeAddonsDialog(addonDocs, category),
-            onHistory: () {
-              final coffeeName =
-                  category['categoryName']?.toString() ?? 'Beverages';
-              final items =
-                  (category['items'] as List?)?.whereType<Map>() ?? const [];
-              _showStaffActivityHistory(
-                kind: 'beverages',
-                categoryName: coffeeName,
-                categoryId:
-                    category['sourceDocId']?.toString() ??
-                    category['coffeeId']?.toString(),
-                itemIds: {
-                  for (final key in ['sourceDocId', 'coffeeId', 'itemId', 'id'])
-                    if (category[key]?.toString().trim().isNotEmpty == true)
-                      category[key].toString().trim(),
-                  for (final item in items)
-                    for (final key in [
-                      'sourceDocId',
-                      'coffeeId',
-                      'itemId',
-                      'id',
-                      'publicId',
-                    ])
-                      if (item[key]?.toString().trim().isNotEmpty == true)
-                        item[key].toString().trim(),
-                },
-                itemNames: {
-                  coffeeName,
-                  for (final item in items)
-                    if (item['name']?.toString().trim().isNotEmpty == true)
-                      item['name'].toString().trim(),
-                },
-              );
-            },
-            compact: true,
-            columns: [
-              _tableColumn('ID'),
-              _tableColumn('Allocated'),
-              _tableColumn('Beverages Name'),
-              _tableColumn('Small'),
-              _tableColumn('Medium'),
-              _tableColumn('Large'),
-              _tableColumn('Total Sold'),
-              _tableColumn('Action'),
-            ],
-            rows: [
-              if (items.isNotEmpty)
-                (() {
-                  Map<String, dynamic>? itemForSize(String size) {
-                    final normalizedSize = size.toLowerCase();
-                    for (final item in items) {
-                      final name =
-                          item['name']?.toString().trim().toLowerCase() ?? '';
-                      if (name.startsWith(normalizedSize)) return item;
-                    }
-                    return null;
-                  }
-
-                  String priceForSize(String size) {
-                    final item = itemForSize(size);
-                    return item == null
-                        ? '--'
-                        : formatMoney(_parsePrice(item['price']));
-                  }
-
-                  return DataRow(
-                    cells: [
-                      _tableCell(
-                        coffeeId.isNotEmpty ? coffeeId : '--',
-                        width: 105,
-                        color: AppColors.primaryDark,
-                      ),
-                      _tableCell(
-                        _allocationDateLabel(
-                          category['assignedAt'] ?? category['allocatedAt'],
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+                child: Container(
+                  padding: const EdgeInsets.all(4),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: AppColors.blush),
+                  ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: _beverageViewButton(
+                          'Beverages',
+                          !_showCoffeeAddonsTable,
+                          () => setState(() => _showCoffeeAddonsTable = false),
                         ),
-                        width: 120,
                       ),
-                      _tableCell(
-                        coffeeName,
-                        width: 145,
-                        weight: FontWeight.w900,
-                      ),
-                      _tableCell(
-                        priceForSize('small'),
-                        width: 88,
-                        color: const Color(0xFF2E7D32),
-                      ),
-                      _tableCell(
-                        priceForSize('medium'),
-                        width: 88,
-                        color: const Color(0xFF2E7D32),
-                      ),
-                      _tableCell(
-                        priceForSize('large'),
-                        width: 88,
-                        color: const Color(0xFF2E7D32),
-                      ),
-                      _tableCell(
-                        '$totalSold',
-                        width: 75,
-                        color: const Color(0xFF2E7D32),
-                      ),
-                      DataCell(
-                        _tableReduceButton(
-                          enabled: true,
-                          label: 'Void',
-                          onPressed: () => _showCoffeeVoidDialog(category),
+                      Expanded(
+                        child: _beverageViewButton(
+                          'Add-ons',
+                          _showCoffeeAddonsTable,
+                          () => setState(() => _showCoffeeAddonsTable = true),
                         ),
                       ),
                     ],
-                  );
-                })(),
+                  ),
+                ),
+              ),
+              if (_showCoffeeAddonsTable) addonsTable else beverageTable,
             ],
           ),
         );
@@ -5071,75 +5187,95 @@ class _AllCategPageState extends State<AllCategPage>
                         }
                         return SingleChildScrollView(
                           padding: const EdgeInsets.fromLTRB(12, 8, 12, 16),
-                          child: Table(
-                            columnWidths: const {
-                              0: FlexColumnWidth(1.1),
-                              1: FlexColumnWidth(1.0),
-                              2: FlexColumnWidth(1.5),
-                              3: FlexColumnWidth(1.0),
-                              4: FlexColumnWidth(0.9),
-                            },
-                            border: TableBorder(
-                              horizontalInside: BorderSide(
-                                color: AppColors.blush,
-                              ),
-                            ),
-                            children: [
-                              TableRow(
-                                decoration: BoxDecoration(
-                                  color: const Color(
-                                    0xFF963B58,
-                                  ).withOpacity(0.08),
+                          child: SingleChildScrollView(
+                            scrollDirection: Axis.horizontal,
+                            child: SizedBox(
+                              width: 650,
+                              child: Table(
+                                columnWidths: const {
+                                  0: FlexColumnWidth(1.0),
+                                  1: FlexColumnWidth(1.0),
+                                  2: FlexColumnWidth(1.4),
+                                  3: FlexColumnWidth(1.0),
+                                  4: FlexColumnWidth(1.1),
+                                  5: FlexColumnWidth(0.9),
+                                },
+                                border: TableBorder(
+                                  horizontalInside: BorderSide(
+                                    color: AppColors.blush,
+                                  ),
                                 ),
-                                children: const [
-                                  _AddonHeaderCell('ID'),
-                                  _AddonHeaderCell('Allocated'),
-                                  _AddonHeaderCell('Add-on'),
-                                  _AddonHeaderCell('Status'),
-                                  _AddonHeaderCell('Price'),
+                                children: [
+                                  TableRow(
+                                    decoration: BoxDecoration(
+                                      color: const Color(
+                                        0xFF963B58,
+                                      ).withOpacity(0.08),
+                                    ),
+                                    children: const [
+                                      _AddonHeaderCell('ID'),
+                                      _AddonHeaderCell('Allocated'),
+                                      _AddonHeaderCell('Add-on'),
+                                      _AddonHeaderCell('Expire date'),
+                                      _AddonHeaderCell('Status'),
+                                      _AddonHeaderCell('Price'),
+                                    ],
+                                  ),
+                                  ...filteredAddons.map((addon) {
+                                    final addonId = _displayItemId(addon);
+                                    final addonName =
+                                        addon['name']?.toString() ?? 'Add-on';
+                                    final status =
+                                        addon['status']?.toString() ??
+                                        (addon['isAvailable'] == false
+                                            ? 'Unavailable'
+                                            : 'Available');
+                                    final price = _parsePrice(
+                                      addon['priceDelta'] ?? addon['price'],
+                                    );
+                                    return TableRow(
+                                      children: [
+                                        _AddonCell(
+                                          addonId,
+                                          color: const Color(0xFF2E7D32),
+                                        ),
+                                        _AddonCell(
+                                          _allocationDateLabel(
+                                            addon['allocatedAt'],
+                                          ),
+                                        ),
+                                        _AddonCell(
+                                          addonName,
+                                          weight: FontWeight.w800,
+                                        ),
+                                        _AddonCell(
+                                          addon['expirationDate']
+                                                      ?.toString()
+                                                      .trim()
+                                                      .isNotEmpty ==
+                                                  true
+                                              ? addon['expirationDate']
+                                                    .toString()
+                                              : '--',
+                                        ),
+                                        _AddonCell(
+                                          status,
+                                          color:
+                                              status.toLowerCase() ==
+                                                  'available'
+                                              ? const Color(0xFF2E7D32)
+                                              : const Color(0xFFC62828),
+                                        ),
+                                        _AddonCell(
+                                          formatMoney(price),
+                                          color: const Color(0xFF2E7D32),
+                                        ),
+                                      ],
+                                    );
+                                  }),
                                 ],
                               ),
-                              ...filteredAddons.map((addon) {
-                                final addonId = _displayItemId(addon);
-                                final addonName =
-                                    addon['name']?.toString() ?? 'Add-on';
-                                final status =
-                                    addon['status']?.toString() ??
-                                    (addon['isAvailable'] == false
-                                        ? 'Unavailable'
-                                        : 'Available');
-                                final price = _parsePrice(
-                                  addon['priceDelta'] ?? addon['price'],
-                                );
-                                return TableRow(
-                                  children: [
-                                    _AddonCell(
-                                      addonId,
-                                      color: const Color(0xFF2E7D32),
-                                    ),
-                                    _AddonCell(
-                                      _allocationDateLabel(
-                                        addon['allocatedAt'],
-                                      ),
-                                    ),
-                                    _AddonCell(
-                                      addonName,
-                                      weight: FontWeight.w800,
-                                    ),
-                                    _AddonCell(
-                                      status,
-                                      color: status.toLowerCase() == 'available'
-                                          ? const Color(0xFF2E7D32)
-                                          : const Color(0xFFC62828),
-                                    ),
-                                    _AddonCell(
-                                      formatMoney(price),
-                                      color: const Color(0xFF2E7D32),
-                                    ),
-                                  ],
-                                );
-                              }),
-                            ],
+                            ),
                           ),
                         );
                       },
