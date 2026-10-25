@@ -28,14 +28,12 @@ import '../Login/Login/Login.dart';
 
 class ProfilePage extends StatefulWidget {
   final VoidCallback onMessage;
-  final VoidCallback onReplayTutorial;
   final GlobalKey? tourTargetKey;
   final GlobalKey? editProfileTourKey;
 
   const ProfilePage({
     super.key,
     required this.onMessage,
-    required this.onReplayTutorial,
     this.tourTargetKey,
     this.editProfileTourKey,
   });
@@ -661,8 +659,6 @@ class _ProfilePageState extends State<ProfilePage>
                       const SizedBox(height: 0),
                       _buildInfoCard(),
                       const SizedBox(height: 24),
-                      _buildReplayTutorial(),
-                      const SizedBox(height: 12),
                       _buildChangePassword(),
                       const SizedBox(height: 12),
                       _buildLogout(),
@@ -671,37 +667,6 @@ class _ProfilePageState extends State<ProfilePage>
                   ),
                 ),
               ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildReplayTutorial() {
-    return Align(
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 520),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16),
-          child: SizedBox(
-            width: double.infinity,
-            child: OutlinedButton.icon(
-              onPressed: widget.onReplayTutorial,
-              icon: const Icon(Icons.lightbulb_outline_rounded),
-              label: const Text('Replay Staff Tutorial'),
-              style: OutlinedButton.styleFrom(
-                foregroundColor: _pinkDark,
-                side: const BorderSide(color: _border),
-                padding: const EdgeInsets.symmetric(vertical: 16),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(18),
-                ),
-                textStyle: const TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
             ),
           ),
         ),

@@ -41,7 +41,6 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
   final GlobalKey _inventoryTableTourKey = GlobalKey();
   final GlobalKey _cashDrawerTourKey = GlobalKey();
   final GlobalKey _salesProcessTourKey = GlobalKey();
-  final GlobalKey _salesCartTourKey = GlobalKey();
   final GlobalKey _salesTourKey = GlobalKey();
   final GlobalKey _profileEditTourKey = GlobalKey();
   final GlobalKey _profileInfoTourKey = GlobalKey();
@@ -196,7 +195,6 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
           openPendingOnStart: _openPendingOnSalesLaunch,
           launchToken: _salesLaunchToken,
           salesTourKey: _salesProcessTourKey,
-          salesCartTourKey: _salesCartTourKey,
         );
       default:
         return _buildDashboardPage();
@@ -255,7 +253,6 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
   Widget _buildProfilePage() {
     return ProfilePage(
       onMessage: _onMessagePressed,
-      onReplayTutorial: () => _startStaffTutorial(isReplay: true),
       tourTargetKey: _profileInfoTourKey,
       editProfileTourKey: _profileEditTourKey,
     );
@@ -386,7 +383,7 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
       title: 'Admin Allocations',
       description:
           'Items allocated by your Admin appear here. Review the items assigned to your staff account.',
-      contentAlign: ContentAlign.bottom,
+      contentAlign: ContentAlign.top,
     ),
     _StaffTourStep(
       key: _cashDrawerTourKey,
@@ -450,14 +447,6 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
       description:
           'Choose the appropriate order type and browse the available items for a customer order.',
       contentAlign: ContentAlign.bottom,
-    ),
-    _StaffTourStep(
-      key: _salesCartTourKey,
-      pageIndex: 3,
-      title: 'Review the Order',
-      description:
-          'Add items to the cart, review quantities and totals, then continue to complete or hold the order.',
-      contentAlign: ContentAlign.top,
     ),
   ];
 
@@ -548,6 +537,11 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
   Future<void> _navigateToTutorialStep(int stepIndex) async {
     final steps = _tutorialSteps();
     final step = steps[stepIndex];
+    if (identical(step.key, _cashDrawerTourKey) &&
+        _scrollController.hasClients) {
+      _scrollController.jumpTo(_scrollController.position.minScrollExtent);
+      await WidgetsBinding.instance.endOfFrame;
+    }
     if (_selectedIndex != step.pageIndex) {
       setState(() {
         _selectedIndex = step.pageIndex;
@@ -674,7 +668,6 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
             openPendingOnStart: _openPendingOnSalesLaunch,
             launchToken: _salesLaunchToken,
             salesTourKey: _salesProcessTourKey,
-            salesCartTourKey: _salesCartTourKey,
           ),
         ],
       ),

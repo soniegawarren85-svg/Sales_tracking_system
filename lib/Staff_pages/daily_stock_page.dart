@@ -108,7 +108,6 @@ class DailyStockPage extends StatefulWidget {
   final String? initialGroupName;
   final int launchToken;
   final GlobalKey? salesTourKey;
-  final GlobalKey? salesCartTourKey;
 
   const DailyStockPage({
     super.key,
@@ -118,7 +117,6 @@ class DailyStockPage extends StatefulWidget {
     this.initialGroupName,
     this.launchToken = 0,
     this.salesTourKey,
-    this.salesCartTourKey,
   });
 
   @override
@@ -8678,10 +8676,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                 const SizedBox(height: 16),
 
                 // ── Cart panel
-                KeyedSubtree(
-                  key: widget.salesCartTourKey,
-                  child: _buildCartPanel(orderItems),
-                ),
+                _buildCartPanel(orderItems),
 
                 const SizedBox(height: 32),
               ],
@@ -8722,10 +8717,7 @@ class _DailyStockPageState extends State<DailyStockPage>
         children: [
           _buildBudgetCard(),
           const SizedBox(height: 16),
-          KeyedSubtree(
-            key: widget.salesCartTourKey,
-            child: _buildCartPanel(orderItems),
-          ),
+          _buildCartPanel(orderItems),
           const SizedBox(height: 32),
         ],
       );
