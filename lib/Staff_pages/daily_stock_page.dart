@@ -108,6 +108,7 @@ class DailyStockPage extends StatefulWidget {
   final String? initialGroupName;
   final int launchToken;
   final GlobalKey? salesTourKey;
+  final GlobalKey? salesCartTourKey;
 
   const DailyStockPage({
     super.key,
@@ -117,6 +118,7 @@ class DailyStockPage extends StatefulWidget {
     this.initialGroupName,
     this.launchToken = 0,
     this.salesTourKey,
+    this.salesCartTourKey,
   });
 
   @override
@@ -8338,9 +8340,15 @@ class _DailyStockPageState extends State<DailyStockPage>
         final firestoreDocs = snapshot.data?.docs
             .map(_CachedDoc.fromFirestore)
             .toList();
+        final hasLocalInventory = _cachedStaffInventoryDocs.isNotEmpty;
+        final firestoreIsCached = snapshot.data?.metadata.isFromCache ?? true;
+        // Firestore's offline snapshot can predate a sale made on this device.
+        // The local cache has already applied queued sale stock movements, so
+        // prefer it until the server-backed inventory snapshot arrives.
         final docs =
             (firestoreDocs == null ||
-                (firestoreDocs.isEmpty && _cachedStaffInventoryDocs.isNotEmpty))
+                (firestoreDocs.isEmpty && hasLocalInventory) ||
+                (firestoreIsCached && hasLocalInventory))
             ? _cachedStaffInventoryDocs
             : firestoreDocs;
         return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
@@ -8673,7 +8681,10 @@ class _DailyStockPageState extends State<DailyStockPage>
                 const SizedBox(height: 16),
 
                 // ── Cart panel
-                _buildCartPanel(orderItems),
+                KeyedSubtree(
+                  key: widget.salesCartTourKey,
+                  child: _buildCartPanel(orderItems),
+                ),
 
                 const SizedBox(height: 32),
               ],
@@ -8714,7 +8725,10 @@ class _DailyStockPageState extends State<DailyStockPage>
         children: [
           _buildBudgetCard(),
           const SizedBox(height: 16),
-          _buildCartPanel(orderItems),
+          KeyedSubtree(
+            key: widget.salesCartTourKey,
+            child: _buildCartPanel(orderItems),
+          ),
           const SizedBox(height: 32),
         ],
       );

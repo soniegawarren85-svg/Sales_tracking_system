@@ -30,12 +30,14 @@ class ProfilePage extends StatefulWidget {
   final VoidCallback onMessage;
   final VoidCallback onReplayTutorial;
   final GlobalKey? tourTargetKey;
+  final GlobalKey? editProfileTourKey;
 
   const ProfilePage({
     super.key,
     required this.onMessage,
     required this.onReplayTutorial,
     this.tourTargetKey,
+    this.editProfileTourKey,
   });
 
   @override
@@ -1176,6 +1178,7 @@ class _ProfilePageState extends State<ProfilePage>
 
   Widget _buildEditButton({bool compact = false}) {
     return Semantics(
+      key: widget.editProfileTourKey,
       button: true,
       label: 'Edit Profile',
       child: Material(

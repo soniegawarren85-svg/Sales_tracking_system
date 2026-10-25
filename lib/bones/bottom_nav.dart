@@ -11,7 +11,6 @@ import 'package:tutorial_coach_mark/tutorial_coach_mark.dart';
 import '../services/inventory_service.dart';
 import '../services/staff_onboarding_service.dart';
 import '../services/held_order_store.dart';
-import '../Staff_pages/Staff_notifcation.dart';
 import '../Staff_pages/dashboard_page.dart';
 import '../Staff_pages/AllCateg.dart';
 import '../Staff_pages/profile_page.dart';
@@ -32,11 +31,18 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
   final GlobalKey _guideTourKey = GlobalKey();
   final GlobalKey _dashboardTourKey = GlobalKey();
   final GlobalKey _dashboardNavTourKey = GlobalKey();
+  final GlobalKey _dashboardCategoriesTourKey = GlobalKey();
+  final GlobalKey _allocatedInventoryTourKey = GlobalKey();
   final GlobalKey _productsTourKey = GlobalKey();
+  final GlobalKey _performanceTourKey = GlobalKey();
+  final GlobalKey _inventoryChecklistTourKey = GlobalKey();
+  final GlobalKey _inventoryReturnsTourKey = GlobalKey();
+  final GlobalKey _inventoryTableTourKey = GlobalKey();
   final GlobalKey _cashDrawerTourKey = GlobalKey();
+  final GlobalKey _salesProcessTourKey = GlobalKey();
+  final GlobalKey _salesCartTourKey = GlobalKey();
   final GlobalKey _salesTourKey = GlobalKey();
-  final GlobalKey _salesHistoryTourKey = GlobalKey();
-  final GlobalKey _profileTourKey = GlobalKey();
+  final GlobalKey _profileEditTourKey = GlobalKey();
   final GlobalKey _profileNavTourKey = GlobalKey();
   int _prevEntryCount = 0;
   int _salesLaunchToken = 0;
@@ -171,12 +177,6 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
     ).push(MaterialPageRoute(builder: (_) => const MessagePage()));
   }
 
-  void _onNotificationPressed() {
-    Navigator.of(
-      context,
-    ).push(MaterialPageRoute(builder: (_) => StaffNotificationPage()));
-  }
-
   Widget _buildPage(int index) {
     switch (index) {
       case 0:
@@ -193,6 +193,8 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
           initialGroupName: _salesInitialGroup,
           openPendingOnStart: _openPendingOnSalesLaunch,
           launchToken: _salesLaunchToken,
+          salesTourKey: _salesProcessTourKey,
+          salesCartTourKey: _salesCartTourKey,
         );
       default:
         return _buildDashboardPage();
@@ -204,12 +206,13 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
     return DashboardPage(
       scrollController: _scrollController,
       onMessage: _onMessagePressed,
-      onNotification: _onNotificationPressed,
       onReplayTutorial: () => _startStaffTutorial(isReplay: true),
       guideTourKey: _guideTourKey,
       dashboardTourKey: _dashboardTourKey,
+      dashboardFiltersTourKey: _dashboardCategoriesTourKey,
+      allocatedItemsTourKey: _allocatedInventoryTourKey,
+      performanceTourKey: _performanceTourKey,
       cashDrawerTourKey: _cashDrawerTourKey,
-      salesHistoryTourKey: _salesHistoryTourKey,
       onOpenSalesGroup:
           ({
             required String view,
@@ -236,9 +239,14 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
 
   Widget _buildAllItemsPage() {
     // Keep the last row above the pending badge as well as the navigation bar.
-    return const Padding(
-      padding: EdgeInsets.only(bottom: 64),
-      child: AllCategPage(embedded: true),
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 64),
+      child: AllCategPage(
+        embedded: true,
+        inventoryChecklistTourKey: _inventoryChecklistTourKey,
+        inventoryReturnsTourKey: _inventoryReturnsTourKey,
+        inventoryTourKey: _inventoryTableTourKey,
+      ),
     );
   }
 
@@ -246,7 +254,7 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
     return ProfilePage(
       onMessage: _onMessagePressed,
       onReplayTutorial: () => _startStaffTutorial(isReplay: true),
-      tourTargetKey: _profileTourKey,
+      editProfileTourKey: _profileEditTourKey,
     );
   }
 
@@ -354,59 +362,82 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
 
   List<_StaffTourStep> _tutorialSteps() => [
     _StaffTourStep(
-      key: _guideTourKey,
+      key: _dashboardTourKey,
       pageIndex: 0,
-      title: 'Your Staff Guide',
+      title: 'Dashboard',
       description:
-          'Use this guide icon any time to replay a quick tour of the staff tools.',
+          'This is your Staff dashboard, with your account overview and daily work at a glance.',
       contentAlign: ContentAlign.bottom,
     ),
     _StaffTourStep(
-      key: _dashboardTourKey,
+      key: _dashboardCategoriesTourKey,
       pageIndex: 0,
-      title: 'Dashboard Overview',
+      title: 'Dashboard Categories',
       description:
-          'Check your dashboard for staff information, allocated items, and daily performance.',
+          'Use these buttons to browse your dashboard categories, bundles, and beverages.',
       contentAlign: ContentAlign.top,
     ),
     _StaffTourStep(
-      key: _productsTourKey,
+      key: _allocatedInventoryTourKey,
+      pageIndex: 0,
+      title: 'Admin Allocations',
+      description:
+          'Items allocated by your Admin appear here. Review the items assigned to your staff account.',
+      contentAlign: ContentAlign.top,
+    ),
+    _StaffTourStep(
+      key: _performanceTourKey,
+      pageIndex: 0,
+      title: 'Performance',
+      description:
+          'Review your performance summary and sales activity cards here.',
+      contentAlign: ContentAlign.top,
+    ),
+    _StaffTourStep(
+      key: _inventoryChecklistTourKey,
       pageIndex: 1,
-      title: 'Products',
+      title: 'Allocation Checklist',
       description:
-          'Open Products to review inventory allocated to your branch.',
+          'Open Checklist to review items allocated to your staff inventory and confirm receipt.',
       contentAlign: ContentAlign.top,
     ),
     _StaffTourStep(
-      key: _cashDrawerTourKey,
-      pageIndex: 0,
-      title: 'Cash Drawer',
-      description:
-          'Your dashboard shows your allocated cash drawer balance. Sales update the drawer as you process transactions.',
+      key: _inventoryReturnsTourKey,
+      pageIndex: 1,
+      title: 'Inventory Returns',
+      description: 'Use Returns to review and manage inventory return records.',
       contentAlign: ContentAlign.top,
     ),
     _StaffTourStep(
-      key: _salesTourKey,
-      pageIndex: 3,
-      title: 'POS / Sales',
+      key: _inventoryTableTourKey,
+      pageIndex: 1,
+      title: 'Staff Inventory',
       description:
-          'Open Sales Process to build an order, review the cart, and complete or hold a transaction.',
+          'Browse the inventory table to see the products available to your staff account.',
       contentAlign: ContentAlign.top,
     ),
     _StaffTourStep(
-      key: _salesHistoryTourKey,
-      pageIndex: 0,
-      title: 'Sales History',
-      description:
-          'Use the History control in Performance to review your previous sales records.',
-      contentAlign: ContentAlign.top,
-    ),
-    _StaffTourStep(
-      key: _profileTourKey,
+      key: _profileEditTourKey,
       pageIndex: 2,
-      title: 'Profile & Account',
+      title: 'Edit Your Profile',
       description:
-          'View your personal details, manage account settings, and replay this tutorial from your profile.',
+          'Use the edit button to update your personal profile information.',
+      contentAlign: ContentAlign.bottom,
+    ),
+    _StaffTourStep(
+      key: _salesProcessTourKey,
+      pageIndex: 3,
+      title: 'Sales Process',
+      description:
+          'Choose the appropriate order type and browse the available items for a customer order.',
+      contentAlign: ContentAlign.top,
+    ),
+    _StaffTourStep(
+      key: _salesCartTourKey,
+      pageIndex: 3,
+      title: 'Review the Order',
+      description:
+          'Add items to the cart, review quantities and totals, then continue to complete or hold the order.',
       contentAlign: ContentAlign.top,
     ),
   ];
@@ -503,7 +534,7 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
     if (!mounted) return;
 
     BuildContext? targetContext = step.key.currentContext;
-    for (var attempt = 0; targetContext == null && attempt < 20; attempt++) {
+    for (var attempt = 0; targetContext == null && attempt < 60; attempt++) {
       await Future<void>.delayed(const Duration(milliseconds: 100));
       if (!mounted) return;
       await WidgetsBinding.instance.endOfFrame;
@@ -593,6 +624,8 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
             initialGroupName: _salesInitialGroup,
             openPendingOnStart: _openPendingOnSalesLaunch,
             launchToken: _salesLaunchToken,
+            salesTourKey: _salesProcessTourKey,
+            salesCartTourKey: _salesCartTourKey,
           ),
         ],
       ),
@@ -603,57 +636,77 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
             _buildPendingOrdersBadge(),
           isTabletLandscape
               ? _buildLandscapeNav()
-              : CurvedNavigationBar(
-                  index: _selectedIndex,
-                  height: 75,
-                  items: <Widget>[
-                    Icon(
-                      Icons.home,
-                      key: _dashboardNavTourKey,
-                      size: _selectedIndex == 0 ? 36 : 30,
-                      color: _selectedIndex == 0
-                          ? Colors.white
-                          : Colors.white70,
+              : Stack(
+                  children: [
+                    CurvedNavigationBar(
+                      index: _selectedIndex,
+                      height: 75,
+                      items: <Widget>[
+                        Icon(
+                          Icons.home,
+                          size: _selectedIndex == 0 ? 36 : 30,
+                          color: _selectedIndex == 0
+                              ? Colors.white
+                              : Colors.white70,
+                        ),
+                        StaffInventoryBadge(
+                          userId: _sessionUserId,
+                          child: Icon(
+                            Icons.inventory_2_rounded,
+                            size: _selectedIndex == 1 ? 32 : 26,
+                            color: _selectedIndex == 1
+                                ? Colors.white
+                                : Colors.white70,
+                          ),
+                        ),
+                        Icon(
+                          Icons.person_outline,
+                          size: _selectedIndex == 2 ? 32 : 26,
+                          color: _selectedIndex == 2
+                              ? Colors.white
+                              : Colors.white70,
+                        ),
+                        Icon(
+                          Icons.point_of_sale_rounded,
+                          size: _selectedIndex == 3 ? 32 : 26,
+                          color: _selectedIndex == 3
+                              ? Colors.white
+                              : Colors.white70,
+                        ),
+                      ],
+                      color: AppColors.primaryDark,
+                      buttonBackgroundColor: AppColors.primary,
+                      backgroundColor: Colors.transparent,
+                      animationCurve: Curves.easeInOut,
+                      animationDuration: const Duration(milliseconds: 300),
+                      onTap: (int idx) {
+                        setState(() {
+                          if (idx != 3) _openPendingOnSalesLaunch = false;
+                          _selectedIndex = idx;
+                        });
+                      },
                     ),
-                    StaffInventoryBadge(
-                      userId: _sessionUserId,
-                      child: Icon(
-                        Icons.inventory_2_rounded,
-                        key: _productsTourKey,
-                        size: _selectedIndex == 1 ? 32 : 26,
-                        color: _selectedIndex == 1
-                            ? Colors.white
-                            : Colors.white70,
+                    Positioned.fill(
+                      child: IgnorePointer(
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: SizedBox.expand(key: _dashboardNavTourKey),
+                            ),
+                            Expanded(
+                              child: SizedBox.expand(key: _productsTourKey),
+                            ),
+                            Expanded(
+                              child: SizedBox.expand(key: _profileNavTourKey),
+                            ),
+                            Expanded(
+                              child: SizedBox.expand(key: _salesTourKey),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
-                    Icon(
-                      Icons.person_outline,
-                      key: _profileNavTourKey,
-                      size: _selectedIndex == 2 ? 32 : 26,
-                      color: _selectedIndex == 2
-                          ? Colors.white
-                          : Colors.white70,
-                    ),
-                    Icon(
-                      Icons.point_of_sale_rounded,
-                      key: _salesTourKey,
-                      size: _selectedIndex == 3 ? 32 : 26,
-                      color: _selectedIndex == 3
-                          ? Colors.white
-                          : Colors.white70,
-                    ),
                   ],
-                  color: AppColors.primaryDark,
-                  buttonBackgroundColor: AppColors.primary,
-                  backgroundColor: Colors.transparent,
-                  animationCurve: Curves.easeInOut,
-                  animationDuration: const Duration(milliseconds: 300),
-                  onTap: (int idx) {
-                    setState(() {
-                      if (idx != 3) _openPendingOnSalesLaunch = false;
-                      _selectedIndex = idx;
-                    });
-                  },
                 ),
         ],
       ),

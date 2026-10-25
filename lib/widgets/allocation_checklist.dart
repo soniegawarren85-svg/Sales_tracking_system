@@ -12,11 +12,15 @@ class AllocationChecklistButton extends StatelessWidget {
   final List<String> scopeIds;
   final FirebaseFirestore? database;
   final bool isAdmin;
+  final GlobalKey? checklistTourKey;
+  final GlobalKey? returnsTourKey;
   const AllocationChecklistButton({
     super.key,
     required this.scopeIds,
     this.database,
     this.isAdmin = false,
+    this.checklistTourKey,
+    this.returnsTourKey,
   });
 
   @override
@@ -53,24 +57,30 @@ class AllocationChecklistButton extends StatelessWidget {
             ),
           );
           if (compact) {
-            return IconButton.filledTonal(
-              tooltip: label,
-              onPressed: open,
-              icon: icon,
+            return KeyedSubtree(
+              key: returns ? returnsTourKey : checklistTourKey,
+              child: IconButton.filledTonal(
+                tooltip: label,
+                onPressed: open,
+                icon: icon,
+              ),
             );
           }
-          return Tooltip(
-            message: label,
-            child: FilledButton.icon(
-              style: FilledButton.styleFrom(
-                backgroundColor: Colors.white,
-                foregroundColor: AppColors.primary,
-                textStyle: const TextStyle(fontWeight: FontWeight.w800),
-                shape: const StadiumBorder(),
+          return KeyedSubtree(
+            key: returns ? returnsTourKey : checklistTourKey,
+            child: Tooltip(
+              message: label,
+              child: FilledButton.icon(
+                style: FilledButton.styleFrom(
+                  backgroundColor: Colors.white,
+                  foregroundColor: AppColors.primary,
+                  textStyle: const TextStyle(fontWeight: FontWeight.w800),
+                  shape: const StadiumBorder(),
+                ),
+                icon: icon,
+                label: Text(label),
+                onPressed: open,
               ),
-              icon: icon,
-              label: Text(label),
-              onPressed: open,
             ),
           );
         }

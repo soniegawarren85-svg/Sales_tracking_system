@@ -150,7 +150,6 @@ class _C {
 class DashboardPage extends StatefulWidget {
   final ScrollController scrollController;
   final VoidCallback onMessage;
-  final VoidCallback onNotification;
   final Future<void> Function()? onReplayTutorial;
   final void Function({
     required String view,
@@ -171,7 +170,6 @@ class DashboardPage extends StatefulWidget {
     super.key,
     required this.scrollController,
     required this.onMessage,
-    required this.onNotification,
     this.onReplayTutorial,
     this.onOpenSalesGroup,
     this.onOpenAllItems,
@@ -1328,7 +1326,6 @@ class _DashboardPageState extends State<DashboardPage>
                   collapseMode: CollapseMode.parallax,
                   background: _Header(
                     onMessage: widget.onMessage,
-                    onNotification: widget.onNotification,
                     onReplayTutorial: widget.onReplayTutorial,
                     guideTourKey: widget.guideTourKey,
                     cashDrawerTourKey: widget.cashDrawerTourKey,
@@ -1431,12 +1428,7 @@ class _DashboardPageState extends State<DashboardPage>
                       constraints: BoxConstraints(maxWidth: contentMaxWidth),
                       child: Row(
                         children: [
-                          Expanded(
-                            child: _SectionLabel(
-                              key: widget.performanceTourKey,
-                              title: 'Performance',
-                            ),
-                          ),
+                          Expanded(child: _SectionLabel(title: 'Performance')),
                           _HistoryButton(
                             key: widget.salesHistoryTourKey,
                             onTap: _showHistory,
@@ -1464,7 +1456,10 @@ class _DashboardPageState extends State<DashboardPage>
                       alignment: Alignment.topCenter,
                       child: ConstrainedBox(
                         constraints: BoxConstraints(maxWidth: contentMaxWidth),
-                        child: RepaintBoundary(child: _buildPerformanceData()),
+                        child: RepaintBoundary(
+                          key: widget.performanceTourKey,
+                          child: _buildPerformanceData(),
+                        ),
                       ),
                     ),
                   ),
@@ -2743,7 +2738,6 @@ class _ReceiptLine extends StatelessWidget {
 
 class _Header extends StatelessWidget {
   final VoidCallback onMessage;
-  final VoidCallback onNotification;
   final Future<void> Function()? onReplayTutorial;
   final List<String> drawerIds;
   final List<_CachedDoc> cachedDrawerDocs;
@@ -2752,7 +2746,6 @@ class _Header extends StatelessWidget {
   final GlobalKey? guideTourKey;
   const _Header({
     required this.onMessage,
-    required this.onNotification,
     this.onReplayTutorial,
     required this.drawerIds,
     required this.cachedDrawerDocs,
@@ -3265,11 +3258,6 @@ class _Header extends StatelessWidget {
                               ),
                             ),
                             const SizedBox(width: 8),
-                            Tooltip(
-                              message: 'Notifications',
-                              child: _NotificationButton(onTap: onNotification),
-                            ),
-                            const SizedBox(width: 8),
                             if ((uid ?? '').isEmpty)
                               _MessageButton(onTap: onMessage)
                             else
@@ -3486,41 +3474,6 @@ class _BrandTitle extends StatelessWidget {
 
 // ── Message button ────────────────────────────────────────────────────────────
 // ── Message button ────────────────────────────────────────────────────────────
-class _NotificationButton extends StatelessWidget {
-  const _NotificationButton({required this.onTap});
-
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return Material(
-      color: Colors.transparent,
-      borderRadius: BorderRadius.circular(14),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(14),
-        child: Container(
-          width: 40,
-          height: 40,
-          decoration: BoxDecoration(
-            color: Colors.white.withOpacity(0.14),
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(
-              color: Colors.white.withOpacity(0.28),
-              width: 1.5,
-            ),
-          ),
-          child: const Icon(
-            Icons.notifications_none_rounded,
-            color: Colors.white,
-            size: 19,
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 // ── Message button ────────────────────────────────────────────────────────────
 class _GuideButton extends StatefulWidget {
   const _GuideButton({super.key, required this.onTap});

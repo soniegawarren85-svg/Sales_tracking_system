@@ -29,6 +29,8 @@ class AllCategPage extends StatefulWidget {
   final bool selectedIsCoffee;
   final bool embedded;
   final GlobalKey? inventoryActionsTourKey;
+  final GlobalKey? inventoryChecklistTourKey;
+  final GlobalKey? inventoryReturnsTourKey;
   final GlobalKey? inventoryTourKey;
 
   const AllCategPage({
@@ -39,6 +41,8 @@ class AllCategPage extends StatefulWidget {
     this.selectedIsCoffee = false,
     this.embedded = false,
     this.inventoryActionsTourKey,
+    this.inventoryChecklistTourKey,
+    this.inventoryReturnsTourKey,
     this.inventoryTourKey,
   });
 
@@ -6151,6 +6155,10 @@ class _AllCategPageState extends State<AllCategPage>
                                       key: widget.inventoryActionsTourKey,
                                       child: AllocationChecklistButton(
                                         scopeIds: _staffInventoryIds,
+                                        checklistTourKey:
+                                            widget.inventoryChecklistTourKey,
+                                        returnsTourKey:
+                                            widget.inventoryReturnsTourKey,
                                       ),
                                     ),
                                   ],
