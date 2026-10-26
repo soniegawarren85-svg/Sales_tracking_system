@@ -223,6 +223,18 @@ void main() {
     expect(labels['random-later-id'], 'Batch - 002');
   });
 
+  test('beverage batch details fall back to allocated sizes', () {
+    final items = allocationBatchItemsForRecord({
+      'items': [],
+      'sizes': [
+        {'name': 'Small'},
+        {'name': 'Large'},
+      ],
+    });
+
+    expect(items.map((item) => item['name']), ['Small', 'Large']);
+  });
+
   test(
     'category allocation batches aggregate stock without hiding batches',
     () {

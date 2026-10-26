@@ -170,10 +170,7 @@ class _StaffPerformancePanelState extends State<StaffPerformancePanel> {
                   sale['timestamp'] ?? sale['createdAt'],
                   _range.start,
                   _range.end.add(const Duration(days: 1)),
-                ) &&
-                '${_name(person)} ${person['staffId']} ${sale['salesId']} ${sale['items']} ${sale['paymentMode']} ${sale['discountName']} ${sale['discountType']}'
-                    .toLowerCase()
-                    .contains(_search),
+                ),
           )
           .toList()
         ..sort(
@@ -200,8 +197,10 @@ class _StaffPerformancePanelState extends State<StaffPerformancePanel> {
     delegate: PerformanceSearchHeader(
       search: _search,
       range: _range,
-      onSearchChanged: (value) =>
-          setState(() => _search = value.trim().toLowerCase()),
+      onSearchChanged: (value) => setState(() {
+        _search = value.trim().toLowerCase();
+        _selected = null;
+      }),
       onPickRange: _pickRange,
     ),
   );
@@ -229,8 +228,11 @@ class _StaffPerformancePanelState extends State<StaffPerformancePanel> {
   Widget build(BuildContext context) => Dialog(
     backgroundColor: Colors.white,
     clipBehavior: Clip.antiAlias,
+    insetPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 20),
     child: SizedBox(
-      width: 840,
+      width: MediaQuery.sizeOf(context).width < 880
+          ? MediaQuery.sizeOf(context).width - 16
+          : 840,
       height: MediaQuery.sizeOf(context).height * .9,
       child: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
         stream: _branch,
@@ -248,22 +250,35 @@ class _StaffPerformancePanelState extends State<StaffPerformancePanel> {
                 .map((id) => '$id')
                 .toSet();
             final members = staff.data!.docs.where((doc) {
-              if (!widget.roleSelection &&
-                  performanceAccountRole(doc.data()) != 'staff') {
-                return false;
-              }
               return performanceAccountAvailable(
                 branchId: widget.branchId,
                 branchAccountIds: ids,
                 documentId: doc.id,
                 account: doc.data(),
-                roleSelection: widget.roleSelection,
-                selectedRole: _role,
+                roleSelection: false,
+                selectedRole: null,
               );
             }).toList();
-            final selected =
-                members.where((d) => d.id == _selected).firstOrNull ??
-                (widget.roleSelection ? null : members.firstOrNull);
+            final metricSearch =
+                _search.contains('order') ||
+                _search.contains('item sold') ||
+                _search.contains('items sold');
+            final searchedMembers = members.where((doc) {
+              final account = doc.data();
+              return '${_name(account)} ${account['staffId']} ${account['adminId']} ${performanceAccountRole(account)}'
+                  .toLowerCase()
+                  .contains(_search);
+            }).toList();
+            final selected = _selected == null
+                ? (metricSearch
+                      ? members
+                            .where(
+                              (d) =>
+                                  performanceAccountRole(d.data()) == 'staff',
+                            )
+                            .firstOrNull
+                      : (_search.isEmpty ? null : searchedMembers.firstOrNull))
+                : members.where((d) => d.id == _selected).firstOrNull;
             final person = selected?.data() ?? {};
             final identity = [
               selected?.id,
@@ -272,6 +287,16 @@ class _StaffPerformancePanelState extends State<StaffPerformancePanel> {
               person['staffId'],
               person['adminId'],
             ].where((v) => v != null && '$v'.isNotEmpty).toSet();
+            final branchIdentities = members.expand((doc) {
+              final account = doc.data();
+              return <String?>[
+                doc.id,
+                account['uid']?.toString(),
+                account['userId']?.toString(),
+                account['staffId']?.toString(),
+                account['adminId']?.toString(),
+              ].whereType<String>().where((id) => id.trim().isNotEmpty);
+            }).toSet();
             return Column(
               children: [
                 Expanded(
@@ -311,7 +336,7 @@ class _StaffPerformancePanelState extends State<StaffPerformancePanel> {
                                 ),
                               ),
                               const Divider(height: 1),
-                              if (widget.roleSelection)
+                              if (false && widget.roleSelection)
                                 Padding(
                                   padding: const EdgeInsets.all(18),
                                   child: DropdownButtonFormField<String>(
@@ -336,7 +361,8 @@ class _StaffPerformancePanelState extends State<StaffPerformancePanel> {
                                     }),
                                   ),
                                 ),
-                              if (!widget.roleSelection || _role != null)
+                              if (false &&
+                                  (!widget.roleSelection || _role != null))
                                 Padding(
                                   padding: const EdgeInsets.fromLTRB(
                                     18,
@@ -372,7 +398,8 @@ class _StaffPerformancePanelState extends State<StaffPerformancePanel> {
                                               setState(() => _selected = value),
                                   ),
                                 ),
-                              if (widget.roleSelection &&
+                              if (false &&
+                                  widget.roleSelection &&
                                   _role != null &&
                                   members.isEmpty)
                                 Padding(
@@ -391,7 +418,7 @@ class _StaffPerformancePanelState extends State<StaffPerformancePanel> {
                                     ),
                                   ),
                                 ),
-                              if (selected != null)
+                              if (false && selected != null)
                                 ListTile(
                                   leading: ProfileAvatar(data: person),
                                   title: Text(_name(person)),
@@ -407,9 +434,7 @@ class _StaffPerformancePanelState extends State<StaffPerformancePanel> {
                           ),
                         ),
                         _searchHeader(),
-                        if (selected != null &&
-                            (!widget.roleSelection ||
-                                performanceAccountRole(person) == 'staff'))
+                        if (selected != null && metricSearch)
                           SliverPersistentHeader(
                             pinned: false,
                             delegate: _PerformanceSummaryHeader(
@@ -434,11 +459,6 @@ class _StaffPerformancePanelState extends State<StaffPerformancePanel> {
                                         identity,
                                         person,
                                       );
-                                      final total = sales.fold<double>(
-                                        0,
-                                        (amount, sale) =>
-                                            amount + reportValue(sale['total']),
-                                      );
                                       final sold = sales.fold<double>(
                                         0,
                                         (quantity, sale) =>
@@ -454,9 +474,18 @@ class _StaffPerformancePanelState extends State<StaffPerformancePanel> {
                                                       ),
                                                 ),
                                       );
+                                      final parts = <String>[];
+                                      if (_search.contains('order')) {
+                                        parts.add('${sales.length} orders');
+                                      }
+                                      if (_search.contains('item sold') ||
+                                          _search.contains('items sold')) {
+                                        parts.add(
+                                          '${sold.toStringAsFixed(0)} items sold',
+                                        );
+                                      }
                                       return _PerformanceSummary(
-                                        text:
-                                            '${sales.length} orders • ${sold.toStringAsFixed(0)} items sold • ${_money(total)}',
+                                        text: parts.join(' • '),
                                       );
                                     },
                                   ),
@@ -471,24 +500,35 @@ class _StaffPerformancePanelState extends State<StaffPerformancePanel> {
                               branchId: widget.branchId,
                               includeReceipts: true,
                               hideSessionEvents: true,
-                              search: _search,
+                              search: _search == 'admin' ? '' : _search,
                               range: _range,
                               database: _db,
                               cardRows: true,
                             ),
                           ),
-                        if (widget.roleSelection && selected == null)
-                          const SliverFillRemaining(
+                        if (selected == null && _search.isEmpty)
+                          SliverToBoxAdapter(
+                            child: ActivityFeed(
+                              actorIds: branchIdentities,
+                              branchId: widget.branchId,
+                              includeReceipts: true,
+                              hideSessionEvents: true,
+                              range: _range,
+                              database: _db,
+                              cardRows: true,
+                            ),
+                          )
+                        else if (selected == null)
+                          SliverFillRemaining(
                             hasScrollBody: false,
                             child: Center(
-                              child: Text(
-                                'Select a role and account to view performance.',
+                              child: const Text(
+                                'No performance found.',
                                 textAlign: TextAlign.center,
                               ),
                             ),
                           )
-                        else if (widget.roleSelection &&
-                            performanceAccountRole(person) == 'admin')
+                        else if (performanceAccountRole(person) == 'admin')
                           _performanceBody(
                             child: ActivityFeed(
                               actorIds: {
@@ -498,7 +538,7 @@ class _StaffPerformancePanelState extends State<StaffPerformancePanel> {
                               branchId: widget.branchId,
                               includeReceipts: true,
                               hideSessionEvents: true,
-                              search: _search,
+                              search: _search == 'admin' ? '' : _search,
                               range: _range,
                               database: _db,
                               cardRows: true,
@@ -593,18 +633,57 @@ class _StaffPerformancePanelState extends State<StaffPerformancePanel> {
                                                   ?.toString()
                                                   .trim();
                                           return Card(
+                                            elevation: 2,
+                                            margin: const EdgeInsets.only(
+                                              bottom: 12,
+                                            ),
+                                            shape: RoundedRectangleBorder(
+                                              borderRadius:
+                                                  BorderRadius.circular(18),
+                                              side: BorderSide(
+                                                color: Colors.pink.shade100,
+                                              ),
+                                            ),
                                             child: Padding(
                                               padding: const EdgeInsets.all(16),
                                               child: Column(
                                                 crossAxisAlignment:
                                                     CrossAxisAlignment.start,
                                                 children: [
-                                                  Text(
-                                                    'Cashier: ${cashierName?.isNotEmpty == true ? cashierName : _name(person)}',
-                                                    style: const TextStyle(
-                                                      fontWeight:
-                                                          FontWeight.bold,
-                                                    ),
+                                                  Row(
+                                                    children: [
+                                                      Expanded(
+                                                        child: Text(
+                                                          'Cashier: ${cashierName?.isNotEmpty == true ? cashierName : _name(person)}',
+                                                          style:
+                                                              const TextStyle(
+                                                                fontWeight:
+                                                                    FontWeight
+                                                                        .bold,
+                                                              ),
+                                                        ),
+                                                      ),
+                                                      Chip(
+                                                        avatar: const Icon(
+                                                          Icons.point_of_sale,
+                                                          size: 16,
+                                                        ),
+                                                        label: const Text(
+                                                          'Order made',
+                                                        ),
+                                                        visualDensity:
+                                                            VisualDensity
+                                                                .compact,
+                                                        backgroundColor: Colors
+                                                            .green
+                                                            .shade50,
+                                                        side: BorderSide(
+                                                          color: Colors
+                                                              .green
+                                                              .shade200,
+                                                        ),
+                                                      ),
+                                                    ],
                                                   ),
                                                   Text(
                                                     'Cashier ID: ${cashierId?.isNotEmpty == true ? cashierId : 'Not recorded'}',

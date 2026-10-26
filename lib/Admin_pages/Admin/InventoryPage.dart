@@ -3216,6 +3216,7 @@ class _InventoryPageState extends State<InventoryPage>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      resizeToAvoidBottomInset: false,
       backgroundColor: PinkTheme.scaffoldBg,
       floatingActionButton:
           _catalogType == 'Categories' && _monitorBranch.isEmpty

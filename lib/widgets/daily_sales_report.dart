@@ -191,6 +191,44 @@ class _DailySalesReportState extends State<DailySalesReport> {
     }
   }
 
+  Future<void> _saveReportExcel(
+    BranchReportData data,
+    DateTime start,
+    DateTime end,
+  ) async {
+    if (printing) return;
+    setState(() => printing = true);
+    try {
+      final bytes = branchReportExcel(
+        data,
+        start,
+        end,
+        branchId: widget.branchId,
+      );
+      final filename =
+          'sales-report-${start.year}-${start.month}-${start.day}.xlsx';
+      final path = kIsWeb
+          ? filename
+          : await FilePicker.platform.saveFile(
+              bytes: bytes,
+              fileName: filename,
+              type: FileType.custom,
+              allowedExtensions: ['xlsx'],
+            );
+      if (path != null) await saveBytes(path, bytes);
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Unable to save Excel file. Please try again.'),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => printing = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(
@@ -684,72 +722,124 @@ class _DailySalesReportState extends State<DailySalesReport> {
                     period: period,
                     branchId: widget.branchId,
                   ),
-                  const SizedBox(height: 20),
-                  Align(
-                    alignment: Alignment.centerRight,
-                    child: Wrap(
-                      spacing: 12,
-                      runSpacing: 12,
-                      children: [
-                        OutlinedButton.icon(
-                          onPressed: printing
-                              ? null
-                              : () async {
-                                  setState(() => printing = true);
-                                  try {
-                                    final bytes = branchReportExcel(
-                                      data,
-                                      start,
-                                      end,
-                                      branchId: widget.branchId,
-                                    );
-                                    final filename =
-                                        'sales-report-${start.year}-${start.month}-${start.day}.xlsx';
-                                    final path = kIsWeb
-                                        ? filename
-                                        : await FilePicker.platform.saveFile(
-                                            bytes: bytes,
-                                            fileName: filename,
-                                            type: FileType.custom,
-                                            allowedExtensions: ['xlsx'],
-                                          );
-                                    if (path != null) {
-                                      await saveBytes(path, bytes);
-                                    }
-                                  } catch (_) {
-                                    if (mounted) {
-                                      ScaffoldMessenger.of(
-                                        context,
-                                      ).showSnackBar(
-                                        const SnackBar(
-                                          content: Text(
-                                            'Unable to save Excel file. Please try again.',
-                                          ),
-                                        ),
+                  if (MediaQuery.sizeOf(context).width >= 600)
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: Wrap(
+                        spacing: 12,
+                        runSpacing: 12,
+                        children: [
+                          OutlinedButton.icon(
+                            onPressed: printing
+                                ? null
+                                : () async {
+                                    setState(() => printing = true);
+                                    try {
+                                      final bytes = branchReportExcel(
+                                        data,
+                                        start,
+                                        end,
+                                        branchId: widget.branchId,
                                       );
+                                      final filename =
+                                          'sales-report-${start.year}-${start.month}-${start.day}.xlsx';
+                                      final path = kIsWeb
+                                          ? filename
+                                          : await FilePicker.platform.saveFile(
+                                              bytes: bytes,
+                                              fileName: filename,
+                                              type: FileType.custom,
+                                              allowedExtensions: ['xlsx'],
+                                            );
+                                      if (path != null) {
+                                        await saveBytes(path, bytes);
+                                      }
+                                    } catch (_) {
+                                      if (mounted) {
+                                        ScaffoldMessenger.of(
+                                          context,
+                                        ).showSnackBar(
+                                          const SnackBar(
+                                            content: Text(
+                                              'Unable to save Excel file. Please try again.',
+                                            ),
+                                          ),
+                                        );
+                                      }
+                                    } finally {
+                                      if (mounted) {
+                                        setState(() => printing = false);
+                                      }
                                     }
-                                  } finally {
-                                    if (mounted) {
-                                      setState(() => printing = false);
-                                    }
-                                  }
-                                },
-                          icon: const Icon(Icons.download_outlined),
-                          label: const Text('Save Excel file'),
-                        ),
-                        FilledButton.icon(
-                          onPressed: printing
-                              ? null
-                              : () => printReport(metrics, rows, chart),
-                          icon: const Icon(Icons.print),
-                          label: Text(printing ? 'Preparing…' : 'Print report'),
-                        ),
-                      ],
+                                  },
+                            icon: const Icon(Icons.download_outlined),
+                            label: const Text('Save Excel file'),
+                          ),
+                          FilledButton.icon(
+                            onPressed: printing
+                                ? null
+                                : () => printReport(metrics, rows, chart),
+                            icon: const Icon(Icons.print),
+                            label: Text(
+                              printing ? 'Preparing…' : 'Print report',
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
                 ],
               ),
             ),
+            if (MediaQuery.sizeOf(context).width < 600)
+              SafeArea(
+                top: false,
+                child: Container(
+                  padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: .08),
+                        blurRadius: 12,
+                        offset: const Offset(0, -3),
+                      ),
+                    ],
+                  ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: FilledButton.icon(
+                          onPressed: printing
+                              ? null
+                              : () => _saveReportExcel(data, start, end),
+                          style: FilledButton.styleFrom(
+                            backgroundColor: const Color(0xFF2E8B45),
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 13),
+                          ),
+                          icon: const Icon(Icons.download_outlined, size: 18),
+                          label: const Text('Save Excel'),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: FilledButton.icon(
+                          onPressed: printing
+                              ? null
+                              : () => printReport(metrics, rows, chart),
+                          style: FilledButton.styleFrom(
+                            backgroundColor: AppColors.primary,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 13),
+                          ),
+                          icon: const Icon(Icons.print, size: 18),
+                          label: Text(printing ? 'Preparing…' : 'Print report'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
           ],
         );
       },

@@ -3082,7 +3082,8 @@ class _InventoryPageState extends State<InventoryPage>
   Future<void> _openCatalogEntry(AdminCatalogEntry entry) =>
       showAdminItemEditor(
         context,
-        entry: entry,
+        entry: entry.details['_emptyCategory'] == true ? null : entry,
+        category: entry.details['_emptyCategory'] == true ? entry.source : null,
         upload: (bytes) =>
             _uploadInventoryImage(bytes, folder: 'inventory_item_images'),
       );
@@ -3255,6 +3256,7 @@ class _InventoryPageState extends State<InventoryPage>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      resizeToAvoidBottomInset: false,
       backgroundColor: PinkTheme.scaffoldBg,
       floatingActionButton:
           _catalogType == 'Categories' && _monitorBranch.isEmpty
@@ -3377,6 +3379,8 @@ class _InventoryPageState extends State<InventoryPage>
                   onOpen: _openCatalogEntry,
                   onVoid: _voidCatalogEntry,
                   onView: _viewBundle,
+                  onViewBatches: (entry) =>
+                      showMainInventoryBatches(context, entry.details),
                   onCategorySelected: (category) =>
                       _selectedCategory = category,
                   actions: Wrap(

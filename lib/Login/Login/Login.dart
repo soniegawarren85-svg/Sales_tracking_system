@@ -1370,7 +1370,9 @@ class _LoginScreenState extends State<LoginScreen>
           controller: controller,
           keyboardType: keyboardType,
           obscureText: obscureText,
-          enableInteractiveSelection: !isPasswordField,
+          // Keep cursor placement and character replacement available. Bulk
+          // paste is still rejected by PasswordTypingFormatter.
+          enableInteractiveSelection: true,
           inputFormatters: isPasswordField
               ? const [PasswordTypingFormatter()]
               : null,

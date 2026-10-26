@@ -10,6 +10,7 @@ import '../services/public_item_id.dart';
 import '../widgets/staff_refund_dialog.dart';
 import '../services/staff_login_session.dart';
 import '../widgets/staff_branch_label.dart';
+import '../widgets/cash_float_inbox.dart';
 // dashboard_page.dart
 
 import 'dart:async';
@@ -564,9 +565,6 @@ class _DashboardPageState extends State<DashboardPage>
         0.0;
   }
 
-  String _refundItemKey(Map<String, dynamic> item) =>
-      '${item['name'] ?? ''}|${item['price'] ?? ''}'.toLowerCase();
-
   List<Map<String, dynamic>> _activeRefundItemsForData(
     Map<String, dynamic> staffData,
     Map<String, dynamic> rootData,
@@ -575,15 +573,14 @@ class _DashboardPageState extends State<DashboardPage>
         .whereType<Map>()
         .map((item) => Map<String, dynamic>.from(item))
         .toList();
-    final rootKeys = rootItems.map(_refundItemKey).toSet();
     return ((staffData['items'] as List<dynamic>?) ?? [])
         .whereType<Map>()
         .map((item) => Map<String, dynamic>.from(item))
         .where((item) {
           final expirationDate = item['expirationDate']?.toString() ?? '';
           if (_isExpiredInventoryItem(expirationDate)) return false;
-          if (rootKeys.isEmpty) return true;
-          return rootKeys.contains(_refundItemKey(item));
+          if (rootItems.isEmpty) return true;
+          return rootItems.any((root) => inventoryVariantsMatch(root, item));
         })
         .toList();
   }
@@ -1582,17 +1579,14 @@ class _DashboardPageState extends State<DashboardPage>
               }
             }
 
-            String itemKey(Map<String, dynamic> item) =>
-                '${item['name'] ?? ''}|${item['price'] ?? ''}'.toLowerCase();
-
             List<Map<String, dynamic>> activeStaffItems(
               Map<String, dynamic> staffData,
               Map<String, dynamic> rootData,
             ) {
-              final rootKeys = ((rootData['items'] as List<dynamic>?) ?? [])
+              final rootItems = ((rootData['items'] as List<dynamic>?) ?? [])
                   .whereType<Map>()
-                  .map((item) => itemKey(Map<String, dynamic>.from(item)))
-                  .toSet();
+                  .map((item) => Map<String, dynamic>.from(item))
+                  .toList();
               return ((staffData['items'] as List<dynamic>?) ?? [])
                   .whereType<Map>()
                   .map((item) => Map<String, dynamic>.from(item))
@@ -1600,7 +1594,10 @@ class _DashboardPageState extends State<DashboardPage>
                     final expirationDate =
                         item['expirationDate']?.toString() ?? '';
                     return !_isExpiredInventoryItem(expirationDate) &&
-                        (rootKeys.isEmpty || rootKeys.contains(itemKey(item)));
+                        (rootItems.isEmpty ||
+                            rootItems.any(
+                              (root) => inventoryVariantsMatch(root, item),
+                            ));
                   })
                   .toList();
             }
@@ -3387,6 +3384,9 @@ class _Header extends StatelessWidget {
                           photoUrl: photoUrl,
                           cashDrawerBalance: cashDrawerBalance,
                           gcashDrawerBalance: gcashDrawerBalance,
+                          cashFloatBranchId: drawerIds.isEmpty
+                              ? ''
+                              : drawerIds.first,
                           cashDrawerTourKey: cashDrawerTourKey,
                         );
                       },
@@ -4022,6 +4022,7 @@ class _StaffProfileCard extends StatefulWidget {
   final String? photoUrl;
   final double cashDrawerBalance;
   final double gcashDrawerBalance;
+  final String cashFloatBranchId;
   final GlobalKey? cashDrawerTourKey;
 
   const _StaffProfileCard({
@@ -4031,6 +4032,7 @@ class _StaffProfileCard extends StatefulWidget {
     this.photoUrl,
     required this.cashDrawerBalance,
     required this.gcashDrawerBalance,
+    required this.cashFloatBranchId,
     this.cashDrawerTourKey,
   });
 
@@ -4068,165 +4070,180 @@ class _StaffProfileCardState extends State<_StaffProfileCard> {
               ),
             ],
           ),
-          child: isCompact
-              ? Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.center,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              isCompact
+                  ? Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
                       children: [
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.center,
+                          children: [
+                            _StaffAvatar(photoUrl: photoUrl),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  _RoleBadge(role: role),
+                                  const SizedBox(height: 6),
+                                  Text(
+                                    name,
+                                    style: const TextStyle(
+                                      fontSize: 20,
+                                      fontWeight: FontWeight.w900,
+                                      color: Colors.white,
+                                      letterSpacing: -0.4,
+                                      height: 1.1,
+                                    ),
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                        _StaffIdChip(staffId: staffId),
+                        const SizedBox(height: 12),
+                        SizedBox(
+                          width: double.infinity,
+                          child: Container(
+                            key: widget.cashDrawerTourKey,
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 10,
+                            ),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withOpacity(0.12),
+                              borderRadius: BorderRadius.circular(18),
+                              border: Border.all(
+                                color: Colors.white.withOpacity(0.18),
+                                width: 1,
+                              ),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text(
+                                  'Cash Drawer',
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w700,
+                                    color: Colors.white70,
+                                  ),
+                                ),
+                                const SizedBox(height: 6),
+                                Text(
+                                  formatMoney(cashDrawerBalance),
+                                  style: const TextStyle(
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w900,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                    )
+                  : Row(
+                      children: [
+                        // ── Avatar (picture unchanged, frame upgraded) ───────────────
                         _StaffAvatar(photoUrl: photoUrl),
-                        const SizedBox(width: 12),
+
+                        const SizedBox(width: 16),
+
+                        // ── Staff info ───────────────────────────────────────────────
                         Expanded(
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             mainAxisSize: MainAxisSize.min,
                             children: [
+                              // Role / Title badge
                               _RoleBadge(role: role),
-                              const SizedBox(height: 6),
+
+                              const SizedBox(height: 7),
+
+                              // Staff name  ← UPGRADED
                               Text(
                                 name,
                                 style: const TextStyle(
-                                  fontSize: 20,
+                                  fontSize: 21,
                                   fontWeight: FontWeight.w900,
                                   color: Colors.white,
                                   letterSpacing: -0.4,
                                   height: 1.1,
                                 ),
-                                maxLines: 2,
+                                maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
+                              ),
+
+                              const SizedBox(height: 8),
+
+                              // Staff ID chip  ← UPGRADED
+                              _StaffIdChip(staffId: staffId),
+                            ],
+                          ),
+                        ),
+
+                        Container(
+                          key: widget.cashDrawerTourKey,
+                          width: 136,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 10,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withOpacity(0.12),
+                            borderRadius: BorderRadius.circular(18),
+                            border: Border.all(
+                              color: Colors.white.withOpacity(0.18),
+                              width: 1,
+                            ),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.end,
+                            children: [
+                              const Text(
+                                'Cash Drawer',
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w700,
+                                  color: Colors.white70,
+                                ),
+                              ),
+                              const SizedBox(height: 5),
+                              Text(
+                                formatMoney(cashDrawerBalance),
+                                style: const TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w900,
+                                  color: Colors.white,
+                                ),
                               ),
                             ],
                           ),
                         ),
                       ],
                     ),
-                    const SizedBox(height: 12),
-                    _StaffIdChip(staffId: staffId),
-                    const SizedBox(height: 12),
-                    SizedBox(
-                      width: double.infinity,
-                      child: Container(
-                        key: widget.cashDrawerTourKey,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 10,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.12),
-                          borderRadius: BorderRadius.circular(18),
-                          border: Border.all(
-                            color: Colors.white.withOpacity(0.18),
-                            width: 1,
-                          ),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Text(
-                              'Cash Drawer',
-                              style: TextStyle(
-                                fontSize: 10,
-                                fontWeight: FontWeight.w700,
-                                color: Colors.white70,
-                              ),
-                            ),
-                            const SizedBox(height: 6),
-                            Text(
-                              formatMoney(cashDrawerBalance),
-                              style: const TextStyle(
-                                fontSize: 15,
-                                fontWeight: FontWeight.w900,
-                                color: Colors.white,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ],
-                )
-              : Row(
-                  children: [
-                    // ── Avatar (picture unchanged, frame upgraded) ───────────────
-                    _StaffAvatar(photoUrl: photoUrl),
-
-                    const SizedBox(width: 16),
-
-                    // ── Staff info ───────────────────────────────────────────────
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          // Role / Title badge
-                          _RoleBadge(role: role),
-
-                          const SizedBox(height: 7),
-
-                          // Staff name  ← UPGRADED
-                          Text(
-                            name,
-                            style: const TextStyle(
-                              fontSize: 21,
-                              fontWeight: FontWeight.w900,
-                              color: Colors.white,
-                              letterSpacing: -0.4,
-                              height: 1.1,
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-
-                          const SizedBox(height: 8),
-
-                          // Staff ID chip  ← UPGRADED
-                          _StaffIdChip(staffId: staffId),
-                        ],
-                      ),
-                    ),
-
-                    Container(
-                      key: widget.cashDrawerTourKey,
-                      width: 136,
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 10,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.white.withOpacity(0.12),
-                        borderRadius: BorderRadius.circular(18),
-                        border: Border.all(
-                          color: Colors.white.withOpacity(0.18),
-                          width: 1,
-                        ),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.end,
-                        children: [
-                          const Text(
-                            'Cash Drawer',
-                            style: TextStyle(
-                              fontSize: 10,
-                              fontWeight: FontWeight.w700,
-                              color: Colors.white70,
-                            ),
-                          ),
-                          const SizedBox(height: 5),
-                          Text(
-                            formatMoney(cashDrawerBalance),
-                            style: const TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w900,
-                              color: Colors.white,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
+              if (role.toLowerCase() == 'staff')
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: CashFloatInbox(
+                    branchId: widget.cashFloatBranchId,
+                    role: 'staff',
+                    compact: true,
+                  ),
                 ),
+            ],
+          ),
         );
       },
     );

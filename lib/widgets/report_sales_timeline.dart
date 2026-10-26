@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../services/branch_report_data.dart';
+import 'historical_cash_drawer.dart';
 import '../theme/app_colors.dart';
 import 'branch_analytics_bars.dart';
 
@@ -21,25 +22,18 @@ class ReportSalesTimeline extends StatefulWidget {
 }
 
 class _ReportSalesTimelineState extends State<ReportSalesTimeline> {
-  String? branch;
   String status = 'All';
 
   @override
-  void initState() {
-    super.initState();
-    branch = widget.branchId;
-  }
-
-  @override
   Widget build(BuildContext context) {
-    final branches = widget.data.rows('branches').where(
-      (row) => widget.branchId == null || row['_id'] == widget.branchId,
-    ).toList();
-    if (widget.branchId != null) {
-      branch = widget.branchId;
-    } else if (!branches.any((b) => b['_id'] == branch)) {
-      branch = null;
-    }
+    final branches = widget.data
+        .rows('branches')
+        .where(
+          (row) => widget.branchId == null || row['_id'] == widget.branchId,
+        )
+        .toList();
+    final branch = widget.branchId;
+    final rangedSales = widget.data.sales(branch, widget.start, widget.end);
     final allowRefunds = branch == null
         ? branches.any((b) => widget.data.refundsEnabled('${b['_id']}'))
         : widget.data.refundsEnabled(branch);
@@ -85,7 +79,13 @@ class _ReportSalesTimelineState extends State<ReportSalesTimeline> {
               ][i]
             : '${start.month}/${start.day}',
       );
-      for (final sale in widget.data.sales(branch, start, end)) {
+      for (final sale in rangedSales) {
+        final saleDate = cashRecordDate(sale['timestamp'] ?? sale['createdAt']);
+        if (saleDate == null ||
+            saleDate.isBefore(start) ||
+            !saleDate.isBefore(end)) {
+          continue;
+        }
         if (reportRefund(sale)) {
           refunds[i] += reportValue(sale['total']).abs();
         } else if (sale['type'] != 'reduce' && sale['status'] != 'reduced') {
@@ -118,36 +118,15 @@ class _ReportSalesTimelineState extends State<ReportSalesTimeline> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              allowRefunds
-                  ? 'Sales, refunds & reductions'
-                  : 'Sales & reductions',
+              'Sales & reductions',
               style: TextStyle(
                 color: AppColors.primaryDeep,
-                fontSize: 20,
+                fontSize: 16,
                 fontWeight: FontWeight.bold,
               ),
             ),
             const SizedBox(height: 16),
-            if (widget.branchId == null)
-              DropdownButton<String>(
-                isExpanded: true,
-                value: branch ?? '',
-                items: [
-                  const DropdownMenuItem(
-                    value: '',
-                    child: Text('All branches'),
-                  ),
-                  ...branches.map(
-                    (b) => DropdownMenuItem(
-                      value: '${b['_id']}',
-                      child: Text('${b['name']}'),
-                    ),
-                  ),
-                ],
-                onChanged: (value) =>
-                    setState(() => branch = value == '' ? null : value),
-              )
-            else
+            if (widget.branchId != null)
               Padding(
                 padding: const EdgeInsets.only(bottom: 12),
                 child: Text(
@@ -155,18 +134,25 @@ class _ReportSalesTimelineState extends State<ReportSalesTimeline> {
                   style: const TextStyle(fontWeight: FontWeight.w600),
                 ),
               ),
-            Wrap(
-              spacing: 8,
-              children:
-                  ['All', 'Completed', if (allowRefunds) 'Refund', 'Reduced']
-                      .map(
-                        (s) => ChoiceChip(
-                          label: Text(s),
-                          selected: status == s,
-                          onSelected: (_) => setState(() => status = s),
-                        ),
-                      )
-                      .toList(),
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [
+                  for (final s in [
+                    'All',
+                    'Completed',
+                    if (allowRefunds) 'Refund',
+                    'Reduced',
+                  ]) ...[
+                    if (s != 'All') const SizedBox(width: 8),
+                    ChoiceChip(
+                      label: Text(s),
+                      selected: status == s,
+                      onSelected: (_) => setState(() => status = s),
+                    ),
+                  ],
+                ],
+              ),
             ),
             const SizedBox(height: 12),
             Wrap(

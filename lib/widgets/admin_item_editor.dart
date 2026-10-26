@@ -16,6 +16,17 @@ import 'admin_catalog.dart';
 double reportValueForSave(dynamic value) =>
     num.tryParse('$value')?.toDouble() ?? 0;
 
+String _inventoryDateText(dynamic value) {
+  final date = value is Timestamp
+      ? value.toDate()
+      : value is DateTime
+      ? value
+      : DateTime.tryParse('$value');
+  return date == null
+      ? '$value'.split('T').first
+      : date.toIso8601String().split('T').first;
+}
+
 /// Only changed fields are written, so editing a name cannot overwrite a price
 /// or quantity changed by another session while the dialog was open.
 Map<String, dynamic> inventoryChangedFields(
@@ -25,12 +36,44 @@ Map<String, dynamic> inventoryChangedFields(
   for (final entry in edited.entries)
     if (entry.value is num
         ? reportValueForSave(current[entry.key]) != entry.value
-        : jsonEncode(
-                current[entry.key] ?? (entry.value is String ? '' : null),
-              ) !=
-              jsonEncode(entry.value))
+        : !_inventoryValuesEqual(
+            current[entry.key] ?? (entry.value is String ? '' : null),
+            entry.value,
+          ))
       entry.key: entry.value,
 };
+
+bool _inventoryValuesEqual(dynamic current, dynamic edited) {
+  if (current is Timestamp && edited is Timestamp) {
+    return current.toDate().isAtSameMomentAs(edited.toDate());
+  }
+  if (current is Timestamp && edited is DateTime) {
+    return current.toDate().isAtSameMomentAs(edited);
+  }
+  if (current is DateTime && edited is Timestamp) {
+    return current.isAtSameMomentAs(edited.toDate());
+  }
+  if (current is DateTime && edited is DateTime) {
+    return current.isAtSameMomentAs(edited);
+  }
+  if (current is List && edited is List) {
+    return current.length == edited.length &&
+        List.generate(
+          current.length,
+          (index) => _inventoryValuesEqual(current[index], edited[index]),
+        ).every((equal) => equal);
+  }
+  if (current is Map && edited is Map) {
+    if (current.length != edited.length ||
+        !current.keys.toSet().containsAll(edited.keys)) {
+      return false;
+    }
+    return edited.entries.every(
+      (entry) => _inventoryValuesEqual(current[entry.key], entry.value),
+    );
+  }
+  return current == edited;
+}
 
 String inventorySaveError(Object error) {
   // cloud_firestore_web 3.x can wrap a Dart timeout in a JS interop TypeError.
@@ -105,7 +148,7 @@ class _ItemEditorState extends State<_ItemEditor> {
   );
   late final _stock = TextEditingController(text: '0');
   late final _expiry = TextEditingController(
-    text: '${_data['expirationDate'] ?? ''}'.split('T').first,
+    text: _inventoryDateText(_data['expirationDate'] ?? ''),
   );
   late final _description = TextEditingController(
     text: '${_data['description'] ?? ''}',
@@ -195,6 +238,18 @@ class _ItemEditorState extends State<_ItemEditor> {
         '${isNew ? 'Created' : 'Updated'} ${_type == 'Bundle' ? 'bundle' : 'inventory item'} ${_name.text.trim()}',
         database: widget.firestore,
         details: details,
+      ),
+    );
+  }
+
+  void _finishSave() {
+    if (!mounted) return;
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    Navigator.of(context).pop();
+    messenger?.showSnackBar(
+      const SnackBar(
+        content: Text('Inventory changes saved successfully.'),
+        backgroundColor: Color(0xFF2E7D32),
       ),
     );
   }
@@ -313,7 +368,9 @@ class _ItemEditorState extends State<_ItemEditor> {
   }
 
   Future<void> _save() async {
-    if (_saving || !(_form.currentState?.validate() ?? false)) return;
+    if (_saving) return;
+    FocusManager.instance.primaryFocus?.unfocus();
+    if (!(_form.currentState?.validate() ?? false)) return;
     setState(() {
       _saving = true;
       _error = null;
@@ -325,10 +382,12 @@ class _ItemEditorState extends State<_ItemEditor> {
       );
       final cost = num.parse(_cost.text.trim());
       final prices = _type == 'Beverages'
-          ? _sizes.map((size) => (
-              price: num.parse(size.$2.text.trim()),
-              cost: num.parse(size.$3.text.trim()),
-            ))
+          ? _sizes.map(
+              (size) => (
+                price: num.parse(size.$2.text.trim()),
+                cost: num.parse(size.$3.text.trim()),
+              ),
+            )
           : [(price: num.parse(_price.text.trim()), cost: cost)];
       if (prices.any((price) => price.price < price.cost)) {
         throw StateError('Selling price cannot be lower than its cost price.');
@@ -341,6 +400,39 @@ class _ItemEditorState extends State<_ItemEditor> {
         throw StateError(
           'Each bundle item needs a quantity greater than zero.',
         );
+      }
+      final addedStock = _type == 'Categories' ? int.parse(_stock.text) : 0;
+      final existingStock = reportValueForSave(
+        _data['stock'] ?? _data['startingStock'],
+      ).toInt();
+      final stockBatches = <Map<String, dynamic>>[
+        for (final batch
+            in (_data['stockBatches'] as List? ?? []).whereType<Map>())
+          Map<String, dynamic>.from(batch),
+      ];
+      if (stockBatches.isEmpty && widget.entry != null && existingStock > 0) {
+        stockBatches.add({
+          'quantity': existingStock,
+          'costPrice': reportValueForSave(_data['costPrice']),
+          'price': reportValueForSave(_data['price']),
+          'expirationDate': _data['expirationDate'] ?? '',
+          'createdAt': _data['createdAt'] ?? Timestamp.now(),
+        });
+      }
+      if (addedStock > 0) {
+        stockBatches.add({
+          'quantity': addedStock,
+          'costPrice': cost,
+          'price': prices.first.price,
+          'expirationDate': _expiry.text,
+          'createdAt': Timestamp.now(),
+        });
+      }
+      if (_type == 'Categories' &&
+          _inventoryDateText(_data['expirationDate'] ?? '') != _expiry.text) {
+        for (final batch in stockBatches) {
+          batch['expirationDate'] = _expiry.text;
+        }
       }
       final url = _photo == null
           ? null
@@ -366,6 +458,7 @@ class _ItemEditorState extends State<_ItemEditor> {
                       _data['stock'] ?? _data['startingStock'],
                     ).toInt()),
           'expirationDate': _expiry.text,
+          'stockBatches': stockBatches,
           if (widget.entry == null) 'startingStock': int.parse(_stock.text),
         },
         if (_type == 'Beverages') ...{
@@ -416,7 +509,7 @@ class _ItemEditorState extends State<_ItemEditor> {
           publicId: bundlePublicId,
           restockedBundles: int.parse(_additionalBundles.text),
         );
-        if (mounted) Navigator.pop(context);
+        _finishSave();
         return;
       }
       if (_type == 'Bundle') {
@@ -425,14 +518,14 @@ class _ItemEditorState extends State<_ItemEditor> {
           if (_recipeChanged) 'items': _ingredients,
         });
         _recordSaveActivity(source, changes, publicId: bundlePublicId);
-        if (mounted) Navigator.pop(context);
+        _finishSave();
         return;
       }
       final patch = widget.entry == null
           ? changes
           : inventoryChangedFields(_data, changes);
       if (patch.isEmpty) {
-        if (mounted) Navigator.pop(context);
+        _finishSave();
         return;
       }
       String? createdPublicId;
@@ -440,9 +533,7 @@ class _ItemEditorState extends State<_ItemEditor> {
         final counterRef = widget.entry == null
             ? db
                   .collection('system_counters')
-                  .doc(
-                    'public_${categoryPrefix('${source['name'] ?? ''}')}',
-                  )
+                  .doc('public_${categoryPrefix('${source['name'] ?? ''}')}')
             : null;
         final snapshotFuture = tx.get(ref);
         final counterFuture = counterRef == null ? null : tx.get(counterRef);
@@ -457,8 +548,7 @@ class _ItemEditorState extends State<_ItemEditor> {
         if (_type != 'Categories') {
           if (counterRef != null) {
             final counter = counterSnapshot?.data();
-            final next =
-                ((counter?['count'] as num?)?.toInt() ?? 0) + 1;
+            final next = ((counter?['count'] as num?)?.toInt() ?? 0) + 1;
             createdPublicId = shortCode(
               categoryPrefix('${source['name'] ?? ''}'),
               next,
@@ -480,10 +570,9 @@ class _ItemEditorState extends State<_ItemEditor> {
           final nextNumber =
               ((counterSnapshot?.data()?['count'] as num?)?.toInt() ?? 0) + 1;
           createdPublicId = shortCode(prefix, nextNumber);
-          tx.set(
-            db.collection('system_counters').doc('public_$prefix'),
-            {'count': nextNumber},
-          );
+          tx.set(db.collection('system_counters').doc('public_$prefix'), {
+            'count': nextNumber,
+          });
           items.add({
             ...changes,
             'id':
@@ -517,7 +606,7 @@ class _ItemEditorState extends State<_ItemEditor> {
         tx.update(ref, {'items': items});
       });
       _recordSaveActivity(source, patch, publicId: createdPublicId);
-      if (mounted) Navigator.pop(context);
+      _finishSave();
     } catch (error) {
       debugPrint('Inventory save failed: $error');
       _upload = null;
@@ -611,6 +700,11 @@ class _ItemEditorState extends State<_ItemEditor> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
+                if (_saving)
+                  const LinearProgressIndicator(
+                    minHeight: 3,
+                    color: AppColors.primary,
+                  ),
                 ListTile(
                   contentPadding: EdgeInsets.zero,
                   leading: ClipRRect(
@@ -659,7 +753,7 @@ class _ItemEditorState extends State<_ItemEditor> {
                 if (_type == 'Categories') ...[
                   _field(
                     _stock,
-                    'Additional stock',
+                    widget.entry == null ? 'Stock' : 'Additional stock',
                     number: true,
                     integer: true,
                   ),
@@ -875,13 +969,23 @@ class _ItemEditorState extends State<_ItemEditor> {
         ),
         FilledButton(
           onPressed: _saving ? null : _save,
-          child: Text(
-            _saving
-                ? 'Saving…'
-                : widget.entry == null
-                ? 'Add'
-                : 'Save',
-          ),
+          child: _saving
+              ? const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    ),
+                    SizedBox(width: 10),
+                    Text('Saving…'),
+                  ],
+                )
+              : Text(widget.entry == null ? 'Add' : 'Save'),
         ),
       ],
     ),

@@ -9,6 +9,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/account_presence.dart';
+import '../services/message_account_status.dart';
 
 const _chatPink = AppColors.primary;
 const _chatDeep = AppColors.primaryDark;
@@ -178,8 +179,8 @@ class _MessagePageState extends State<MessagePage> {
                 builder: (context, snapshot) {
                   final accountDocs = (snapshot.data?.docs ?? []).where((doc) {
                     final data = doc.data();
-                    final status = data['status']?.toString().toLowerCase();
-                    return doc.id != me['id'] && status != 'rejected';
+                    return doc.id != me['id'] &&
+                        isMessageAccountAvailable(data);
                   }).toList();
                   if (snapshot.connectionState == ConnectionState.waiting) {
                     return const Center(child: _LoadingSpinner());
@@ -191,6 +192,19 @@ class _MessagePageState extends State<MessagePage> {
                         .snapshots(),
                     builder: (context, chatSnapshot) {
                       final rows = <String, _InboxRow>{};
+                      final contactIds = <String>{
+                        for (final doc in accountDocs) ...[
+                          doc.id,
+                          for (final key in [
+                            'uid',
+                            'userId',
+                            'staffId',
+                            'adminId',
+                          ])
+                            if ('${doc.data()[key] ?? ''}'.trim().isNotEmpty)
+                              '${doc.data()[key]}',
+                        ],
+                      };
 
                       for (final doc in accountDocs) {
                         final data = doc.data();
@@ -215,7 +229,9 @@ class _MessagePageState extends State<MessagePage> {
                           (id) => id != me['id'],
                           orElse: () => '',
                         );
-                        if (otherId.isEmpty) continue;
+                        if (otherId.isEmpty || !contactIds.contains(otherId)) {
+                          continue;
+                        }
                         final names = chat['participantNames'];
                         final photos = chat['participantPhotos'];
                         final name = names is Map

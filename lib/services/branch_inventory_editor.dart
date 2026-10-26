@@ -8,6 +8,9 @@ Future<void> updateBranchInventoryItem({
   required String name,
   required double price,
   int? stock,
+  Map<String, double>? sizePrices,
+  DateTime? expirationDate,
+  bool updateExpirationDate = false,
 }) async {
   final sourceId = '${item['sourceInventoryId'] ?? ''}';
   final itemId = '${item['id'] ?? ''}';
@@ -142,6 +145,11 @@ Future<void> updateBranchInventoryItem({
         'price': price,
         'branchNameOverride': name,
         'branchPriceOverride': price,
+        if (sizePrices != null) 'branchSizePriceOverrides': sizePrices,
+        if (updateExpirationDate)
+          'expirationDate': expirationDate == null
+              ? null
+              : Timestamp.fromDate(expirationDate),
         if (stock != null) ...{
           if (candidate.index == null && currentItem['isBundle'] == true)
             'bundleCount': quantities[index]

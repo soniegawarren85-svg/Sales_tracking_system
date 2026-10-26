@@ -385,9 +385,13 @@ class _AdminVoidInventoryState extends State<AdminVoidInventory> {
           }).toList(),
         ),
         if (records.isEmpty)
-          const Padding(
-            padding: EdgeInsets.all(24),
-            child: Text('No records match your filters.'),
+          Padding(
+            padding: const EdgeInsets.all(24),
+            child: Text(
+              widget.expired
+                  ? 'No expired records found.'
+                  : 'No void records found.',
+            ),
           ),
       ],
     );

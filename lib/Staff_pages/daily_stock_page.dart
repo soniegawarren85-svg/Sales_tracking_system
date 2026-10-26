@@ -4706,8 +4706,8 @@ class _DailyStockPageState extends State<DailyStockPage>
                     ),
                   ],
                 ),
-                child: const RaspberryCupcakeLoader(
-                  message: 'Processing your order...',
+                child: const RaspberryTransactionLoader(
+                  message: 'Processing transaction...',
                 ),
               ),
             ),
@@ -8400,17 +8400,14 @@ class _DailyStockPageState extends State<DailyStockPage>
               }
             }
 
-            String itemKey(Map<String, dynamic> item) =>
-                '${item['name'] ?? ''}|${item['price'] ?? ''}'.toLowerCase();
-
             List<Map<String, dynamic>> allocatedStaffItems(
               Map<String, dynamic> staffData,
               Map<String, dynamic> rootData,
             ) {
-              final rootKeys = ((rootData['items'] as List<dynamic>?) ?? [])
+              final rootItems = ((rootData['items'] as List<dynamic>?) ?? [])
                   .whereType<Map>()
-                  .map((item) => itemKey(Map<String, dynamic>.from(item)))
-                  .toSet();
+                  .map((item) => Map<String, dynamic>.from(item))
+                  .toList();
               return ((staffData['items'] as List<dynamic>?) ?? [])
                   .whereType<Map>()
                   .map((item) => Map<String, dynamic>.from(item))
@@ -8418,7 +8415,10 @@ class _DailyStockPageState extends State<DailyStockPage>
                     final expirationDate =
                         item['expirationDate']?.toString() ?? '';
                     return !_isExpiredItem(expirationDate) &&
-                        (rootKeys.isEmpty || rootKeys.contains(itemKey(item)));
+                        (rootItems.isEmpty ||
+                            rootItems.any(
+                              (root) => inventoryVariantsMatch(root, item),
+                            ));
                   })
                   .toList();
             }
@@ -9157,10 +9157,13 @@ class _DailyStockPageState extends State<DailyStockPage>
                             title: 'Senior Discount',
                             subtitle: '20% off for senior citizens',
                             value: _seniorDiscount,
-                            onChanged: (value) => setLocalState(() {
-                              _seniorDiscount = value;
-                              if (value) _pwdDiscount = false;
-                            }),
+                            onChanged: (value) {
+                              setState(() {
+                                _seniorDiscount = value;
+                                if (value) _pwdDiscount = false;
+                              });
+                              setLocalState(() {});
+                            },
                             icon: Icons.elderly_rounded,
                           ),
                           const SizedBox(height: 10),
@@ -9168,10 +9171,13 @@ class _DailyStockPageState extends State<DailyStockPage>
                             title: 'PWD Discount',
                             subtitle: '20% off for persons with disability',
                             value: _pwdDiscount,
-                            onChanged: (value) => setLocalState(() {
-                              _pwdDiscount = value;
-                              if (value) _seniorDiscount = false;
-                            }),
+                            onChanged: (value) {
+                              setState(() {
+                                _pwdDiscount = value;
+                                if (value) _seniorDiscount = false;
+                              });
+                              setLocalState(() {});
+                            },
                             icon: Icons.accessible_rounded,
                           ),
                         ],
@@ -11304,6 +11310,8 @@ class _DailyStockPageState extends State<DailyStockPage>
       0,
       (totalQty, entry) => totalQty + entry.value,
     );
+    final discountAmount = _discountValue(orderItems);
+    final hasDiscount = discountAmount > 0;
 
     return Container(
       constraints: const BoxConstraints(minHeight: 360),
@@ -11644,11 +11652,11 @@ class _DailyStockPageState extends State<DailyStockPage>
                   label: 'Subtotal',
                   value: formatMoney(_cartTotal(orderItems)),
                 ),
-                if (_seniorDiscount || _pwdDiscount) ...[
+                if (hasDiscount) ...[
                   const SizedBox(height: 6),
                   _SummaryRow(
                     label: _discountLabel,
-                    value: '- ${formatMoney(_discountValue(orderItems))}',
+                    value: '- ${formatMoney(discountAmount)}',
                     valueColor: const Color(0xFF2E7D32),
                   ),
                 ],
@@ -11665,8 +11673,8 @@ class _DailyStockPageState extends State<DailyStockPage>
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      const Text(
-                        'Total',
+                      Text(
+                        hasDiscount ? 'Total after discount' : 'Total',
                         style: TextStyle(
                           color: _AppColors.textMid,
                           fontSize: 16,
@@ -11701,6 +11709,8 @@ class _DailyStockPageState extends State<DailyStockPage>
       0,
       (totalQty, entry) => totalQty + entry.value,
     );
+    final discountAmount = _discountValue(orderItems);
+    final hasDiscount = discountAmount > 0;
 
     return Container(
       decoration: BoxDecoration(
@@ -11948,11 +11958,11 @@ class _DailyStockPageState extends State<DailyStockPage>
                   label: 'Subtotal',
                   value: formatMoney(_cartTotal(orderItems)),
                 ),
-                if (_seniorDiscount || _pwdDiscount) ...[
+                if (hasDiscount) ...[
                   const SizedBox(height: 6),
                   _SummaryRow(
                     label: _discountLabel,
-                    value: '- ${formatMoney(_discountValue(orderItems))}',
+                    value: '- ${formatMoney(discountAmount)}',
                     valueColor: const Color(0xFF2E7D32),
                   ),
                 ],
@@ -11971,8 +11981,8 @@ class _DailyStockPageState extends State<DailyStockPage>
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      const Text(
-                        'Total',
+                      Text(
+                        hasDiscount ? 'Total after discount' : 'Total',
                         style: TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.w800,

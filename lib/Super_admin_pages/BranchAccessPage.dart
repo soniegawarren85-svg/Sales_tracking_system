@@ -3,6 +3,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import '../services/branch_session.dart';
+import '../services/inventory_display_ids.dart';
 import '../services/number_format.dart';
 
 class BranchAccessPage extends StatefulWidget {
@@ -121,9 +122,6 @@ class _BranchAccessPageState extends State<BranchAccessPage> {
       if (name.isNotEmpty) activeSourcesByName[name] = data;
     }
 
-    String itemKey(Map<String, dynamic> item) =>
-        '${item['name'] ?? ''}|${item['price'] ?? ''}'.toLowerCase();
-
     return docs.where((doc) {
       final data = doc.data();
       if (data['isDeleted'] == true) return false;
@@ -143,8 +141,8 @@ class _BranchAccessPageState extends State<BranchAccessPage> {
 
       final sourceItems = ((source['items'] as List<dynamic>?) ?? [])
           .whereType<Map>()
-          .map((item) => itemKey(Map<String, dynamic>.from(item)))
-          .toSet();
+          .map((item) => Map<String, dynamic>.from(item))
+          .toList();
       return ((data['items'] as List<dynamic>?) ?? [])
           .whereType<Map>()
           .map((item) => Map<String, dynamic>.from(item))
@@ -154,7 +152,10 @@ class _BranchAccessPageState extends State<BranchAccessPage> {
                 : _parseInt(item['startingStock']);
             return stock > 0 &&
                 !_isExpired(item['expirationDate']?.toString() ?? '') &&
-                (sourceItems.isEmpty || sourceItems.contains(itemKey(item)));
+                (sourceItems.isEmpty ||
+                    sourceItems.any(
+                      (sourceItem) => inventoryVariantsMatch(sourceItem, item),
+                    ));
           });
     }).toList();
   }

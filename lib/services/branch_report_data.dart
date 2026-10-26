@@ -318,7 +318,10 @@ class BranchReportData {
         : lastDay;
     final closingRows = selected.where(
       (row) =>
-          DateUtils.isSameDay(cashRecordDate(row['timestamp']), closingDay),
+          DateUtils.isSameDay(
+            cashRecordDate(row['timestamp'] ?? row['createdAt']),
+            closingDay,
+          ),
     );
     final cash = closingRows
         .where(

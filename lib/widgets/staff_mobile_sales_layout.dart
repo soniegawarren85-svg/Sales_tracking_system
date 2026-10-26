@@ -29,7 +29,7 @@ class StaffMobileSalesLayout extends StatelessWidget {
             SliverAppBar(
               pinned: true,
               automaticallyImplyLeading: false,
-              backgroundColor: AppColors.primary,
+              backgroundColor: AppColors.primaryDark,
               foregroundColor: Colors.white,
               expandedHeight: 56,
               leading: reviewing
@@ -38,7 +38,8 @@ class StaffMobileSalesLayout extends StatelessWidget {
                       onPressed: onBack,
                       icon: const Icon(Icons.arrow_back_rounded),
                     )
-                  : const Icon(Icons.point_of_sale_rounded),
+                  : null,
+              leadingWidth: reviewing ? 56 : 0,
               title: KeyedSubtree(
                 key: titleTourKey,
                 child: Text(

@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import '../theme/app_colors.dart';
 
 class RaspberryCupcakeLoader extends StatefulWidget {
   const RaspberryCupcakeLoader({
@@ -14,6 +15,115 @@ class RaspberryCupcakeLoader extends StatefulWidget {
 
   @override
   State<RaspberryCupcakeLoader> createState() => _RaspberryCupcakeLoaderState();
+}
+
+class RaspberryTransactionLoader extends StatefulWidget {
+  const RaspberryTransactionLoader({
+    super.key,
+    this.message = 'Processing transaction...',
+  });
+
+  final String message;
+
+  @override
+  State<RaspberryTransactionLoader> createState() =>
+      _RaspberryTransactionLoaderState();
+}
+
+class _RaspberryTransactionLoaderState extends State<RaspberryTransactionLoader>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1200),
+  )..repeat();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: _controller,
+    builder: (context, _) => Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SizedBox(
+          width: 126,
+          height: 126,
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              Container(
+                width: 92,
+                height: 92,
+                decoration: const BoxDecoration(
+                  color: AppColors.surfaceTint,
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.receipt_long_rounded,
+                  color: AppColors.primaryDark,
+                  size: 48,
+                ),
+              ),
+              Transform.rotate(
+                angle: _controller.value * math.pi * 2,
+                child: SizedBox(
+                  width: 122,
+                  height: 122,
+                  child: CircularProgressIndicator(
+                    value: null,
+                    strokeWidth: 5,
+                    color: AppColors.primary,
+                    strokeCap: StrokeCap.round,
+                    backgroundColor: AppColors.blush,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 14),
+        Text(
+          widget.message,
+          textAlign: TextAlign.center,
+          style: const TextStyle(
+            color: AppColors.primaryDeep,
+            fontSize: 17,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+        const SizedBox(height: 8),
+        const Text(
+          'Please wait',
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            color: AppColors.textMuted,
+            fontSize: 13,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        const SizedBox(height: 14),
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: List.generate(3, (index) {
+            final phase = (_controller.value + index / 3) % 1;
+            return Container(
+              width: 7,
+              height: 7,
+              margin: const EdgeInsets.symmetric(horizontal: 3),
+              decoration: BoxDecoration(
+                color: Color.lerp(AppColors.blush, AppColors.primary, phase),
+                shape: BoxShape.circle,
+              ),
+            );
+          }),
+        ),
+      ],
+    ),
+  );
 }
 
 class _RaspberryCupcakeLoaderState extends State<RaspberryCupcakeLoader>
@@ -43,28 +153,30 @@ class _RaspberryCupcakeLoaderState extends State<RaspberryCupcakeLoader>
               painter: _CupcakePainter(_controller.value),
             ),
           ),
-          const SizedBox(height: 8),
-          const Text(
-            'Angelz Bites Cupcakes',
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              color: Color(0xFF94163A),
-              fontSize: 20,
-              fontWeight: FontWeight.w800,
-              letterSpacing: 0.2,
+          if (!widget.fullScreen) ...[
+            const SizedBox(height: 8),
+            const Text(
+              'Angelz Bites Cupcakes',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Color(0xFF94163A),
+                fontSize: 20,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 0.2,
+              ),
             ),
-          ),
-          const SizedBox(height: 7),
-          Text(
-            widget.message,
-            textAlign: TextAlign.center,
-            style: const TextStyle(
-              color: Color(0xFF786570),
-              fontSize: 13,
-              fontWeight: FontWeight.w600,
+            const SizedBox(height: 7),
+            Text(
+              widget.message,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                color: Color(0xFF786570),
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
             ),
-          ),
-          const SizedBox(height: 16),
+            const SizedBox(height: 16),
+          ],
           Row(
             mainAxisSize: MainAxisSize.min,
             children: List.generate(3, (index) {

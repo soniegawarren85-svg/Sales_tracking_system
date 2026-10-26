@@ -15,10 +15,16 @@ String catalogCategoryKey(Map data) =>
     '${data['name'] ?? ''}'.trim().toLowerCase();
 
 bool catalogItemActive(Map item, DateTime now) {
-  final raw = item['expirationDate'];
+  final raw = item['expirationDate'] ?? item['expiryDate'];
   final expiry = raw is Timestamp ? raw.toDate() : DateTime.tryParse('$raw');
+  final status = '${item['status'] ?? ''}'.trim().toLowerCase();
   return item['isDeleted'] != true &&
       item['isVoided'] != true &&
+      item['isDisabled'] != true &&
+      item['deletedAt'] == null &&
+      item['voidedAt'] == null &&
+      item['removedAt'] == null &&
+      !{'deleted', 'voided', 'removed', 'deactivated'}.contains(status) &&
       (expiry == null || !expiry.isBefore(DateUtils.dateOnly(now)));
 }
 
@@ -28,14 +34,14 @@ List<Map<String, dynamic>> currentCatalogCategories(
 }) {
   final categories = <String, Map<String, dynamic>>{};
   for (final product in products) {
-    if (product['isDeleted'] == true ||
-        product['isVoided'] == true ||
-        product['isBundle'] == true ||
+    if (product['isBundle'] == true ||
         !catalogItemActive(product, now ?? DateTime.now())) {
       continue;
     }
-    final items = (product['items'] as List? ?? []).whereType<Map>();
-    if (!items.any((item) => catalogItemActive(item, now ?? DateTime.now()))) {
+    final activeItems = (product['items'] as List? ?? [])
+        .whereType<Map>()
+        .where((item) => catalogItemActive(item, now ?? DateTime.now()));
+    if (activeItems.isEmpty) {
       continue;
     }
     categories.putIfAbsent(catalogCategoryKey(product), () => product);
@@ -151,8 +157,6 @@ List<AdminCatalogEntry> adminCatalogEntries(
   String identifier(List<dynamic> values) => values
       .map((value) => publicItemId(value?.toString().trim() ?? ''))
       .firstWhere((value) => value.isNotEmpty, orElse: () => 'Not recorded');
-  bool active(Map item) => catalogItemActive(item, day);
-
   List<String> images(Map data, List<Map> items) =>
       [data['imageUrl'], ...items.map((item) => item['imageUrl'])]
           .map((url) => url?.toString() ?? '')
@@ -161,11 +165,11 @@ List<AdminCatalogEntry> adminCatalogEntries(
           .toList();
   final result = <AdminCatalogEntry>[];
   for (final data in products.where(
-    (data) => data['isDeleted'] != true && data['isVoided'] != true,
+    (data) => catalogItemActive(data, day),
   )) {
     final items = (data['items'] as List? ?? [])
         .whereType<Map>()
-        .where(active)
+        .where((item) => catalogItemActive(item, day))
         .toList();
     final bundle =
         data['isBundle'] == true ||
@@ -198,7 +202,7 @@ List<AdminCatalogEntry> adminCatalogEntries(
           id: identifier([data['publicId'], data['categoryId'], data['id']]),
           name: data['name']?.toString() ?? 'Category',
           type: 'Categories',
-          source: {...data, 'items': items},
+          source: data,
           images: images(data, items),
           stock: stock,
           available: stock > 0,
@@ -229,7 +233,7 @@ List<AdminCatalogEntry> adminCatalogEntries(
       }
     }
   }
-  for (final data in coffees.where((data) => data['isDeleted'] != true)) {
+  for (final data in coffees.where((data) => catalogItemActive(data, day))) {
     final stockValue = data['stock'] ?? data['startingStock'];
     final stock = stockValue == null ? null : number(stockValue);
     result.add(
@@ -262,6 +266,7 @@ class AdminCatalog extends StatefulWidget {
     this.onBeverageTabChanged,
     this.onVoid,
     this.onView,
+    this.onViewBatches,
     this.firestore,
     this.onBranchChanged,
     this.scrollController,
@@ -280,6 +285,7 @@ class AdminCatalog extends StatefulWidget {
   final ValueChanged<bool>? onBeverageTabChanged;
   final ValueChanged<AdminCatalogEntry>? onVoid;
   final ValueChanged<AdminCatalogEntry>? onView;
+  final ValueChanged<AdminCatalogEntry>? onViewBatches;
   final bool gallery;
   final bool pinnedControls;
   final bool compactHeader;
@@ -799,13 +805,21 @@ class _AdminCatalogState extends State<AdminCatalog> {
       Widget actions(AdminCatalogEntry entry) => Wrap(
         spacing: 2,
         children: [
+          if (widget.onViewBatches != null &&
+              (entry.type == 'Categories' || entry.type == 'Bundle'))
+            IconButton(
+              tooltip: 'View stock batches',
+              visualDensity: VisualDensity.compact,
+              icon: const Icon(Icons.layers_outlined, size: 18),
+              onPressed: () => widget.onViewBatches!(entry),
+            ),
           IconButton.filledTonal(
             tooltip: 'Edit ${entry.name}',
             visualDensity: VisualDensity.compact,
             icon: const Icon(Icons.edit_outlined, size: 18),
             onPressed: () => widget.onOpen(entry),
           ),
-          if (widget.onVoid != null)
+          if (widget.onVoid != null && entry.details['_emptyCategory'] != true)
             IconButton(
               tooltip: 'Void ${entry.name}',
               visualDensity: VisualDensity.compact,

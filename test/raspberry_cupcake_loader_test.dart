@@ -28,4 +28,25 @@ void main() {
       expect(tester.takeException(), isNull);
     });
   }
+
+  testWidgets('transaction loader uses a raspberry receipt animation', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(
+          body: RaspberryTransactionLoader(
+            message: 'Processing transaction...',
+          ),
+        ),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 400));
+
+    expect(find.byIcon(Icons.receipt_long_rounded), findsOneWidget);
+    expect(find.text('Processing transaction...'), findsOneWidget);
+    expect(find.text('Please wait'), findsOneWidget);
+    expect(find.text('Angelz Bites Cupcakes'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
 }

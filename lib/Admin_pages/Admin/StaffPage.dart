@@ -696,11 +696,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
     required int deactivated,
   }) => LayoutBuilder(
     builder: (context, constraints) {
-      final columns = constraints.maxWidth >= 760
-          ? 4
-          : constraints.maxWidth >= 380
-          ? 2
-          : 1;
+      const columns = 4;
       final width = (constraints.maxWidth - (columns - 1) * 10) / columns;
       final cards = [
         (label: 'Total', count: total, icon: Icons.groups_rounded),

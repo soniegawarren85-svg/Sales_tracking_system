@@ -715,9 +715,6 @@ class _BudgetPageState extends State<BudgetPage>
       if (rootName.isNotEmpty) activeRootByName[rootName] = rootData;
     }
 
-    String itemKey(Map<String, dynamic> item) =>
-        '${item['name'] ?? ''}|${item['price'] ?? ''}'.toLowerCase();
-
     return docs.where((doc) {
       final data = doc.data();
       if (data['isDeleted'] == true) return false;
@@ -735,10 +732,10 @@ class _BudgetPageState extends State<BudgetPage>
         return _availableAssignedBundleCount(data) > 0;
       }
 
-      final rootKeys = ((rootData['items'] as List<dynamic>?) ?? [])
+      final rootItems = ((rootData['items'] as List<dynamic>?) ?? [])
           .whereType<Map>()
-          .map((item) => itemKey(Map<String, dynamic>.from(item)))
-          .toSet();
+          .map((item) => Map<String, dynamic>.from(item))
+          .toList();
       final activeItems = ((data['items'] as List<dynamic>?) ?? [])
           .whereType<Map>()
           .map((item) => Map<String, dynamic>.from(item))
@@ -750,7 +747,8 @@ class _BudgetPageState extends State<BudgetPage>
                 !_isExpiredInventoryItem(
                   item['expirationDate']?.toString() ?? '',
                 ) &&
-                (rootKeys.isEmpty || rootKeys.contains(itemKey(item)));
+                (rootItems.isEmpty ||
+                    rootItems.any((root) => inventoryVariantsMatch(root, item)));
           })
           .toList();
       return activeItems.isNotEmpty;
@@ -4781,16 +4779,16 @@ class _BudgetPageState extends State<BudgetPage>
                     ),
                   ),
                 ),
-                const SizedBox(height: 10),
-                _buildBranchSalesSummary(branchId),
-                const SizedBox(height: 16),
-                _buildAllocationFilters(),
-                const SizedBox(height: 12),
-                _buildBranchItemsTable(branchId, allowAllocationChanges: false),
-                const SizedBox(height: 20),
-                _buildBranchReportSummary(branchId),
-                const SizedBox(height: 16),
-                _buildPeriodBranchAnalytics(branchId, branchName),
+              const SizedBox(height: 10),
+              _buildBranchSalesSummary(branchId),
+              const SizedBox(height: 16),
+              _buildAllocationFilters(),
+              const SizedBox(height: 12),
+              _buildBranchItemsTable(branchId, allowAllocationChanges: false),
+              const SizedBox(height: 20),
+              _buildBranchReportSummary(branchId),
+              const SizedBox(height: 16),
+              _buildPeriodBranchAnalytics(branchId, branchName),
               const SizedBox(height: 82),
             ],
           ),
@@ -6960,7 +6958,7 @@ class _BudgetPageState extends State<BudgetPage>
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const Text(
-                      'Cash Allocation',
+                      'Cash float',
                       style: TextStyle(
                         color: kBannerTop,
                         fontSize: 17,
@@ -7023,7 +7021,7 @@ class _BudgetPageState extends State<BudgetPage>
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       const Text(
-                        'Current allocation',
+                        'Allocated Cash float',
                         style: TextStyle(
                           fontSize: 11,
                           fontWeight: FontWeight.w700,
@@ -7121,7 +7119,7 @@ class _BudgetPageState extends State<BudgetPage>
             enabled: enabled,
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
             decoration: InputDecoration(
-              labelText: 'Allocated Amount ',
+              labelText: 'Cash float amount',
               hintText: '0.00',
               prefixIcon: const Icon(Icons.payments_rounded, color: kDeep),
               filled: true,
@@ -7178,7 +7176,7 @@ class _BudgetPageState extends State<BudgetPage>
                     );
                   },
                   icon: const Icon(Icons.edit_rounded),
-                  label: const Text('Set Daily Cash'),
+                  label: const Text('Set Starting Cash'),
                   style: OutlinedButton.styleFrom(
                     foregroundColor: kBannerTop,
                     side: const BorderSide(color: kBannerTop),

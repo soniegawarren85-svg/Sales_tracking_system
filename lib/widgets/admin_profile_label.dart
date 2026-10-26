@@ -46,8 +46,14 @@ class AdminProfileLabel extends StatelessWidget {
           }
         } catch (_) {}
         if (greeting) {
+          final hour = DateTime.now().hour;
+          final salutation = hour < 12
+              ? 'Good morning'
+              : hour < 17
+              ? 'Good afternoon'
+              : 'Good evening';
           return Text(
-            'Welcome, ${firstName.isEmpty ? label.split(' ').first : firstName}!',
+            '$salutation, ${firstName.isEmpty ? label.split(' ').first : firstName}!',
             style: const TextStyle(
               color: Colors.white,
               fontSize: 22,

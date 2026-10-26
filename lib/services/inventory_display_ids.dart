@@ -17,6 +17,26 @@ String inventoryDisplayId(Map<String, dynamic> data) {
   return '--';
 }
 
+bool inventoryVariantsMatch(Map first, Map second) {
+  final firstIds = [
+    for (final key in ['publicId', 'id', 'itemId', 'variantId'])
+      '${first[key] ?? ''}'.trim().toLowerCase(),
+  ].where((id) => id.isNotEmpty).toSet();
+  final secondIds = [
+    for (final key in ['publicId', 'id', 'itemId', 'variantId'])
+      '${second[key] ?? ''}'.trim().toLowerCase(),
+  ].where((id) => id.isNotEmpty).toSet();
+  if (firstIds.intersection(secondIds).isNotEmpty) return true;
+
+  final firstName = '${first['name'] ?? first['variant'] ?? ''}'
+      .trim()
+      .toLowerCase();
+  final secondName = '${second['name'] ?? second['variant'] ?? ''}'
+      .trim()
+      .toLowerCase();
+  return firstName.isNotEmpty && firstName == secondName;
+}
+
 /// Copy display codes only: stock quantities and internal references belong to
 /// the allocation and must never be replaced with the central inventory's.
 Map<String, dynamic> alignInventoryDisplayIds(

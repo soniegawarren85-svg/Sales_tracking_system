@@ -33,6 +33,9 @@ class SalesReportMetrics extends StatelessWidget {
       'Total VAT': Icons.percent,
       'Total net sales': Icons.account_balance_wallet_outlined,
       'Total net profit': Icons.bar_chart,
+      'Total sold items': Icons.inventory_2_outlined,
+      'Total profit': Icons.trending_up_rounded,
+      'Total loss': Icons.warning_amber_rounded,
     };
     return Column(
       children: [
@@ -40,7 +43,7 @@ class SalesReportMetrics extends StatelessWidget {
           builder: (context, box) {
             final columns = box.maxWidth >= 900
                 ? 4
-                : box.maxWidth >= 400
+                : box.maxWidth >= 600
                 ? 2
                 : 1;
             return Wrap(
@@ -177,10 +180,16 @@ class SalesReportDashboard extends StatelessWidget {
           : raw;
       payments[payment] = (payments[payment] ?? 0) + amount;
       for (final item in (sale['items'] as List? ?? []).whereType<Map>()) {
-        final name = '${item['name'] ?? 'Item'}';
+        final variant = '${item['variant'] ?? item['coffeeSize'] ?? ''}'.trim();
+        final name = variant.isNotEmpty ? variant : '${item['name'] ?? 'Item'}';
+        final type = item['isBundle'] == true
+            ? 'Bundle'
+            : item['isCoffee'] == true
+            ? 'Beverages'
+            : 'Categories';
         final row = ranked.putIfAbsent(
           name,
-          () => {'name': name, 'sold': 0.0, 'sales': 0.0},
+          () => {'name': name, 'type': type, 'sold': 0.0, 'sales': 0.0},
         );
         final qty = reportValue(item['quantity']);
         row['sold'] = reportValue(row['sold']) + qty;
@@ -216,7 +225,7 @@ class SalesReportDashboard extends StatelessWidget {
           ? DateTime(start.year, i + 2)
           : from.add(const Duration(days: 1));
       final rows = sales.where((s) {
-        final at = cashRecordDate(s['timestamp']);
+        final at = cashRecordDate(s['timestamp'] ?? s['createdAt']);
         return at != null && !at.isBefore(from) && at.isBefore(until);
       }).toList();
       final revenue = rows.fold<double>(
@@ -294,8 +303,12 @@ class SalesReportDashboard extends StatelessWidget {
             padding: const EdgeInsets.symmetric(vertical: 7),
             child: Row(
               children: [
-                const Icon(
-                  Icons.local_cafe_outlined,
+                Icon(
+                  row['type'] == 'Beverages'
+                      ? Icons.local_cafe_outlined
+                      : row['type'] == 'Bundle'
+                      ? Icons.inventory_2_outlined
+                      : Icons.bakery_dining_outlined,
                   size: 20,
                   color: AppColors.primaryDark,
                 ),

@@ -4444,7 +4444,8 @@ class _AllCategPageState extends State<AllCategPage>
 
         final beverageTable = _tableBlock(
           title: 'Beverages',
-          subtitle: 'Available Beverages Items: ${items.length}',
+          subtitle:
+              'Assigned by Super Admin · ${_allocationDateLabel(category['assignedAt'] ?? category['allocatedAt'])}',
           onHistory: showBeverageHistory,
           compact: true,
           columns: [
@@ -4512,10 +4513,16 @@ class _AllCategPageState extends State<AllCategPage>
                       color: const Color(0xFF2E7D32),
                     ),
                     DataCell(
-                      _tableReduceButton(
-                        enabled: true,
-                        label: 'Void',
-                        onPressed: () => _showCoffeeVoidDialog(category),
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          _batchButton(category),
+                          _tableReduceButton(
+                            enabled: true,
+                            label: 'Void',
+                            onPressed: () => _showCoffeeVoidDialog(category),
+                          ),
+                        ],
                       ),
                     ),
                   ],
@@ -4525,7 +4532,7 @@ class _AllCategPageState extends State<AllCategPage>
         );
         final addonsTable = _tableBlock(
           title: 'Beverages Add-ons',
-          subtitle: 'Available add-ons: ${addonDocs.length}',
+          subtitle: '${addonDocs.length} assigned by Super Admin',
           onHistory: showAddonHistory,
           compact: true,
           columns: [
@@ -4547,7 +4554,10 @@ class _AllCategPageState extends State<AllCategPage>
                   ),
                   _tableCell(
                     _allocationDateLabel(
-                      addon['allocatedAt'] ?? category['assignedAt'],
+                      addon['allocatedAt'] ??
+                          addon['assignedAt'] ??
+                          category['assignedAt'] ??
+                          category['allocatedAt'],
                     ),
                     width: 120,
                   ),
@@ -6275,10 +6285,6 @@ class _AllCategPageState extends State<AllCategPage>
                     }
                   }
 
-                  String itemKey(Map<String, dynamic> item) =>
-                      '${item['id'] ?? item['variantId'] ?? item['name'] ?? ''}'
-                          .toLowerCase();
-
                   final visibleDocs = <Map<String, dynamic>>[];
                   for (final doc in docs) {
                     final data = _inventoryDataWithPendingSales(doc);
@@ -6366,7 +6372,6 @@ class _AllCategPageState extends State<AllCategPage>
                             .whereType<Map>()
                             .map((item) => Map<String, dynamic>.from(item))
                             .toList();
-                    final rootKeys = rootItems.map(itemKey).toSet();
                     final alignedData = alignInventoryDisplayIds(
                       data,
                       rootData,
@@ -6379,8 +6384,13 @@ class _AllCategPageState extends State<AllCategPage>
                               final expirationDate =
                                   item['expirationDate']?.toString() ?? '';
                               return !_isExpiredItem(expirationDate) &&
-                                  (rootKeys.isEmpty ||
-                                      rootKeys.contains(itemKey(item)));
+                                  (rootItems.isEmpty ||
+                                      rootItems.any(
+                                        (root) => inventoryVariantsMatch(
+                                          root,
+                                          item,
+                                        ),
+                                      ));
                             })
                             .toList();
                     if (activeItems.isEmpty) continue;
@@ -6461,10 +6471,14 @@ class _AllCategPageState extends State<AllCategPage>
                   );
                   final addonByName = <String, Map<String, dynamic>>{};
                   for (final data in visibleDocs) {
-                    if (data['isAddon'] == true) {
-                      final name = data['name']?.toString().trim() ?? '';
-                      if (name.isEmpty) continue;
+                    if (data['isAddon'] != true) continue;
+                    final name = data['name']?.toString().trim() ?? '';
+                    if (name.isNotEmpty) {
                       addonByName.putIfAbsent(name, () => data);
+                    }
+                  }
+                  for (final data in visibleDocs) {
+                    if (data['isAddon'] == true) {
                       continue;
                     }
                     for (final addon

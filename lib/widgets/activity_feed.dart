@@ -243,51 +243,10 @@ class _ActivityFeedState extends State<ActivityFeed> {
           children: [
             ...pageRows.map((r) {
               final action = '${r['action'] ?? 'activity'}';
-              final rawDetails = r['details'];
-              final details = rawDetails is Map
-                  ? Map<String, dynamic>.from(rawDetails)
-                  : <String, dynamic>{};
-              final fields = details.remove('fields');
               final date = _dateOf(r['createdAt']);
               final actorName = '${r['actorName'] ?? 'Unknown user'}';
               final actorId = '${r['actorPublicId'] ?? ''}'.trim();
               final actorRole = '${r['actorRole'] ?? ''}'.trim();
-              final detailLines = <Widget>[
-                for (final entry in details.entries)
-                  if (entry.value != null && entry.value != '')
-                    Padding(
-                      padding: const EdgeInsets.only(top: 7),
-                      child: RichText(
-                        text: TextSpan(
-                          style: TextStyle(
-                            color: Colors.blueGrey.shade700,
-                            fontSize: compact ? 12 : 13,
-                            height: 1.45,
-                          ),
-                          children: [
-                            TextSpan(
-                              text: '${_label(entry.key)}: ',
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                            TextSpan(text: _formatValue(entry.value)),
-                          ],
-                        ),
-                      ),
-                    ),
-                if (fields is List && fields.isNotEmpty)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 5),
-                    child: Text(
-                      'Updated fields: ${fields.map((field) => _label('$field')).join(', ')}',
-                      style: TextStyle(
-                        color: Colors.blueGrey.shade700,
-                        fontSize: compact ? 12 : 13,
-                      ),
-                    ),
-                  ),
-              ];
               final content = Padding(
                 padding: EdgeInsets.all(compact ? 14 : 18),
                 child: Row(
@@ -345,30 +304,7 @@ class _ActivityFeedState extends State<ActivityFeed> {
                               ),
                             ],
                           ),
-                          if (detailLines.isNotEmpty) ...[
-                            const SizedBox(height: 10),
-                            Container(
-                              width: double.infinity,
-                              padding: const EdgeInsets.fromLTRB(11, 8, 11, 10),
-                              decoration: BoxDecoration(
-                                color: const Color(0xfffff6f8),
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: detailLines,
-                              ),
-                            ),
-                          ] else ...[
-                            const SizedBox(height: 6),
-                            Text(
-                              'Activity recorded: ${_label(action)}',
-                              style: TextStyle(
-                                color: Colors.blueGrey.shade600,
-                                fontSize: compact ? 12 : 13,
-                              ),
-                            ),
-                          ],
+                          const SizedBox(height: 6),
                           const SizedBox(height: 10),
                           Wrap(
                             spacing: 6,

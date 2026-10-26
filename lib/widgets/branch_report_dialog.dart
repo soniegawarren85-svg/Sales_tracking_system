@@ -582,7 +582,7 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
                       title,
                       style: const TextStyle(
                         color: Colors.white,
-                        fontSize: 20,
+                        fontSize: 16,
                         fontWeight: FontWeight.w800,
                       ),
                     ),
@@ -694,37 +694,48 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
                   if (!_allowRefunds && _comparison == 'Refund') {
                     _comparison = 'Complete';
                   }
-                  return ListView(
-                    padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+                  return Column(
                     children: [
-                      if (widget.branchId == null)
-                        overall(data)
-                      else
-                        ...branch(data),
-                      Wrap(
-                        alignment: WrapAlignment.end,
-                        spacing: 12,
-                        runSpacing: 8,
-                        children: [
-                          OutlinedButton.icon(
-                            onPressed: _printing
-                                ? null
-                                : () => printReport(data),
-                            icon: const Icon(Icons.print),
-                            label: Text(
-                              _printing ? 'Preparing…' : 'Print report',
+                      Expanded(
+                        child: ListView(
+                          padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+                          children: [
+                            if (widget.branchId == null)
+                              overall(data)
+                            else
+                              ...branch(data),
+                          ],
+                        ),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 4, 16, 14),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: OutlinedButton.icon(
+                                onPressed: _printing
+                                    ? null
+                                    : () => printReport(data),
+                                icon: const Icon(Icons.print),
+                                label: Text(_printing ? 'Preparing…' : 'Print'),
+                              ),
                             ),
-                          ),
-                          FilledButton.icon(
-                            onPressed: _printing ? null : () => export(data),
-                            style: FilledButton.styleFrom(
-                              backgroundColor: Colors.green.shade700,
-                              foregroundColor: Colors.white,
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: FilledButton.icon(
+                                onPressed: _printing
+                                    ? null
+                                    : () => export(data),
+                                style: FilledButton.styleFrom(
+                                  backgroundColor: Colors.green.shade700,
+                                  foregroundColor: Colors.white,
+                                ),
+                                icon: const Icon(Icons.table_view),
+                                label: const Text('Save Excel'),
+                              ),
                             ),
-                            icon: const Icon(Icons.table_view),
-                            label: const Text('Save Excel File'),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
                     ],
                   );
@@ -743,8 +754,18 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
       for (final row in data.rows('branches'))
         '${row['_id']}': '${row['name']}',
     };
+    final matchingBranchIds = amounts.keys
+        .where(
+          (id) =>
+              _search.isEmpty ||
+              (names[id] ?? id).toLowerCase().contains(_search),
+        )
+        .toSet();
+    final visibleAmounts = Map.fromEntries(
+      amounts.entries.where((entry) => matchingBranchIds.contains(entry.key)),
+    );
     final ranked =
-        amounts.keys
+        visibleAmounts.keys
             .where(
               (id) =>
                   _search.isEmpty ||
@@ -752,9 +773,11 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
             )
             .toList()
           ..sort((a, b) => amounts[b]!.compareTo(amounts[a]!));
-    final total = amounts.values.fold<double>(0, (a, b) => a + b);
+    final total = visibleAmounts.values.fold<double>(0, (a, b) => a + b);
     final saleItems = [
-      for (final entry in names.entries)
+      for (final entry in names.entries.where(
+        (entry) => matchingBranchIds.contains(entry.key),
+      ))
         ...data
             .items(entry.key, range.$1, range.$2)
             .where((item) => reportValue(item['sold']) > 0)
@@ -786,7 +809,7 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
                     children: [
                       Positioned.fill(
                         child: CustomPaint(
-                          painter: ReportPie(amounts.values.toList()),
+                          painter: ReportPie(visibleAmounts.values.toList()),
                         ),
                       ),
                       Container(
@@ -828,17 +851,25 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
               ),
             ),
           ),
-          Wrap(
-            spacing: 10,
-            children: ['Complete', if (_allowRefunds) 'Refund', 'Reduce']
-                .map(
-                  (value) => ChoiceChip(
-                    label: Text(value),
-                    selected: _comparison == value,
-                    onSelected: (_) => setState(() => _comparison = value),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                for (final value in [
+                  'Complete',
+                  if (_allowRefunds) 'Refund',
+                  'Reduce',
+                ])
+                  Padding(
+                    padding: const EdgeInsets.only(right: 10),
+                    child: ChoiceChip(
+                      label: Text(value),
+                      selected: _comparison == value,
+                      onSelected: (_) => setState(() => _comparison = value),
+                    ),
                   ),
-                )
-                .toList(),
+              ],
+            ),
           ),
           if (total == 0) const Text('No activity recorded for this period.'),
           ...ranked.map((id) {
@@ -1342,30 +1373,30 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
         Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Wrap(
-              spacing: 12,
-              runSpacing: 8,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              children: [
-                ChoiceChip(
-                  label: const Text('All'),
-                  selected: all,
-                  onSelected: (_) => setState(() => _status = 'All'),
-                ),
-                for (final entry in [
-                  if (_allowRefunds) ('Refund', const Color(0xFFF9A825)),
-                  ('Reduce', const Color(0xFF1976D2)),
-                  ('Complete', const Color(0xFFE53935)),
-                ])
-                  ActionChip(
-                    avatar: Icon(Icons.circle, color: entry.$2, size: 14),
-                    label: Text(entry.$1),
-                    onPressed: () => setState(() {
-                      _status = entry.$1;
-                      _rank = 'All';
-                    }),
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [
+                  ChoiceChip(
+                    label: const Text('All'),
+                    selected: all,
+                    onSelected: (_) => setState(() => _status = 'All'),
                   ),
-              ],
+                  for (final entry in [
+                    if (_allowRefunds) ('Refund', const Color(0xFFF9A825)),
+                    ('Reduce', const Color(0xFF1976D2)),
+                    ('Complete', const Color(0xFFE53935)),
+                  ])
+                    ActionChip(
+                      avatar: Icon(Icons.circle, color: entry.$2, size: 14),
+                      label: Text(entry.$1),
+                      onPressed: () => setState(() {
+                        _status = entry.$1;
+                        _rank = 'All';
+                      }),
+                    ),
+                ],
+              ),
             ),
             const SizedBox(height: 16),
             Text(
@@ -1393,28 +1424,17 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
             const SizedBox(height: 16),
             SizedBox(
               height: 280,
-              child: LayoutBuilder(
-                builder: (context, constraints) => SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: SizedBox(
-                    width: math.max(
-                      constraints.maxWidth,
-                      chart.$1.length * 38.0,
-                    ),
-                    child: BranchAnalyticsBars(
-                      values: values,
-                      labels: chart.$4,
-                      colors: [chartColor, chartColor],
-                      refunds: all && _allowRefunds ? chart.$2 : null,
-                      reduced: all ? chart.$3 : null,
-                      selectedStatus: _status == 'Complete'
-                          ? 'Completed'
-                          : _status == 'Reduce'
-                          ? 'Reduced'
-                          : _status,
-                    ),
-                  ),
-                ),
+              child: BranchAnalyticsBars(
+                values: values,
+                labels: chart.$4,
+                colors: [chartColor, chartColor],
+                refunds: all && _allowRefunds ? chart.$2 : null,
+                reduced: all ? chart.$3 : null,
+                selectedStatus: _status == 'Complete'
+                    ? 'Completed'
+                    : _status == 'Reduce'
+                    ? 'Reduced'
+                    : _status,
               ),
             ),
             const SizedBox(height: 16),

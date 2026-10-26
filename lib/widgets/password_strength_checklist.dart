@@ -137,7 +137,7 @@ class PasswordEntryField extends StatelessWidget {
         obscureText: obscureText,
         enabled: enabled,
         autofillHints: null,
-        enableInteractiveSelection: false,
+        enableInteractiveSelection: true,
         contextMenuBuilder: (_, _) => const SizedBox.shrink(),
         inputFormatters: const [PasswordTypingFormatter()],
         autocorrect: false,

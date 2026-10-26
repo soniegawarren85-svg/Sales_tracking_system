@@ -10,6 +10,7 @@ import '../widgets/email_pending_badge.dart';
 import '../services/password_policy.dart';
 import '../widgets/password_strength_checklist.dart';
 import '../widgets/top_edge_refresh.dart';
+import '../widgets/logout_progress.dart';
 import 'dart:async';
 import '../widgets/branch_staff_activity_dialog.dart';
 import '../services/public_item_id.dart';
@@ -214,26 +215,32 @@ class _ProfilePageState extends State<ProfilePage>
     final shouldLogout = await _showLogoutConfirmation(context);
     if (shouldLogout != true || !mounted) return;
     try {
-      await StaffLoginSession.close();
-    } catch (_) {
+      await runWithLogoutProgress(context, () async {
+        try {
+          await StaffLoginSession.close();
+        } catch (_) {
+          throw StateError(
+            'Unable to save logout time. Please reconnect and try again.',
+          );
+        }
+        final prefs = await SharedPreferences.getInstance();
+        await clearPersistedAccountSession(prefs);
+        await FirebaseAuth.instance.signOut();
+      });
+    } catch (error) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              'Unable to save logout time. Please reconnect and try again.',
-            ),
-          ),
+          SnackBar(content: Text('$error'.replaceFirst('Bad state: ', ''))),
         );
       }
       return;
     }
-    final prefs = await SharedPreferences.getInstance();
-    await clearPersistedAccountSession(prefs);
-    await FirebaseAuth.instance.signOut();
-    navigator.pushAndRemoveUntil(
-      MaterialPageRoute(builder: (_) => const LoginScreen()),
-      (route) => false,
-    );
+    if (mounted) {
+      navigator.pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const LoginScreen()),
+        (route) => false,
+      );
+    }
   }
 
   Future<bool?> _showLogoutConfirmation(BuildContext currentContext) {

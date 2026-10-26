@@ -399,14 +399,30 @@ class _TransactionSettingsDialogState extends State<TransactionSettingsDialog> {
       fontSize: 24,
       fontWeight: FontWeight.bold,
     ),
-    title: Text(
-      widget.kind == 'discounts'
-          ? 'Discount Control'
-          : widget.kind == 'tax'
-          ? 'Tax Configuration'
-          : widget.kind == 'permissions'
-          ? 'Security and Approval'
-          : 'Payment Settings',
+    title: Row(
+      children: [
+        Expanded(
+          child: Text(
+            widget.kind == 'discounts'
+                ? 'Discount Control'
+                : widget.kind == 'tax'
+                ? 'Tax Configuration'
+                : widget.kind == 'permissions'
+                ? 'Security and Approval'
+                : 'Payment Settings',
+          ),
+        ),
+        if (busy) ...[
+          const SizedBox(width: 8),
+          const SizedBox(
+            width: 18,
+            height: 18,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+          const SizedBox(width: 6),
+          const Text('Saving…', style: TextStyle(fontSize: 12)),
+        ],
+      ],
     ),
     content: SizedBox(
       width: 620,
@@ -491,6 +507,14 @@ class _TransactionSettingsDialogState extends State<TransactionSettingsDialog> {
                           includeAll: true,
                         ),
                       const SizedBox(height: 8),
+                      if (busy) ...[
+                        const LinearProgressIndicator(),
+                        const SizedBox(height: 8),
+                        const Text(
+                          'Saving settings…',
+                          style: TextStyle(color: AppColors.textMuted),
+                        ),
+                      ],
                       SwitchListTile(
                         title: const Text('Enable tax'),
                         value: taxEnabled,
@@ -567,9 +591,6 @@ class _TransactionSettingsDialogState extends State<TransactionSettingsDialog> {
                             ),
                             decoration: InputDecoration(
                               labelText: 'BIR TIN (optional)',
-                              hintText: isAllBranches
-                                  ? 'Apply the same TIN to all branches'
-                                  : 'Enter branch TIN for receipts',
                               suffixIcon: IconButton(
                                 tooltip: 'Save TIN',
                                 onPressed: busy
@@ -590,13 +611,6 @@ class _TransactionSettingsDialogState extends State<TransactionSettingsDialog> {
                           ),
                         ),
                       ],
-                      const Padding(
-                        padding: EdgeInsets.symmetric(horizontal: 16),
-                        child: Text(
-                          'Displayed item prices already include VAT. The cashier shows the VAT breakdown without adding tax to the total.',
-                          style: TextStyle(color: AppColors.textMuted),
-                        ),
-                      ),
                     ],
                   ),
                 );

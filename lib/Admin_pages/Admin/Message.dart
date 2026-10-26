@@ -8,6 +8,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../services/account_presence.dart';
+import '../../services/message_account_status.dart';
 import '../../services/super_admin.dart';
 
 const _chatPink = AppColors.primary;
@@ -25,6 +26,7 @@ class MessagePage extends StatefulWidget {
 
 class _MessagePageState extends State<MessagePage> {
   Map<String, String>? _me;
+  Set<String> _myIds = {};
   Set<String> _pinnedIds = {};
   String _search = '';
   String? _selectedId;
@@ -40,11 +42,18 @@ class _MessagePageState extends State<MessagePage> {
   Future<void> _loadMe() async {
     final prefs = await SharedPreferences.getInstance();
     final lastRole = prefs.getString('lastRole') ?? '';
+    final ownIds = <String>{
+      if (lastRole == 'admin') prefs.getString('adminId') ?? '',
+      if (lastRole == 'staff') prefs.getString('lastUserId') ?? '',
+      if (lastRole == 'staff') prefs.getString('lastStaffDocId') ?? '',
+      FirebaseAuth.instance.currentUser?.uid ?? '',
+    }..removeWhere((id) => id.trim().isEmpty);
     if (lastRole == 'admin') {
       final adminId = prefs.getString('adminId') ?? 'ADM-0001';
       if (!mounted) return;
       setState(() {
         _me = {'id': adminId, 'name': 'Admin User', 'role': 'admin'};
+        _myIds = {...ownIds, adminId};
       });
       _loadPinnedIds(adminId);
       return;
@@ -62,6 +71,8 @@ class _MessagePageState extends State<MessagePage> {
         if (!mounted) return;
         setState(() {
           _me = {'id': staffId, 'name': _displayName(data), 'role': 'staff'};
+          _myIds = {...ownIds, staffId, data['uid']?.toString() ?? ''}
+            ..removeWhere((id) => id.trim().isEmpty);
         });
         _loadPinnedIds(staffId);
         return;
@@ -82,6 +93,13 @@ class _MessagePageState extends State<MessagePage> {
           'name': _displayName(data),
           'role': (data['role'] ?? 'staff').toString(),
         };
+        _myIds = {
+          ...ownIds,
+          user.uid,
+          doc.id,
+          data['staffId']?.toString() ?? '',
+          data['adminId']?.toString() ?? '',
+        }..removeWhere((id) => id.trim().isEmpty);
       });
       _loadPinnedIds(user.uid);
       return;
@@ -91,6 +109,7 @@ class _MessagePageState extends State<MessagePage> {
     if (!mounted) return;
     setState(() {
       _me = {'id': adminId, 'name': 'Admin User', 'role': 'admin'};
+      _myIds = {...ownIds, adminId};
     });
     _loadPinnedIds(adminId);
   }
@@ -122,7 +141,10 @@ class _MessagePageState extends State<MessagePage> {
   }
 
   Future<void> _deleteConversation(String chatId) async {
-    await FirebaseFirestore.instance.collection('messages').doc(chatId).delete();
+    await FirebaseFirestore.instance
+        .collection('messages')
+        .doc(chatId)
+        .delete();
     if (mounted) {
       setState(() {
         _selectedId = null;
@@ -220,184 +242,228 @@ class _MessagePageState extends State<MessagePage> {
                     .snapshots(),
                 builder: (context, superAdminSnapshot) {
                   final superAdminData =
-                      superAdminSnapshot.data?.data() ??
-                      <String, dynamic>{};
-                  return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                stream: FirebaseFirestore.instance
-                    .collection('staff_requests')
-                    .snapshots(),
-                builder: (context, snapshot) {
-                  final accountDocs = (snapshot.data?.docs ?? []).where((doc) {
-                    final data = doc.data();
-                    final status = data['status']?.toString().toLowerCase();
-                    return doc.id != me['id'] && status != 'rejected';
-                  }).toList();
-                  if (snapshot.connectionState == ConnectionState.waiting) {
-                    return const Center(child: _LoadingSpinner());
-                  }
+                      superAdminSnapshot.data?.data() ?? <String, dynamic>{};
                   return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
                     stream: FirebaseFirestore.instance
-                        .collection('messages')
-                        .where('participantIds', arrayContains: me['id'])
+                        .collection('staff_requests')
                         .snapshots(),
-                    builder: (context, chatSnapshot) {
-                      final rows = <String, _InboxRow>{};
-
-                      if (me['role'] != SuperAdmin.role) {
-                        rows[SuperAdmin.id] = _InboxRow(
-                          id: SuperAdmin.id,
-                          name: _displayName({
-                            ...superAdminData,
-                            'name': superAdminData['name'] ?? SuperAdmin.name,
-                          }),
-                          role: SuperAdmin.role,
-                          online: _isOnline(superAdminData),
-                          lastSeenAt: AccountPresenceService.lastSeen(
-                            superAdminData,
-                          ),
-                        );
-                      }
-
-                      for (final doc in accountDocs) {
+                    builder: (context, snapshot) {
+                      final accountDocs = (snapshot.data?.docs ?? []).where((
+                        doc,
+                      ) {
                         final data = doc.data();
-                        rows[doc.id] = _InboxRow(
-                          id: doc.id,
-                          name: _displayName(data),
-                          role: data['role']?.toString() ?? 'staff',
-                          online: _isOnline(data),
-                          photoUrl:
-                              data['photoUrl']?.toString() ??
-                              data['profileImageUrl']?.toString(),
-                          lastSeenAt: AccountPresenceService.lastSeen(data),
-                        );
+                        final ids = <String>{
+                          doc.id,
+                          for (final key in [
+                            'uid',
+                            'userId',
+                            'staffId',
+                            'adminId',
+                          ])
+                            if ('${data[key] ?? ''}'.trim().isNotEmpty)
+                              '${data[key]}',
+                        };
+                        return ids.intersection(_myIds).isEmpty &&
+                            isMessageAccountAvailable(data);
+                      }).toList();
+                      if (snapshot.connectionState == ConnectionState.waiting) {
+                        return const Center(child: _LoadingSpinner());
                       }
+                      return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                        stream: FirebaseFirestore.instance
+                            .collection('messages')
+                            .where('participantIds', arrayContains: me['id'])
+                            .snapshots(),
+                        builder: (context, chatSnapshot) {
+                          final rows = <String, _InboxRow>{};
+                          final contactIds = <String>{
+                            SuperAdmin.id,
+                            for (final doc in accountDocs) ...[
+                              doc.id,
+                              for (final key in [
+                                'uid',
+                                'userId',
+                                'staffId',
+                                'adminId',
+                              ])
+                                if ('${doc.data()[key] ?? ''}'
+                                    .trim()
+                                    .isNotEmpty)
+                                  '${doc.data()[key]}',
+                            ],
+                          }..removeAll(_myIds);
 
-                      for (final chatDoc in chatSnapshot.data?.docs ?? []) {
-                        final chat = chatDoc.data();
-                        final ids = (chat['participantIds'] as List? ?? [])
-                            .map((id) => id.toString())
-                            .toList();
-                        final otherId = ids.firstWhere(
-                          (id) => id != me['id'],
-                          orElse: () => '',
-                        );
-                        if (otherId.isEmpty) continue;
-                        final names = chat['participantNames'];
-                        final photos = chat['participantPhotos'];
-                        final name = names is Map
-                            ? names[otherId]?.toString() ??
-                                  rows[otherId]?.name ??
-                                  'User'
-                            : rows[otherId]?.name ?? 'User';
-                        rows[otherId] =
-                            rows[otherId]?.copyWith(
-                              unread: _unreadCount(chat),
-                              lastMessage: chat['lastMessage']?.toString() ?? '',
-                              photoUrl:
-                                  rows[otherId]?.photoUrl ??
-                                  (photos is Map
-                                      ? photos[otherId]?.toString()
-                                      : null),
-                              pinned: _pinnedIds.contains(otherId),
-                            ) ??
-                            _InboxRow(
-                              id: otherId,
-                              name: name,
-                              role: otherId.startsWith('ADM-')
-                                  ? 'admin'
-                                  : otherId == SuperAdmin.id
-                                  ? SuperAdmin.role
-                                  : 'staff',
-                              online: otherId == SuperAdmin.id
-                                  ? _isOnline(superAdminData)
-                                  : false,
-                              lastSeenAt: otherId == SuperAdmin.id
-                                  ? AccountPresenceService.lastSeen(
-                                      superAdminData,
-                                    )
-                                  : null,
-                              unread: _unreadCount(chat),
-                              lastMessage: chat['lastMessage']?.toString() ?? '',
-                              pinned: _pinnedIds.contains(otherId),
+                          if (me['role'] != SuperAdmin.role &&
+                              !_myIds.contains(SuperAdmin.id)) {
+                            rows[SuperAdmin.id] = _InboxRow(
+                              id: SuperAdmin.id,
+                              name: _displayName({
+                                ...superAdminData,
+                                'name':
+                                    superAdminData['name'] ?? SuperAdmin.name,
+                              }),
+                              role: SuperAdmin.role,
+                              online: _isOnline(superAdminData),
+                              lastSeenAt: AccountPresenceService.lastSeen(
+                                superAdminData,
+                              ),
                             );
-                      }
-
-                      for (final id in rows.keys.toList()) {
-                        rows[id] = rows[id]!.copyWith(
-                          pinned: _pinnedIds.contains(id),
-                        );
-                      }
-                      final items = rows.values.where((row) {
-                        final query = _search.trim().toLowerCase();
-                        return query.isEmpty ||
-                            row.name.toLowerCase().contains(query) ||
-                            row.role.toLowerCase().contains(query) ||
-                            row.lastMessage.toLowerCase().contains(query);
-                      }).toList()
-                        ..sort((a, b) {
-                          if (a.pinned != b.pinned) return a.pinned ? -1 : 1;
-                          final unreadCompare = b.unread.compareTo(a.unread);
-                          if (unreadCompare != 0) return unreadCompare;
-                          return a.name.compareTo(b.name);
-                        });
-                      if (items.isEmpty) {
-                        return const _EmptyInboxState();
-                      }
-                      final selected = _selectedId == null
-                          ? null
-                          : rows[_selectedId];
-                      return LayoutBuilder(
-                        builder: (context, constraints) {
-                          final compact = constraints.maxWidth < 760;
-                          final contacts = _ContactsPanel(
-                            items: items,
-                            selectedId: _selectedId,
-                            search: _search,
-                            onSearchChanged: _handleSearchChanged,
-                            onSelect: (row) => setState(() => _selectedId = row.id),
-                            onPin: _togglePinned,
-                          );
-                          if (compact) {
-                            return selected == null
-                                ? contacts
-                                : _ConversationPanel(
-                                    key: ValueKey(selected.id),
-                                    chatId: _chatId(selected.id),
-                                    me: me,
-                                    other: selected,
-                                    onBack: () => setState(() => _selectedId = null),
-                                    onDeleteConversation: () => _deleteConversation(
-                                      _chatId(selected.id),
-                                    ),
-                                  );
                           }
-                          return Padding(
-                            padding: const EdgeInsets.all(16),
-                            child: Row(
-                              children: [
-                                SizedBox(width: 340, child: contacts),
-                                const SizedBox(width: 16),
-                                Expanded(
-                                  child: selected == null
-                                      ? const _SelectConversationState()
-                                      : _ConversationPanel(
-                                          key: ValueKey(selected.id),
-                                          chatId: _chatId(selected.id),
-                                          me: me,
-                                          other: selected,
-                                          onDeleteConversation: () => _deleteConversation(
-                                            _chatId(selected.id),
-                                          ),
-                                        ),
+
+                          for (final doc in accountDocs) {
+                            final data = doc.data();
+                            rows[doc.id] = _InboxRow(
+                              id: doc.id,
+                              name: _displayName(data),
+                              role: data['role']?.toString() ?? 'staff',
+                              online: _isOnline(data),
+                              photoUrl:
+                                  data['photoUrl']?.toString() ??
+                                  data['profileImageUrl']?.toString(),
+                              lastSeenAt: AccountPresenceService.lastSeen(data),
+                            );
+                          }
+
+                          for (final chatDoc in chatSnapshot.data?.docs ?? []) {
+                            final chat = chatDoc.data();
+                            final ids = (chat['participantIds'] as List? ?? [])
+                                .map((id) => id.toString())
+                                .toList();
+                            final otherId = ids.firstWhere(
+                              (id) => !_myIds.contains(id),
+                              orElse: () => '',
+                            );
+                            if (otherId.isEmpty ||
+                                !contactIds.contains(otherId)) {
+                              continue;
+                            }
+                            final names = chat['participantNames'];
+                            final photos = chat['participantPhotos'];
+                            final name = names is Map
+                                ? names[otherId]?.toString() ??
+                                      rows[otherId]?.name ??
+                                      'User'
+                                : rows[otherId]?.name ?? 'User';
+                            rows[otherId] =
+                                rows[otherId]?.copyWith(
+                                  unread: _unreadCount(chat),
+                                  lastMessage:
+                                      chat['lastMessage']?.toString() ?? '',
+                                  photoUrl:
+                                      rows[otherId]?.photoUrl ??
+                                      (photos is Map
+                                          ? photos[otherId]?.toString()
+                                          : null),
+                                  pinned: _pinnedIds.contains(otherId),
+                                ) ??
+                                _InboxRow(
+                                  id: otherId,
+                                  name: name,
+                                  role: otherId.startsWith('ADM-')
+                                      ? 'admin'
+                                      : otherId == SuperAdmin.id
+                                      ? SuperAdmin.role
+                                      : 'staff',
+                                  online: otherId == SuperAdmin.id
+                                      ? _isOnline(superAdminData)
+                                      : false,
+                                  lastSeenAt: otherId == SuperAdmin.id
+                                      ? AccountPresenceService.lastSeen(
+                                          superAdminData,
+                                        )
+                                      : null,
+                                  unread: _unreadCount(chat),
+                                  lastMessage:
+                                      chat['lastMessage']?.toString() ?? '',
+                                  pinned: _pinnedIds.contains(otherId),
+                                );
+                          }
+
+                          for (final id in rows.keys.toList()) {
+                            rows[id] = rows[id]!.copyWith(
+                              pinned: _pinnedIds.contains(id),
+                            );
+                          }
+                          final items =
+                              rows.values.where((row) {
+                                final query = _search.trim().toLowerCase();
+                                return query.isEmpty ||
+                                    row.name.toLowerCase().contains(query) ||
+                                    row.role.toLowerCase().contains(query) ||
+                                    row.lastMessage.toLowerCase().contains(
+                                      query,
+                                    );
+                              }).toList()..sort((a, b) {
+                                if (a.pinned != b.pinned)
+                                  return a.pinned ? -1 : 1;
+                                final unreadCompare = b.unread.compareTo(
+                                  a.unread,
+                                );
+                                if (unreadCompare != 0) return unreadCompare;
+                                return a.name.compareTo(b.name);
+                              });
+                          if (items.isEmpty) {
+                            return const _EmptyInboxState();
+                          }
+                          final selected = _selectedId == null
+                              ? null
+                              : rows[_selectedId];
+                          return LayoutBuilder(
+                            builder: (context, constraints) {
+                              final compact = constraints.maxWidth < 760;
+                              final contacts = _ContactsPanel(
+                                items: items,
+                                selectedId: _selectedId,
+                                search: _search,
+                                onSearchChanged: _handleSearchChanged,
+                                onSelect: (row) =>
+                                    setState(() => _selectedId = row.id),
+                                onPin: _togglePinned,
+                              );
+                              if (compact) {
+                                return selected == null
+                                    ? contacts
+                                    : _ConversationPanel(
+                                        key: ValueKey(selected.id),
+                                        chatId: _chatId(selected.id),
+                                        me: me,
+                                        other: selected,
+                                        onBack: () =>
+                                            setState(() => _selectedId = null),
+                                        onDeleteConversation: () =>
+                                            _deleteConversation(
+                                              _chatId(selected.id),
+                                            ),
+                                      );
+                              }
+                              return Padding(
+                                padding: const EdgeInsets.all(16),
+                                child: Row(
+                                  children: [
+                                    SizedBox(width: 340, child: contacts),
+                                    const SizedBox(width: 16),
+                                    Expanded(
+                                      child: selected == null
+                                          ? const _SelectConversationState()
+                                          : _ConversationPanel(
+                                              key: ValueKey(selected.id),
+                                              chatId: _chatId(selected.id),
+                                              me: me,
+                                              other: selected,
+                                              onDeleteConversation: () =>
+                                                  _deleteConversation(
+                                                    _chatId(selected.id),
+                                                  ),
+                                            ),
+                                    ),
+                                  ],
                                 ),
-                              ],
-                            ),
+                              );
+                            },
                           );
                         },
                       );
                     },
-                  );
-                },
                   );
                 },
               ),
@@ -468,50 +534,50 @@ class _ContactsPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => DecoratedBox(
-        decoration: BoxDecoration(
-          color: Colors.white.withOpacity(.62),
-          borderRadius: BorderRadius.circular(22),
-          border: Border.all(color: _chatPink.withOpacity(.14)),
-        ),
-        child: Column(
-          children: [
-            Padding(
-              padding: const EdgeInsets.all(12),
-              child: TextField(
-                onChanged: onSearchChanged,
-                decoration: InputDecoration(
-                  hintText: 'Find or start a conversation',
-                  prefixIcon: const Icon(Icons.search_rounded),
-                  filled: true,
-                  fillColor: Colors.white,
-                  isDense: true,
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(14),
-                    borderSide: BorderSide(color: _chatPink.withOpacity(.25)),
-                  ),
-                ),
+    decoration: BoxDecoration(
+      color: Colors.white.withOpacity(.62),
+      borderRadius: BorderRadius.circular(22),
+      border: Border.all(color: _chatPink.withOpacity(.14)),
+    ),
+    child: Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.all(12),
+          child: TextField(
+            onChanged: onSearchChanged,
+            decoration: InputDecoration(
+              hintText: 'Find or start a conversation',
+              prefixIcon: const Icon(Icons.search_rounded),
+              filled: true,
+              fillColor: Colors.white,
+              isDense: true,
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(14),
+                borderSide: BorderSide(color: _chatPink.withOpacity(.25)),
               ),
             ),
-            Expanded(
-              child: ListView.separated(
-                padding: const EdgeInsets.fromLTRB(10, 2, 10, 10),
-                itemCount: items.length,
-                separatorBuilder: (_, _) => const SizedBox(height: 6),
-                itemBuilder: (context, index) {
-                  final row = items[index];
-                  return _InboxTile(
-                    row: row,
-                    selected: row.id == selectedId,
-                    compact: true,
-                    onPin: () => onPin(row.id),
-                    onTap: () => onSelect(row),
-                  );
-                },
-              ),
-            ),
-          ],
+          ),
         ),
-      );
+        Expanded(
+          child: ListView.separated(
+            padding: const EdgeInsets.fromLTRB(10, 2, 10, 10),
+            itemCount: items.length,
+            separatorBuilder: (_, _) => const SizedBox(height: 6),
+            itemBuilder: (context, index) {
+              final row = items[index];
+              return _InboxTile(
+                row: row,
+                selected: row.id == selectedId,
+                compact: true,
+                onPin: () => onPin(row.id),
+                onTap: () => onSelect(row),
+              );
+            },
+          ),
+        ),
+      ],
+    ),
+  );
 }
 
 class _SelectConversationState extends StatelessWidget {
@@ -519,23 +585,29 @@ class _SelectConversationState extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => DecoratedBox(
-        decoration: BoxDecoration(
-          color: const Color(0xFFFFF7F9),
-          borderRadius: BorderRadius.circular(22),
-          border: Border.all(color: _chatPink.withOpacity(.14)),
-        ),
-        child: const Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.chat_bubble_outline_rounded, size: 54, color: _chatPink),
-              SizedBox(height: 14),
-              Text('Select a conversation to start chatting',
-                  style: TextStyle(color: _chatDeep, fontWeight: FontWeight.w800, fontSize: 16)),
-            ],
+    decoration: BoxDecoration(
+      color: const Color(0xFFFFF7F9),
+      borderRadius: BorderRadius.circular(22),
+      border: Border.all(color: _chatPink.withOpacity(.14)),
+    ),
+    child: const Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.chat_bubble_outline_rounded, size: 54, color: _chatPink),
+          SizedBox(height: 14),
+          Text(
+            'Select a conversation to start chatting',
+            style: TextStyle(
+              color: _chatDeep,
+              fontWeight: FontWeight.w800,
+              fontSize: 16,
+            ),
           ),
-        ),
-      );
+        ],
+      ),
+    ),
+  );
 }
 
 class _ConversationPanel extends StatefulWidget {
@@ -577,10 +649,9 @@ class _ConversationPanelState extends State<_ConversationPanel> {
     await FirebaseFirestore.instance
         .collection('messages')
         .doc(widget.chatId)
-        .set(
-          {'unreadBy': {widget.me['id']!: 0}},
-          SetOptions(merge: true),
-        );
+        .set({
+          'unreadBy': {widget.me['id']!: 0},
+        }, SetOptions(merge: true));
   }
 
   Future<void> _send() async {
@@ -592,23 +663,20 @@ class _ConversationPanelState extends State<_ConversationPanel> {
         .collection('messages')
         .doc(widget.chatId);
 
-    await chatRef.set(
-      {
-        'participantIds': [widget.me['id'], widget.other.id],
-        'participantNames': {
-          widget.me['id']: widget.me['name'],
-          widget.other.id: widget.other.name,
-        },
-        'participantPhotos': {
-          widget.me['id']: widget.me['photoUrl'] ?? '',
-          widget.other.id: widget.other.photoUrl ?? '',
-        },
-        'lastMessage': text,
-        'updatedAt': FieldValue.serverTimestamp(),
-        'unreadBy': {widget.other.id: FieldValue.increment(1)},
+    await chatRef.set({
+      'participantIds': [widget.me['id'], widget.other.id],
+      'participantNames': {
+        widget.me['id']: widget.me['name'],
+        widget.other.id: widget.other.name,
       },
-      SetOptions(merge: true),
-    );
+      'participantPhotos': {
+        widget.me['id']: widget.me['photoUrl'] ?? '',
+        widget.other.id: widget.other.photoUrl ?? '',
+      },
+      'lastMessage': text,
+      'updatedAt': FieldValue.serverTimestamp(),
+      'unreadBy': {widget.other.id: FieldValue.increment(1)},
+    }, SetOptions(merge: true));
 
     await chatRef.collection('items').add({
       'senderId': widget.me['id'],
@@ -648,7 +716,10 @@ class _ConversationPanelState extends State<_ConversationPanel> {
                     padding: const EdgeInsets.only(right: 8),
                     child: IconButton(
                       onPressed: widget.onBack,
-                      icon: const Icon(Icons.arrow_back_rounded, color: _chatDeep),
+                      icon: const Icon(
+                        Icons.arrow_back_rounded,
+                        color: _chatDeep,
+                      ),
                     ),
                   ),
                 _ChatAvatar(
@@ -684,11 +755,15 @@ class _ConversationPanelState extends State<_ConversationPanel> {
                   ),
                 ),
                 PopupMenuButton<String>(
-                  icon: const Icon(Icons.more_vert_rounded, color: Colors.white),
+                  icon: const Icon(
+                    Icons.more_vert_rounded,
+                    color: Colors.white,
+                  ),
                   color: const Color(0xFF1F2430),
                   tooltip: 'Conversation actions',
                   onSelected: (value) async {
-                    if (value == 'delete' && widget.onDeleteConversation != null) {
+                    if (value == 'delete' &&
+                        widget.onDeleteConversation != null) {
                       final shouldDelete = await showDialog<bool>(
                         context: context,
                         builder: (dialogContext) => AlertDialog(
@@ -703,12 +778,20 @@ class _ConversationPanelState extends State<_ConversationPanel> {
                           ),
                           actions: [
                             TextButton(
-                              onPressed: () => Navigator.pop(dialogContext, false),
-                              child: const Text('Cancel', style: TextStyle(color: _chatPink)),
+                              onPressed: () =>
+                                  Navigator.pop(dialogContext, false),
+                              child: const Text(
+                                'Cancel',
+                                style: TextStyle(color: _chatPink),
+                              ),
                             ),
                             TextButton(
-                              onPressed: () => Navigator.pop(dialogContext, true),
-                              child: const Text('Delete', style: TextStyle(color: Colors.redAccent)),
+                              onPressed: () =>
+                                  Navigator.pop(dialogContext, true),
+                              child: const Text(
+                                'Delete',
+                                style: TextStyle(color: Colors.redAccent),
+                              ),
                             ),
                           ],
                         ),
@@ -774,7 +857,9 @@ class _ConversationPanelState extends State<_ConversationPanel> {
                       key: ValueKey(docs[index].id),
                       mine: mine,
                       child: Align(
-                        alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
+                        alignment: mine
+                            ? Alignment.centerRight
+                            : Alignment.centerLeft,
                         child: Container(
                           margin: const EdgeInsets.only(bottom: 10),
                           padding: const EdgeInsets.symmetric(
@@ -801,7 +886,9 @@ class _ConversationPanelState extends State<_ConversationPanel> {
                             ),
                             border: mine
                                 ? null
-                                : Border.all(color: _chatPink.withOpacity(0.14)),
+                                : Border.all(
+                                    color: _chatPink.withOpacity(0.14),
+                                  ),
                             boxShadow: [
                               BoxShadow(
                                 color: (mine ? _chatDeep : _chatPink)
@@ -908,8 +995,10 @@ class _EntranceItemState extends State<_EntranceItem>
     vsync: this,
     duration: const Duration(milliseconds: 380),
   );
-  late final Animation<double> _fade =
-      CurvedAnimation(parent: _controller, curve: Curves.easeOut);
+  late final Animation<double> _fade = CurvedAnimation(
+    parent: _controller,
+    curve: Curves.easeOut,
+  );
   late final Animation<Offset> _slide = Tween<Offset>(
     begin: const Offset(0.06, 0),
     end: Offset.zero,
@@ -960,8 +1049,7 @@ class _InboxTile extends StatefulWidget {
 class _InboxTileState extends State<_InboxTile> {
   double _scale = 1;
 
-  void _setPressed(bool pressed) =>
-      setState(() => _scale = pressed ? 0.98 : 1);
+  void _setPressed(bool pressed) => setState(() => _scale = pressed ? 0.98 : 1);
 
   @override
   Widget build(BuildContext context) {
@@ -1001,27 +1089,38 @@ class _InboxTileState extends State<_InboxTile> {
                       end: Alignment.bottomRight,
                     )
                   : row.pinned
-                      ? LinearGradient(
-                          colors: [
-                            _chatPink.withOpacity(0.07),
-                            Colors.white,
-                          ],
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                        )
-                      : null,
+                  ? LinearGradient(
+                      colors: [_chatPink.withOpacity(0.07), Colors.white],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    )
+                  : null,
               border: Border.all(
                 color: widget.selected
                     ? _chatDeep.withOpacity(0.28)
                     : row.pinned
-                        ? _chatDeep.withOpacity(0.45)
-                        : _chatPink.withOpacity(0.12),
-                width: widget.selected ? 1.3 : row.pinned ? 1.4 : 1,
+                    ? _chatDeep.withOpacity(0.45)
+                    : _chatPink.withOpacity(0.12),
+                width: widget.selected
+                    ? 1.3
+                    : row.pinned
+                    ? 1.4
+                    : 1,
               ),
               boxShadow: [
                 BoxShadow(
-                  color: _chatPink.withOpacity(widget.selected ? 0.12 : row.pinned ? 0.14 : 0.06),
-                  blurRadius: widget.selected ? 16 : row.pinned ? 20 : 14,
+                  color: _chatPink.withOpacity(
+                    widget.selected
+                        ? 0.12
+                        : row.pinned
+                        ? 0.14
+                        : 0.06,
+                  ),
+                  blurRadius: widget.selected
+                      ? 16
+                      : row.pinned
+                      ? 20
+                      : 14,
                   offset: const Offset(0, 6),
                 ),
               ],
@@ -1048,7 +1147,9 @@ class _InboxTileState extends State<_InboxTile> {
                               style: TextStyle(
                                 fontWeight: FontWeight.w600,
                                 fontSize: 15,
-                                color: widget.selected ? const Color(0xFF2F1B23) : const Color(0xFF2A1A22),
+                                color: widget.selected
+                                    ? const Color(0xFF2F1B23)
+                                    : const Color(0xFF2A1A22),
                               ),
                             ),
                           ),
@@ -1056,28 +1157,32 @@ class _InboxTileState extends State<_InboxTile> {
                             Text(
                               timeText,
                               style: TextStyle(
-                                color: widget.selected ? Colors.white70 : Colors.grey.shade600,
+                                color: widget.selected
+                                    ? Colors.white70
+                                    : Colors.grey.shade600,
                                 fontWeight: FontWeight.w700,
                                 fontSize: 12,
                               ),
                             ),
                           AnimatedSwitcher(
                             duration: const Duration(milliseconds: 220),
-                            transitionBuilder: (child, anim) => ScaleTransition(
-                              scale: anim,
-                              child: child,
-                            ),
+                            transitionBuilder: (child, anim) =>
+                                ScaleTransition(scale: anim, child: child),
                             child: row.pinned
                                 ? Padding(
                                     key: const ValueKey('pinned'),
                                     padding: const EdgeInsets.only(left: 4),
                                     child: Icon(
                                       Icons.push_pin_rounded,
-                                      color: widget.selected ? Colors.white70 : _chatDeep,
+                                      color: widget.selected
+                                          ? Colors.white70
+                                          : _chatDeep,
                                       size: 16,
                                     ),
                                   )
-                                : const SizedBox.shrink(key: ValueKey('unpinned')),
+                                : const SizedBox.shrink(
+                                    key: ValueKey('unpinned'),
+                                  ),
                           ),
                         ],
                       ),
@@ -1092,7 +1197,9 @@ class _InboxTileState extends State<_InboxTile> {
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: TextStyle(
-                                color: widget.selected ? Colors.white70 : Colors.grey.shade700,
+                                color: widget.selected
+                                    ? Colors.white70
+                                    : Colors.grey.shade700,
                                 fontWeight: FontWeight.w600,
                                 fontSize: 13,
                               ),
@@ -1102,7 +1209,9 @@ class _InboxTileState extends State<_InboxTile> {
                             Text(
                               timeText,
                               style: TextStyle(
-                                color: widget.selected ? Colors.white70 : Colors.grey.shade600,
+                                color: widget.selected
+                                    ? Colors.white70
+                                    : Colors.grey.shade600,
                                 fontWeight: FontWeight.w700,
                                 fontSize: 12,
                               ),
@@ -1135,7 +1244,8 @@ class _UnreadBadge extends StatelessWidget {
       tween: Tween(begin: 0, end: 1),
       duration: const Duration(milliseconds: 350),
       curve: Curves.elasticOut,
-      builder: (context, value, child) => Transform.scale(scale: value, child: child),
+      builder: (context, value, child) =>
+          Transform.scale(scale: value, child: child),
       child: Container(
         margin: const EdgeInsets.only(right: 4),
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -1585,7 +1695,8 @@ class _ChatThreadPageState extends State<ChatThreadPage> {
                               vertical: 10,
                             ),
                             constraints: BoxConstraints(
-                              maxWidth: MediaQuery.of(context).size.width * 0.76,
+                              maxWidth:
+                                  MediaQuery.of(context).size.width * 0.76,
                             ),
                             decoration: BoxDecoration(
                               gradient: mine
@@ -1604,7 +1715,9 @@ class _ChatThreadPageState extends State<ChatThreadPage> {
                               ),
                               border: mine
                                   ? null
-                                  : Border.all(color: _chatPink.withOpacity(0.14)),
+                                  : Border.all(
+                                      color: _chatPink.withOpacity(0.14),
+                                    ),
                               boxShadow: [
                                 BoxShadow(
                                   color: (mine ? _chatDeep : _chatPink)
@@ -1712,8 +1825,10 @@ class _BubbleEntranceState extends State<_BubbleEntrance>
     vsync: this,
     duration: const Duration(milliseconds: 260),
   )..forward();
-  late final Animation<double> _fade =
-      CurvedAnimation(parent: _controller, curve: Curves.easeOut);
+  late final Animation<double> _fade = CurvedAnimation(
+    parent: _controller,
+    curve: Curves.easeOut,
+  );
   late final Animation<Offset> _slide = Tween<Offset>(
     begin: Offset(widget.mine ? 0.12 : -0.12, 0),
     end: Offset.zero,
@@ -1745,8 +1860,7 @@ class _SendButton extends StatefulWidget {
 class _SendButtonState extends State<_SendButton> {
   double _scale = 1;
 
-  void _setPressed(bool pressed) =>
-      setState(() => _scale = pressed ? 0.88 : 1);
+  void _setPressed(bool pressed) => setState(() => _scale = pressed ? 0.88 : 1);
 
   @override
   Widget build(BuildContext context) {

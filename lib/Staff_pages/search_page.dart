@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'AllCateg.dart';
 import '../screens/staff_page.dart';
 import '../services/inventory_service.dart';
+import '../services/inventory_display_ids.dart';
 
 // ─── Design Tokens (shared with StaffPage) ────────────────────────────────────
 class _AC {
@@ -161,9 +162,6 @@ class _AnalyticsPageState extends State<AnalyticsPage>
         }
       }
 
-      String itemKey(Map<String, dynamic> item) =>
-          '${item['name'] ?? ''}|${item['price'] ?? ''}'.toLowerCase();
-
       int bundleStock(Map<String, dynamic> data) {
         final instances = data['bundleInstances'];
         if (instances is List && instances.isNotEmpty) {
@@ -241,17 +239,18 @@ class _AnalyticsPageState extends State<AnalyticsPage>
           continue;
         }
 
-        final rootKeys = ((rootData['items'] as List<dynamic>?) ?? [])
+        final rootItems = ((rootData['items'] as List<dynamic>?) ?? [])
             .whereType<Map>()
-            .map((item) => itemKey(Map<String, dynamic>.from(item)))
-            .toSet();
+            .map((item) => Map<String, dynamic>.from(item))
+            .toList();
         final items = data['items'] as List<dynamic>? ?? [];
         final hasAvailableItem = items.any((raw) {
           if (raw is! Map) return false;
           final item = Map<String, dynamic>.from(raw);
           final expirationDate = item['expirationDate']?.toString() ?? '';
           if (_isExpiredInventoryItem(expirationDate)) return false;
-          if (rootKeys.isNotEmpty && !rootKeys.contains(itemKey(item))) {
+          if (rootItems.isNotEmpty &&
+              !rootItems.any((root) => inventoryVariantsMatch(root, item))) {
             return false;
           }
           final stock =

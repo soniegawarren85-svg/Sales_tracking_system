@@ -31,6 +31,7 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/services.dart';
 import '../services/cash_drawer_service.dart';
+import '../services/cash_float_service.dart';
 import '../services/number_format.dart';
 
 // ── Color Palette ─────────────────────────────────────────────────
@@ -473,6 +474,84 @@ class _BudgetPageState extends State<BudgetPage>
     }
   }
 
+  Future<void> _requestBranchCashFloat(
+    String branchId,
+    String branchName,
+    double amount,
+  ) async {
+    try {
+      await BranchPermissions.require(
+        'adminAllowAllocations',
+        database: _firestore,
+        branchId: branchId,
+      );
+      if (!mounted) return;
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Confirm cash float allocation'),
+          content: Text(
+            'Send ${formatMoney(amount)} to $branchName? The branch must confirm receipt before the cash drawer is updated.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('Confirm allocation'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true) return;
+      final actor = await resolveSessionActor(_firestore, admin: true);
+      final drawer =
+          (await _firestore.collection('staff_cash_drawer').doc(branchId).get())
+              .data();
+      final today = CashDrawerService.dayKey(DateTime.now());
+      final currentOpening =
+          (drawer?['dailyOpeningCash'] as num?)?.toDouble() ??
+          (drawer?['openingCash'] as num?)?.toDouble() ??
+          0;
+      final startingCash =
+          drawer == null ||
+          drawer['drawerDate'] != today ||
+          currentOpening <= 0;
+      if (startingCash &&
+          !CashDrawerService.meetsMinimumDailyOpeningCash(amount)) {
+        _showSnack(
+          'Starting cash float must be at least ${formatMoney(CashDrawerService.minimumDailyOpeningCash)}.',
+          Colors.orange.shade700,
+        );
+        return;
+      }
+      await CashFloatService.createRequest(
+        firestore: _firestore,
+        branchId: branchId,
+        branchName: branchName,
+        senderId: actor.id,
+        senderName: actor.name,
+        amount: amount,
+        startingCash: startingCash,
+      );
+      if (!mounted) return;
+      setState(() => _budgetControllers[branchId]?.clear());
+      _showSnack(
+        'Cash float sent to $branchName for receipt confirmation.',
+        Colors.green.shade600,
+      );
+    } catch (error) {
+      if (mounted) {
+        _showSnack(
+          'Unable to allocate cash float: $error',
+          Colors.red.shade600,
+        );
+      }
+    }
+  }
+
   int _parseInt(dynamic value, {int fallback = 0}) {
     if (value is num) return value.toInt();
     return int.tryParse(value?.toString() ?? '') ?? fallback;
@@ -722,9 +801,6 @@ class _BudgetPageState extends State<BudgetPage>
       if (rootName.isNotEmpty) activeRootByName[rootName] = rootData;
     }
 
-    String itemKey(Map<String, dynamic> item) =>
-        '${item['name'] ?? ''}|${item['price'] ?? ''}'.toLowerCase();
-
     return docs.where((doc) {
       final data = doc.data();
       if (data['isDeleted'] == true) return false;
@@ -742,10 +818,10 @@ class _BudgetPageState extends State<BudgetPage>
         return _availableAssignedBundleCount(data) > 0;
       }
 
-      final rootKeys = ((rootData['items'] as List<dynamic>?) ?? [])
+      final rootItems = ((rootData['items'] as List<dynamic>?) ?? [])
           .whereType<Map>()
-          .map((item) => itemKey(Map<String, dynamic>.from(item)))
-          .toSet();
+          .map((item) => Map<String, dynamic>.from(item))
+          .toList();
       final activeItems = ((data['items'] as List<dynamic>?) ?? [])
           .whereType<Map>()
           .map((item) => Map<String, dynamic>.from(item))
@@ -757,7 +833,8 @@ class _BudgetPageState extends State<BudgetPage>
                 !_isExpiredInventoryItem(
                   item['expirationDate']?.toString() ?? '',
                 ) &&
-                (rootKeys.isEmpty || rootKeys.contains(itemKey(item)));
+                (rootItems.isEmpty ||
+                    rootItems.any((root) => inventoryVariantsMatch(root, item)));
           })
           .toList();
       return activeItems.isNotEmpty;
@@ -7073,7 +7150,7 @@ class _BudgetPageState extends State<BudgetPage>
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const Text(
-                      'Cash Allocation',
+                      'Cash float',
                       style: TextStyle(
                         color: kBannerTop,
                         fontSize: 17,
@@ -7136,7 +7213,7 @@ class _BudgetPageState extends State<BudgetPage>
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       const Text(
-                        'Current allocation',
+                        'Allocated Cash float',
                         style: TextStyle(
                           fontSize: 11,
                           fontWeight: FontWeight.w700,
@@ -7234,10 +7311,11 @@ class _BudgetPageState extends State<BudgetPage>
             enabled: enabled,
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
             decoration: InputDecoration(
-              labelText: 'Allocated Amount ',
+              labelText: 'Cash float amount',
               hintText: '0.00',
-              helperText:
-                  'Set Daily Cash minimum: ${formatMoney(CashDrawerService.minimumDailyOpeningCash)}',
+              helperText: controller.text.trim().isEmpty
+                  ? 'Set Starting Cash minimum: ${formatMoney(CashDrawerService.minimumDailyOpeningCash)}'
+                  : 'Additional cash float for $branchName',
               prefixIcon: const Icon(Icons.payments_rounded, color: kDeep),
               filled: true,
               fillColor: Colors.white,
@@ -7254,12 +7332,13 @@ class _BudgetPageState extends State<BudgetPage>
                 borderSide: const BorderSide(color: kPrimary, width: 2),
               ),
             ),
+            onChanged: (_) => setState(() {}),
           ),
           const SizedBox(height: 10),
           Row(
             children: [
               Expanded(
-                child: OutlinedButton.icon(
+                child: FilledButton.icon(
                   onPressed: () {
                     if (!enabled) {
                       _showSnack(
@@ -7277,26 +7356,24 @@ class _BudgetPageState extends State<BudgetPage>
                       return;
                     }
                     final budget = double.tryParse(budgetText);
-                    if (budget == null || budget < 0) {
+                    if (budget == null || !budget.isFinite || budget <= 0) {
                       _showSnack(
                         'Invalid allocation amount',
                         Colors.red.shade600,
                       );
                       return;
                     }
-                    _saveBudget(
-                      branchId,
-                      branchName,
-                      budget,
-                      isBranch: true,
-                      replaceDailyOpening: true,
-                    );
+                    _requestBranchCashFloat(branchId, branchName, budget);
                   },
-                  icon: const Icon(Icons.edit_rounded),
-                  label: const Text('Set Daily Cash'),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: kBannerTop,
-                    side: const BorderSide(color: kBannerTop),
+                  icon: const Icon(Icons.payments_rounded),
+                  label: Text(
+                    controller.text.trim().isEmpty
+                        ? 'Set Starting Cash'
+                        : 'Allocate Cash',
+                  ),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: kPrimary,
+                    foregroundColor: Colors.white,
                     padding: const EdgeInsets.symmetric(vertical: 13),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(14),

@@ -20,19 +20,31 @@ Future<void> showAdminAddonEditor(
 
 Widget _photo(String url) {
   if (url.isEmpty) {
-    return const Icon(Icons.extension_outlined, color: AppColors.primaryDark);
+    return const ColoredBox(
+      color: AppColors.surfaceTint,
+      child: Center(
+        child: Text(
+          'No picture',
+          textAlign: TextAlign.center,
+          style: TextStyle(fontSize: 9, color: AppColors.textMuted),
+        ),
+      ),
+    );
   }
   if (url.startsWith('data:image/')) {
     try {
       return Image.memory(base64Decode(url.split(',').last), fit: BoxFit.cover);
     } catch (_) {
-      return const Icon(Icons.image_not_supported);
+      return const Center(
+        child: Text('No picture', style: TextStyle(fontSize: 9)),
+      );
     }
   }
   return Image.network(
     url,
     fit: BoxFit.cover,
-    errorBuilder: (_, _, _) => const Icon(Icons.image_not_supported),
+    errorBuilder: (_, _, _) =>
+        const Center(child: Text('No picture', style: TextStyle(fontSize: 9))),
   );
 }
 
@@ -82,13 +94,44 @@ class _AdminAddonsTableState extends State<AdminAddonsTable> {
           return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 14,
+                ),
+                decoration: const BoxDecoration(
+                  color: AppColors.primaryDark,
+                  borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+                ),
+                child: Row(
+                  children: [
+                    const Expanded(
+                      child: Text(
+                        'Add-ons',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                    Text(
+                      '${rows.length} items',
+                      style: const TextStyle(
+                        color: Colors.white70,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
               InventoryRecordsTable(
                 headings: const [
                   'ID',
                   'Image',
                   'Add-on',
-                  'Allocation date',
                   'Price',
+                  'Cost price',
                   'Expiry date',
                   'Actions',
                 ],
@@ -96,7 +139,7 @@ class _AdminAddonsTableState extends State<AdminAddonsTable> {
                   0: 1.0,
                   1: 1.0,
                   2: 2.1,
-                  3: 1.5,
+                  3: 1.1,
                   4: 1.1,
                   5: 1.2,
                   6: 1.1,
@@ -108,12 +151,6 @@ class _AdminAddonsTableState extends State<AdminAddonsTable> {
                       ? data['publicId'].toString().trim()
                       : 'Assigning ID…';
                   final expiry = DateTime.tryParse('${data['expirationDate']}');
-                  final allocatedValue = data['allocationDate'] ?? data['createdAt'];
-                  final allocated = allocatedValue is Timestamp
-                      ? allocatedValue.toDate()
-                      : allocatedValue is DateTime
-                      ? allocatedValue
-                      : DateTime.tryParse('$allocatedValue');
                   final expired =
                       expiry != null &&
                       expiry.isBefore(DateUtils.dateOnly(DateTime.now()));
@@ -143,9 +180,11 @@ class _AdminAddonsTableState extends State<AdminAddonsTable> {
                         ),
                       ],
                     ),
-                    Text(allocated == null ? 'Not recorded' : MaterialLocalizations.of(context).formatShortDate(allocated)),
                     Text(
                       '₱${(num.tryParse('${data['priceDelta']}') ?? 0).toStringAsFixed(2)}',
+                    ),
+                    Text(
+                      '₱${(num.tryParse('${data['costPrice']}') ?? 0).toStringAsFixed(2)}',
                     ),
                     Text(
                       '${data['expirationDate'] ?? 'Not recorded'}${expired ? '\nExpired' : ''}',

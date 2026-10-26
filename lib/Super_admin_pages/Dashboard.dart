@@ -10,6 +10,8 @@ import '../widgets/admin_sales_overview.dart';
 import '../widgets/activity_feed.dart';
 import '../widgets/admin_page_skeleton.dart';
 import '../widgets/login_session_alert_watcher.dart';
+import '../widgets/logout_progress.dart';
+import '../widgets/raspberry_mobile_navigation.dart';
 import '../services/account_login_session.dart';
 import 'dashboard_totals.dart';
 import 'package:flutter/material.dart';
@@ -259,10 +261,10 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard>
     switch (_selectedIndex) {
       case 1:
         // Budget page displays without the admin collapsible header
-        return const BudgetPage();
+        return _refreshablePage(const BudgetPage());
       case 2:
         // Inventory is part of the main admin navigation.
-        return const InventoryPage(embedded: true);
+        return _refreshablePage(const InventoryPage(embedded: true));
       case 3:
         return _refreshablePage(
           StaffPage(onBack: () => setState(() => _selectedIndex = 5)),
@@ -294,6 +296,8 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard>
   }
 
   Widget _refreshablePage(Widget child) => TopEdgeRefresh(
+    color: AppColors.primary,
+    backgroundColor: Colors.white,
     notificationPredicate: (notification) =>
         notification.depth == 0 && notification.metrics.axis == Axis.vertical,
     onRefresh: _refreshCurrentPage,
@@ -302,6 +306,14 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard>
 
   Future<void> _refreshCurrentPage() async {
     final names = switch (_selectedIndex) {
+      1 => ['completed_sales', 'staff_inventory', 'admin_settings', 'branches'],
+      2 => [
+        'staff_inventory',
+        'sales_inventory',
+        'coffee_products',
+        'coffee_addons',
+        'completed_sales',
+      ],
       3 => ['staff_requests', 'branches'],
       4 => ['completed_sales', 'staff_inventory_history', 'stock_adjustments'],
       5 => ['admin_settings', 'staff_requests', 'branches'],
@@ -333,6 +345,8 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard>
   // ══════════════════════════════════════════════════════════════════════════
   Widget _buildHomePage() {
     return TopEdgeRefresh(
+      color: AppColors.primary,
+      backgroundColor: Colors.white,
       notificationPredicate: (notification) =>
           notification.depth == 0 && notification.metrics.axis == Axis.vertical,
       onRefresh: () async {
@@ -654,18 +668,20 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard>
     );
     if (confirmed != true || !mounted) return;
     try {
-      await AccountLoginSession.close();
+      await runWithLogoutProgress(context, () async {
+        await AccountLoginSession.close();
+        final prefs = await SharedPreferences.getInstance();
+        await clearPersistedAccountSession(prefs);
+        await FirebaseAuth.instance.signOut();
+      });
     } catch (error) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Unable to save logout activity: $error')),
+          SnackBar(content: Text('Unable to complete logout: $error')),
         );
       }
       return;
     }
-    final prefs = await SharedPreferences.getInstance();
-    await clearPersistedAccountSession(prefs);
-    await FirebaseAuth.instance.signOut();
     if (!mounted) return;
     Navigator.of(context).pushAndRemoveUntil(
       MaterialPageRoute(builder: (_) => const LoginScreen()),
@@ -1068,112 +1084,34 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard>
     );
   }
 
-  Widget _buildBottomNavigationBar() => Container(
-    decoration: const BoxDecoration(
-      color: Colors.white,
-      boxShadow: [
-        BoxShadow(color: Colors.black12, blurRadius: 10, offset: Offset(0, -2)),
-      ],
-    ),
-    child: SafeArea(
-      child: Row(
-        children: [
-          Expanded(
-            child: _buildNavItem(
-              const _NavItem(icon: Icons.dashboard_rounded, label: 'Dashboard'),
-              0,
-            ),
-          ),
-          Expanded(
-            child: _buildNavItem(
-              const _NavItem(
-                icon: Icons.storefront_rounded,
-                label: 'Branch Sales',
-              ),
-              1,
-            ),
-          ),
-          Expanded(
-            child: _buildNavItem(
-              const _NavItem(
-                icon: Icons.inventory_2_rounded,
-                label: 'Inventory',
-              ),
-              2,
-            ),
-          ),
-          Expanded(
-            child: _buildNavItem(
-              const _NavItem(icon: Icons.more_horiz_rounded, label: 'More'),
-              5,
-            ),
-          ),
-        ],
+  Widget _buildBottomNavigationBar() => RaspberryMobileNavigation(
+    items: [
+      const RaspberryMobileNavItem(
+        icon: Icons.dashboard_rounded,
+        label: 'Overview',
+        index: 0,
       ),
-    ),
+      const RaspberryMobileNavItem(
+        icon: Icons.storefront_rounded,
+        label: 'Branch Performance',
+        index: 1,
+      ),
+      RaspberryMobileNavItem(
+        icon: Icons.inventory_2_rounded,
+        label: 'Inventory',
+        index: 2,
+        badgeCount: _navigationBadgeCount(2),
+      ),
+    ],
+    selectedIndex: _selectedIndex,
+    moreSelected: _selectedIndex >= 3,
+    onDestinationSelected: (index) => setState(() {
+      _selectedIndex = index;
+    }),
+    onMoreSelected: () => setState(() {
+      _selectedIndex = 5;
+    }),
   );
-
-  Widget _buildNavItem(_NavItem item, int index) {
-    final selected =
-        _selectedIndex == index || (index == 5 && _selectedIndex >= 3);
-    return GestureDetector(
-      onTap: () => setState(() {
-        _selectedIndex = index;
-        if (index == 4) _returnReportToMore = false;
-      }),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 220),
-        curve: Curves.easeInOut,
-        padding: EdgeInsets.symmetric(
-          horizontal: MediaQuery.of(context).size.width >= 600 ? 12 : 4,
-          vertical: MediaQuery.of(context).size.width >= 600 ? 5 : 8,
-        ),
-        decoration: BoxDecoration(
-          color: selected
-              ? kPrimaryBrown.withOpacity(0.12)
-              : Colors.transparent,
-          borderRadius: BorderRadius.circular(16),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            AnimatedSwitcher(
-              duration: const Duration(milliseconds: 200),
-              transitionBuilder: (child, animation) => ScaleTransition(
-                scale: animation,
-                child: FadeTransition(opacity: animation, child: child),
-              ),
-              child: Badge(
-                isLabelVisible: _navigationBadgeCount(index) > 0,
-                label: Text(
-                  _navigationBadgeCount(index) > 99
-                      ? '99+'
-                      : '${_navigationBadgeCount(index)}',
-                ),
-                child: Icon(
-                  item.icon,
-                  key: ValueKey(selected),
-                  size: MediaQuery.of(context).size.width >= 600 ? 21 : 24,
-                  color: selected ? kPrimaryBrown : Colors.grey[400],
-                ),
-              ),
-            ),
-            SizedBox(height: MediaQuery.of(context).size.width >= 600 ? 2 : 4),
-            AnimatedDefaultTextStyle(
-              duration: const Duration(milliseconds: 200),
-              style: TextStyle(
-                fontSize: MediaQuery.of(context).size.width >= 600 ? 10 : 11,
-                color: selected ? kPrimaryBrown : Colors.grey[500],
-                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-                letterSpacing: 0.2,
-              ),
-              child: Text(item.label, textAlign: TextAlign.center),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
 
   int _navigationBadgeCount(int index) => switch (index) {
     2 => _pendingReturnCount,

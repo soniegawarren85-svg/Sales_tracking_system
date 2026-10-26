@@ -147,6 +147,7 @@ class _BranchInventoryMonitorState extends State<BranchInventoryMonitor> {
                     allocationId: '${row['allocationId']}',
                     scopeIds: [widget.branchId],
                     itemId: row['allocationItemId']?.toString(),
+                    readOnly: widget.showBatchHistory,
                     database: widget.firestore,
                   ),
                 ),
@@ -197,6 +198,9 @@ class _BranchInventoryMonitorState extends State<BranchInventoryMonitor> {
             name: value.name,
             price: value.price,
             stock: value.stock,
+            sizePrices: value.sizePrices.isEmpty ? null : value.sizePrices,
+            expirationDate: value.expirationDate,
+            updateExpirationDate: item['type'] == 'Add-ons',
           );
         },
       ),

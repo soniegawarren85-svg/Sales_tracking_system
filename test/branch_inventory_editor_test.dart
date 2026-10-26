@@ -5,6 +5,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sales_tracking/services/branch_inventory_editor.dart';
 import 'package:sales_tracking/services/branch_report_data.dart';
 import 'package:sales_tracking/widgets/branch_inventory_monitor.dart';
+import 'package:sales_tracking/widgets/branch_allocation_table.dart';
+import 'package:sales_tracking/widgets/branch_inventory_edit_dialog.dart';
 
 void main() {
   testWidgets('branch inventory edit action follows admin permission', (
@@ -115,6 +117,7 @@ void main() {
       name: 'Branch special',
       price: 15,
       stock: 6,
+      sizePrices: {'Large': 120},
     );
 
     final first =
@@ -147,6 +150,7 @@ void main() {
     expect(first['price'], 15);
     expect(first['branchNameOverride'], 'Branch special');
     expect(second['branchPriceOverride'], 15);
+    expect(first['branchSizePriceOverrides'], {'Large': 120});
     expect(otherBranch['stock'], 9);
     expect(otherBranch['branchNameOverride'], isNull);
     expect(central['items'][0]['name'], 'Original');
@@ -178,5 +182,93 @@ void main() {
     expect(current.single['name'], 'Branch special');
     expect(current.single['price'], 15);
     expect(current.single['remaining'], 6);
+  });
+
+  test('beverage size price override takes precedence in the branch table', () {
+    expect(
+      branchSizePrice({
+        'basePrice': 90,
+        'sizes': [
+          {'name': 'Large', 'priceDelta': 20},
+        ],
+        'branchSizePriceOverrides': {'Large': 125},
+      }, 'Large'),
+      125,
+    );
+    expect(
+      branchSizePrice({
+        'basePrice': 90,
+        'sizes': [
+          {'name': 'Large', 'priceDelta': 20},
+        ],
+      }, 'Large'),
+      110,
+    );
+  });
+
+  testWidgets('branch beverage and add-on editors use their relevant fields', (
+    tester,
+  ) async {
+    BranchInventoryEdit? saved;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Builder(
+            builder: (context) => TextButton(
+              onPressed: () => showDialog<void>(
+                context: context,
+                builder: (_) => BranchInventoryEditDialog(
+                  item: {
+                    'type': 'Beverages',
+                    'name': 'Milk Tea',
+                    'basePrice': 90,
+                    'sizes': [
+                      {'name': 'Small', 'priceDelta': 0},
+                      {'name': 'Large', 'priceDelta': 20},
+                    ],
+                  },
+                  onSave: (value) async => saved = value,
+                ),
+              ),
+              child: const Text('Open'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('Open'));
+    await tester.pumpAndSettle();
+    expect(find.text('Small price'), findsOneWidget);
+    expect(find.text('Large price'), findsOneWidget);
+    expect(find.text('Stock'), findsNothing);
+    await tester.enterText(find.byType(TextFormField).at(2), '125');
+    await tester.tap(find.text('Save'));
+    await tester.pumpAndSettle();
+    expect(saved?.sizePrices['Large'], 125);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Builder(
+            builder: (context) => TextButton(
+              onPressed: () => showDialog<void>(
+                context: context,
+                builder: (_) => BranchInventoryEditDialog(
+                  item: {'type': 'Add-ons', 'name': 'Whipped Cream'},
+                ),
+              ),
+              child: const Text('Open'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('Open'));
+    await tester.pumpAndSettle();
+    expect(find.text('Expiration date'), findsOneWidget);
+    expect(find.text('Stock'), findsNothing);
+    await tester.tap(find.byTooltip('Choose expiration date'));
+    await tester.pumpAndSettle();
+    expect(find.byType(DatePickerDialog), findsOneWidget);
   });
 }

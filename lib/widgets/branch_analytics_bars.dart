@@ -159,7 +159,11 @@ class _BranchAnalyticsBarsState extends State<BranchAnalyticsBars> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: List.generate(values.length, (index) {
                         final value = values[index];
-                        final height = plotHeight * value / ceiling;
+                        final height = value <= 0
+                            ? 0.0
+                            : (plotHeight * value / ceiling)
+                                  .clamp(4.0, plotHeight)
+                                  .toDouble();
                         return Expanded(
                           child: Padding(
                             padding: const EdgeInsets.symmetric(horizontal: 3),
@@ -201,6 +205,9 @@ class _BranchAnalyticsBarsState extends State<BranchAnalyticsBars> {
                                               );
                                             },
                                       child: Container(
+                                        key: ValueKey(
+                                          'sales-report-bar-$index',
+                                        ),
                                         width: double.infinity,
                                         height: height,
                                         clipBehavior: Clip.antiAlias,

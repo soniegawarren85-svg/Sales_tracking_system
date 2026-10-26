@@ -11,6 +11,7 @@ import '../widgets/account_activity_logs_dialog.dart';
 import '../services/account_login_session.dart';
 import '../widgets/password_strength_checklist.dart';
 import '../widgets/admin_page_skeleton.dart';
+import '../widgets/logout_progress.dart';
 import '../widgets/account_profile_editor_sheet.dart';
 import '../services/catalog_image_service.dart';
 import 'package:sales_tracking/theme/app_colors.dart';
@@ -1163,22 +1164,24 @@ class _LogoutButtonState extends State<_LogoutButton>
                       onTap: () async {
                         Navigator.pop(context);
                         try {
-                          await AccountLoginSession.close();
+                          await runWithLogoutProgress(context, () async {
+                            await AccountLoginSession.close();
+                            final prefs = await SharedPreferences.getInstance();
+                            await clearPersistedAccountSession(prefs);
+                            await FirebaseAuth.instance.signOut();
+                          });
                         } catch (error) {
                           if (context.mounted) {
                             ScaffoldMessenger.of(context).showSnackBar(
                               SnackBar(
                                 content: Text(
-                                  'Unable to save logout activity: $error',
+                                  'Unable to complete logout: $error',
                                 ),
                               ),
                             );
                           }
                           return;
                         }
-                        final prefs = await SharedPreferences.getInstance();
-                        await clearPersistedAccountSession(prefs);
-                        await FirebaseAuth.instance.signOut();
                         if (!context.mounted) return;
                         Navigator.of(context).pushAndRemoveUntil(
                           MaterialPageRoute(

@@ -8,6 +8,412 @@ import '../services/session_actor.dart';
 import '../services/number_format.dart';
 import '../services/sale_stock.dart';
 
+Future<void> showMainInventoryBatches(
+  BuildContext context,
+  Map<String, dynamic> item,
+) => showDialog<void>(
+  context: context,
+  builder: (_) => _MainInventoryBatchesDialog(item: item),
+);
+
+class _MainInventoryBatchesDialog extends StatefulWidget {
+  const _MainInventoryBatchesDialog({required this.item});
+
+  final Map<String, dynamic> item;
+
+  @override
+  State<_MainInventoryBatchesDialog> createState() =>
+      _MainInventoryBatchesDialogState();
+}
+
+class _MainInventoryBatchesDialogState
+    extends State<_MainInventoryBatchesDialog> {
+  final _searchController = TextEditingController();
+  DateTimeRange? _dateRange;
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  DateTime? _date(dynamic value) => value is Timestamp
+      ? value.toDate().toLocal()
+      : value is DateTime
+      ? value.toLocal()
+      : DateTime.tryParse('$value')?.toLocal();
+
+  String _dateLabel(dynamic value) {
+    final date = _date(value);
+    if (date == null) return 'Date not recorded';
+    return '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+  }
+
+  Future<void> _pickDateRange() async {
+    final today = DateUtils.dateOnly(DateTime.now());
+    final range = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(2000),
+      lastDate: DateTime(today.year + 5),
+      initialDateRange: _dateRange ??
+          DateTimeRange(start: today, end: today),
+    );
+    if (range != null && mounted) setState(() => _dateRange = range);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final storedBatches = (widget.item['stockBatches'] as List? ?? [])
+        .whereType<Map>()
+        .map((batch) => Map<String, dynamic>.from(batch))
+        .toList();
+    final legacyStock =
+        (num.tryParse(
+                  '${widget.item['stock'] ?? widget.item['startingStock'] ?? 0}',
+                ) ??
+                0)
+            .toInt();
+    final batches = storedBatches.isEmpty && legacyStock > 0
+        ? [
+            {
+              'quantity': legacyStock,
+              'createdAt': widget.item['createdAt'],
+              'expirationDate': widget.item['expirationDate'] ?? '',
+            },
+          ]
+        : storedBatches;
+    final query = _searchController.text.trim().toLowerCase();
+    final filteredBatches = [
+      for (var index = 0; index < batches.length; index++)
+        if (_matches(batches[index], index, query)) (index, batches[index]),
+    ];
+    final screen = MediaQuery.sizeOf(context);
+
+    return Dialog(
+      backgroundColor: AppColors.surfaceTint,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(26)),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxWidth: 560,
+          maxHeight: screen.height * 0.82,
+        ),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 20, 20, 12),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    width: 42,
+                    height: 42,
+                    decoration: BoxDecoration(
+                      color: AppColors.rose.withValues(alpha: 0.2),
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: const Icon(
+                      Icons.inventory_2_outlined,
+                      color: AppColors.primary,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'INVENTORY BATCHES',
+                          style: TextStyle(
+                            color: AppColors.primaryDark,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 1.1,
+                          ),
+                        ),
+                        Text(
+                          '${widget.item['name'] ?? 'Item'}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 17,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: _searchController,
+                onChanged: (_) => setState(() {}),
+                decoration: InputDecoration(
+                  hintText: 'Search batches',
+                  prefixIcon: const Icon(Icons.search_rounded),
+                  suffixIcon: _searchController.text.isEmpty
+                      ? null
+                      : IconButton(
+                          tooltip: 'Clear search',
+                          onPressed: () {
+                            _searchController.clear();
+                            setState(() {});
+                          },
+                          icon: const Icon(Icons.close_rounded),
+                        ),
+                  filled: true,
+                  fillColor: Colors.white,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(16),
+                    borderSide: BorderSide.none,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: _pickDateRange,
+                      icon: const Icon(Icons.date_range_rounded),
+                      label: Text(
+                        _dateRange == null
+                            ? 'Filter by date'
+                            : '${_dateLabel(_dateRange!.start)} – ${_dateLabel(_dateRange!.end)}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ),
+                  if (_dateRange != null)
+                    IconButton(
+                      tooltip: 'Clear date filter',
+                      onPressed: () => setState(() => _dateRange = null),
+                      icon: const Icon(Icons.close_rounded),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Expanded(
+                child: filteredBatches.isEmpty
+                    ? Center(
+                        child: Text(
+                          batches.isEmpty
+                              ? 'No stock batches have been recorded yet.'
+                              : 'No batches match these filters.',
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(color: AppColors.primaryDark),
+                        ),
+                      )
+                    : ListView.separated(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        itemCount: filteredBatches.length,
+                        separatorBuilder: (_, _) =>
+                            const SizedBox(height: 10),
+                        itemBuilder: (context, index) {
+                          final (batchIndex, batch) = filteredBatches[index];
+                          return _InventoryBatchCard(
+                            index: batchIndex,
+                            batch: batch,
+                            item: widget.item,
+                            dateLabel: _dateLabel,
+                          );
+                        },
+                      ),
+              ),
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Close'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  bool _matches(Map<String, dynamic> batch, int index, String query) {
+    final batchDate = _date(batch['createdAt'] ?? widget.item['createdAt']);
+    if (_dateRange != null) {
+      if (batchDate == null ||
+          batchDate.isBefore(DateUtils.dateOnly(_dateRange!.start)) ||
+          !batchDate.isBefore(
+            DateUtils.dateOnly(_dateRange!.end).add(const Duration(days: 1)),
+          )) {
+        return false;
+      }
+    }
+    if (query.isEmpty) return true;
+    final searchText = [
+      'BATCH-${(index + 1).toString().padLeft(3, '0')}',
+      batch['batchId'],
+      batch['quantity'],
+      _dateLabel(batch['createdAt'] ?? widget.item['createdAt']),
+      batch['expirationDate'],
+      batch['costPrice'] ?? widget.item['costPrice'],
+      batch['price'] ?? widget.item['price'] ?? widget.item['basePrice'],
+    ].join(' ').toLowerCase();
+    return searchText.contains(query);
+  }
+}
+
+class _InventoryBatchCard extends StatelessWidget {
+  const _InventoryBatchCard({
+    required this.index,
+    required this.batch,
+    required this.item,
+    required this.dateLabel,
+  });
+
+  final int index;
+  final Map<String, dynamic> batch;
+  final Map<String, dynamic> item;
+  final String Function(dynamic) dateLabel;
+
+  @override
+  Widget build(BuildContext context) {
+    final remaining = num.tryParse(
+      '${batch['remaining'] ?? batch['quantity'] ?? 0}',
+    );
+    final available = remaining == null || remaining > 0;
+    final batchName =
+        '${batch['batchId'] ?? 'BATCH-${(index + 1).toString().padLeft(3, '0')}'}';
+    final createdDate = batch['createdAt'] ?? item['createdAt'];
+    final expiry = '${batch['expirationDate'] ?? 'No expiry'}';
+
+    return Container(
+      key: ValueKey('inventory-batch-card-$index'),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: AppColors.rose.withValues(alpha: 0.45)),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x0D94163A),
+            blurRadius: 10,
+            offset: Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              CircleAvatar(
+                radius: 20,
+                backgroundColor: AppColors.rose.withValues(alpha: 0.22),
+                child: Text(
+                  '${index + 1}',
+                  style: const TextStyle(
+                    color: AppColors.primaryDark,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  batchName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: AppColors.primaryDark,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 6,
+                ),
+                decoration: BoxDecoration(
+                  color: AppColors.rose.withValues(alpha: 0.18),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text(
+                  '${batch['quantity'] ?? 0} units',
+                  style: const TextStyle(
+                    color: AppColors.primaryDark,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              _MainBatchInfoChip(
+                icon: Icons.event_available_rounded,
+                label: 'Added ${dateLabel(createdDate)}',
+              ),
+              _MainBatchInfoChip(
+                icon: Icons.event_busy_rounded,
+                label: expiry == 'No expiry' || expiry.isEmpty
+                    ? 'No expiry'
+                    : 'Expires $expiry',
+              ),
+              _MainBatchInfoChip(
+                icon: Icons.payments_outlined,
+                label:
+                    'Cost ${_batchMoney(batch['costPrice'] ?? item['costPrice'])}',
+              ),
+              _MainBatchInfoChip(
+                icon: Icons.sell_outlined,
+                label:
+                    'Price ${_batchMoney(batch['price'] ?? item['price'] ?? item['basePrice'])}',
+              ),
+              _MainBatchInfoChip(
+                icon: available ? Icons.check_circle : Icons.remove_circle,
+                label: available ? 'Available' : 'Out of stock',
+                color: available ? const Color(0xFF2E7D32) : Colors.grey,
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _MainBatchInfoChip extends StatelessWidget {
+  const _MainBatchInfoChip({
+    required this.icon,
+    required this.label,
+    this.color = AppColors.primaryDark,
+  });
+
+  final IconData icon;
+  final String label;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) => Chip(
+    avatar: Icon(icon, size: 16, color: color),
+    label: Text(label, style: TextStyle(color: color, fontSize: 11)),
+    visualDensity: VisualDensity.compact,
+    backgroundColor: color.withValues(alpha: 0.08),
+    side: BorderSide.none,
+    padding: const EdgeInsets.symmetric(horizontal: 4),
+  );
+}
+
+String _batchMoney(dynamic value) {
+  final amount = num.tryParse('$value');
+  return amount == null ? '—' : '₱${amount.toStringAsFixed(2)}';
+}
+
 Map<String, String> allocationBatchLabels(
   Iterable<Map<String, dynamic>> records,
 ) {
@@ -205,7 +611,9 @@ List<Map<String, dynamic>> allocationBatchItemsForRecord(
   String? itemId,
 }) {
   final requestedId = itemId?.trim() ?? '';
-  return bundleRows(record['items']).where((item) {
+  final items = bundleRows(record['items']);
+  final batchItems = items.isEmpty ? bundleRows(record['sizes']) : items;
+  return batchItems.where((item) {
     if (requestedId.isEmpty) return true;
     return [
       item['id'],
@@ -236,6 +644,7 @@ Future<void> showInventoryBatches(
   required String allocationId,
   required List<String> scopeIds,
   String? itemId,
+  bool readOnly = false,
   FirebaseFirestore? database,
 }) => showDialog<void>(
   context: context,
@@ -243,6 +652,7 @@ Future<void> showInventoryBatches(
     allocationId: allocationId,
     scopeIds: scopeIds,
     itemId: itemId,
+    readOnly: readOnly,
     db: database ?? FirebaseFirestore.instance,
   ),
 );
@@ -253,10 +663,12 @@ class _BatchDialog extends StatefulWidget {
     required this.scopeIds,
     required this.db,
     this.itemId,
+    this.readOnly = false,
   });
   final String allocationId;
   final List<String> scopeIds;
   final String? itemId;
+  final bool readOnly;
   final FirebaseFirestore db;
   @override
   State<_BatchDialog> createState() => _BatchDialogState();
@@ -294,10 +706,17 @@ class _BatchDialogState extends State<_BatchDialog> {
       if (original == null || !widget.scopeIds.contains(original['staffId'])) {
         throw StateError('This allocation is no longer available.');
       }
-      final docs = await widget.db
-          .collection('staff_inventory')
-          .where('staffId', isEqualTo: original['staffId'])
-          .get();
+      final snapshots = await Future.wait([
+        widget.db
+            .collection('staff_inventory')
+            .where('staffId', isEqualTo: original['staffId'])
+            .get(),
+        widget.db
+            .collection('completed_sales')
+            .where('branchId', isEqualTo: original['staffId'])
+            .get(),
+      ]);
+      final docs = snapshots[0];
       final rows = docs.docs
           .where(
             (d) =>
@@ -312,10 +731,7 @@ class _BatchDialogState extends State<_BatchDialog> {
           )
           .map((d) => <String, dynamic>{...d.data(), '_id': d.id})
           .toList();
-      final sales = await widget.db
-          .collection('completed_sales')
-          .where('branchId', isEqualTo: original['staffId'])
-          .get();
+      final sales = snapshots[1];
       for (final saleDoc in sales.docs) {
         final sale = saleDoc.data();
         if (sale['isVoided'] == true || sale['isDeleted'] == true) continue;
@@ -373,16 +789,6 @@ class _BatchDialogState extends State<_BatchDialog> {
   String dateLabel(dynamic value) => value == null || '$value'.isEmpty
       ? '--'
       : date(value).toIso8601String().split('T').first;
-  String originBatchLabel(
-    Map<String, dynamic> instance,
-    Map<String, String> labels,
-  ) {
-    final originId = instance['originBatchId'];
-    if (originId == null) return '';
-    final label = labels['$originId'] ?? 'Batch - 001';
-    return '\n(Og ${label.replaceFirst('Batch - ', 'Batch-')})';
-  }
-
   Future<void> submit() async {
     if (selectedAllocation == null || selected.isEmpty) return;
     setState(() {
@@ -538,6 +944,7 @@ class _BatchDialogState extends State<_BatchDialog> {
     return PopScope(
       canPop: !busy,
       child: AlertDialog(
+        insetPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
         titlePadding: EdgeInsets.zero,
         title: Container(
           padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 18),
@@ -564,7 +971,9 @@ class _BatchDialogState extends State<_BatchDialog> {
           ),
         ),
         content: SizedBox(
-          width: 620,
+          width: MediaQuery.sizeOf(context).width < 600
+              ? double.maxFinite
+              : 620,
           child: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -604,9 +1013,20 @@ class _BatchDialogState extends State<_BatchDialog> {
                     ],
                   ),
                 const SizedBox(height: 12),
-                if (records == null && error == null)
+                if (records == null && error == null) ...[
                   const LinearProgressIndicator(),
-                if (bundle) ...[
+                  const SizedBox(height: 12),
+                  const Center(child: Text('Loading allocated batches...')),
+                ],
+                if (error != null)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    child: Text(
+                      error!,
+                      style: const TextStyle(color: Colors.red),
+                    ),
+                  ),
+                if (bundle && !widget.readOnly) ...[
                   DropdownButtonFormField<String>(
                     initialValue: action,
                     isExpanded: true,
@@ -692,48 +1112,102 @@ class _BatchDialogState extends State<_BatchDialog> {
                           final someSelected =
                               selectedCount > 0 && !allSelected;
                           return Card(
-                            color: Colors.white,
-                            elevation: 2,
-                            margin: const EdgeInsets.symmetric(vertical: 6),
+                            color: const Color(0xFFFFFBFC),
+                            elevation: 0,
+                            margin: const EdgeInsets.symmetric(vertical: 7),
                             shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(16),
-                              side: const BorderSide(color: AppColors.blush),
+                              borderRadius: BorderRadius.circular(18),
+                              side: BorderSide(
+                                color: selectedCount > 0
+                                    ? AppColors.primary
+                                    : AppColors.blush,
+                                width: selectedCount > 0 ? 1.5 : 1,
+                              ),
                             ),
                             child: ExpansionTile(
+                              tilePadding: const EdgeInsets.symmetric(
+                                horizontal: 14,
+                                vertical: 5,
+                              ),
+                              childrenPadding: const EdgeInsets.fromLTRB(
+                                12,
+                                0,
+                                12,
+                                12,
+                              ),
                               shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(16),
+                                borderRadius: BorderRadius.circular(18),
                               ),
                               collapsedShape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(16),
+                                borderRadius: BorderRadius.circular(18),
+                              ),
+                              leading: CircleAvatar(
+                                radius: 19,
+                                backgroundColor: AppColors.blush,
+                                child: Icon(
+                                  Icons.inventory_2_outlined,
+                                  size: 19,
+                                  color: AppColors.primaryDark,
+                                ),
                               ),
                               title: Row(
                                 children: [
                                   Expanded(
                                     child: Text(
-                                      '${record['name']} - ${dateLabel(batch['assignedAt'])}',
+                                      '${record['name'] ?? 'Bundle'}',
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.w800,
+                                        color: AppColors.text,
+                                      ),
                                     ),
                                   ),
-                                  Checkbox(
-                                    tristate: true,
-                                    value: allSelected
-                                        ? true
-                                        : someSelected
-                                        ? null
-                                        : false,
-                                    onChanged: busy || selectable.isEmpty
-                                        ? null
-                                        : (checked) => setState(
-                                            () => toggleBatchSelection(
-                                              '${record['_id']}',
-                                              selectable,
-                                              checked == true,
+                                  if (!widget.readOnly)
+                                    Checkbox(
+                                      tristate: true,
+                                      value: allSelected
+                                          ? true
+                                          : someSelected
+                                          ? null
+                                          : false,
+                                      onChanged: busy || selectable.isEmpty
+                                          ? null
+                                          : (checked) => setState(
+                                              () => toggleBatchSelection(
+                                                '${record['_id']}',
+                                                selectable,
+                                                checked == true,
+                                              ),
                                             ),
-                                          ),
-                                  ),
+                                    ),
                                 ],
                               ),
-                              subtitle: Text(
-                                '${record['origin'] == 'unbundle' ? 'Unbundle' : 'Allocated'} | ${instanceBatchLabels['${batch['batchId']}'] ?? 'Batch - 001'}',
+                              subtitle: Padding(
+                                padding: const EdgeInsets.only(top: 4),
+                                child: Wrap(
+                                  spacing: 6,
+                                  runSpacing: 4,
+                                  crossAxisAlignment: WrapCrossAlignment.center,
+                                  children: [
+                                    _BatchInfoChip(
+                                      label:
+                                          'Batch ${instanceBatchLabels['${batch['batchId']}']?.replaceFirst('Batch - ', '') ?? '001'}',
+                                      icon: Icons.layers_outlined,
+                                    ),
+                                    if (dateLabel(batch['assignedAt']) != '--')
+                                      _BatchInfoChip(
+                                        label: dateLabel(batch['assignedAt']),
+                                        icon: Icons.calendar_today_outlined,
+                                      ),
+                                    if (!widget.readOnly)
+                                      _BatchInfoChip(
+                                        label: '$selectedCount selected',
+                                        icon:
+                                            Icons.check_circle_outline_rounded,
+                                      ),
+                                  ],
+                                ),
                               ),
                               children: [
                                 for (
@@ -744,12 +1218,85 @@ class _BatchDialogState extends State<_BatchDialog> {
                                   Builder(
                                     builder: (context) {
                                       final instance = instances[index];
-                                      return ListTile(
-                                        title: Text(
-                                          '${allocationInstanceLabel(instance, index)} | ${formatMoney(num.tryParse('${instance['price'] ?? record['price']}') ?? 0)}',
+                                      final expiration = dateLabel(
+                                        instance['expirationDate'],
+                                      );
+                                      final bundleItems = bundleRows(
+                                        instance['items'],
+                                      );
+                                      return Container(
+                                        margin: const EdgeInsets.only(top: 8),
+                                        padding: const EdgeInsets.all(12),
+                                        decoration: BoxDecoration(
+                                          color: Colors.white,
+                                          borderRadius: BorderRadius.circular(
+                                            14,
+                                          ),
+                                          border: Border.all(
+                                            color: AppColors.border,
+                                          ),
                                         ),
-                                        subtitle: Text(
-                                          '${instance['status'] ?? 'available'} | Expiry: ${dateLabel(instance['expirationDate'])}\n${bundleRows(instance['items']).map((i) => '${i['name']} x${i['quantity']} (${dateLabel(i['expirationDate'])})').join('\n')}${originBatchLabel(instance, instanceBatchLabels)}',
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Wrap(
+                                              spacing: 8,
+                                              runSpacing: 6,
+                                              crossAxisAlignment:
+                                                  WrapCrossAlignment.center,
+                                              children: [
+                                                Text(
+                                                  'Bundle ${allocationInstanceNumber(instance, index)}',
+                                                  style: const TextStyle(
+                                                    fontWeight: FontWeight.w800,
+                                                    color:
+                                                        AppColors.primaryDeep,
+                                                  ),
+                                                ),
+                                                Text(
+                                                  formatMoney(
+                                                    num.tryParse(
+                                                          '${instance['price'] ?? record['price']}',
+                                                        ) ??
+                                                        0,
+                                                  ),
+                                                  style: const TextStyle(
+                                                    fontWeight: FontWeight.w800,
+                                                    color: Color(0xFF2E7D32),
+                                                  ),
+                                                ),
+                                                _BatchInfoChip(
+                                                  label:
+                                                      '${instance['status'] ?? 'Available'}',
+                                                  icon: Icons.circle,
+                                                ),
+                                                if (expiration != '--')
+                                                  _BatchInfoChip(
+                                                    label:
+                                                        'Expires $expiration',
+                                                    icon: Icons.event_outlined,
+                                                  ),
+                                              ],
+                                            ),
+                                            if (bundleItems.isNotEmpty) ...[
+                                              const SizedBox(height: 8),
+                                              for (final item in bundleItems)
+                                                Padding(
+                                                  padding:
+                                                      const EdgeInsets.only(
+                                                        top: 3,
+                                                      ),
+                                                  child: Text(
+                                                    '${item['name'] ?? 'Item'}  ×${item['quantity'] ?? 0}',
+                                                    style: const TextStyle(
+                                                      color: AppColors.text,
+                                                      fontSize: 13,
+                                                    ),
+                                                  ),
+                                                ),
+                                            ],
+                                          ],
                                         ),
                                       );
                                     },
@@ -780,11 +1327,11 @@ class _BatchDialogState extends State<_BatchDialog> {
                         ].join(' - ');
                         return Card(
                           color: Colors.white,
-                          elevation: 2,
+                          elevation: 0,
                           margin: const EdgeInsets.symmetric(vertical: 6),
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(16),
-                            side: const BorderSide(color: AppColors.blush),
+                            side: const BorderSide(color: AppColors.border),
                           ),
                           child: ExpansionTile(
                             shape: RoundedRectangleBorder(
@@ -793,9 +1340,35 @@ class _BatchDialogState extends State<_BatchDialog> {
                             collapsedShape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(16),
                             ),
-                            title: Text(title),
+                            tilePadding: const EdgeInsets.symmetric(
+                              horizontal: 14,
+                              vertical: 4,
+                            ),
+                            childrenPadding: const EdgeInsets.fromLTRB(
+                              12,
+                              0,
+                              12,
+                              12,
+                            ),
+                            leading: const CircleAvatar(
+                              radius: 18,
+                              backgroundColor: AppColors.blush,
+                              child: Icon(
+                                Icons.inventory_2_outlined,
+                                size: 19,
+                                color: AppColors.primaryDark,
+                              ),
+                            ),
+                            title: Text(
+                              title,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
                             subtitle: Text(
-                              '${record['origin'] == 'unbundle' || items.any((item) => item['origin'] == 'unbundle') ? 'Unbundle' : 'Allocated'} | ${batchLabels['${record['_id']}'] ?? 'Batch - 001'}',
+                              '${record['origin'] == 'unbundle' || items.any((item) => item['origin'] == 'unbundle') ? 'Unbundled' : 'Assigned'} · Batch ${batchLabels['${record['_id']}']?.replaceFirst('Batch - ', '') ?? '001'} · ${dateLabel(record['assignedAt'])}',
                             ),
                             children: [
                               for (final sale in bundleRows(record['_sales']))
@@ -830,7 +1403,7 @@ class _BatchDialogState extends State<_BatchDialog> {
             onPressed: busy ? null : () => Navigator.pop(context),
             child: const Text('Close'),
           ),
-          if (bundle)
+          if (bundle && !widget.readOnly)
             FilledButton(
               onPressed:
                   busy ||
@@ -844,6 +1417,37 @@ class _BatchDialogState extends State<_BatchDialog> {
       ),
     );
   }
+}
+
+class _BatchInfoChip extends StatelessWidget {
+  const _BatchInfoChip({required this.label, required this.icon});
+
+  final String label;
+  final IconData icon;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+    decoration: BoxDecoration(
+      color: AppColors.surfaceTint,
+      borderRadius: BorderRadius.circular(20),
+    ),
+    child: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 13, color: AppColors.primaryDark),
+        const SizedBox(width: 4),
+        Text(
+          label,
+          style: const TextStyle(
+            color: AppColors.primaryDark,
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ],
+    ),
+  );
 }
 
 class ReconciliationRequestsButton extends StatelessWidget {

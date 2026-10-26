@@ -48,6 +48,62 @@ void main() {
     expect(entries.last.images, isEmpty);
   });
 
+  test('current inventory excludes expired and voided categories and variants', () {
+    final entries = adminCatalogEntries([
+      {
+        'id': 'active-category',
+        'name': 'Active',
+        'items': [
+          {'id': 'active-item', 'name': 'Active item', 'stock': 4},
+          {
+            'id': 'expired-item',
+            'name': 'Expired item',
+            'stock': 5,
+            'expirationDate': '2026-09-23',
+          },
+          {
+            'id': 'voided-item',
+            'name': 'Voided item',
+            'stock': 6,
+            'isVoided': true,
+          },
+        ],
+      },
+      {
+        'id': 'expired-category',
+        'name': 'Expired category',
+        'expirationDate': '2026-09-23',
+        'items': [
+          {'id': 'expired-category-item', 'name': 'Expired category item'},
+        ],
+      },
+      {
+        'id': 'voided-category',
+        'name': 'Voided category',
+        'status': 'voided',
+        'items': [
+          {'id': 'voided-category-item', 'name': 'Voided category item'},
+        ],
+      },
+    ], [], now: today);
+
+    expect(entries.map((entry) => entry.id), ['active-item']);
+    expect(
+      currentCatalogCategories([
+        {
+          'name': 'Empty after filtering',
+          'items': [
+            {
+              'name': 'Expired',
+              'expirationDate': '2026-09-23',
+            },
+          ],
+        },
+      ], now: today),
+      isEmpty,
+    );
+  });
+
   test('Home groups active variants and includes their carousel images', () {
     final entry = adminCatalogEntries(
       [category],

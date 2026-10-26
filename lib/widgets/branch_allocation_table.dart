@@ -11,6 +11,13 @@ double branchStockCost(Map row) => row['totalCost'] != null
     ? reportValue(row['totalCost'])
     : reportValue(row['costPrice']) * reportValue(row['sold']);
 double? branchSizePrice(Map row, String size) {
+  final override = row['branchSizePriceOverrides'] as Map?;
+  final overrideValue = override?.entries
+      .where((entry) => '${entry.key}'.toLowerCase() == size.toLowerCase())
+      .firstOrNull
+      ?.value;
+  final branchPrice = num.tryParse('${overrideValue ?? ''}');
+  if (branchPrice != null) return branchPrice.toDouble();
   final option = (row['sizes'] as List? ?? [])
       .whereType<Map>()
       .where((s) => '${s['name']}'.toLowerCase() == size.toLowerCase())
@@ -69,6 +76,18 @@ class BranchAllocationTable extends StatelessWidget {
   String qty(dynamic v) => v == null ? '—' : reportValue(v).toStringAsFixed(0);
   @override
   Widget build(BuildContext context) {
+    final beverageSizes = rows
+        .expand(
+          (row) => (row['sizes'] as List? ?? [])
+              .whereType<Map>()
+              .map((size) => '${size['name'] ?? ''}'.trim())
+              .where((name) => name.isNotEmpty),
+        )
+        .toSet()
+        .toList();
+    if (beverages && beverageSizes.isEmpty) {
+      beverageSizes.addAll(['Small', 'Medium', 'Large']);
+    }
     final columns = <(String, String)>[
       ('id', 'ID'),
       if (addons) ('image', 'Image'),
@@ -78,19 +97,18 @@ class BranchAllocationTable extends StatelessWidget {
         ('costPrice', 'Cost price'),
         ('price', 'Price'),
         ('expirationDate', 'Expiry'),
-        ('remaining', 'Stock'),
         ('status', 'Availability'),
       ] else if (inventory) ...[
         ('costPrice', 'Cost price'),
         if (!beverages) ('price', 'Price'),
         if (beverages)
-          for (final size in ['Small', 'Medium', 'Large']) (size, size),
+          for (final size in beverageSizes) (size, size),
         ('expirationDate', 'Expiry'),
         if (!beverages) ('remaining', 'Stock'),
         ('status', 'Availability'),
       ] else ...[
         if (beverages)
-          for (final size in ['Small', 'Medium', 'Large']) (size, size)
+          for (final size in beverageSizes) (size, size)
         else
           ('price', 'Unit price'),
         if (!beverages) ...[
@@ -178,7 +196,10 @@ class BranchAllocationTable extends StatelessWidget {
           ],
         );
       }
-      if (['Small', 'Medium', 'Large'].contains(key)) {
+      if (beverages &&
+          (row['sizes'] as List? ?? []).whereType<Map>().any(
+            (size) => '${size['name']}'.trim() == key,
+          )) {
         final price = branchSizePrice(row, key);
         return Text(price == null ? '—' : money(price));
       }
