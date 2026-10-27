@@ -145,6 +145,7 @@ class _ActivityFeedState extends State<ActivityFeed> {
     };
     Widget feed(
       List<QueryDocumentSnapshot<Map<String, dynamic>>> receipts,
+      List<QueryDocumentSnapshot<Map<String, dynamic>>> sales,
     ) => StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
       stream: query.snapshots(),
       builder: (context, snapshot) {
@@ -191,6 +192,38 @@ class _ActivityFeedState extends State<ActivityFeed> {
                               : r['confirmedAt'] ?? r['decidedAt'],
                         };
                       }),
+                  ...sales.map((doc) {
+                    final r = doc.data();
+                    final items = (r['items'] as List? ?? [])
+                        .whereType<Map>()
+                        .map(
+                          (item) =>
+                              '${item['name'] ?? 'Item'} × ${item['quantity'] ?? item['qty'] ?? 1}',
+                        )
+                        .join(', ');
+                    final receipt = '${r['salesId'] ?? doc.id}';
+                    final cashier =
+                        '${r['cashierName'] ?? r['staffName'] ?? r['userName'] ?? 'Cashier'}';
+                    return <String, dynamic>{
+                      'action': 'cashier_order',
+                      'description':
+                          'Cashier order $receipt${items.isEmpty ? '' : ': $items'}',
+                      'actorId':
+                          r['cashierId'] ??
+                          r['staffUid'] ??
+                          r['staffId'] ??
+                          r['userId'],
+                      'actorName': cashier,
+                      'actorPublicId':
+                          r['cashierPublicId'] ??
+                          r['staffPublicId'] ??
+                          r['staffId'] ??
+                          '',
+                      'actorRole': 'Cashier',
+                      'branchIds': [r['branchId'] ?? branchId],
+                      'createdAt': r['timestamp'] ?? r['createdAt'],
+                    };
+                  }),
                 ]
                 .where(
                   (r) =>
@@ -403,13 +436,23 @@ class _ActivityFeedState extends State<ActivityFeed> {
         );
       },
     );
-    if (!includeReceipts || branchId == null) return feed(const []);
+    if (!includeReceipts || branchId == null) return feed(const [], const []);
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
       stream: db
           .collection('allocation_checklist')
           .where('staffId', isEqualTo: branchId)
           .snapshots(),
-      builder: (context, receipts) => feed(receipts.data?.docs ?? const []),
+      builder: (context, receipts) =>
+          StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+            stream: db
+                .collection('completed_sales')
+                .where('branchId', isEqualTo: branchId)
+                .snapshots(),
+            builder: (context, sales) => feed(
+              receipts.data?.docs ?? const [],
+              sales.data?.docs ?? const [],
+            ),
+          ),
     );
   }
 }

@@ -504,8 +504,7 @@ class _AdminCatalogState extends State<AdminCatalog> {
             .where(
               (entry) =>
                   (filter == 'All' || entry.type == filter) &&
-                  (_query.isNotEmpty ||
-                      widget.type != 'Categories' ||
+                  (widget.type != 'Categories' ||
                       catalogCategoryKey(entry.source) == _category) &&
                   '${entry.id} ${entry.name} ${catalogExpiryLabel(entry)} ${_low(entry) ? 'low stock' : ''} ${_near(entry) ? 'near expiry expiring soon malapit ma expire' : ''}'
                       .toLowerCase()
@@ -813,12 +812,13 @@ class _AdminCatalogState extends State<AdminCatalog> {
               icon: const Icon(Icons.layers_outlined, size: 18),
               onPressed: () => widget.onViewBatches!(entry),
             ),
-          IconButton.filledTonal(
-            tooltip: 'Edit ${entry.name}',
-            visualDensity: VisualDensity.compact,
-            icon: const Icon(Icons.edit_outlined, size: 18),
-            onPressed: () => widget.onOpen(entry),
-          ),
+          if (_branch.isEmpty && widget.lockedBranchId == null)
+            IconButton.filledTonal(
+              tooltip: 'Edit ${entry.name}',
+              visualDensity: VisualDensity.compact,
+              icon: const Icon(Icons.edit_outlined, size: 18),
+              onPressed: () => widget.onOpen(entry),
+            ),
           if (widget.onVoid != null && entry.details['_emptyCategory'] != true)
             IconButton(
               tooltip: 'Void ${entry.name}',

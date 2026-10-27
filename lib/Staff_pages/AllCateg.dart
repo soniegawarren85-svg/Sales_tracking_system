@@ -584,6 +584,7 @@ class _AllCategPageState extends State<AllCategPage>
   }) async {
     final qtyController = TextEditingController();
     final commentController = TextEditingController();
+    final pageContext = context;
     String? selectedReason;
     bool isSaving = false;
     final reasonOptions = [
@@ -840,101 +841,174 @@ class _AllCategPageState extends State<AllCategPage>
 
                                       setState(() => isSaving = true);
                                       try {
-                                        final docRef = FirebaseFirestore
-                                            .instance
+                                        final firestore =
+                                            FirebaseFirestore.instance;
+                                        final docRef = firestore
                                             .collection('staff_inventory')
                                             .doc(sourceDocId);
-                                        final snapshot = await docRef.get();
-                                        final data = snapshot.data();
-                                        final items =
-                                            (data?['items'] as List?)
-                                                ?.cast<
-                                                  Map<String, dynamic>
-                                                >() ??
-                                            [];
-                                        final unitPrice = _parsePrice(
-                                          item['price'],
-                                        );
-                                        double reductionAmount = 0.0;
-                                        final updatedItems = items.map((entry) {
-                                          final entryName =
-                                              entry['name']?.toString() ?? '';
-                                          final entryVariant =
-                                              entry['variant']?.toString() ??
-                                              '';
-                                          final entryId =
-                                              entry['id']?.toString() ?? '';
-                                          final itemName =
-                                              item['name']?.toString() ?? '';
-                                          final itemVariant =
-                                              item['variant']?.toString() ?? '';
-                                          final itemId =
-                                              item['id']?.toString() ?? '';
-                                          final isMatchingEntry =
-                                              itemId.isNotEmpty
-                                              ? entryId == itemId
-                                              : entryName == itemName &&
-                                                    entryVariant == itemVariant;
+                                        final adjustmentRef = firestore
+                                            .collection('stock_adjustments')
+                                            .doc();
+                                        final notificationRef = firestore
+                                            .collection('admin_notifications')
+                                            .doc();
+                                        final itemId =
+                                            item['id']?.toString() ?? '';
+                                        final itemName =
+                                            item['name']?.toString() ?? '';
+                                        final itemVariant =
+                                            item['variant']?.toString() ?? '';
+                                        final currentUser =
+                                            FirebaseAuth.instance.currentUser;
+                                        final staffName =
+                                            currentUser?.displayName
+                                                    ?.trim()
+                                                    .isNotEmpty ==
+                                                true
+                                            ? currentUser!.displayName!
+                                            : currentUser?.email
+                                                      ?.split('@')
+                                                      .first ??
+                                                  'Staff';
 
-                                          if (isMatchingEntry) {
-                                            final stockValue =
-                                                entry['stock'] is num
-                                                ? (entry['stock'] as num)
-                                                      .toInt()
-                                                : int.tryParse(
-                                                        entry['stock']
-                                                                ?.toString() ??
-                                                            '',
-                                                      ) ??
-                                                      0;
-                                            final startingStockValue =
-                                                entry['startingStock'] is num
-                                                ? (entry['startingStock']
-                                                          as num)
-                                                      .toInt()
-                                                : int.tryParse(
-                                                        entry['startingStock']
-                                                                ?.toString() ??
-                                                            '',
-                                                      ) ??
-                                                      0;
-                                            final actualStock = stockValue > 0
-                                                ? stockValue
-                                                : startingStockValue;
-                                            final newStock =
-                                                actualStock - quantity;
-                                            final reducedStock = newStock < 0
-                                                ? 0
-                                                : newStock;
-                                            final unitPrice = _parsePrice(
-                                              entry['price'],
+                                        await firestore.runTransaction<void>((
+                                          transaction,
+                                        ) async {
+                                          final snapshot = await transaction
+                                              .get(docRef);
+                                          final data = snapshot.data();
+                                          if (!snapshot.exists ||
+                                              data == null) {
+                                            throw StateError(
+                                              'Inventory item no longer exists.',
                                             );
-                                            reductionAmount =
-                                                unitPrice * quantity;
-                                            final hasStockField = entry
-                                                .containsKey('stock');
-                                            final currentReduced =
-                                                int.tryParse(
-                                                  entry['reducedQuantity']
-                                                          ?.toString() ??
-                                                      '',
-                                                ) ??
-                                                0;
-                                            return {
-                                              ...entry,
-                                              'stock': reducedStock,
-                                              'reducedQuantity':
-                                                  currentReduced + quantity,
-                                              if (!hasStockField)
-                                                'startingStock': reducedStock,
-                                            };
                                           }
-                                          return entry;
-                                        }).toList();
 
-                                        await docRef.update({
-                                          'items': updatedItems,
+                                          int stockValue(dynamic value) =>
+                                              value is num
+                                              ? value.toInt()
+                                              : int.tryParse(
+                                                      value?.toString() ?? '',
+                                                    ) ??
+                                                    0;
+
+                                          var matched = false;
+                                          var previousStock = 0;
+                                          var newStock = 0;
+                                          var lossAmount = 0.0;
+                                          final updatedItems = <dynamic>[];
+                                          for (final rawEntry
+                                              in data['items'] as List? ??
+                                                  const []) {
+                                            if (rawEntry is! Map) {
+                                              updatedItems.add(rawEntry);
+                                              continue;
+                                            }
+                                            final entry =
+                                                Map<String, dynamic>.from(
+                                                  rawEntry,
+                                                );
+                                            final entryId =
+                                                entry['id']?.toString() ?? '';
+                                            final isMatchingEntry =
+                                                itemId.isNotEmpty
+                                                ? entryId == itemId
+                                                : (entry['name']?.toString() ??
+                                                              '') ==
+                                                          itemName &&
+                                                      (entry['variant']
+                                                                  ?.toString() ??
+                                                              '') ==
+                                                          itemVariant;
+                                            if (!isMatchingEntry || matched) {
+                                              updatedItems.add(entry);
+                                              continue;
+                                            }
+
+                                            final hasStockField =
+                                                entry.containsKey('stock') &&
+                                                entry['stock'] != null;
+                                            previousStock = hasStockField
+                                                ? stockValue(entry['stock'])
+                                                : stockValue(
+                                                    entry['startingStock'],
+                                                  );
+                                            if (quantity > previousStock) {
+                                              throw StateError(
+                                                'Stock changed. Only $previousStock item(s) remain.',
+                                              );
+                                            }
+                                            newStock = previousStock - quantity;
+                                            lossAmount =
+                                                _parsePrice(entry['price']) *
+                                                quantity;
+                                            final reducedQuantity = stockValue(
+                                              entry['reducedQuantity'],
+                                            );
+                                            updatedItems.add({
+                                              ...entry,
+                                              'stock': newStock,
+                                              'reducedQuantity':
+                                                  reducedQuantity + quantity,
+                                              if (!hasStockField)
+                                                'startingStock': newStock,
+                                            });
+                                            matched = true;
+                                          }
+                                          if (!matched) {
+                                            throw StateError(
+                                              'Selected inventory item no longer exists.',
+                                            );
+                                          }
+
+                                          final variantLabel =
+                                              itemVariant.isNotEmpty
+                                              ? ' ($itemVariant)'
+                                              : '';
+                                          transaction.update(docRef, {
+                                            'items': updatedItems,
+                                          });
+                                          transaction.set(adjustmentRef, {
+                                            'userId': currentUser?.uid,
+                                            'staffId': currentUser?.uid,
+                                            'categoryName': categoryName,
+                                            'categoryId': sourceDocId,
+                                            'itemId':
+                                                item['id'] ??
+                                                item['itemId'] ??
+                                                item['variantId'] ??
+                                                '',
+                                            'itemName': itemName,
+                                            'variant': itemVariant,
+                                            'quantity': quantity,
+                                            'unitPrice': lossAmount / quantity,
+                                            'lossAmount': lossAmount,
+                                            'previousStock': previousStock,
+                                            'newStock': newStock,
+                                            'reason': reason,
+                                            'comment': comment,
+                                            'createdAt':
+                                                FieldValue.serverTimestamp(),
+                                          });
+                                          transaction.set(notificationRef, {
+                                            'title': 'Stock reduced',
+                                            'message':
+                                                '$staffName reduced $quantity x $itemName$variantLabel from $previousStock to $newStock. Expected sales decreased by ${formatMoney(lossAmount)}.',
+                                            'category': 'Stock',
+                                            'type': 'stock_adjustment',
+                                            'itemName': itemName,
+                                            'variant': itemVariant,
+                                            'quantity': quantity,
+                                            'reductionAmount': lossAmount,
+                                            'categoryName': categoryName,
+                                            'staffId': currentUser?.uid,
+                                            'staffName': staffName,
+                                            'isRead': false,
+                                            'createdAt':
+                                                FieldValue.serverTimestamp(),
+                                          });
                                         });
+
                                         final selectedItemId =
                                             item['id']?.toString() ?? '';
                                         InventoryService().recordStockReduction(
@@ -945,79 +1019,11 @@ class _AllCategPageState extends State<AllCategPage>
                                           quantity: quantity,
                                           sourceInventoryId: sourceDocId,
                                         );
-                                        await FirebaseFirestore.instance
-                                            .collection('stock_adjustments')
-                                            .add({
-                                              'userId': FirebaseAuth
-                                                  .instance
-                                                  .currentUser
-                                                  ?.uid,
-                                              'staffId': FirebaseAuth
-                                                  .instance
-                                                  .currentUser
-                                                  ?.uid,
-                                              'categoryName': categoryName,
-                                              'categoryId': sourceDocId,
-                                              'itemId':
-                                                  item['id']?.toString() ??
-                                                  item['itemId']?.toString() ??
-                                                  item['variantId']
-                                                      ?.toString() ??
-                                                  '',
-                                              'itemName': item['name'] ?? '',
-                                              'variant': item['variant'] ?? '',
-                                              'quantity': quantity,
-                                              'unitPrice': unitPrice,
-                                              'lossAmount': reductionAmount,
-                                              'reason': reason,
-                                              'comment': comment,
-                                              'createdAt':
-                                                  FieldValue.serverTimestamp(),
-                                            });
-
-                                        final currentUser =
-                                            FirebaseAuth.instance.currentUser;
-                                        final staffName =
-                                            (currentUser?.displayName
-                                                    ?.trim()
-                                                    .isNotEmpty ==
-                                                true
-                                            ? currentUser!.displayName!
-                                            : currentUser?.email
-                                                      ?.split('@')
-                                                      .first ??
-                                                  'Staff');
-                                        final variantLabel =
-                                            (item['variant']?.toString() ?? '')
-                                                .isNotEmpty
-                                            ? ' (${item['variant']})'
-                                            : '';
-
-                                        await FirebaseFirestore.instance
-                                            .collection('admin_notifications')
-                                            .add({
-                                              'title': 'Stock reduced',
-                                              'message':
-                                                  '$staffName reduced $quantity x ${item['name'] ?? ''}$variantLabel from $currentStock to ${currentStock - quantity}. Expected sales decreased by ${formatMoney(reductionAmount)}.',
-                                              'category': 'Stock',
-                                              'type': 'stock_adjustment',
-                                              'itemName': item['name'] ?? '',
-                                              'variant': item['variant'] ?? '',
-                                              'quantity': quantity,
-                                              'reductionAmount':
-                                                  reductionAmount,
-                                              'categoryName': categoryName,
-                                              'staffId': currentUser?.uid,
-                                              'staffName': staffName,
-                                              'isRead': false,
-                                              'createdAt':
-                                                  FieldValue.serverTimestamp(),
-                                            });
 
                                         if (mounted) {
                                           Navigator.of(context).pop();
                                           showTopNotification(
-                                            context,
+                                            pageContext,
                                             'Stock reduced successfully!',
                                           );
                                         }
@@ -1074,6 +1080,8 @@ class _AllCategPageState extends State<AllCategPage>
         );
       },
     );
+    qtyController.dispose();
+    commentController.dispose();
   }
 
   SnackBar _buildSnackBar(String message, {bool isError = false}) {
@@ -3986,10 +3994,13 @@ class _AllCategPageState extends State<AllCategPage>
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(icon, size: 64, color: AppColors.primaryDark.withOpacity(0.3)),
-          const SizedBox(height: 16),
+          Icon(icon, size: 52, color: AppColors.primaryDark.withOpacity(0.3)),
+          const SizedBox(height: 8),
           Text(
             message,
+            textAlign: TextAlign.center,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
             style: const TextStyle(
               color: AppColors.primaryDark,
               fontSize: 16,
@@ -6386,10 +6397,8 @@ class _AllCategPageState extends State<AllCategPage>
                               return !_isExpiredItem(expirationDate) &&
                                   (rootItems.isEmpty ||
                                       rootItems.any(
-                                        (root) => inventoryVariantsMatch(
-                                          root,
-                                          item,
-                                        ),
+                                        (root) =>
+                                            inventoryVariantsMatch(root, item),
                                       ));
                             })
                             .toList();

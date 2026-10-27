@@ -1357,8 +1357,14 @@ class _DailyStockPageState extends State<DailyStockPage>
     if (value.isEmpty) {
       return;
     }
+    if (maxStock <= 0) {
+      setState(() => _cart.remove(key));
+      _syncQtyController(key, 0);
+      _showStyledSnackBar('No stock available', isError: true);
+      return;
+    }
     final parsed = int.tryParse(value.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
-    final upperLimit = max(maxStock, 1);
+    final upperLimit = maxStock;
     final clamped = parsed < 1
         ? 1
         : (parsed > upperLimit ? upperLimit : parsed);
@@ -4336,44 +4342,6 @@ class _DailyStockPageState extends State<DailyStockPage>
     return 'S-${now.year}${now.month.toString().padLeft(2, "0")}${now.day.toString().padLeft(2, "0")}-${now.hour.toString().padLeft(2, "0")}${now.minute.toString().padLeft(2, "0")}-$random';
   }
 
-  Future<void> _notifyAdminOutOfStock({
-    required String itemName,
-    required String variantName,
-    required String sourceInventoryId,
-    required String staffInventoryDocId,
-  }) async {
-    final today = DateTime.now();
-    final dateKey =
-        '${today.year}-${today.month.toString().padLeft(2, '0')}-${today.day.toString().padLeft(2, '0')}';
-    final identity = [
-      sourceInventoryId,
-      staffInventoryDocId,
-      itemName,
-      variantName,
-      dateKey,
-    ].where((part) => part.trim().isNotEmpty).join('_');
-    final safeId =
-        'out_of_stock_${identity.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_')}';
-
-    await FirebaseFirestore.instance
-        .collection('admin_notifications')
-        .doc(safeId)
-        .set({
-          'type': 'out_of_stock',
-          'title': 'Item Out of Stock',
-          'message': variantName.trim().isEmpty
-              ? '$itemName is now out of stock.'
-              : '$itemName - $variantName is now out of stock.',
-          'itemName': itemName,
-          'variantName': variantName,
-          'sourceInventoryId': sourceInventoryId,
-          'staffInventoryDocId': staffInventoryDocId,
-          'staffId': _currentUserId,
-          'isRead': false,
-          'createdAt': FieldValue.serverTimestamp(),
-        }, SetOptions(merge: true));
-  }
-
   Future<void> _finalizeOrder(
     double orderTotal,
     double paidAmount,
@@ -4489,6 +4457,15 @@ class _DailyStockPageState extends State<DailyStockPage>
             'publicId': item['publicId'],
             'coffeeId': item['coffeeId'] ?? '',
             'itemId': item['itemId'] ?? item['id'] ?? '',
+            'soldOutAfterSale':
+                item['untrackedStock'] != true &&
+                entry.value >=
+                    _stockForItem(
+                      item,
+                      item['variantSlot'] is int
+                          ? item['variantSlot'] as int
+                          : 0,
+                    ),
             'basePrice': item['basePrice'] ?? 0,
             'sizePriceDelta': item['sizePriceDelta'] ?? 0,
             'addonName': item['addonName'] ?? '',
@@ -7301,12 +7278,75 @@ class _DailyStockPageState extends State<DailyStockPage>
       );
       if (confirmed != true || !mounted) return;
     }
+
     final validCartEntries = _validCartEntries(orderItems);
+    final soldOutItems = <String>[];
+    final changedStockItems = <String>[];
+    for (final entry in validCartEntries) {
+      final item = _knownOrderItems(orderItems).firstWhere(
+        (element) => _cartKey(element) == entry.key,
+        orElse: () => <String, dynamic>{},
+      );
+      if (item.isEmpty) continue;
+      final variantSlot = item['variantSlot'] is int
+          ? item['variantSlot'] as int
+          : 0;
+      final availableStock = _stockForItem(item, variantSlot);
+      if (entry.value > availableStock) {
+        changedStockItems.add(_itemDisplayLabel(item));
+      } else if (availableStock > 0 && entry.value == availableStock) {
+        soldOutItems.add('${_itemDisplayLabel(item)} (${entry.value})');
+      }
+    }
+    if (changedStockItems.isNotEmpty) {
+      _showStyledSnackBar(
+        'Stock changed for ${changedStockItems.join(', ')}. Review the quantity and try again.',
+        isError: true,
+      );
+      return;
+    }
+    if (soldOutItems.isNotEmpty) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Confirm sell-out order'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'This order will use all remaining stock for:',
+              ),
+              const SizedBox(height: 12),
+              ...soldOutItems.map(
+                (item) => Padding(
+                  padding: const EdgeInsets.only(bottom: 6),
+                  child: Text(item),
+                ),
+              ),
+              const SizedBox(height: 6),
+              const Text(
+                'The item will be marked sold out after the sale. Continue?',
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Review order'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('Continue'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true || !mounted) return;
+    }
+
     final salesId = _generateSalesId();
-    final paymentController = TextEditingController(
-      text: _discountedTotal(orderItems).toStringAsFixed(2),
-    );
-    var paidManuallyEdited = false;
+    final paymentController = TextEditingController();
     final gcashTransactionController = TextEditingController();
     final discountProofController = TextEditingController();
     var paymentMode = 'Cash';
@@ -7331,32 +7371,38 @@ class _DailyStockPageState extends State<DailyStockPage>
               final totalDue = double.parse(
                 _discountedTotal(orderItems).toStringAsFixed(2),
               );
-              if (!paidManuallyEdited) {
-                paymentController.text = totalDue.toStringAsFixed(2);
-              }
-              paidAmount =
-                  double.tryParse(
+              final enteredAmount = paymentController.text.trim();
+              final hasPaidAmount = enteredAmount.isNotEmpty;
+              paidAmount = enteredAmount.isEmpty
+                  ? 0
+                  : double.tryParse(
                     paymentController.text.trim().replaceAll(
                       RegExp(r'[^0-9.]'),
                       '',
                     ),
                   ) ??
                   0;
-              change = paidAmount - totalDue;
+              change = enteredAmount.isEmpty ? -totalDue : paidAmount - totalDue;
               final hasEnoughCashForChange =
                   paymentMode != 'Cash' ||
                   change <= 0 ||
                   _cashDrawer + 0.001 >= change;
               final canConfirm =
-                  paidAmount >= totalDue && hasEnoughCashForChange;
+                  enteredAmount.isNotEmpty &&
+                  paidAmount >= totalDue &&
+                  hasEnoughCashForChange;
               return Dialog(
+                insetPadding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 24,
+                ),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(28),
                 ),
                 elevation: 0,
                 backgroundColor: Colors.transparent,
                 child: Container(
-                  width: min(MediaQuery.sizeOf(context).width - 48, 680),
+                  width: min(MediaQuery.sizeOf(context).width - 32, 680),
                   constraints: BoxConstraints(
                     maxHeight: MediaQuery.sizeOf(context).height * 0.88,
                   ),
@@ -7583,10 +7629,6 @@ class _DailyStockPageState extends State<DailyStockPage>
                                     .toList(),
                                 onChanged: (value) => setState(() {
                                   paymentMode = value ?? 'Cash';
-                                  if (!paidManuallyEdited) {
-                                    paymentController.text = totalDue
-                                        .toStringAsFixed(2);
-                                  }
                                 }),
                               ),
                               const SizedBox(height: 12),
@@ -7688,12 +7730,6 @@ class _DailyStockPageState extends State<DailyStockPage>
                                                     if (value) {
                                                       _pwdDiscount = false;
                                                     }
-                                                    if (!paidManuallyEdited) {
-                                                      paymentController.text =
-                                                          _discountedTotal(
-                                                            orderItems,
-                                                          ).toStringAsFixed(2);
-                                                    }
                                                   }),
                                               icon: Icons.elderly_rounded,
                                             ),
@@ -7709,12 +7745,6 @@ class _DailyStockPageState extends State<DailyStockPage>
                                                     if (value) {
                                                       _seniorDiscount = false;
                                                     }
-                                                    if (!paidManuallyEdited) {
-                                                      paymentController.text =
-                                                          _discountedTotal(
-                                                            orderItems,
-                                                          ).toStringAsFixed(2);
-                                                    }
                                                   }),
                                               icon: Icons.accessible_rounded,
                                             ),
@@ -7729,16 +7759,14 @@ class _DailyStockPageState extends State<DailyStockPage>
                               _PinkTextField(
                                 controller: paymentController,
                                 label: 'Customer Paid',
-                                hint: '0.00',
+                                hint: totalDue.toStringAsFixed(2),
                                 icon: Icons.payments_outlined,
                                 keyboardType:
                                     const TextInputType.numberWithOptions(
                                       decimal: true,
                                     ),
                                 prefixText: '₱',
-                                onChanged: (_) => setState(() {
-                                  paidManuallyEdited = true;
-                                }),
+                                onChanged: (_) => setState(() {}),
                               ),
                               const SizedBox(height: 12),
                               Container(
@@ -7747,7 +7775,9 @@ class _DailyStockPageState extends State<DailyStockPage>
                                   vertical: 12,
                                 ),
                                 decoration: BoxDecoration(
-                                  color: change >= 0
+                                  color: !hasPaidAmount
+                                      ? _AppColors.bg
+                                      : change >= 0
                                       ? const Color(0xFFE8F5E9)
                                       : const Color(0xFFFFEBEE),
                                   borderRadius: BorderRadius.circular(12),
@@ -7760,17 +7790,25 @@ class _DailyStockPageState extends State<DailyStockPage>
                                       'Change',
                                       style: TextStyle(
                                         fontWeight: FontWeight.w700,
-                                        color: change >= 0
+                                        color: !hasPaidAmount
+                                            ? _AppColors.textSoft
+                                            : change >= 0
                                             ? const Color(0xFF2E7D32)
                                             : const Color(0xFFB71C1C),
                                       ),
                                     ),
                                     Text(
-                                      formatMoney((change >= 0 ? change : 0)),
+                                      hasPaidAmount
+                                          ? formatMoney(
+                                              change >= 0 ? change : 0,
+                                            )
+                                          : '—',
                                       style: TextStyle(
                                         fontWeight: FontWeight.w800,
                                         fontSize: 16,
-                                        color: change >= 0
+                                        color: !hasPaidAmount
+                                            ? _AppColors.textSoft
+                                            : change >= 0
                                             ? const Color(0xFF2E7D32)
                                             : const Color(0xFFB71C1C),
                                       ),
@@ -11923,22 +11961,48 @@ class _DailyStockPageState extends State<DailyStockPage>
                               ),
                               const SizedBox(width: 10),
                               Expanded(
-                                child: Text(
-                                  displayName,
+                                child: isCompact
+                                    ? Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            displayName,
+                                            maxLines: 3,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: const TextStyle(
+                                              color: _AppColors.textMid,
+                                              fontSize: 13,
+                                            ),
+                                          ),
+                                          const SizedBox(height: 4),
+                                          Text(
+                                            formatMoney(subtotal),
+                                            style: const TextStyle(
+                                              fontWeight: FontWeight.w700,
+                                              color: _AppColors.textMid,
+                                              fontSize: 13,
+                                            ),
+                                          ),
+                                        ],
+                                      )
+                                    : Text(
+                                        displayName,
+                                        style: const TextStyle(
+                                          color: _AppColors.textMid,
+                                          fontSize: 13,
+                                        ),
+                                      ),
+                              ),
+                              if (!isCompact)
+                                Text(
+                                  formatMoney(subtotal),
                                   style: const TextStyle(
+                                    fontWeight: FontWeight.w700,
                                     color: _AppColors.textMid,
                                     fontSize: 13,
                                   ),
                                 ),
-                              ),
-                              Text(
-                                formatMoney(subtotal),
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.w700,
-                                  color: _AppColors.textMid,
-                                  fontSize: 13,
-                                ),
-                              ),
                             ],
                           ),
                         ),

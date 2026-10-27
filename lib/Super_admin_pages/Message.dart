@@ -10,6 +10,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/account_presence.dart';
 import '../services/message_account_status.dart';
+import '../widgets/cash_float_conversation_card.dart';
 
 const _chatPink = AppColors.primary;
 const _chatDeep = AppColors.primaryDark;
@@ -192,6 +193,7 @@ class _MessagePageState extends State<MessagePage> {
                         .snapshots(),
                     builder: (context, chatSnapshot) {
                       final rows = <String, _InboxRow>{};
+                      final latestChatTimes = <String, DateTime>{};
                       final contactIds = <String>{
                         for (final doc in accountDocs) ...[
                           doc.id,
@@ -205,11 +207,30 @@ class _MessagePageState extends State<MessagePage> {
                               '${doc.data()[key]}',
                         ],
                       };
+                      final canonicalIdsByAlias = <String, String>{};
 
                       for (final doc in accountDocs) {
                         final data = doc.data();
-                        rows[doc.id] = _InboxRow(
-                          id: doc.id,
+                        final contactId =
+                            '${data['role'] ?? ''}'.trim().toLowerCase() ==
+                                    'admin' &&
+                                '${data['adminId'] ?? ''}'.trim().isNotEmpty
+                            ? '${data['adminId']}'.trim()
+                            : doc.id;
+                        canonicalIdsByAlias[doc.id] = contactId;
+                        for (final key in [
+                          'uid',
+                          'userId',
+                          'staffId',
+                          'adminId',
+                        ]) {
+                          final alias = '${data[key] ?? ''}'.trim();
+                          if (alias.isNotEmpty) {
+                            canonicalIdsByAlias[alias] = contactId;
+                          }
+                        }
+                        rows[contactId] = _InboxRow(
+                          id: contactId,
                           name: _displayName(data),
                           role: data['role']?.toString() ?? 'staff',
                           online: _isOnline(data),
@@ -232,38 +253,57 @@ class _MessagePageState extends State<MessagePage> {
                         if (otherId.isEmpty || !contactIds.contains(otherId)) {
                           continue;
                         }
+                        final contactId =
+                            canonicalIdsByAlias[otherId] ?? otherId;
+                        final updatedAt = chat['updatedAt'];
+                        final chatTime = updatedAt is Timestamp
+                            ? updatedAt.toDate()
+                            : updatedAt is DateTime
+                            ? updatedAt
+                            : null;
+                        final previousTime = latestChatTimes[contactId];
+                        if (previousTime != null &&
+                            (chatTime == null ||
+                                !chatTime.isAfter(previousTime))) {
+                          continue;
+                        }
+                        if (chatTime != null) {
+                          latestChatTimes[contactId] = chatTime;
+                        }
                         final names = chat['participantNames'];
                         final photos = chat['participantPhotos'];
                         final name = names is Map
                             ? names[otherId]?.toString() ??
-                                  rows[otherId]?.name ??
+                                  rows[contactId]?.name ??
                                   'User'
-                            : rows[otherId]?.name ?? 'User';
-                        rows[otherId] =
-                            rows[otherId]?.copyWith(
+                            : rows[contactId]?.name ?? 'User';
+                        rows[contactId] =
+                            rows[contactId]?.copyWith(
                               unread: _unreadCount(chat),
                               lastMessage:
                                   chat['lastMessage']?.toString() ?? '',
                               photoUrl:
-                                  rows[otherId]?.photoUrl ??
+                                  rows[contactId]?.photoUrl ??
                                   (photos is Map
                                       ? photos[otherId]?.toString()
                                       : null),
-                              pinned: _pinnedIds.contains(otherId),
+                              pinned: _pinnedIds.contains(contactId),
+                              chatId: chatDoc.id,
                             ) ??
                             _InboxRow(
-                              id: otherId,
+                              id: contactId,
                               name: name,
-                              role: otherId.startsWith('ADM-')
+                              role: contactId.startsWith('ADM-')
                                   ? 'admin'
-                                  : otherId == SuperAdmin.id
+                                  : contactId == SuperAdmin.id
                                   ? SuperAdmin.role
                                   : 'staff',
                               online: false,
                               unread: _unreadCount(chat),
                               lastMessage:
                                   chat['lastMessage']?.toString() ?? '',
-                              pinned: _pinnedIds.contains(otherId),
+                              pinned: _pinnedIds.contains(contactId),
+                              chatId: chatDoc.id,
                             );
                       }
 
@@ -308,14 +348,16 @@ class _MessagePageState extends State<MessagePage> {
                                 ? contacts
                                 : _ConversationPanel(
                                     key: ValueKey(selected.id),
-                                    chatId: _chatId(selected.id),
+                                    chatId:
+                                        selected.chatId ?? _chatId(selected.id),
                                     me: me,
                                     other: selected,
                                     onBack: () =>
                                         setState(() => _selectedId = null),
                                     onDeleteConversation: () =>
                                         _deleteConversation(
-                                          _chatId(selected.id),
+                                          selected.chatId ??
+                                              _chatId(selected.id),
                                         ),
                                   );
                           }
@@ -330,12 +372,15 @@ class _MessagePageState extends State<MessagePage> {
                                       ? const _SelectConversationState()
                                       : _ConversationPanel(
                                           key: ValueKey(selected.id),
-                                          chatId: _chatId(selected.id),
+                                          chatId:
+                                              selected.chatId ??
+                                              _chatId(selected.id),
                                           me: me,
                                           other: selected,
                                           onDeleteConversation: () =>
                                               _deleteConversation(
-                                                _chatId(selected.id),
+                                                selected.chatId ??
+                                                    _chatId(selected.id),
                                               ),
                                         ),
                                 ),
@@ -360,6 +405,7 @@ class _InboxRow {
   final bool online;
   final int unread;
   final String lastMessage;
+  final String? chatId;
   final String? photoUrl;
   final bool pinned;
   final DateTime? lastSeenAt;
@@ -371,6 +417,7 @@ class _InboxRow {
     required this.online,
     this.unread = 0,
     this.lastMessage = '',
+    this.chatId,
     this.photoUrl,
     this.pinned = false,
     this.lastSeenAt,
@@ -379,6 +426,7 @@ class _InboxRow {
   _InboxRow copyWith({
     int? unread,
     String? lastMessage,
+    String? chatId,
     String? photoUrl,
     bool? pinned,
   }) {
@@ -389,6 +437,7 @@ class _InboxRow {
       online: online,
       unread: unread ?? this.unread,
       lastMessage: lastMessage ?? this.lastMessage,
+      chatId: chatId ?? this.chatId,
       photoUrl: photoUrl ?? this.photoUrl,
       pinned: pinned ?? this.pinned,
       lastSeenAt: lastSeenAt,
@@ -779,13 +828,21 @@ class _ConversationPanelState extends State<_ConversationPanel> {
                               ),
                             ],
                           ),
-                          child: Text(
-                            data['text']?.toString() ?? '',
-                            style: TextStyle(
-                              color: mine ? Colors.white : Colors.black87,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
+                          child: data['type'] == 'cash_float'
+                              ? CashFloatConversationCard(
+                                  requestId:
+                                      data['cashFloatRequestId']?.toString() ??
+                                      '',
+                                  chatId: widget.chatId,
+                                  role: widget.me['role'] ?? 'super_admin',
+                                )
+                              : Text(
+                                  data['text']?.toString() ?? '',
+                                  style: TextStyle(
+                                    color: mine ? Colors.white : Colors.black87,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
                         ),
                       ),
                     );

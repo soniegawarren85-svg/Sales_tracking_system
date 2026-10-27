@@ -210,6 +210,7 @@ class _AssignModeButton extends StatelessWidget {
 class _BudgetPageState extends State<BudgetPage>
     with SingleTickerProviderStateMixin {
   final _budgetControllers = <String, TextEditingController>{};
+  final _cashFloatSavingBranches = <String>{};
   final _assignmentQtyControllers = <String, TextEditingController>{};
   final _branchSearchController = TextEditingController();
   final _allocationSearchController = TextEditingController();
@@ -477,8 +478,15 @@ class _BudgetPageState extends State<BudgetPage>
   Future<void> _requestBranchCashFloat(
     String branchId,
     String branchName,
-    double amount,
-  ) async {
+    double amount, {
+    required ValueChanged<bool> onSavingChanged,
+    required VoidCallback onSuccess,
+  }) async {
+    if (_cashFloatSavingBranches.contains(branchId)) return;
+    if (mounted) {
+      setState(() => _cashFloatSavingBranches.add(branchId));
+    }
+    onSavingChanged(true);
     try {
       await BranchPermissions.require(
         'adminAllowAllocations',
@@ -506,10 +514,13 @@ class _BudgetPageState extends State<BudgetPage>
         ),
       );
       if (confirmed != true) return;
-      final actor = await resolveSessionActor(_firestore, admin: true);
-      final drawer =
-          (await _firestore.collection('staff_cash_drawer').doc(branchId).get())
-              .data();
+      final actorFuture = resolveSessionActor(_firestore, admin: true);
+      final drawerFuture = _firestore
+          .collection('staff_cash_drawer')
+          .doc(branchId)
+          .get();
+      final actor = await actorFuture;
+      final drawer = (await drawerFuture).data();
       final today = CashDrawerService.dayKey(DateTime.now());
       final currentOpening =
           (drawer?['dailyOpeningCash'] as num?)?.toDouble() ??
@@ -538,8 +549,9 @@ class _BudgetPageState extends State<BudgetPage>
       );
       if (!mounted) return;
       setState(() => _budgetControllers[branchId]?.clear());
+      onSuccess();
       _showSnack(
-        'Cash float sent to $branchName for receipt confirmation.',
+        'Cash float successfully sent to $branchName for receipt confirmation.',
         Colors.green.shade600,
       );
     } catch (error) {
@@ -549,6 +561,11 @@ class _BudgetPageState extends State<BudgetPage>
           Colors.red.shade600,
         );
       }
+    } finally {
+      if (mounted && _cashFloatSavingBranches.contains(branchId)) {
+        setState(() => _cashFloatSavingBranches.remove(branchId));
+      }
+      onSavingChanged(false);
     }
   }
 
@@ -834,7 +851,9 @@ class _BudgetPageState extends State<BudgetPage>
                   item['expirationDate']?.toString() ?? '',
                 ) &&
                 (rootItems.isEmpty ||
-                    rootItems.any((root) => inventoryVariantsMatch(root, item)));
+                    rootItems.any(
+                      (root) => inventoryVariantsMatch(root, item),
+                    ));
           })
           .toList();
       return activeItems.isNotEmpty;
@@ -6669,30 +6688,64 @@ class _BudgetPageState extends State<BudgetPage>
     TextEditingController controller,
     List<String> staffIds,
   ) {
+    var isSending = false;
+    var isClosing = false;
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (context) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxHeight: 390, maxWidth: 760),
-            child: Material(
-              borderRadius: BorderRadius.circular(20),
+      builder: (context) => StatefulBuilder(
+        builder: (context, setSheetState) {
+          final keyboardInset = MediaQuery.viewInsetsOf(context).bottom;
+          final availableHeight =
+              (MediaQuery.sizeOf(context).height - keyboardInset - 32)
+                  .clamp(0.0, double.infinity)
+                  .toDouble();
+          return AnimatedPadding(
+            duration: const Duration(milliseconds: 200),
+            curve: Curves.easeOutCubic,
+            padding: EdgeInsets.only(bottom: keyboardInset),
+            child: SafeArea(
               child: Padding(
                 padding: const EdgeInsets.all(16),
-                child: _buildBranchAllocationPanel(
-                  branchId: branchId,
-                  branchName: branchName,
-                  controller: controller,
-                  staffIds: staffIds,
-                  enabled: true,
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxHeight: availableHeight,
+                    maxWidth: 760,
+                  ),
+                  child: SingleChildScrollView(
+                    child: Material(
+                      borderRadius: BorderRadius.circular(20),
+                      child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: _buildBranchAllocationPanel(
+                          branchId: branchId,
+                          branchName: branchName,
+                          controller: controller,
+                          staffIds: staffIds,
+                          enabled: true,
+                          isSending: isSending,
+                          onSavingChanged: (sending) {
+                            if (!isClosing && context.mounted) {
+                              setSheetState(() => isSending = sending);
+                            }
+                          },
+                          onSuccess: () {
+                            if (context.mounted && !isClosing) {
+                              isClosing = true;
+                              Navigator.of(context).pop();
+                            }
+                          },
+                          onAmountChanged: () => setSheetState(() {}),
+                        ),
+                      ),
+                    ),
+                  ),
                 ),
               ),
             ),
-          ),
-        ),
+          );
+        },
       ),
     );
   }
@@ -7121,6 +7174,10 @@ class _BudgetPageState extends State<BudgetPage>
     required TextEditingController controller,
     required List<String> staffIds,
     required bool enabled,
+    required bool isSending,
+    required ValueChanged<bool> onSavingChanged,
+    required VoidCallback onSuccess,
+    required VoidCallback onAmountChanged,
   }) {
     return Container(
       width: double.infinity,
@@ -7169,7 +7226,7 @@ class _BudgetPageState extends State<BudgetPage>
               ),
               IconButton(
                 tooltip: 'Close',
-                onPressed: () => Navigator.of(context).pop(),
+                onPressed: isSending ? null : () => Navigator.of(context).pop(),
                 icon: const Icon(Icons.close_rounded),
                 color: kDeep,
               ),
@@ -7306,68 +7363,98 @@ class _BudgetPageState extends State<BudgetPage>
             ],
           ),
           const SizedBox(height: 12),
-          TextField(
-            controller: controller,
-            enabled: enabled,
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            decoration: InputDecoration(
-              labelText: 'Cash float amount',
-              hintText: '0.00',
-              helperText: controller.text.trim().isEmpty
-                  ? 'Set Starting Cash minimum: ${formatMoney(CashDrawerService.minimumDailyOpeningCash)}'
-                  : 'Additional cash float for $branchName',
-              prefixIcon: const Icon(Icons.payments_rounded, color: kDeep),
-              filled: true,
-              fillColor: Colors.white,
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(14),
-                borderSide: BorderSide(color: kAccent.withOpacity(0.6)),
+          AnimatedSize(
+            duration: const Duration(milliseconds: 180),
+            curve: Curves.easeOutCubic,
+            child: TextField(
+              controller: controller,
+              enabled: enabled && !isSending,
+              minLines: controller.text.trim().isEmpty ? 1 : 2,
+              maxLines: 2,
+              scrollPadding: const EdgeInsets.only(bottom: 160),
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
               ),
-              enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(14),
-                borderSide: BorderSide(color: kAccent.withOpacity(0.6)),
+              decoration: InputDecoration(
+                labelText: 'Cash float amount',
+                hintText: '0.00',
+                helperText: controller.text.trim().isEmpty
+                    ? 'Set Starting Cash minimum: ${formatMoney(CashDrawerService.minimumDailyOpeningCash)}'
+                    : 'Additional cash float for $branchName',
+                prefixIcon: const Icon(Icons.payments_rounded, color: kDeep),
+                filled: true,
+                fillColor: Colors.white,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  borderSide: BorderSide(color: kAccent.withOpacity(0.6)),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  borderSide: BorderSide(color: kAccent.withOpacity(0.6)),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  borderSide: const BorderSide(color: kPrimary, width: 2),
+                ),
               ),
-              focusedBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(14),
-                borderSide: const BorderSide(color: kPrimary, width: 2),
-              ),
+              onChanged: (_) => onAmountChanged(),
             ),
-            onChanged: (_) => setState(() {}),
           ),
           const SizedBox(height: 10),
           Row(
             children: [
               Expanded(
                 child: FilledButton.icon(
-                  onPressed: () {
-                    if (!enabled) {
-                      _showSnack(
-                        'Assign staff to this branch first.',
-                        Colors.orange.shade700,
-                      );
-                      return;
-                    }
-                    final budgetText = controller.text.trim();
-                    if (budgetText.isEmpty) {
-                      _showSnack(
-                        'Please enter an allocation amount',
-                        Colors.orange.shade700,
-                      );
-                      return;
-                    }
-                    final budget = double.tryParse(budgetText);
-                    if (budget == null || !budget.isFinite || budget <= 0) {
-                      _showSnack(
-                        'Invalid allocation amount',
-                        Colors.red.shade600,
-                      );
-                      return;
-                    }
-                    _requestBranchCashFloat(branchId, branchName, budget);
-                  },
-                  icon: const Icon(Icons.payments_rounded),
+                  onPressed: isSending
+                      ? null
+                      : () {
+                          if (!enabled) {
+                            _showSnack(
+                              'Assign staff to this branch first.',
+                              Colors.orange.shade700,
+                            );
+                            return;
+                          }
+                          final budgetText = controller.text.trim();
+                          if (budgetText.isEmpty) {
+                            _showSnack(
+                              'Please enter an allocation amount',
+                              Colors.orange.shade700,
+                            );
+                            return;
+                          }
+                          final budget = double.tryParse(budgetText);
+                          if (budget == null ||
+                              !budget.isFinite ||
+                              budget <= 0) {
+                            _showSnack(
+                              'Invalid allocation amount',
+                              Colors.red.shade600,
+                            );
+                            return;
+                          }
+                          _requestBranchCashFloat(
+                            branchId,
+                            branchName,
+                            budget,
+                            onSavingChanged: onSavingChanged,
+                            onSuccess: onSuccess,
+                          );
+                        },
+                  icon: isSending
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : const Icon(Icons.payments_rounded),
                   label: Text(
-                    controller.text.trim().isEmpty
+                    isSending
+                        ? 'Sending...'
+                        : controller.text.trim().isEmpty
                         ? 'Set Starting Cash'
                         : 'Allocate Cash',
                   ),

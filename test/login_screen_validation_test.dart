@@ -64,4 +64,30 @@ void main() {
       },
     );
   }
+
+  testWidgets('login validation stays visible above the mobile keyboard', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    tester.view.viewInsets = const FakeViewPadding(bottom: 280);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(tester.view.resetViewInsets);
+
+    await tester.pumpWidget(const MaterialApp(home: LoginScreen()));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    await tester.ensureVisible(find.text('Sign In'));
+    await tester.tap(find.text('Sign In'));
+    await tester.pump();
+
+    final snackBar = tester.widget<SnackBar>(find.byType(SnackBar));
+    expect(
+      snackBar.margin!.resolve(TextDirection.ltr).bottom,
+      greaterThan(280),
+    );
+    expect(find.text('Email address is required.'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
 }

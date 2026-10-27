@@ -67,4 +67,87 @@ void main() {
       'sold',
     ]);
   });
+
+  test('selling all remaining category stock leaves it at zero', () {
+    final updated = applySaleStock(
+      {
+        'items': [
+          {'id': 'cake-1', 'stock': 3, 'startingStock': 10},
+        ],
+      },
+      'sale-all',
+      [
+        {'itemId': 'cake-1', 'quantity': 3},
+      ],
+    );
+
+    expect((updated['items'] as List).single['stock'], 0);
+  });
+
+  test('stale category sales never make stock negative', () {
+    final updated = applySaleStock(
+      {
+        'items': [
+          {'id': 'cake-1', 'stock': 2, 'startingStock': 10},
+        ],
+      },
+      'sale-stale',
+      [
+        {'itemId': 'cake-1', 'quantity': 3},
+      ],
+    );
+
+    expect((updated['items'] as List).single['stock'], 0);
+  });
+
+  test('selling every available bundle leaves zero and marks all sold', () {
+    final updated = applySaleStock(
+      {
+        'isBundle': true,
+        'bundleCount': 2,
+        'bundleInstances': [
+          {'id': 'first', 'status': 'available'},
+          {'id': 'second', 'status': 'available'},
+        ],
+      },
+      'sale-all-bundles',
+      [
+        {
+          'quantity': 2,
+          'bundleInstanceIds': ['first', 'second'],
+        },
+      ],
+    );
+
+    expect(updated['bundleCount'], 0);
+    expect((updated['bundleInstances'] as List).map((row) => row['status']), [
+      'sold',
+      'sold',
+    ]);
+  });
+
+  test('bundle sale uses remaining available units when allocation IDs stale', () {
+    final updated = applySaleStock(
+      {
+        'isBundle': true,
+        'bundleCount': 1,
+        'bundleInstances': [
+          {'id': 'current-instance', 'status': 'available'},
+        ],
+      },
+      'sale-stale-allocation',
+      [
+        {
+          'quantity': 1,
+          'bundleInstanceIds': ['old-instance'],
+        },
+      ],
+    );
+
+    expect(updated['bundleCount'], 0);
+    expect(
+      (updated['bundleInstances'] as List).single['status'],
+      'sold',
+    );
+  });
 }

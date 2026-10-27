@@ -10,7 +10,6 @@ import '../services/public_item_id.dart';
 import '../widgets/staff_refund_dialog.dart';
 import '../services/staff_login_session.dart';
 import '../widgets/staff_branch_label.dart';
-import '../widgets/cash_float_inbox.dart';
 // dashboard_page.dart
 
 import 'dart:async';
@@ -122,13 +121,29 @@ int _availableStockForInventoryItem(Map<String, dynamic> item) {
 List<String> _inventoryImageUrls(Map<String, dynamic> data) {
   final urls = <String>[];
   final seen = <String>{};
-  final items = (data['items'] as List?)?.cast<Map<String, dynamic>>() ?? [];
-  for (final item in items) {
-    final url = item['imageUrl']?.toString().trim() ?? '';
-    if (url.isNotEmpty && seen.add(url)) urls.add(url);
+
+  void addImage(dynamic value) {
+    if (value is String) {
+      final url = value.trim();
+      if (url.isNotEmpty && seen.add(url)) urls.add(url);
+    } else if (value is Iterable) {
+      for (final image in value) {
+        addImage(image);
+      }
+    }
   }
-  final categoryUrl = data['imageUrl']?.toString().trim() ?? '';
-  if (categoryUrl.isNotEmpty && seen.add(categoryUrl)) urls.add(categoryUrl);
+
+  void addImagesFrom(Map<dynamic, dynamic> record) {
+    for (final key in const ['imageUrl', 'imageUrls', 'images', 'photos']) {
+      addImage(record[key]);
+    }
+  }
+
+  final items = data['items'] as List? ?? [];
+  for (final item in items.whereType<Map>()) {
+    addImagesFrom(item);
+  }
+  addImagesFrom(data);
   return urls;
 }
 
@@ -3384,9 +3399,6 @@ class _Header extends StatelessWidget {
                           photoUrl: photoUrl,
                           cashDrawerBalance: cashDrawerBalance,
                           gcashDrawerBalance: gcashDrawerBalance,
-                          cashFloatBranchId: drawerIds.isEmpty
-                              ? ''
-                              : drawerIds.first,
                           cashDrawerTourKey: cashDrawerTourKey,
                         );
                       },
@@ -4022,7 +4034,6 @@ class _StaffProfileCard extends StatefulWidget {
   final String? photoUrl;
   final double cashDrawerBalance;
   final double gcashDrawerBalance;
-  final String cashFloatBranchId;
   final GlobalKey? cashDrawerTourKey;
 
   const _StaffProfileCard({
@@ -4032,7 +4043,6 @@ class _StaffProfileCard extends StatefulWidget {
     this.photoUrl,
     required this.cashDrawerBalance,
     required this.gcashDrawerBalance,
-    required this.cashFloatBranchId,
     this.cashDrawerTourKey,
   });
 
@@ -4233,15 +4243,6 @@ class _StaffProfileCardState extends State<_StaffProfileCard> {
                         ),
                       ],
                     ),
-              if (role.toLowerCase() == 'staff')
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: CashFloatInbox(
-                    branchId: widget.cashFloatBranchId,
-                    role: 'staff',
-                    compact: true,
-                  ),
-                ),
             ],
           ),
         );
@@ -4756,7 +4757,7 @@ class _ItemStatusBadge extends StatelessWidget {
           ),
           const SizedBox(width: 4),
           Text(
-            isLocked ? 'Unavailable' : 'Tap to view',
+            isLocked ? 'Sold Out' : 'Tap to view',
             style: TextStyle(
               fontSize: 10.5,
               fontWeight: FontWeight.w700,

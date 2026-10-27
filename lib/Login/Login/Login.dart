@@ -157,7 +157,12 @@ class _LoginScreenState extends State<LoginScreen>
             : const Color(0xFF4A7C59),
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+        margin: EdgeInsets.fromLTRB(
+          20,
+          12,
+          20,
+          MediaQuery.viewInsetsOf(context).bottom + 12,
+        ),
         duration: const Duration(seconds: 2),
       ),
     );
@@ -1111,34 +1116,39 @@ class _LoginScreenState extends State<LoginScreen>
                   ),
                 ),
               ),
-              const SizedBox(width: 16),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // ── Angel'Z Bites — changed to Satisfy (elegant script) ──
-                  Text(
-                    "Angel'Z Bites",
-                    style: GoogleFonts.satisfy(
-                      fontSize: 26,
-                      fontWeight: FontWeight.w400,
-                      color: Colors.white,
-                      letterSpacing: 0.5,
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // ── Angel'Z Bites — changed to Satisfy (elegant script) ──
+                    Text(
+                      "Angel'Z Bites",
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: GoogleFonts.satisfy(
+                        fontSize: 26,
+                        fontWeight: FontWeight.w400,
+                        color: Colors.white,
+                        letterSpacing: 0.5,
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    'C U P C A K E S',
-                    style: GoogleFonts.dmSans(
-                      fontSize: 10,
-                      fontWeight: FontWeight.w600,
-                      color: Colors.white60,
-                      letterSpacing: 3.5,
+                    const SizedBox(height: 2),
+                    Text(
+                      'C U P C A K E S',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: GoogleFonts.dmSans(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.white60,
+                        letterSpacing: 3.5,
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-
-              const Spacer(),
+              const SizedBox(width: 12),
 
               // Decorative accent circles inside header
               Stack(

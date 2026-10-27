@@ -12,6 +12,31 @@ import 'collection_storage.dart';
 import 'collection_storage_native.dart'
     if (dart.library.js_interop) 'collection_storage_web.dart';
 
+int _remainingSaleStock(
+  Map<String, dynamic> inventory,
+  Map<String, dynamic> line,
+) {
+  if (inventory['isBundle'] == true) {
+    return stockNumber(inventory['bundleCount']);
+  }
+
+  final wantedId = '${line['itemId'] ?? ''}';
+  final items = inventory['items'] as List? ?? const [];
+  for (final rawItem in items.whereType<Map>()) {
+    final item = Map<String, dynamic>.from(rawItem);
+    final matches = wantedId.isNotEmpty
+        ? '${item['id'] ?? item['itemId'] ?? ''}' == wantedId
+        : item['name'] == line['variant'] || item['variant'] == line['variant'];
+    if (matches) {
+      return stockNumber(item['stock'] ?? item['startingStock']);
+    }
+  }
+  if (inventory.containsKey('stock')) {
+    return stockNumber(inventory['stock']);
+  }
+  return 0;
+}
+
 class LocalDatabaseSyncService {
   LocalDatabaseSyncService._()
     : _firestore = FirebaseFirestore.instance,
@@ -805,20 +830,59 @@ class LocalDatabaseSyncService {
               await tx.get(_firestore.collection('staff_inventory').doc(id)),
             );
           }
+          final outOfStockNotificationIds = <String>{};
           for (final doc in stock) {
             if (!doc.exists) {
               throw StateError(
                 'Allocated inventory no longer exists: ${doc.id}',
               );
             }
+            final linesForDocument = lines
+                .where((line) => line['staffInventoryDocId'] == doc.id)
+                .toList();
             final updated = applySaleStock(
               doc.data()!,
               docId,
-              lines
-                  .where((line) => line['staffInventoryDocId'] == doc.id)
-                  .toList(),
+              linesForDocument,
             );
             tx.update(doc.reference, updated);
+            for (final line in linesForDocument) {
+              if (line['soldOutAfterSale'] != true ||
+                  _remainingSaleStock(updated, line) > 0) {
+                continue;
+              }
+              final itemName = '${line['name'] ?? 'Item'}';
+              final variantName = '${line['variant'] ?? ''}';
+              final identity = [
+                line['sourceInventoryId'] ?? doc.id,
+                line['itemId'] ?? itemName,
+                variantName,
+                docId,
+              ].join('_');
+              final notificationId =
+                  'out_of_stock_${identity.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_')}';
+              if (!outOfStockNotificationIds.add(notificationId)) continue;
+              tx.set(
+                _firestore
+                    .collection('admin_notifications')
+                    .doc(notificationId),
+                {
+                  'type': 'out_of_stock',
+                  'title': 'Item Out of Stock',
+                  'message': variantName.trim().isEmpty
+                      ? '$itemName is now out of stock.'
+                      : '$itemName - $variantName is now out of stock.',
+                  'itemName': itemName,
+                  'variantName': variantName,
+                  'sourceInventoryId':
+                      line['sourceInventoryId']?.toString() ?? '',
+                  'staffInventoryDocId': doc.id,
+                  'staffId': payload['userId']?.toString() ?? '',
+                  'isRead': false,
+                  'createdAt': FieldValue.serverTimestamp(),
+                },
+              );
+            }
           }
           tx.set(ref, {
             ...payload,

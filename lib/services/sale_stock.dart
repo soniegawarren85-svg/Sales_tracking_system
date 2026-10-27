@@ -142,34 +142,52 @@ Map<String, dynamic> applySaleStock(
       0,
       1 << 31,
     );
-    var remaining = quantity;
     final selectedInstances = lines
         .expand((line) => line['bundleInstanceIds'] as List? ?? const [])
         .map((id) => '$id')
         .toSet();
-    var marked = 0;
-    result['bundleInstances'] = (data['bundleInstances'] as List? ?? [])
+    final instances = (data['bundleInstances'] as List? ?? [])
         .whereType<Map>()
-        .map((raw) {
-          final item = Map<String, dynamic>.from(raw);
-          final selected =
-              selectedInstances.isEmpty ||
-              selectedInstances.contains('${item['id']}');
-          if (remaining > 0 &&
-              selected &&
-              (item['status'] ?? 'available') == 'available') {
-            remaining--;
-            marked++;
-            item['status'] = 'sold';
-            item['salesId'] = saleId;
-          }
-          return item;
-        })
+        .map((raw) => Map<String, dynamic>.from(raw))
         .toList();
-    if ((data['bundleInstances'] as List? ?? []).isNotEmpty &&
-        marked != quantity) {
+    final selectedIndexes = <int>{};
+    bool isAvailable(Map<String, dynamic> item) {
+      final status = '${item['status'] ?? 'available'}'.toLowerCase();
+      return item['isDeleted'] != true &&
+          item['isVoided'] != true &&
+          (status.isEmpty || status == 'available');
+    }
+
+    for (final selectedId in selectedInstances) {
+      if (selectedIndexes.length >= quantity) break;
+      for (var index = 0; index < instances.length; index++) {
+        final item = instances[index];
+        if ('${item['id']}' == selectedId &&
+            isAvailable(item) &&
+            selectedIndexes.add(index)) {
+          break;
+        }
+      }
+    }
+    for (var index = 0;
+        selectedIndexes.length < quantity && index < instances.length;
+        index++) {
+      if (isAvailable(instances[index])) selectedIndexes.add(index);
+    }
+    if (instances.isNotEmpty && selectedIndexes.length < quantity) {
       throw StateError('Bundle stock changed before this sale was applied.');
     }
+    result['bundleInstances'] = [
+      for (var index = 0; index < instances.length; index++)
+        if (selectedIndexes.contains(index))
+          {
+            ...instances[index],
+            'status': 'sold',
+            'salesId': saleId,
+          }
+        else
+          instances[index],
+    ];
   } else {
     final items = (data['items'] as List? ?? [])
         .whereType<Map>()
@@ -184,16 +202,17 @@ Map<String, dynamic> applySaleStock(
                   item['variant'] == line['variant'],
       );
       if (index >= 0) {
+        final available = stockNumber(
+          items[index]['stock'] ?? items[index]['startingStock'],
+        );
+        final quantity = stockNumber(line['quantity']);
         items[index]['stock'] =
-            (stockNumber(
-                      items[index]['stock'] ?? items[index]['startingStock'],
-                    ) -
-                    stockNumber(line['quantity']))
-                .clamp(0, 1 << 31);
+            (available - quantity).clamp(0, 1 << 31);
       } else if (data['isCoffee'] == true && data.containsKey('stock')) {
+        final available = stockNumber(result['stock']);
+        final quantity = stockNumber(line['quantity']);
         result['stock'] =
-            (stockNumber(result['stock']) - stockNumber(line['quantity']))
-                .clamp(0, 1 << 31);
+            (available - quantity).clamp(0, 1 << 31);
       }
     }
     result['items'] = items;

@@ -10,6 +10,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../services/account_presence.dart';
 import '../../services/message_account_status.dart';
 import '../../services/super_admin.dart';
+import '../../widgets/cash_float_conversation_card.dart';
 
 const _chatPink = AppColors.primary;
 const _chatDeep = AppColors.primaryDark;
@@ -898,13 +899,23 @@ class _ConversationPanelState extends State<_ConversationPanel> {
                               ),
                             ],
                           ),
-                          child: Text(
-                            data['text']?.toString() ?? '',
-                            style: TextStyle(
-                              color: mine ? Colors.white : Colors.black87,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
+                          child: data['type'] == 'cash_float'
+                              ? CashFloatConversationCard(
+                                  requestId:
+                                      data['cashFloatRequestId']?.toString() ??
+                                      '',
+                                  chatId: widget.chatId,
+                                  role: widget.me['role'] ?? 'admin',
+                                )
+                              : Text(
+                                  data['text']?.toString() ?? '',
+                                  style: TextStyle(
+                                    color: mine
+                                        ? Colors.white
+                                        : Colors.black87,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
                         ),
                       ),
                     );

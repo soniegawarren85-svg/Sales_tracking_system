@@ -3,7 +3,6 @@ import '../../widgets/admin_page_skeleton.dart';
 import 'package:sales_tracking/widgets/top_edge_refresh.dart';
 import '../../widgets/admin_message_preview.dart';
 import '../../widgets/admin_profile_label.dart';
-import '../../widgets/cash_float_inbox.dart';
 import 'dart:async';
 import 'package:sales_tracking/theme/app_colors.dart';
 import '../../services/short_id_service.dart';
@@ -726,11 +725,6 @@ class _AdminDashboardState extends State<AdminDashboard>
                           fontWeight: FontWeight.w700,
                         ),
                       ),
-                    ),
-                    CashFloatInbox(
-                      branchId: _assignedBranchId ?? '',
-                      role: 'admin',
-                      compact: true,
                     ),
                   ],
                 ),
