@@ -23,6 +23,7 @@ class HeldOrderStore {
   final bool syncEnabled;
   final _lock = LocalWriteLock();
   bool _syncing = false;
+  bool _syncRequested = false;
 
   Future<List<HeldOrder>> list(
     String userId, {
@@ -48,31 +49,20 @@ class HeldOrderStore {
     return result;
   }
 
-  Future<void> merge(
-    String userId,
-    List<HeldOrder> incoming, {
-    required bool authoritative,
-  }) => _lock.run(() async {
-    final rows = await local.getCachedCollection('pending_orders');
-    final byId = {for (final row in rows) '${row['_localDocId']}': row};
-    final remoteIds = incoming.map((row) => row.id).toSet();
-    if (authoritative) {
-      for (final row in byId.values) {
-        if (row['userId'] == userId &&
-            row['_pendingSync'] != true &&
-            !remoteIds.contains(row['_localDocId'])) {
-          row['status'] = 'removed';
+  Future<void> merge(String userId, List<HeldOrder> incoming) =>
+      _lock.run(() async {
+        final rows = await local.getCachedCollection('pending_orders');
+        final byId = {for (final row in rows) '${row['_localDocId']}': row};
+        // Missing documents in a snapshot are not deletion requests. Keep local
+        // held orders until an explicit action closes them.
+        for (final order in incoming) {
+          if (order.value['userId'] != userId ||
+              byId[order.id]?['_pendingSync'] == true)
+            continue;
+          byId[order.id] = {...order.value, '_localDocId': order.id};
         }
-      }
-    }
-    for (final order in incoming) {
-      if (order.value['userId'] != userId ||
-          byId[order.id]?['_pendingSync'] == true)
-        continue;
-      byId[order.id] = {...order.value, '_localDocId': order.id};
-    }
-    await local.cacheCollectionDocs('pending_orders', byId.values);
-  });
+        await local.cacheCollectionDocs('pending_orders', byId.values);
+      });
 
   Stream<List<HeldOrder>> watch(String userId) {
     late StreamController<List<HeldOrder>> controller;
@@ -81,19 +71,7 @@ class HeldOrderStore {
     Future<void> emit() async {
       try {
         final rows = await list(userId);
-        final cutoff = DateTime.now().subtract(const Duration(hours: 4));
-        for (final row in rows) {
-          final created = row.value['createdAt'] is Timestamp
-              ? (row.value['createdAt'] as Timestamp).toDate()
-              : DateTime.tryParse('${row.value['createdAt'] ?? ''}');
-          if (created != null && created.isBefore(cutoff)) {
-            try {
-              await consume(userId, row.id, 'expired');
-            } catch (_) {}
-          }
-        }
-        final active = await list(userId);
-        if (!controller.isClosed) controller.add(active);
+        if (!controller.isClosed) controller.add(rows);
       } catch (error, stack) {
         if (!controller.isClosed) controller.addError(error, stack);
       }
@@ -109,7 +87,7 @@ class HeldOrderStore {
           cloud = db
               .collection('pending_orders')
               .where('userId', isEqualTo: userId)
-              .snapshots(includeMetadataChanges: true)
+              .snapshots()
               .listen(
                 (snapshot) async {
                   try {
@@ -118,9 +96,6 @@ class HeldOrderStore {
                       snapshot.docs
                           .map((doc) => HeldOrder(doc.id, doc.data()))
                           .toList(),
-                      authoritative:
-                          !snapshot.metadata.isFromCache &&
-                          !snapshot.metadata.hasPendingWrites,
                     );
                     unawaited(sync(userId));
                   } catch (error) {
@@ -171,7 +146,7 @@ class HeldOrderStore {
   }
 
   Future<void> consume(String userId, String id, String action) async {
-    if (!['restored', 'voided', 'expired'].contains(action))
+    if (!['restored', 'voided'].contains(action))
       throw ArgumentError('Invalid hold action');
     await _lock.run(() async {
       final rows = await local.getCachedCollection('pending_orders');
@@ -226,45 +201,52 @@ class HeldOrderStore {
   }
 
   Future<void> sync(String userId) async {
-    if (!syncEnabled || _syncing) return;
+    if (!syncEnabled) return;
+    if (_syncing) {
+      _syncRequested = true;
+      return;
+    }
     _syncing = true;
     try {
-      final pending = (await list(
-        userId,
-        includeClosed: true,
-      )).where((row) => row.value['_pendingSync'] == true).toList();
-      for (final order in pending) {
-        final revision = order.value['_revision'];
-        final payload = Map<String, dynamic>.from(order.value)
-          ..remove('_localDocId')
-          ..remove('_pendingSync');
-        final batch = db.batch();
-        batch.set(db.collection('pending_orders').doc(order.id), payload);
-        for (final event
-            in (payload['events'] as List? ?? []).whereType<Map>()) {
-          batch.set(
-            db
-                .collection('pending_order_history')
-                .doc('${order.id}_${event['revision']}'),
-            {
-              ...Map<String, dynamic>.from(event),
-              'orderId': order.id,
-              'userId': userId,
-              'items': payload['items'],
-            },
-          );
+      do {
+        _syncRequested = false;
+        final pending = (await list(
+          userId,
+          includeClosed: true,
+        )).where((row) => row.value['_pendingSync'] == true).toList();
+        for (final order in pending) {
+          final revision = order.value['_revision'];
+          final payload = Map<String, dynamic>.from(order.value)
+            ..remove('_localDocId')
+            ..remove('_pendingSync');
+          final batch = db.batch();
+          batch.set(db.collection('pending_orders').doc(order.id), payload);
+          for (final event
+              in (payload['events'] as List? ?? []).whereType<Map>()) {
+            batch.set(
+              db
+                  .collection('pending_order_history')
+                  .doc('${order.id}_${event['revision']}'),
+              {
+                ...Map<String, dynamic>.from(event),
+                'orderId': order.id,
+                'userId': userId,
+                'items': payload['items'],
+              },
+            );
+          }
+          await batch.commit().timeout(const Duration(seconds: 6));
+          await _lock.run(() async {
+            final rows = await local.getCachedCollection('pending_orders');
+            final row = rows
+                .where((row) => row['_localDocId'] == order.id)
+                .firstOrNull;
+            if (row != null && row['_revision'] == revision)
+              row['_pendingSync'] = false;
+            await local.cacheCollectionDocs('pending_orders', rows);
+          });
         }
-        await batch.commit().timeout(const Duration(seconds: 6));
-        await _lock.run(() async {
-          final rows = await local.getCachedCollection('pending_orders');
-          final row = rows
-              .where((row) => row['_localDocId'] == order.id)
-              .firstOrNull;
-          if (row != null && row['_revision'] == revision)
-            row['_pendingSync'] = false;
-          await local.cacheCollectionDocs('pending_orders', rows);
-        });
-      }
+      } while (_syncRequested);
     } catch (error) {
       debugPrint('Held orders waiting to sync: $error');
     } finally {

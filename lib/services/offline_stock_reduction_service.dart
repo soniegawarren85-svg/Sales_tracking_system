@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'bundle_stock_service.dart';
+import 'local_write_lock.dart';
 import 'number_format.dart';
 
 bool stockReductionMatchesItem(
@@ -221,9 +222,11 @@ StockReductionDocumentsResult reduceMatchingInventoryDocuments({
 class OfflineStockReductionService {
   static const _queueKey = 'pending_offline_stock_reductions';
   static final _changes = StreamController<void>.broadcast();
+  static final _queueLock = LocalWriteLock();
   static bool _syncing = false;
 
   Stream<void> get changes => _changes.stream;
+  bool get isSyncing => _syncing;
 
   Future<List<Map<String, dynamic>>> pending() async {
     final preferences = await SharedPreferences.getInstance();
@@ -240,12 +243,17 @@ class OfflineStockReductionService {
   }
 
   Future<void> enqueue(Map<String, dynamic> reduction) async {
-    final queue = await pending();
-    if (queue.any((item) => item['id'] == reduction['id'])) return;
-    queue.add(Map<String, dynamic>.from(reduction));
-    final preferences = await SharedPreferences.getInstance();
-    await preferences.setString(_queueKey, jsonEncode(queue));
-    if (!_changes.isClosed) _changes.add(null);
+    await _queueLock.run(() async {
+      final queue = await pending();
+      if (queue.any((item) => item['id'] == reduction['id'])) return;
+      queue.add({
+        ...Map<String, dynamic>.from(reduction),
+        'queuedAt': reduction['queuedAt'] ?? DateTime.now().toIso8601String(),
+      });
+      final preferences = await SharedPreferences.getInstance();
+      await preferences.setString(_queueKey, jsonEncode(queue));
+      if (!_changes.isClosed) _changes.add(null);
+    });
   }
 
   Map<String, dynamic> applyPendingToInventory(
@@ -464,16 +472,19 @@ class OfflineStockReductionService {
   Future<void> sync(FirebaseFirestore database) async {
     if (_syncing) return;
     _syncing = true;
+    if (!_changes.isClosed) _changes.add(null);
     try {
       final queue = await pending();
       for (final reduction in queue) {
         try {
           await _apply(database, reduction);
-          final latest = await pending();
-          latest.removeWhere((item) => item['id'] == reduction['id']);
-          final preferences = await SharedPreferences.getInstance();
-          await preferences.setString(_queueKey, jsonEncode(latest));
-          if (!_changes.isClosed) _changes.add(null);
+          await _queueLock.run(() async {
+            final latest = await pending();
+            latest.removeWhere((item) => item['id'] == reduction['id']);
+            final preferences = await SharedPreferences.getInstance();
+            await preferences.setString(_queueKey, jsonEncode(latest));
+            if (!_changes.isClosed) _changes.add(null);
+          });
         } on FirebaseException catch (error) {
           if (_isConnectionError(error.code)) return;
           debugPrint(
@@ -489,6 +500,7 @@ class OfflineStockReductionService {
       }
     } finally {
       _syncing = false;
+      if (!_changes.isClosed) _changes.add(null);
     }
   }
 
@@ -502,13 +514,15 @@ class OfflineStockReductionService {
     Map<String, dynamic> reduction,
     String message,
   ) async {
-    final queue = await pending();
-    final index = queue.indexWhere((item) => item['id'] == reduction['id']);
-    if (index < 0 || queue[index]['syncError'] == message) return;
-    queue[index] = {...queue[index], 'syncError': message};
-    final preferences = await SharedPreferences.getInstance();
-    await preferences.setString(_queueKey, jsonEncode(queue));
-    if (!_changes.isClosed) _changes.add(null);
+    await _queueLock.run(() async {
+      final queue = await pending();
+      final index = queue.indexWhere((item) => item['id'] == reduction['id']);
+      if (index < 0 || queue[index]['syncError'] == message) return;
+      queue[index] = {...queue[index], 'syncError': message};
+      final preferences = await SharedPreferences.getInstance();
+      await preferences.setString(_queueKey, jsonEncode(queue));
+      if (!_changes.isClosed) _changes.add(null);
+    });
   }
 
   Future<void> _apply(
@@ -722,6 +736,9 @@ class OfflineStockReductionService {
           'newStock': newStock,
           'reason': reduction['reason'],
           'comment': reduction['comment'] ?? '',
+          'offline': true,
+          'syncStatus': 'synced',
+          'offlineCreatedAt': reduction['queuedAt'],
           'createdAt': FieldValue.serverTimestamp(),
         });
         transaction.set(notificationRef, {
@@ -815,6 +832,9 @@ class OfflineStockReductionService {
         'newStock': newStock,
         'reason': reduction['reason'],
         'comment': comment,
+        'offline': true,
+        'syncStatus': 'synced',
+        'offlineCreatedAt': reduction['queuedAt'],
         'createdAt': FieldValue.serverTimestamp(),
       });
       transaction.set(notificationRef, {

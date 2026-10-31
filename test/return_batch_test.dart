@@ -87,6 +87,25 @@ void main() {
     );
   });
 
+  test('legacy product fields resolve return names and IDs, newest first', () {
+    final old = {
+      'name': 'Item',
+      'itemDisplayId': '--',
+      'product': {'productName': 'Red Velvet', 'productId': 'CO-004'},
+      'createdAt': Timestamp.fromDate(DateTime(2026, 10, 4)),
+    };
+    final newest = {
+      'itemName': 'Bundle Cakes',
+      'itemDisplayId': '--',
+      'bundleId': 'BND-001',
+      'reducedAt': Timestamp.fromDate(DateTime(2026, 10, 5)),
+    };
+
+    expect(returnItemName(old), 'Red Velvet');
+    expect(returnItemCode(old), 'CO-004');
+    expect(sortReturnRecordsNewestFirst([old, newest]), [newest, old]);
+  });
+
   test(
     'one batch preserves details and claims every source exactly once',
     () async {
@@ -163,7 +182,7 @@ void main() {
   );
   for (final width in [360.0, 900.0]) {
     testWidgets(
-      'batch card groups counts and opens searchable details at $width',
+      'batch card groups and shows return details at $width',
       (tester) async {
         tester.view.physicalSize = Size(width, 850);
         tester.view.devicePixelRatio = 1;
@@ -184,22 +203,14 @@ void main() {
         expect(find.text('Waiting Admin Confirmation'), findsOneWidget);
         expect(find.text('Categories (2)'), findsOneWidget);
         expect(find.text('Bundle (1)'), findsOneWidget);
-        expect(find.text('Staff ID: STF-001'), findsOneWidget);
-        await tester.pumpAndSettle();
-        await tester.tap(find.text('View'));
+        expect(find.text('Staff ID: STF-001'), findsWidgets);
         await tester.pumpAndSettle();
         expect(find.text('Item ID: CO-001'), findsOneWidget);
         expect(find.text('Source: Refund'), findsWidgets);
         expect(find.textContaining('Source: refund'), findsNothing);
-        await tester.ensureVisible(find.widgetWithText(ChoiceChip, 'Bundle'));
-        await tester.tap(find.widgetWithText(ChoiceChip, 'Bundle'));
-        await tester.pumpAndSettle();
         expect(find.text('Bundle Cakes'), findsOneWidget);
-        expect(find.text('OG Cookies'), findsNothing);
+        expect(find.text('OG Cookies'), findsOneWidget);
         expect(find.text('Source: Reduce items'), findsOneWidget);
-        await tester.enterText(find.byType(TextField), 'missing');
-        await tester.pumpAndSettle();
-        expect(find.text('No matching items.'), findsOneWidget);
         expect(tester.takeException(), isNull);
       },
     );

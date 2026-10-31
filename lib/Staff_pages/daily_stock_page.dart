@@ -33,6 +33,8 @@ import '../widgets/top_notification.dart';
 import '../widgets/thermal_printer_settings_sheet.dart';
 import '../widgets/top_edge_refresh.dart';
 import '../widgets/raspberry_cupcake_loader.dart';
+import '../widgets/coffee_addon_option_card.dart';
+import '../widgets/held_order_card.dart';
 
 // ─── Theme Constants ─────────────────────────────────────────────────────────
 class _AppColors {
@@ -144,6 +146,7 @@ class _DailyStockPageState extends State<DailyStockPage>
   StreamSubscription? _pendingOrdersSubscription;
   StreamSubscription<void>? _pendingReductionsSubscription;
   StreamSubscription<List<ConnectivityResult>>? _connectivitySubscription;
+  bool? _hasNetwork;
   final Map<String, int> _cart = {};
   final Map<String, Map<String, dynamic>> _cartItemLookup = {};
   final Map<String, TextEditingController> _qtyControllers = {};
@@ -317,9 +320,15 @@ class _DailyStockPageState extends State<DailyStockPage>
     _connectivitySubscription = Connectivity().onConnectivityChanged.listen((
       results,
     ) {
-      if (results.contains(ConnectivityResult.none)) return;
+      final hasNetwork =
+          results.isNotEmpty && !results.contains(ConnectivityResult.none);
+      if (mounted && _hasNetwork != hasNetwork) {
+        setState(() => _hasNetwork = hasNetwork);
+      }
+      if (!hasNetwork) return;
       unawaited(_syncOfflineStockReductions());
     });
+    unawaited(_refreshNetworkAvailability());
     unawaited(_syncOfflineStockReductions());
     WidgetsBinding.instance.addObserver(this);
     _budgetRequestController = TextEditingController();
@@ -472,10 +481,26 @@ class _DailyStockPageState extends State<DailyStockPage>
     }
   }
 
+  Future<void> _refreshNetworkAvailability() async {
+    try {
+      final results = await Connectivity().checkConnectivity();
+      if (!mounted) return;
+      setState(
+        () => _hasNetwork =
+            results.isNotEmpty && !results.contains(ConnectivityResult.none),
+      );
+    } catch (error) {
+      debugPrint('Unable to check network availability: $error');
+    }
+  }
+
   Future<void> _syncOfflineStockReductions() async {
     try {
       final connectivity = await Connectivity().checkConnectivity();
-      if (connectivity.contains(ConnectivityResult.none)) return;
+      if (connectivity.isEmpty ||
+          connectivity.contains(ConnectivityResult.none)) {
+        return;
+      }
       await OfflineStockReductionService().sync(FirebaseFirestore.instance);
       final pending = await OfflineStockReductionService().pending();
       if (!mounted) return;
@@ -765,7 +790,6 @@ class _DailyStockPageState extends State<DailyStockPage>
         .watch(uid)
         .listen(
           (orders) {
-            unawaited(_expireInvalidHeldOrders(uid, orders));
             if (!mounted) return;
             setState(() {
               _pendingOrderCount = orders.length;
@@ -781,37 +805,6 @@ class _DailyStockPageState extends State<DailyStockPage>
             }
           },
         );
-  }
-
-  Future<void> _expireInvalidHeldOrders(
-    String userId,
-    List<HeldOrder> orders,
-  ) async {
-    final today = DateUtils.dateOnly(DateTime.now());
-    for (final order in orders) {
-      final items = (order.data()['items'] as List? ?? []).whereType<Map>();
-      final invalid = items.any((item) {
-        final expiry = DateTime.tryParse('${item['expirationDate'] ?? ''}');
-        if (expiry != null && !DateUtils.dateOnly(expiry).isAfter(today))
-          return true;
-        if (_latestOrderItems.isEmpty) return false;
-        final source = '${item['sourceInventoryId'] ?? ''}';
-        final name = '${item['name'] ?? ''}';
-        final variant = '${item['variant'] ?? ''}';
-        return !_latestOrderItems.any(
-          (available) =>
-              (source.isNotEmpty &&
-                  available['sourceInventoryId']?.toString() == source) ||
-              (available['name']?.toString() == name &&
-                  available['variant']?.toString() == variant),
-        );
-      });
-      if (invalid) {
-        try {
-          await HeldOrderStore.instance.consume(userId, order.id, 'expired');
-        } catch (_) {}
-      }
-    }
   }
 
   int get _cartItemCount => _cart.values.fold(0, (sum, qty) => sum + qty);
@@ -1656,7 +1649,7 @@ class _DailyStockPageState extends State<DailyStockPage>
             final activeSizeVariants = sizeGroups[selectedSize] ?? variants;
             final chosen = selectedItem();
             final totalPrice = _parsePrice(chosen['price']) * quantity;
-            final availableDialogWidth = MediaQuery.sizeOf(context).width - 48;
+            final availableDialogWidth = MediaQuery.sizeOf(context).width - 24;
             final addonOptions = activeSizeVariants
                 .map((variant) => variant['addonName']?.toString() ?? '')
                 .where((name) => name.isNotEmpty)
@@ -1707,8 +1700,8 @@ class _DailyStockPageState extends State<DailyStockPage>
 
             return Dialog(
               insetPadding: const EdgeInsets.symmetric(
-                horizontal: 20,
-                vertical: 24,
+                horizontal: 12,
+                vertical: 12,
               ),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(28),
@@ -1717,7 +1710,7 @@ class _DailyStockPageState extends State<DailyStockPage>
               child: Container(
                 width: availableDialogWidth > 640 ? 640 : availableDialogWidth,
                 constraints: BoxConstraints(
-                  maxHeight: MediaQuery.of(context).size.height * 0.86,
+                  maxHeight: MediaQuery.of(context).size.height * 0.92,
                 ),
                 decoration: BoxDecoration(
                   color: Colors.white,
@@ -1795,7 +1788,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                     ),
                     Flexible(
                       child: SingleChildScrollView(
-                        padding: const EdgeInsets.all(22),
+                        padding: const EdgeInsets.all(16),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
@@ -1920,130 +1913,48 @@ class _DailyStockPageState extends State<DailyStockPage>
                                             ),
                                           )
                                         else
-                                          Wrap(
-                                            spacing: 8,
-                                            runSpacing: 8,
-                                            children: [
-                                              ...visibleAddonOptions.map((
-                                                addonName,
-                                              ) {
-                                                final addonVariant =
-                                                    activeSizeVariants.firstWhere(
-                                                      (variant) =>
-                                                          (variant['addonName']
-                                                                  ?.toString() ??
-                                                              '') ==
-                                                          addonName,
-                                                      orElse: () =>
-                                                          activeSizeVariants
-                                                              .first,
-                                                    );
-                                                final addonPrice = _parsePrice(
-                                                  addonVariant['addonPriceDelta'],
-                                                );
-                                                final isSelected =
-                                                    selectedAddon == addonName;
-                                                return InkWell(
+                                          Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.stretch,
+                                            children: visibleAddonOptions.map((
+                                              addonName,
+                                            ) {
+                                              final addonVariant =
+                                                  activeSizeVariants.firstWhere(
+                                                    (variant) =>
+                                                        (variant['addonName']
+                                                                ?.toString() ??
+                                                            '') ==
+                                                        addonName,
+                                                    orElse: () =>
+                                                        activeSizeVariants
+                                                            .first,
+                                                  );
+                                              final isSelected =
+                                                  selectedAddon == addonName;
+                                              return Padding(
+                                                padding: const EdgeInsets.only(
+                                                  bottom: 8,
+                                                ),
+                                                child: CoffeeAddonOptionCard(
+                                                  name: addonName,
+                                                  price: _parsePrice(
+                                                    addonVariant['addonPriceDelta'],
+                                                  ),
+                                                  imageUrl:
+                                                      addonVariant['addonImageUrl']
+                                                          ?.toString() ??
+                                                      '',
+                                                  selected: isSelected,
                                                   onTap: () => setDialogState(
                                                     () => selectedAddon =
                                                         isSelected
                                                         ? ''
                                                         : addonName,
                                                   ),
-                                                  borderRadius:
-                                                      BorderRadius.circular(12),
-                                                  child: Container(
-                                                    width: 190,
-                                                    padding:
-                                                        const EdgeInsets.all(7),
-                                                    decoration: BoxDecoration(
-                                                      color: isSelected
-                                                          ? _AppColors.primary
-                                                                .withOpacity(
-                                                                  0.08,
-                                                                )
-                                                          : _AppColors.cardBg,
-                                                      borderRadius:
-                                                          BorderRadius.circular(
-                                                            12,
-                                                          ),
-                                                      border: Border.all(
-                                                        color: isSelected
-                                                            ? _AppColors.primary
-                                                            : _AppColors.border,
-                                                      ),
-                                                    ),
-                                                    child: Row(
-                                                      children: [
-                                                        _orderImageBox(
-                                                          addonVariant['addonImageUrl']
-                                                                  ?.toString() ??
-                                                              addonVariant['imageUrl']
-                                                                  ?.toString() ??
-                                                              '',
-                                                          fallbackIcon: Icons
-                                                              .add_circle_outline,
-                                                          size: 34,
-                                                          width: 38,
-                                                          height: 38,
-                                                        ),
-                                                        const SizedBox(
-                                                          width: 7,
-                                                        ),
-                                                        Expanded(
-                                                          child: Column(
-                                                            crossAxisAlignment:
-                                                                CrossAxisAlignment
-                                                                    .start,
-                                                            mainAxisSize:
-                                                                MainAxisSize
-                                                                    .min,
-                                                            children: [
-                                                              Text(
-                                                                addonName,
-                                                                maxLines: 1,
-                                                                overflow:
-                                                                    TextOverflow
-                                                                        .ellipsis,
-                                                                style: TextStyle(
-                                                                  color:
-                                                                      isSelected
-                                                                      ? _AppColors
-                                                                            .primary
-                                                                      : _AppColors
-                                                                            .textMid,
-                                                                  fontSize: 11,
-                                                                  fontWeight:
-                                                                      FontWeight
-                                                                          .w800,
-                                                                ),
-                                                              ),
-                                                              Text(
-                                                                addonPrice > 0
-                                                                    ? '+${formatMoney(addonPrice)}'
-                                                                    : 'Included',
-                                                                style: const TextStyle(
-                                                                  color: _AppColors
-                                                                      .textSoft,
-                                                                  fontSize: 10,
-                                                                ),
-                                                              ),
-                                                            ],
-                                                          ),
-                                                        ),
-                                                        if (isSelected)
-                                                          const Icon(
-                                                            Icons.check_circle,
-                                                            color: _AppColors
-                                                                .primary,
-                                                            size: 16,
-                                                          ),
-                                                      ],
-                                                    ),
-                                                  ),
-                                                );
-                                              }),
-                                            ],
+                                                ),
+                                              );
+                                            }).toList(),
                                           ),
                                       ],
                                     )
@@ -5346,165 +5257,137 @@ class _DailyStockPageState extends State<DailyStockPage>
         stream: store.watch(userId),
         builder: (context, snapshot) {
           final orders = snapshot.data ?? const <HeldOrder>[];
-          return AlertDialog(
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(24),
-            ),
-            title: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-              decoration: BoxDecoration(
-                color: _AppColors.primary,
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: const Row(
-                children: [
-                  Icon(Icons.pause_circle_outline, color: Colors.white),
-                  SizedBox(width: 10),
-                  Text(
-                    'Pending Orders',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w800,
-                    ),
+          return StreamBuilder<List<ConnectivityResult>>(
+            stream: Connectivity().onConnectivityChanged,
+            initialData: _hasNetwork == null
+                ? null
+                : _hasNetwork!
+                ? const [ConnectivityResult.wifi]
+                : const [ConnectivityResult.none],
+            builder: (context, networkSnapshot) {
+              final networkResults = networkSnapshot.data;
+              final hasNetwork = networkResults == null
+                  ? _hasNetwork
+                  : networkResults.isNotEmpty &&
+                        !networkResults.contains(ConnectivityResult.none);
+              return AlertDialog(
+                insetPadding: const EdgeInsets.symmetric(
+                  horizontal: 8,
+                  vertical: 12,
+                ),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(24),
+                ),
+                titlePadding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+                contentPadding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+                actionsPadding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+                title: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 18,
+                    vertical: 14,
+                  ),
+                  decoration: BoxDecoration(
+                    color: _AppColors.primary,
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: const Row(
+                    children: [
+                      Icon(Icons.pause_circle_outline, color: Colors.white),
+                      SizedBox(width: 10),
+                      Text(
+                        'Pending Orders',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w800,
+                          fontSize: 18,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                content: SizedBox(
+                  width: min(MediaQuery.sizeOf(context).width - 24, 720),
+                  height: min(MediaQuery.sizeOf(context).height * .74, 720),
+                  child: snapshot.hasError
+                      ? const Center(
+                          child: Text('Unable to load saved orders.'),
+                        )
+                      : !snapshot.hasData
+                      ? const Center(child: CircularProgressIndicator())
+                      : orders.isEmpty
+                      ? const Center(child: Text('No pending orders found'))
+                      : ListView.builder(
+                          itemCount: orders.length,
+                          itemBuilder: (context, index) {
+                            final order = orders[index];
+                            final data = order.data();
+                            final items = (data['items'] as List? ?? [])
+                                .whereType<Map>()
+                                .map((item) => Map<String, dynamic>.from(item))
+                                .toList();
+                            return HeldOrderCard(
+                              data: data,
+                              hasNetwork: hasNetwork,
+                              onVoid: () async {
+                                try {
+                                  await store.consume(
+                                    userId,
+                                    order.id,
+                                    'voided',
+                                  );
+                                  if (dialogContext.mounted) {
+                                    showTopNotification(
+                                      dialogContext,
+                                      'Held order voided',
+                                    );
+                                  }
+                                } catch (error) {
+                                  if (dialogContext.mounted) {
+                                    ScaffoldMessenger.of(
+                                      dialogContext,
+                                    ).showSnackBar(
+                                      SnackBar(content: Text('$error')),
+                                    );
+                                  }
+                                }
+                              },
+                              onRestore: () async {
+                                try {
+                                  _restorePendingOrder(
+                                    items,
+                                    discountType:
+                                        data['discountType']?.toString() ??
+                                        'None',
+                                  );
+                                  await store.consume(
+                                    userId,
+                                    order.id,
+                                    'restored',
+                                  );
+                                  if (!dialogContext.mounted) return;
+                                  Navigator.pop(dialogContext);
+                                } catch (error) {
+                                  if (dialogContext.mounted) {
+                                    ScaffoldMessenger.of(
+                                      dialogContext,
+                                    ).showSnackBar(
+                                      SnackBar(content: Text('$error')),
+                                    );
+                                  }
+                                }
+                              },
+                            );
+                          },
+                        ),
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(dialogContext),
+                    child: const Text('Close'),
                   ),
                 ],
-              ),
-            ),
-            content: SizedBox(
-              width: min(MediaQuery.sizeOf(context).width * .88, 680),
-              height: MediaQuery.sizeOf(context).height * .62,
-              child: snapshot.hasError
-                  ? const Center(child: Text('Unable to load saved orders.'))
-                  : !snapshot.hasData
-                  ? const Center(child: CircularProgressIndicator())
-                  : orders.isEmpty
-                  ? const Center(child: Text('No pending orders found'))
-                  : ListView.builder(
-                      itemCount: orders.length,
-                      itemBuilder: (context, index) {
-                        final order = orders[index];
-                        final data = order.data();
-                        final items = (data['items'] as List? ?? [])
-                            .whereType<Map>()
-                            .map((item) => Map<String, dynamic>.from(item))
-                            .toList();
-                        final created = data['createdAt'] is Timestamp
-                            ? (data['createdAt'] as Timestamp).toDate()
-                            : DateTime.tryParse('${data['createdAt']}');
-                        return Card(
-                          elevation: 2,
-                          color: const Color(0xFFFFF8FA),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(18),
-                            side: const BorderSide(color: _AppColors.border),
-                          ),
-                          margin: const EdgeInsets.only(bottom: 12),
-                          child: Padding(
-                            padding: const EdgeInsets.all(12),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Row(
-                                  children: [
-                                    const Expanded(
-                                      child: Text(
-                                        'Held order',
-                                        style: TextStyle(
-                                          fontWeight: FontWeight.bold,
-                                        ),
-                                      ),
-                                    ),
-                                    if (data['_pendingSync'] == true)
-                                      const Chip(
-                                        label: Text(
-                                          'Saved offline',
-                                          style: TextStyle(fontSize: 11),
-                                        ),
-                                      ),
-                                  ],
-                                ),
-                                if (created != null)
-                                  Text(
-                                    MaterialLocalizations.of(
-                                      context,
-                                    ).formatShortDate(created),
-                                  ),
-                                ...items.map(
-                                  (item) => Text(
-                                    '${item['name']} ${item['variant'] ?? ''} ×${item['quantity'] ?? 0}',
-                                  ),
-                                ),
-                                const SizedBox(height: 8),
-                                Row(
-                                  mainAxisAlignment: MainAxisAlignment.end,
-                                  children: [
-                                    TextButton(
-                                      onPressed: () async {
-                                        try {
-                                          await store.consume(
-                                            userId,
-                                            order.id,
-                                            'voided',
-                                          );
-                                          if (dialogContext.mounted)
-                                            showTopNotification(
-                                              dialogContext,
-                                              'Held order voided',
-                                            );
-                                        } catch (error) {
-                                          if (dialogContext.mounted)
-                                            ScaffoldMessenger.of(
-                                              dialogContext,
-                                            ).showSnackBar(
-                                              SnackBar(content: Text('$error')),
-                                            );
-                                        }
-                                      },
-                                      child: const Text('Void'),
-                                    ),
-                                    FilledButton(
-                                      onPressed: () async {
-                                        try {
-                                          _restorePendingOrder(
-                                            items,
-                                            discountType:
-                                                data['discountType']
-                                                    ?.toString() ??
-                                                'None',
-                                          );
-                                          await store.consume(
-                                            userId,
-                                            order.id,
-                                            'restored',
-                                          );
-                                          if (!dialogContext.mounted) return;
-                                          Navigator.pop(dialogContext);
-                                        } catch (error) {
-                                          if (dialogContext.mounted)
-                                            ScaffoldMessenger.of(
-                                              dialogContext,
-                                            ).showSnackBar(
-                                              SnackBar(content: Text('$error')),
-                                            );
-                                        }
-                                      },
-                                      child: const Text('Restore'),
-                                    ),
-                                  ],
-                                ),
-                              ],
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(dialogContext),
-                child: const Text('Close'),
-              ),
-            ],
+              );
+            },
           );
         },
       ),

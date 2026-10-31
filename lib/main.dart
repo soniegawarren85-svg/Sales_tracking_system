@@ -61,12 +61,16 @@ class _MyAppState extends State<MyApp> {
   bool _shorebirdUpdatePending = false;
   bool _shorebirdRestartPending = false;
   static const _shorebirdLastPromptKey = 'shorebird.lastPromptAt';
+  static const _shorebirdPatchDownloadedKey = 'shorebird.patchDownloaded';
 
   @override
   void initState() {
     super.initState();
     ShorebirdUpdateService.salesProcessActive.addListener(
       _onSalesProcessStateChanged,
+    );
+    ShorebirdUpdateService.registerUpdatePromptHandler(
+      _onShorebirdUpdatePromptRequested,
     );
     _appLinks = AppLinks();
     _linkSubscription = _appLinks.uriLinkStream.listen(
@@ -92,6 +96,34 @@ class _MyAppState extends State<MyApp> {
     }
   }
 
+  Future<void> _onShorebirdUpdatePromptRequested() async {
+    if (!mounted || !ShorebirdUpdateService.updater.isAvailable) return;
+    try {
+      if (ShorebirdUpdateService.promptState.value ==
+          ShorebirdUpdatePromptState.hidden) {
+        final status = await ShorebirdUpdateService.check();
+        if (!mounted) return;
+        if (status == UpdateStatus.outdated) {
+          ShorebirdUpdateService.promptState.value =
+              ShorebirdUpdatePromptState.available;
+        } else if (status == UpdateStatus.restartRequired) {
+          ShorebirdUpdateService.promptState.value =
+              ShorebirdUpdatePromptState.restartRequired;
+        } else {
+          return;
+        }
+      }
+
+      _shorebirdRestartPending =
+          ShorebirdUpdateService.promptState.value ==
+          ShorebirdUpdatePromptState.restartRequired;
+      _shorebirdUpdatePending = !_shorebirdRestartPending;
+      await _showPendingShorebirdDialog();
+    } catch (error) {
+      debugPrint('Unable to open Shorebird update prompt: $error');
+    }
+  }
+
   Future<void> _checkForShorebirdUpdate() async {
     if (!mounted ||
         _checkingForShorebirdUpdate ||
@@ -102,14 +134,28 @@ class _MyAppState extends State<MyApp> {
     try {
       final status = await ShorebirdUpdateService.check();
       if (!mounted) return;
+      if (status == UpdateStatus.upToDate) {
+        ShorebirdUpdateService.promptState.value =
+            ShorebirdUpdatePromptState.hidden;
+        final prefs = await SharedPreferences.getInstance();
+        if (prefs.getBool(_shorebirdPatchDownloadedKey) == true) {
+          await prefs.remove(_shorebirdPatchDownloadedKey);
+          await ShorebirdUpdateService.notifyApplied();
+        }
+        return;
+      }
       if (status == UpdateStatus.restartRequired) {
         await ShorebirdUpdateService.clearNotification();
+        ShorebirdUpdateService.promptState.value =
+            ShorebirdUpdatePromptState.restartRequired;
         _shorebirdRestartPending = true;
         await _showPendingShorebirdDialog();
         return;
       }
       if (status != UpdateStatus.outdated || _showingShorebirdDialog) return;
 
+      ShorebirdUpdateService.promptState.value =
+          ShorebirdUpdatePromptState.available;
       _shorebirdNotificationPending = true;
       final prefs = await SharedPreferences.getInstance();
       final lastPrompt = prefs.getInt(_shorebirdLastPromptKey) ?? 0;
@@ -154,11 +200,11 @@ class _MyAppState extends State<MyApp> {
         context: _navigatorKey.currentState!.context,
         barrierDismissible: false,
         builder: (context) => AlertDialog(
-          title: Text(restartPending ? 'Update ready' : 'Update Available'),
+          title: Text(restartPending ? 'Update ready' : 'Ready to update'),
           content: Text(
             restartPending
                 ? 'The update is ready. Restart the app when convenient to apply it.'
-                : 'A new app update is ready to download. You can install it now or do it later.',
+                : 'A new Angel’z Bites Cupcakes app update is ready. Update now or do it later.',
           ),
           actions: [
             TextButton(
@@ -167,7 +213,7 @@ class _MyAppState extends State<MyApp> {
             ),
             FilledButton(
               onPressed: () => Navigator.pop(context, true),
-              child: Text(restartPending ? 'OK' : 'Update Now'),
+              child: Text(restartPending ? 'Got it' : 'Update Now'),
             ),
           ],
         ),
@@ -214,6 +260,10 @@ class _MyAppState extends State<MyApp> {
       await ShorebirdUpdateService.download();
       if (!mounted || !navigator.mounted) return;
       navigator.pop();
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_shorebirdPatchDownloadedKey, true);
+      ShorebirdUpdateService.promptState.value =
+          ShorebirdUpdatePromptState.restartRequired;
       await ShorebirdUpdateService.clearNotification();
       if (!mounted || !navigator.mounted) return;
       await showDialog<void>(
@@ -221,7 +271,7 @@ class _MyAppState extends State<MyApp> {
         builder: (context) => AlertDialog(
           title: const Text('Update ready'),
           content: const Text(
-            'The update is downloaded and will be applied the next time you restart the app.',
+            'The update is ready. Restart the app when convenient to apply it.',
           ),
           actions: [
             FilledButton(

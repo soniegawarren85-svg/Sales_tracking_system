@@ -7,6 +7,7 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Handler
@@ -29,16 +30,32 @@ class MainActivity : FlutterActivity() {
     private val updatePermissionRequest = 7412
     private var pendingNotificationResult: MethodChannel.Result? = null
     private val updateChannelId = "shorebird_updates"
+    private val updatePromptExtra = "openShorebirdUpdate"
+    private var updateMethodChannel: MethodChannel? = null
+    private var pendingUpdatePrompt = false
     @Volatile private var printerSocket: BluetoothSocket? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, channelName)
             .setMethodCallHandler(::handlePrinterCall)
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger,
-            "com.example.sales_tracking/updates").setMethodCallHandler { call, result ->
+        pendingUpdatePrompt = consumeUpdatePromptIntent(intent)
+        updateMethodChannel = MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            "com.example.sales_tracking/updates"
+        )
+        updateMethodChannel?.setMethodCallHandler { call, result ->
             when (call.method) {
                 "showUpdateAvailable" -> showUpdateNotification(result)
+                "showUpdateApplied" -> {
+                    showUpdateAppliedNotification()
+                    result.success(null)
+                }
+                "consumeUpdatePrompt" -> {
+                    val pending = pendingUpdatePrompt
+                    pendingUpdatePrompt = false
+                    result.success(pending)
+                }
                 "clearUpdateNotification" -> {
                     (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
                         .cancel(7413)
@@ -47,6 +64,21 @@ class MainActivity : FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (consumeUpdatePromptIntent(intent)) {
+            pendingUpdatePrompt = true
+            updateMethodChannel?.invokeMethod("openUpdatePrompt", null)
+        }
+    }
+
+    private fun consumeUpdatePromptIntent(intent: Intent?): Boolean {
+        val requested = intent?.getBooleanExtra(updatePromptExtra, false) == true
+        if (requested) intent?.removeExtra(updatePromptExtra)
+        return requested
     }
 
     private fun showUpdateNotification(result: MethodChannel.Result) {
@@ -71,17 +103,35 @@ class MainActivity : FlutterActivity() {
         }
         val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
         val pendingIntent = launchIntent?.let {
+            it.flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            it.putExtra(updatePromptExtra, true)
             PendingIntent.getActivity(this, 7413, it,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         }
         val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
             Notification.Builder(this, updateChannelId) else Notification.Builder(this)
         builder.setSmallIcon(android.R.drawable.stat_sys_download_done)
-            .setContentTitle("Update Available")
-            .setContentText("A new Sales Tracking update is ready to download.")
+            .setContentTitle("Update ready")
+            .setContentText("Tap to open Angel’z Bites Cupcakes and update the app.")
             .setAutoCancel(true)
             .setContentIntent(pendingIntent)
         manager.notify(7413, builder.build())
+    }
+
+    private fun showUpdateAppliedNotification() {
+        val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            manager.createNotificationChannel(NotificationChannel(
+                updateChannelId, "App updates", NotificationManager.IMPORTANCE_DEFAULT
+            ).apply { description = "Shorebird app update alerts" })
+        }
+        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+            Notification.Builder(this, updateChannelId) else Notification.Builder(this)
+        builder.setSmallIcon(android.R.drawable.stat_sys_download_done)
+            .setContentTitle("Update successful")
+            .setContentText("You’re now using the latest Angel’z Bites Cupcakes app.")
+            .setAutoCancel(true)
+        manager.notify(7414, builder.build())
     }
 
     override fun onRequestPermissionsResult(

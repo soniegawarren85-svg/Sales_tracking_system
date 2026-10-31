@@ -6,9 +6,10 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sales_tracking/widgets/admin_catalog.dart';
 import 'package:sales_tracking/widgets/admin_item_editor.dart';
 import 'package:sales_tracking/widgets/inventory_batches.dart';
+import 'package:sales_tracking/services/branch_report_data.dart';
 
 void main() {
-  testWidgets('saving an edited inventory price persists and confirms save', (
+  testWidgets('catalog edits refresh metadata in existing allocations', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(390, 844);
@@ -26,9 +27,39 @@ void main() {
           'id': 'pistachio',
           'name': 'Pistachio Dubai Chewy',
           'price': 100,
+          'imageUrl': 'old-image.jpg',
           'costPrice': 40,
           'stock': 320,
           'expirationDate': '2026-12-31',
+        },
+      ],
+    });
+    await db.collection('staff_inventory').doc('branch-one').set({
+      'staffId': 'branch-one',
+      'sourceInventoryId': 'cookies',
+      'items': [
+        {
+          'id': 'pistachio',
+          'name': 'Pistachio Dubai Chewy',
+          'price': 100,
+          'imageUrl': 'old-image.jpg',
+          'stock': 7,
+        },
+      ],
+      'allocationHistory': ['unchanged'],
+    });
+    await db.collection('staff_inventory').doc('branch-two').set({
+      'staffId': 'branch-two',
+      'sourceInventoryId': 'cookies',
+      'items': [
+        {
+          'id': 'pistachio',
+          'name': 'Branch Pistachio',
+          'branchNameOverride': 'Branch Pistachio',
+          'price': 150,
+          'branchPriceOverride': 150,
+          'imageUrl': 'old-image.jpg',
+          'stock': 4,
         },
       ],
     });
@@ -70,13 +101,45 @@ void main() {
     );
     await tester.tap(find.text('Open editor'));
     await tester.pumpAndSettle();
-    await tester.enterText(find.byType(TextFormField).at(1), '99');
+    await tester.enterText(
+      find.byType(TextFormField).at(0),
+      'Pistachio Dubai Chewy XL',
+    );
+    await tester.enterText(find.byType(TextFormField).at(1), '120');
     await tester.tap(find.widgetWithText(FilledButton, 'Save'));
     await tester.pump();
     await tester.pumpAndSettle();
 
     final saved = await db.collection('sales_inventory').doc('cookies').get();
-    expect(((saved.data()!['items'] as List).single as Map)['price'], 99);
+    final catalogItem = (saved.data()!['items'] as List).single as Map;
+    expect(catalogItem['price'], 120);
+    expect(catalogItem['name'], 'Pistachio Dubai Chewy XL');
+    final allocated =
+        (await db.collection('staff_inventory').doc('branch-one').get())
+            .data()!;
+    final allocatedItem = (allocated['items'] as List).single as Map;
+    expect(allocatedItem['price'], 120);
+    expect(allocatedItem['name'], 'Pistachio Dubai Chewy XL');
+    expect(allocatedItem['stock'], 7);
+    expect(allocated['allocationHistory'], ['unchanged']);
+    final branchInventory = BranchReportData({
+      'sales_inventory': [
+        {'_id': 'cookies', ...saved.data()!},
+      ],
+      'staff_inventory': [
+        {'_id': 'branch-one', ...allocated},
+      ],
+    }).currentInventory('branch-one', DateTime.now()).single;
+    expect(branchInventory['name'], 'Pistachio Dubai Chewy XL');
+    expect(branchInventory['price'], 120);
+    final overridden =
+        (await db.collection('staff_inventory').doc('branch-two').get())
+            .data()!;
+    final overriddenItem = (overridden['items'] as List).single as Map;
+    expect(overriddenItem['price'], 150);
+    expect(overriddenItem['branchPriceOverride'], 150);
+    expect(overriddenItem['name'], 'Branch Pistachio');
+    expect(overriddenItem['stock'], 4);
     expect(find.text('Inventory changes saved successfully.'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });

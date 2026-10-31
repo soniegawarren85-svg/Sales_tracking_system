@@ -64,8 +64,66 @@ void main() {
           .exists,
       isTrue,
     );
+    final adjustment =
+        (await database
+                .collection('stock_adjustments')
+                .doc('reduction-1')
+                .get())
+            .data()!;
+    expect(adjustment['offline'], isTrue);
+    expect(adjustment['syncStatus'], 'synced');
+    expect(adjustment['offlineCreatedAt'], isNotNull);
     expect(await service.pending(), isEmpty);
   });
+
+  test('concurrent offline reductions are all retained in the queue', () async {
+    await Future.wait([
+      service.enqueue({'id': 'queued-1', 'inventoryId': 'allocation-1'}),
+      service.enqueue({'id': 'queued-2', 'inventoryId': 'allocation-1'}),
+    ]);
+
+    expect((await service.pending()).map((entry) => entry['id']).toSet(), {
+      'queued-1',
+      'queued-2',
+    });
+    expect(
+      (await service.pending()).every((entry) => entry['queuedAt'] != null),
+      isTrue,
+    );
+  });
+
+  test(
+    'retry after a committed adjustment does not apply stock twice',
+    () async {
+      final reduction = {
+        'id': 'retry-reduction',
+        'inventoryId': 'allocation-1',
+        'itemId': 'cookie-1',
+        'itemName': 'Cookie',
+        'variant': 'Pistachio',
+        'quantity': 2,
+        'staffId': 'staff-1',
+      };
+      await service.enqueue(reduction);
+      await service.sync(database);
+
+      await service.enqueue(reduction);
+      await service.sync(database);
+
+      final inventory =
+          (await database
+                  .collection('staff_inventory')
+                  .doc('allocation-1')
+                  .get())
+              .data()!;
+      expect(((inventory['items'] as List).single as Map)['stock'], 2);
+      expect(
+        (await database.collection('stock_adjustments').get()).docs,
+        hasLength(1),
+      );
+      expect(await service.pending(), isEmpty);
+    },
+  );
 
   test('stale reductions remain queued instead of overselling stock', () async {
     await service.enqueue({
@@ -429,6 +487,8 @@ void main() {
     expect(adjustment['branchId'], 'branch-1');
     expect(adjustment['coffeeSize'], 'Medium');
     expect(adjustment['unitPrice'], 120);
+    expect(adjustment['offline'], isTrue);
+    expect(adjustment['syncStatus'], 'synced');
   });
 
   test(
@@ -518,6 +578,14 @@ void main() {
           .data()?['type'],
       'bundle_stock_adjustment',
     );
+    final adjustment =
+        (await database
+                .collection('stock_adjustments')
+                .doc('bundle-reduction')
+                .get())
+            .data()!;
+    expect(adjustment['offline'], isTrue);
+    expect(adjustment['syncStatus'], 'synced');
     expect(await service.pending(), isEmpty);
   });
 

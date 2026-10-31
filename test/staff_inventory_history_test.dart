@@ -56,6 +56,66 @@ void main() {
     },
   );
 
+  test('offline history shows the saved item name and offline status', () {
+    final entries = staffInventoryHistoryEntries(
+      staffId: 'staff-a',
+      kind: 'categories',
+      categoryId: 'category-1',
+      categoryName: 'Cookies',
+      itemIds: {'item-1'},
+      itemNames: {'Cookie'},
+      adjustments: const [],
+      sales: const [],
+      pendingOfflineReductions: [
+        {
+          'id': 'offline-reduction',
+          'type': 'stock_adjustment',
+          'staffId': 'staff-a',
+          'inventoryId': 'category-1',
+          'itemId': 'item-1',
+          'itemName': 'Pistachio Cookie',
+          'categoryName': 'Cookies',
+          'quantity': 2,
+          'queuedAt': today.toIso8601String(),
+        },
+      ],
+    );
+
+    expect(entries, hasLength(1));
+    expect(entries.single['name'], 'Pistachio Cookie');
+    expect(entries.single['offline'], isTrue);
+    expect(entries.single['offlineStatus'], 'Saved offline');
+  });
+
+  test('synced offline adjustment remains marked as offline in history', () {
+    final entries = staffInventoryHistoryEntries(
+      staffId: 'staff-a',
+      kind: 'categories',
+      categoryId: 'category-1',
+      categoryName: 'Cookies',
+      itemIds: {'item-1'},
+      itemNames: {'Cookie'},
+      adjustments: [
+        {
+          'type': 'stock_adjustment',
+          'staffId': 'staff-a',
+          'categoryId': 'category-1',
+          'itemId': 'item-1',
+          'itemName': 'Pistachio Cookie',
+          'quantity': 1,
+          'offline': true,
+          'syncStatus': 'synced',
+          'createdAt': today,
+        },
+      ],
+      sales: const [],
+    );
+
+    expect(entries.single['name'], 'Pistachio Cookie');
+    expect(entries.single['offline'], isTrue);
+    expect(entries.single['offlineStatus'], 'Saved offline');
+  });
+
   test('bundle history is scoped to the selected allocated bundle', () {
     final entries = staffInventoryHistoryEntries(
       staffId: 'staff-a',

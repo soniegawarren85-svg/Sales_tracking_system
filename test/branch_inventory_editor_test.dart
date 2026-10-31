@@ -63,6 +63,72 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  test(
+    'catalog metadata updates allocated branches without changing stock',
+    () async {
+      final firestore = FakeFirebaseFirestore();
+      for (final branch in ['branch-one', 'branch-two']) {
+        await firestore.collection('staff_inventory').doc(branch).set({
+          'staffId': branch,
+          'sourceInventoryId': 'catalog-item',
+          'items': [
+            {
+              'id': 'stale-allocation-row',
+              'name': 'Old name',
+              'price': 100,
+              'imageUrl': 'old-image.jpg',
+              'stock': branch == 'branch-one' ? 7 : 4,
+              if (branch == 'branch-two') ...{
+                'branchNameOverride': 'Branch name',
+                'branchPriceOverride': 150,
+              },
+            },
+          ],
+          'allocationHistory': ['preserved'],
+        });
+      }
+
+      await syncAllocatedInventoryMetadata(
+        firestore: firestore,
+        sourceInventoryId: 'catalog-item',
+        item: {'id': 'internal-item', 'name': 'Old name'},
+        changes: {
+          'name': 'Updated name',
+          'price': 120,
+          'imageUrl': 'new-image.jpg',
+        },
+      );
+
+      final first =
+          (await firestore
+                  .collection('staff_inventory')
+                  .doc('branch-one')
+                  .get())
+              .data()!;
+      final firstItem = (first['items'] as List).single as Map;
+      expect(firstItem['name'], 'Updated name');
+      expect(firstItem['price'], 120);
+      expect(firstItem['imageUrl'], 'new-image.jpg');
+      expect(firstItem['stock'], 7);
+      expect(first['allocationHistory'], ['preserved']);
+
+      final second =
+          (await firestore
+                  .collection('staff_inventory')
+                  .doc('branch-two')
+                  .get())
+              .data()!;
+      final secondItem = (second['items'] as List).single as Map;
+      expect(secondItem['name'], 'Branch name');
+      expect(secondItem['price'], 150);
+      expect(secondItem['branchNameOverride'], 'Branch name');
+      expect(secondItem['branchPriceOverride'], 150);
+      expect(secondItem['imageUrl'], 'new-image.jpg');
+      expect(secondItem['stock'], 4);
+      expect(second['allocationHistory'], ['preserved']);
+    },
+  );
+
   test('editing inventory updates only matching branch allocations', () async {
     final firestore = FakeFirebaseFirestore();
     await firestore.collection('sales_inventory').doc('catalog-item').set({

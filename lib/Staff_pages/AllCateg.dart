@@ -79,6 +79,7 @@ class _AllCategPageState extends State<AllCategPage>
   List<Map<String, dynamic>> _pendingOfflineSales = const [];
   List<Map<String, dynamic>> _pendingOfflineReductions = const [];
   bool _inventoryOnline = false;
+  bool _syncingOfflineReductions = false;
 
   bool get _isFilteredCategory =>
       (widget.selectedCategoryName?.trim().isNotEmpty ?? false) ||
@@ -99,9 +100,9 @@ class _AllCategPageState extends State<AllCategPage>
         .listen((_) => _loadPendingOfflineSales());
     _offlineInventorySubscription = LocalDatabaseSyncService().collectionUpdates
         .where((collection) => collection == 'staff_inventory')
-        .listen((_) => _loadPendingOfflineReductions());
+        .listen((_) => _loadPendingOfflineReductions(sync: false));
     _offlineReductionsSubscription = OfflineStockReductionService().changes
-        .listen((_) => _loadPendingOfflineReductions());
+        .listen((_) => _loadPendingOfflineReductions(sync: false));
     _connectivitySubscription = Connectivity().onConnectivityChanged.listen((
       results,
     ) {
@@ -277,27 +278,41 @@ class _AllCategPageState extends State<AllCategPage>
     }
   }
 
-  Future<void> _loadPendingOfflineReductions() async {
+  Future<void> _loadPendingOfflineReductions({bool sync = true}) async {
     try {
       final connectivity = await Connectivity().checkConnectivity();
       final online = !connectivity.contains(ConnectivityResult.none);
       final service = OfflineStockReductionService();
       var pending = await service.pending();
-      if (online && pending.isNotEmpty) {
-        await service.sync(FirebaseFirestore.instance);
-        pending = await service.pending();
-      }
       if (!mounted) return;
       final sameQueue =
           jsonEncode(_pendingOfflineReductions) == jsonEncode(pending);
-      if (_inventoryOnline != online || !sameQueue) {
+      if (_inventoryOnline != online ||
+          !sameQueue ||
+          _syncingOfflineReductions !=
+              (online && pending.isNotEmpty && service.isSyncing) ||
+          (sync && online && pending.isNotEmpty)) {
         setState(() {
           _inventoryOnline = online;
           _pendingOfflineReductions = pending;
+          _syncingOfflineReductions =
+              online && pending.isNotEmpty && (sync || service.isSyncing);
         });
       }
+      if (!sync || !online || pending.isEmpty) return;
+      await service.sync(FirebaseFirestore.instance);
+      pending = await service.pending();
+      if (!mounted) return;
+      setState(() {
+        _pendingOfflineReductions = pending;
+        _syncingOfflineReductions =
+            online && pending.isNotEmpty && service.isSyncing;
+      });
     } catch (error) {
       debugPrint('Unable to load pending stock reductions: $error');
+      if (mounted && sync) {
+        setState(() => _syncingOfflineReductions = false);
+      }
     }
   }
 
@@ -7430,7 +7445,8 @@ class _AllCategPageState extends State<AllCategPage>
                   if (categoryDocs.isEmpty &&
                       bundleDocs.isEmpty &&
                       coffeeDocs.isEmpty &&
-                      addonDocs.isEmpty) {
+                      addonDocs.isEmpty &&
+                      _pendingOfflineReductions.isEmpty) {
                     return KeyedSubtree(
                       key: widget.inventoryTourKey,
                       child: _buildEmptyInventoryState(
@@ -7442,8 +7458,7 @@ class _AllCategPageState extends State<AllCategPage>
 
                   return Column(
                     children: [
-                      if (!_inventoryOnline &&
-                          _pendingOfflineReductions.isNotEmpty)
+                      if (_pendingOfflineReductions.isNotEmpty)
                         Padding(
                           padding: const EdgeInsets.fromLTRB(16, 8, 16, 2),
                           child: Container(
@@ -7453,12 +7468,88 @@ class _AllCategPageState extends State<AllCategPage>
                               color: const Color(0xFFFFF3E0),
                               borderRadius: BorderRadius.circular(12),
                             ),
-                            child: Text(
-                              '${_pendingOfflineReductions.length} stock reduction(s) saved offline and waiting to sync.',
-                              style: TextStyle(
-                                color: const Color(0xFF8A4B08),
-                                fontWeight: FontWeight.w700,
-                              ),
+                            child: Row(
+                              children: [
+                                if (_syncingOfflineReductions)
+                                  const SizedBox(
+                                    width: 18,
+                                    height: 18,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: Color(0xFF8A4B08),
+                                    ),
+                                  )
+                                else
+                                  const Icon(
+                                    Icons.cloud_upload_outlined,
+                                    size: 18,
+                                    color: Color(0xFF8A4B08),
+                                  ),
+                                const SizedBox(width: 9),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        _syncingOfflineReductions
+                                            ? 'Syncing saved offline reductions'
+                                            : _inventoryOnline
+                                            ? 'Saved offline • waiting to sync'
+                                            : 'Saved offline • waiting for internet',
+                                        style: const TextStyle(
+                                          color: Color(0xFF8A4B08),
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 3),
+                                      Row(
+                                        children: [
+                                          AnimatedSwitcher(
+                                            duration: const Duration(
+                                              milliseconds: 220,
+                                            ),
+                                            transitionBuilder:
+                                                (child, animation) =>
+                                                    FadeTransition(
+                                                      opacity: animation,
+                                                      child: SlideTransition(
+                                                        position: Tween<Offset>(
+                                                          begin: const Offset(
+                                                            0,
+                                                            0.3,
+                                                          ),
+                                                          end: Offset.zero,
+                                                        ).animate(animation),
+                                                        child: child,
+                                                      ),
+                                                    ),
+                                            child: Text(
+                                              '${_pendingOfflineReductions.length}',
+                                              key: ValueKey(
+                                                _pendingOfflineReductions
+                                                    .length,
+                                              ),
+                                              style: const TextStyle(
+                                                color: Color(0xFF8A4B08),
+                                                fontWeight: FontWeight.w900,
+                                              ),
+                                            ),
+                                          ),
+                                          const SizedBox(width: 4),
+                                          const Text(
+                                            'stock reduction(s) remaining',
+                                            style: TextStyle(
+                                              color: Color(0xFF8A4B08),
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
                         ),

@@ -11,6 +11,7 @@ import '../services/password_policy.dart';
 import '../widgets/password_strength_checklist.dart';
 import '../widgets/top_edge_refresh.dart';
 import '../widgets/logout_progress.dart';
+import '../widgets/shorebird_update_button.dart';
 import 'dart:async';
 import '../widgets/branch_staff_activity_dialog.dart';
 import '../services/public_item_id.dart';
@@ -669,6 +670,8 @@ class _ProfilePageState extends State<ProfilePage>
                       const SizedBox(height: 0),
                       _buildInfoCard(),
                       const SizedBox(height: 24),
+                      const ShorebirdUpdateButton(),
+                      const SizedBox(height: 12),
                       _buildChangePassword(),
                       if (widget.showLogoutButton) ...[
                         const SizedBox(height: 12),

@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import '../theme/app_colors.dart';
 import '../services/number_format.dart';
+import '../services/offline_stock_reduction_service.dart';
 
 DateTime? _historyDate(dynamic value) {
   if (value is Timestamp) return value.toDate().toLocal();
@@ -27,6 +30,7 @@ List<Map<String, dynamic>> staffInventoryHistoryEntries({
   Set<String> scopeIds = const {},
   Iterable<Map<String, dynamic>> reconciliations = const [],
   Iterable<Map<String, dynamic>> returns = const [],
+  Iterable<Map<String, dynamic>> pendingOfflineReductions = const [],
 }) {
   final result = <Map<String, dynamic>>[];
   final normalizedIds = itemIds
@@ -92,14 +96,30 @@ List<Map<String, dynamic>> staffInventoryHistoryEntries({
     return categoryMatches || belongsToItem(row);
   }
 
-  for (final row in adjustments.where(isRelevantAdjustment)) {
-    final date = _historyDate(row['createdAt'] ?? row['timestamp']);
+  final adjustmentRows = [
+    ...adjustments,
+    ...pendingOfflineReductions.map(
+      (reduction) => {
+        ...reduction,
+        'categoryId': reduction['inventoryId'],
+        'isOffline': true,
+        'syncStatus': 'pending',
+      },
+    ),
+  ];
+  for (final row in adjustmentRows.where(isRelevantAdjustment)) {
+    final date = _historyDate(
+      row['createdAt'] ?? row['timestamp'] ?? row['queuedAt'],
+    );
     if (date == null) continue;
     final quantity = _historyQuantity(row['quantity']);
     if (quantity <= 0) continue;
+    final isOffline = row['offline'] == true || row['isOffline'] == true;
     result.add({
       'activity': 'Reduce',
-      'name': row['itemName'] ?? row['categoryName'] ?? categoryName,
+      'name': '${row['itemName'] ?? ''}'.trim().isNotEmpty
+          ? row['itemName']
+          : row['categoryName'] ?? categoryName,
       'itemId':
           row['itemId'] ?? row['coffeeId'] ?? row['bundleInstanceId'] ?? '',
       'quantity': quantity,
@@ -107,6 +127,8 @@ List<Map<String, dynamic>> staffInventoryHistoryEntries({
       'reason': row['reason'] ?? 'Stock reduction',
       'comment': row['comment'] ?? '',
       'date': date,
+      'offline': isOffline,
+      if (isOffline) 'offlineStatus': 'Saved offline',
     });
   }
 
@@ -312,6 +334,8 @@ class _StaffInventoryHistoryDialogState
   );
   late DateTimeRange selectedRange = dateRange;
   String search = '';
+  List<Map<String, dynamic>> _pendingOfflineReductions = const [];
+  late final StreamSubscription<void> _offlineReductionsSubscription;
   late final Stream<QuerySnapshot<Map<String, dynamic>>> reconciliationStream =
       widget.db
           .collection('inventory_reconciliations')
@@ -341,6 +365,29 @@ class _StaffInventoryHistoryDialogState
             : widget.scopeIds.take(30).toList(),
       )
       .snapshots();
+
+  @override
+  void initState() {
+    super.initState();
+    final offlineReductions = OfflineStockReductionService();
+    _offlineReductionsSubscription = offlineReductions.changes.listen((_) {
+      unawaited(_loadPendingOfflineReductions());
+    });
+    unawaited(_loadPendingOfflineReductions());
+  }
+
+  Future<void> _loadPendingOfflineReductions() async {
+    try {
+      final pending = await OfflineStockReductionService().pending();
+      if (mounted) setState(() => _pendingOfflineReductions = pending);
+    } catch (_) {}
+  }
+
+  @override
+  void dispose() {
+    _offlineReductionsSubscription.cancel();
+    super.dispose();
+  }
 
   String dayLabel(DateTime value) =>
       '${value.year}-${value.month.toString().padLeft(2, '0')}-${value.day.toString().padLeft(2, '0')}';
@@ -529,6 +576,14 @@ class _StaffInventoryHistoryDialogState
                                   itemNames: widget.itemNames,
                                   adjustments: adjustmentsSnapshot.data!.docs
                                       .map((doc) => doc.data()),
+                                  pendingOfflineReductions:
+                                      _pendingOfflineReductions.where(
+                                        (reduction) =>
+                                            !adjustmentsSnapshot.data!.docs.any(
+                                              (doc) =>
+                                                  doc.id == reduction['id'],
+                                            ),
+                                      ),
                                   sales: salesSnapshot.data!.docs.map(
                                     (doc) => doc.data(),
                                   ),
@@ -723,6 +778,18 @@ class _StaffInventoryHistoryDialogState
               child: Text(
                 '${activity == 'Reduce' ? 'Reason' : 'Receipt'}: ${entry['reason']}',
                 style: const TextStyle(color: AppColors.text),
+              ),
+            ),
+          if (entry['offline'] == true)
+            Padding(
+              padding: const EdgeInsets.only(top: 5),
+              child: Text(
+                '${entry['offlineStatus'] ?? 'Saved offline'}',
+                style: const TextStyle(
+                  color: Color(0xFF8A4B08),
+                  fontSize: 11,
+                  fontWeight: FontWeight.w800,
+                ),
               ),
             ),
           if ('${entry['comment'] ?? ''}'.isNotEmpty)

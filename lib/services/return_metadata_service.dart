@@ -19,10 +19,19 @@ class ReturnMetadataService {
   static String normalized(dynamic value) =>
       '$value'.trim().toLowerCase().replaceAll(RegExp(r'\s+'), ' ');
   static String displayCode(Map data) {
+    final nested = data['item'] is Map
+        ? data['item'] as Map
+        : data['product'] is Map
+        ? data['product'] as Map
+        : const <String, dynamic>{};
     for (final key in [
       'itemDisplayId',
       'publicId',
       'itemPublicId',
+      'productId',
+      'inventoryItemId',
+      'itemCode',
+      'sku',
       'bundleId',
       'coffeeId',
       'addonId',
@@ -30,7 +39,8 @@ class ReturnMetadataService {
       'itemId',
       'variantId',
     ]) {
-      final value = '${data[key] ?? ''}'.trim();
+      final value = '${data[key] ?? nested[key] ?? ''}'.trim();
+      if (value.isEmpty || value == '--') continue;
       final match = RegExp(r'^([A-Z]{2,5})-(\d{1,4})$').firstMatch(value);
       if (match != null && match[1] != 'CAT') {
         return '${match[1]}-${int.parse(match[2]!).toString().padLeft(3, '0')}';
@@ -105,11 +115,15 @@ class ReturnMetadataService {
   Future<String> itemCode(Map<String, dynamic> item) async =>
       '${(await resolve(item))['itemDisplayId']}';
 
-  Future<Map<String, dynamic>> resolve(Map<String, dynamic> record) async {
+  Future<Map<String, dynamic>> resolve(
+    Map<String, dynamic> record, {
+    Map<String, dynamic>? sourceData,
+  }) async {
     final collection = record['returnSourceCollection'] ?? record['collection'];
     final sourceId = record['returnSourceId'] ?? record['id'];
-    Map<String, dynamic> source = {};
-    if ([
+    Map<String, dynamic> source = sourceData ?? {};
+    if (sourceData == null &&
+        [
           'completed_sales',
           'stock_adjustments',
           'staff_inventory',
@@ -152,16 +166,30 @@ class ReturnMetadataService {
       original['id'],
       product['publicId'],
       product['itemPublicId'],
+      product['productId'],
+      product['inventoryItemId'],
+      product['itemCode'],
+      product['sku'],
     ].where((v) => v != null && '$v'.isNotEmpty).map((v) => '$v').toSet();
+    final directCode = returnText([
+      displayCode(product),
+      displayCode(record),
+    ], '');
     List<Map<String, dynamic>> entries = [];
-    try {
-      entries = await catalog();
-    } catch (_) {}
+    if (directCode.isEmpty) {
+      try {
+        entries = await catalog();
+      } catch (_) {}
+    }
     bool identityMatch(Map entry) => [
       entry['id'],
       entry['itemId'],
       entry['variantId'],
       entry['publicId'],
+      entry['productId'],
+      entry['inventoryItemId'],
+      entry['itemCode'],
+      entry['sku'],
     ].any((v) => v != null && identities.contains('$v'));
     var matches = entries.where(identityMatch).toList();
     if (matches.isEmpty) {
@@ -187,9 +215,8 @@ class ReturnMetadataService {
     final stock = stockMatches.length == 1 ? stockMatches.single : allocation;
     final code = returnText([
       displayCode(resolved),
+      directCode,
       displayCode(stock),
-      displayCode(product),
-      displayCode(record),
     ], '--');
     final expiry =
         product['expirationDate'] ??

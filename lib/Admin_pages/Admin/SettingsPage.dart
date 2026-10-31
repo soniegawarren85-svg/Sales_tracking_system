@@ -16,6 +16,7 @@ import 'dart:convert';
 import '../../widgets/backup_restore_dialog.dart';
 import '../../widgets/admin_page_skeleton.dart';
 import '../../widgets/logout_progress.dart';
+import '../../widgets/shorebird_update_button.dart';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -477,6 +478,7 @@ class _SettingsPageState extends State<SettingsPage>
                       builder: (_) => const BackupRestoreDialog(),
                     ),
                   ),
+                  const ShorebirdUpdateButton(),
                   _settingItem(
                     icon: Icons.info_rounded,
                     title: "About App",

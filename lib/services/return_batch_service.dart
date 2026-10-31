@@ -11,49 +11,147 @@ String returnText(
     .firstWhere((v) => v.isNotEmpty, orElse: () => fallback);
 
 String returnItemName(Map item) {
+  final nested = item['item'] is Map
+      ? item['item'] as Map
+      : item['product'] is Map
+      ? item['product'] as Map
+      : const <String, dynamic>{};
   final isCoffee =
-      item['isCoffee'] == true || '${item['coffeeId'] ?? ''}'.isNotEmpty;
+      item['isCoffee'] == true ||
+      '${item['coffeeId'] ?? nested['coffeeId'] ?? ''}'.isNotEmpty;
+  String nameFrom(Iterable<dynamic> values, String fallback) {
+    final name = values
+        .map((value) => '${value ?? ''}'.trim())
+        .firstWhere(
+          (value) =>
+              value.isNotEmpty &&
+              !const {'item', 'unknown'}.contains(value.toLowerCase()),
+          orElse: () => fallback,
+        );
+    return name;
+  }
+
   if (isCoffee) {
-    final name = returnText([
+    final name = nameFrom([
       item['flavor'],
       item['coffeeName'],
       item['name'],
       item['itemName'],
+      item['productName'],
       item['categoryName'],
+      nested['flavor'],
+      nested['name'],
+      nested['itemName'],
+      nested['productName'],
     ], 'Beverage');
-    final size = returnText([item['coffeeSize'], item['variant']], '');
+    final size = returnText([
+      item['coffeeSize'],
+      item['variant'],
+      nested['coffeeSize'],
+      nested['variant'],
+    ], '');
     if (size.isNotEmpty && !name.toLowerCase().contains(size.toLowerCase())) {
       return '$name ($size)';
     }
     return name;
   }
-  return returnText([
+  return nameFrom([
     item['flavor'],
     item['variant'],
     item['itemName'],
     item['name'],
+    item['productName'],
+    item['itemTitle'],
     item['categoryName'],
+    item['category'],
+    nested['flavor'],
+    nested['variant'],
+    nested['itemName'],
+    nested['name'],
+    nested['productName'],
+    nested['itemTitle'],
+    nested['categoryName'],
   ], 'Item');
 }
 
-String returnItemCode(Map item) => inventoryDisplayId({
-  if ('${item['itemDisplayId'] ?? ''}'.trim().isNotEmpty)
-    'publicId': item['itemDisplayId'],
-  if ('${item['bundleDisplayId'] ?? ''}'.trim().isNotEmpty)
-    'publicId': item['bundleDisplayId'],
+String returnItemCode(Map item) {
+  final nested = item['item'] is Map
+      ? item['item'] as Map
+      : item['product'] is Map
+      ? item['product'] as Map
+      : const <String, dynamic>{};
+  final data = <String, dynamic>{};
   for (final key in [
+    'itemDisplayId',
+    'bundleDisplayId',
     'publicId',
     'itemPublicId',
+    'productId',
+    'inventoryItemId',
+    'itemCode',
+    'sku',
     'coffeeId',
     'bundleId',
     'addonId',
     'itemId',
     'variantId',
     'id',
-  ])
-    if ('${item[key] ?? ''}'.trim().isNotEmpty)
-      key == 'itemPublicId' ? 'publicId' : key: item[key],
-});
+  ]) {
+    final value = item[key] ?? nested[key];
+    if (value == null || '$value'.trim().isEmpty || '$value'.trim() == '--') {
+      continue;
+    }
+    data[key == 'itemDisplayId' ||
+                key == 'bundleDisplayId' ||
+                key == 'itemPublicId' ||
+                key == 'productId' ||
+                key == 'inventoryItemId' ||
+                key == 'itemCode' ||
+                key == 'sku'
+            ? 'publicId'
+            : key] =
+        value;
+  }
+  return inventoryDisplayId(data);
+}
+
+DateTime? returnRecordDate(Map item) {
+  for (final key in [
+    'refundAt',
+    'refundedAt',
+    'reducedAt',
+    'reductionAt',
+    'recordedAt',
+    'replacementAt',
+    'timestamp',
+    'createdAt',
+    'sourceDate',
+    'date',
+  ]) {
+    final value = item[key];
+    final date = value is Timestamp
+        ? value.toDate()
+        : value is DateTime
+        ? value
+        : DateTime.tryParse('${value ?? ''}');
+    if (date != null) return date;
+  }
+  return null;
+}
+
+List<Map<String, dynamic>> sortReturnRecordsNewestFirst(
+  Iterable<Map<String, dynamic>> records,
+) {
+  final indexed = records.indexed.toList();
+  indexed.sort((first, second) {
+    final firstDate = returnRecordDate(first.$2);
+    final secondDate = returnRecordDate(second.$2);
+    final byDate = (secondDate ?? DateTime.fromMillisecondsSinceEpoch(0))
+        .compareTo(firstDate ?? DateTime.fromMillisecondsSinceEpoch(0));
+    return byDate == 0 ? first.$1.compareTo(second.$1) : byDate;
+  });
+  return indexed.map((entry) => entry.$2).toList();
+}
 
 /// One atomic commit per submission. All source claims are checked before writes,
 /// and the same batch ID makes retries safe after an uncertain network response.
@@ -215,6 +313,7 @@ class ReturnBatchService {
           claimed[line] =
               AllocationChecklistService.quantity(claimed[line]) + count;
           final sourceType = '${data['type'] ?? ''}';
+          final selectedCode = '${selected['itemDisplayId'] ?? ''}'.trim();
           final reason = returnText([
             item['refundReason'],
             data['reason'],
@@ -235,9 +334,9 @@ class ReturnBatchService {
             'submittedByStaffId': actorPublicId,
             'staffName': actorName,
             'name': returnItemName(item),
-            'itemDisplayId': returnText([
-              selected['itemDisplayId'],
-            ], returnItemCode(item)),
+            'itemDisplayId': selectedCode.isNotEmpty && selectedCode != '--'
+                ? selectedCode
+                : returnItemCode(item),
             'quantity': count,
             'reason': reason,
             'originalReason': reason,

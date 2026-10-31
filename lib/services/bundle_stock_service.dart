@@ -184,6 +184,39 @@ int availableBundleStock(Map bundle, {DateTime? now}) {
   return bundleQuantity(bundle['bundleCount']);
 }
 
+bool staffBundleAllocationExpired(Map bundle, {DateTime? now}) {
+  final day = now ?? DateTime.now();
+  if (bundleExpired(bundle, day)) return true;
+  final instances = bundleRows(bundle['bundleInstances']);
+  if (instances.isEmpty) {
+    return bundleRows(bundle['items']).any((item) => bundleExpired(item, day));
+  }
+  final availableInstances = instances.where((instance) {
+    final status = '${instance['status'] ?? 'available'}'.toLowerCase();
+    return instance['isDeleted'] != true &&
+        instance['isVoided'] != true &&
+        (status.isEmpty || status == 'available');
+  }).toList();
+  return availableInstances.isNotEmpty &&
+      availableInstances.every((instance) {
+        if (bundleExpired(instance, day)) return true;
+        final items = bundleRows(instance['items']);
+        final expiryItems = items.isEmpty ? bundleRows(bundle['items']) : items;
+        return expiryItems.any((item) => bundleExpired(item, day));
+      });
+}
+
+bool staffBundleAllocationVisible(Map bundle, {DateTime? now}) =>
+    bundle['isDeleted'] != true && !staffBundleAllocationExpired(bundle, now: now);
+
+int availableStaffBundleCount(
+  Iterable<Map<String, dynamic>> allocations, {
+  DateTime? now,
+}) => allocations.fold(
+  0,
+  (total, allocation) => total + availableBundleStock(allocation, now: now),
+);
+
 String bundleExpirationDateLabel(Map bundle, {DateTime? now}) {
   final day = now ?? DateTime.now();
   final instances = bundleRows(bundle['bundleInstances']);

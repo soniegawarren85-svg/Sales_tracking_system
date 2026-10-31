@@ -5,6 +5,7 @@ import 'package:sales_tracking/theme/app_colors.dart';
 import '../services/short_id_service.dart';
 import '../services/bundle_stock_service.dart';
 import '../services/bundle_metadata_service.dart';
+import '../services/branch_inventory_editor.dart';
 import 'dart:math';
 import 'dart:convert';
 import 'dart:typed_data';
@@ -525,6 +526,17 @@ class _ItemEditorState extends State<_ItemEditor> {
           ? changes
           : inventoryChangedFields(_data, changes);
       if (patch.isEmpty) {
+        if (widget.entry != null) {
+          await syncAllocatedInventoryMetadata(
+            firestore: db,
+            sourceInventoryId: ref.id,
+            item: _data,
+            changes: {
+              for (final key in ['name', 'price', 'imageUrl'])
+                if (_data.containsKey(key)) key: _data[key],
+            },
+          );
+        }
         _finishSave();
         return;
       }
@@ -605,6 +617,14 @@ class _ItemEditorState extends State<_ItemEditor> {
         }
         tx.update(ref, {'items': items});
       });
+      if (widget.entry != null) {
+        await syncAllocatedInventoryMetadata(
+          firestore: db,
+          sourceInventoryId: ref.id,
+          item: _data,
+          changes: patch,
+        );
+      }
       _recordSaveActivity(source, patch, publicId: createdPublicId);
       _finishSave();
     } catch (error) {

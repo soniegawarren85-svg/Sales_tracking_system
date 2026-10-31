@@ -12,6 +12,7 @@ import '../services/account_login_session.dart';
 import '../widgets/password_strength_checklist.dart';
 import '../widgets/admin_page_skeleton.dart';
 import '../widgets/logout_progress.dart';
+import '../widgets/shorebird_update_button.dart';
 import '../widgets/account_profile_editor_sheet.dart';
 import '../services/catalog_image_service.dart';
 import 'package:sales_tracking/theme/app_colors.dart';
@@ -480,6 +481,7 @@ class _SuperAdminSettingsPageState extends State<SuperAdminSettingsPage>
                       builder: (_) => const BackupRestoreDialog(),
                     ),
                   ),
+                  const ShorebirdUpdateButton(),
                   _settingItem(
                     icon: Icons.info_rounded,
                     title: "About App",

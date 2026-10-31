@@ -1,6 +1,77 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'inventory_display_ids.dart';
 
+Future<void> syncAllocatedInventoryMetadata({
+  required FirebaseFirestore firestore,
+  required String sourceInventoryId,
+  required Map<String, dynamic> item,
+  required Map<String, dynamic> changes,
+}) async {
+  final metadata = <String, dynamic>{
+    for (final key in ['name', 'price', 'imageUrl'])
+      if (changes.containsKey(key)) key: changes[key],
+  };
+  if (sourceInventoryId.isEmpty || metadata.isEmpty) return;
+
+  final snapshot = await firestore
+      .collection('staff_inventory')
+      .where('sourceInventoryId', isEqualTo: sourceInventoryId)
+      .get();
+  if (snapshot.docs.isEmpty) return;
+
+  await firestore.runTransaction((transaction) async {
+    final latestSnapshots = await Future.wait(
+      snapshot.docs.map((document) => transaction.get(document.reference)),
+    );
+    for (final latest in latestSnapshots) {
+      if (!latest.exists) continue;
+      final allocation = latest.data() ?? <String, dynamic>{};
+      if (allocation['isBundle'] == true) continue;
+
+      Map<String, dynamic> withCurrentMetadata(Map raw) {
+        final current = Map<String, dynamic>.from(raw);
+        return {
+          ...current,
+          if (metadata.containsKey('name'))
+            'name': current['branchNameOverride'] ?? metadata['name'],
+          if (metadata.containsKey('price'))
+            'price': current['branchPriceOverride'] ?? metadata['price'],
+          if (metadata.containsKey('imageUrl'))
+            'imageUrl': metadata['imageUrl'],
+        };
+      }
+
+      bool matches(Map raw) {
+        return inventoryVariantsMatch(item, raw);
+      }
+
+      if (allocation['isCoffee'] == true || allocation['isAddon'] == true) {
+        transaction.set(
+          latest.reference,
+          withCurrentMetadata(allocation),
+          SetOptions(merge: true),
+        );
+        continue;
+      }
+
+      final variants = (allocation['items'] as List? ?? []).toList();
+      var changed = false;
+      for (var index = 0; index < variants.length; index++) {
+        final raw = variants[index];
+        if (raw is! Map || !matches(raw)) continue;
+        variants[index] = withCurrentMetadata(raw);
+        changed = true;
+      }
+      if (changed) {
+        transaction.set(latest.reference, {
+          ...allocation,
+          'items': variants,
+        }, SetOptions(merge: true));
+      }
+    }
+  });
+}
+
 Future<void> updateBranchInventoryItem({
   required FirebaseFirestore firestore,
   required String branchId,

@@ -3,6 +3,7 @@ import 'package:sales_tracking/widgets/top_edge_refresh.dart';
 import '../widgets/admin_category_manager.dart';
 import '../widgets/allocation_checklist.dart';
 import '../services/bundle_stock_service.dart';
+import '../services/inventory_void_service.dart';
 import '../services/activity_log.dart';
 import '../widgets/bundle_details_dialog.dart';
 import '../widgets/void_reason_dialog.dart';
@@ -594,8 +595,6 @@ class _InventoryPageState extends State<InventoryPage>
     required String sourceInventoryId,
     required Map<String, dynamic> removedVariant,
   }) async {
-    final removedId = removedVariant['id']?.toString() ?? '';
-    final removedName = removedVariant['name']?.toString() ?? '';
     final snapshot = await _firestore
         .collection('staff_inventory')
         .where('sourceInventoryId', isEqualTo: sourceInventoryId)
@@ -604,18 +603,8 @@ class _InventoryPageState extends State<InventoryPage>
     final batch = _firestore.batch();
     for (final doc in snapshot.docs) {
       final data = doc.data();
-      final items = (data['items'] as List<dynamic>? ?? [])
-          .whereType<Map>()
-          .map((entry) => Map<String, dynamic>.from(entry))
-          .toList();
-
-      final nextItems = items.where((entry) {
-        final id = entry['id']?.toString() ?? '';
-        final name = entry['name']?.toString() ?? '';
-        if (removedId.isNotEmpty && id == removedId) return false;
-        if (removedName.isNotEmpty && name == removedName) return false;
-        return true;
-      }).toList();
+      final items = data['items'] as List<dynamic>? ?? [];
+      final nextItems = removeAllocatedCatalogVariant(items, removedVariant);
 
       if (nextItems.length == items.length) continue;
       batch.update(doc.reference, {
@@ -3533,9 +3522,8 @@ class _InventoryPageState extends State<InventoryPage>
       final snapshot = await _firestore.collection('sales_inventory').get();
       List<Map<String, dynamic>> inventory = [];
       for (var doc in snapshot.docs) {
-        if (doc.data().containsKey('isDeleted') && doc['isDeleted'] == true) {
-          continue;
-        }
+        final data = doc.data();
+        if (!catalogItemActive(data, DateTime.now())) continue;
         if (doc.data().containsKey('isBundle') && doc['isBundle'] == true) {
           continue;
         }
@@ -3544,12 +3532,13 @@ class _InventoryPageState extends State<InventoryPage>
             doc['bundleId'].toString().isNotEmpty) {
           continue;
         }
-        final data = doc.data();
         final filteredItems = ((data['items'] as List<dynamic>?) ?? [])
             .where((e) {
-              final variant = e as Map<String, dynamic>?;
-              final expiryDate = variant?['expirationDate']?.toString() ?? '';
-              return !_isExpired(expiryDate);
+              if (e is! Map) return false;
+              final variant = Map<String, dynamic>.from(e);
+              final expiryDate = variant['expirationDate']?.toString() ?? '';
+              return catalogItemActive(variant, DateTime.now()) &&
+                  !_isExpired(expiryDate);
             })
             .map((e) => Map<String, dynamic>.from(e as Map<String, dynamic>))
             .toList();
@@ -3565,6 +3554,7 @@ class _InventoryPageState extends State<InventoryPage>
       }
       final coffees = await _firestore.collection('coffee_products').get();
       for (final doc in coffees.docs) {
+        if (!catalogItemActive(doc.data(), DateTime.now())) continue;
         final sizes = bundleBeverageSizes(doc.id, doc.data());
         if (sizes.isEmpty) continue;
         inventory.add({

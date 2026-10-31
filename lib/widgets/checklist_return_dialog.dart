@@ -1,7 +1,6 @@
 import 'dart:async';
 import '../services/return_metadata_service.dart';
 import '../services/return_batch_service.dart';
-import '../services/public_item_id.dart';
 import '../theme/app_colors.dart';
 import 'return_batch_cards.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -33,10 +32,11 @@ class _ChecklistReturnDialogState extends State<ChecklistReturnDialog> {
   String error = '';
   String? branch;
   bool loading = true, saving = false;
+  bool resolvingItemCodes = false;
   String? batchId;
   List<Map<String, dynamic>>? pendingItems;
   String actorName = '', actorPublicId = '';
-  final profiles = <String, Map<String, dynamic>>{};
+  int _loadGeneration = 0;
 
   @override
   void initState() {
@@ -45,47 +45,27 @@ class _ChecklistReturnDialogState extends State<ChecklistReturnDialog> {
   }
 
   Future<void> load() async {
+    final generation = ++_loadGeneration;
     setState(() {
       loading = true;
+      resolvingItemCodes = false;
       error = '';
     });
     try {
       final user = await resolveBranchInventoryActor(widget.db);
 
       final ids = widget.scopeIds.toSet().toList();
-      final snapshots = <QueryDocumentSnapshot<Map<String, dynamic>>>[];
-      for (var offset = 0; offset < ids.length; offset += 30) {
-        snapshots.addAll(
-          (await widget.db
-                  .collection('staff_inventory')
-                  .where('staffId', whereIn: ids.skip(offset).take(30).toList())
-                  .get())
-              .docs,
-        );
-      }
-      final records = await Future.wait([
-        widget.db
-            .collection('completed_sales')
-            .where('userId', isEqualTo: user.id)
-            .get(),
-        widget.db
-            .collection('stock_adjustments')
-            .where('userId', isEqualTo: user.id)
-            .get(),
-        widget.db
-            .collection('stock_adjustments')
-            .where('staffId', isEqualTo: user.id)
-            .get(),
-      ]);
-      final choices = <Map<String, dynamic>>[];
-      final refunds = {for (final doc in records.first.docs) doc.id: doc};
-      final reductions = {
-        for (final snapshot in records.skip(1))
-          for (final doc in snapshot.docs) doc.id: doc,
-      };
+      final inventoryQueries = <Future<QuerySnapshot<Map<String, dynamic>>>>[];
+      final branchQueries = <Future<QuerySnapshot<Map<String, dynamic>>>>[];
       for (var offset = 0; offset < ids.length; offset += 30) {
         final scope = ids.skip(offset).take(30).toList();
-        final branchRecords = await Future.wait([
+        inventoryQueries.add(
+          widget.db
+              .collection('staff_inventory')
+              .where('staffId', whereIn: scope)
+              .get(),
+        );
+        branchQueries.addAll([
           widget.db
               .collection('completed_sales')
               .where('branchId', whereIn: scope)
@@ -99,66 +79,53 @@ class _ChecklistReturnDialogState extends State<ChecklistReturnDialog> {
               .where('staffId', whereIn: scope)
               .get(),
         ]);
-        for (final doc in branchRecords.first.docs) {
-          refunds[doc.id] = doc;
-        }
-        for (final snapshot in branchRecords.skip(1)) {
-          for (final doc in snapshot.docs) {
-            reductions[doc.id] = doc;
-          }
-        }
       }
-      final staffUids = {
-        user.id,
-        ...refunds.values.map((doc) => '${doc.data()['userId'] ?? ''}'),
-        ...reductions.values.map(
-          (doc) => '${doc.data()['userId'] ?? doc.data()['staffId'] ?? ''}',
-        ),
-      }.where((id) => id.isNotEmpty).toSet();
-      await Future.wait(
-        staffUids.map((id) async {
-          Map<String, dynamic> profile = {};
-          try {
-            profile =
-                (await widget.db
-                        .collection('staff_requests')
-                        .doc(id)
-                        .get()
-                        .timeout(const Duration(seconds: 6)))
-                    .data() ??
-                {};
-          } catch (_) {
-            // Older records may outlive a staff profile or its read access.
-          }
-          final fullName =
-              [profile['firstName'], profile['middleName'], profile['lastName']]
-                  .map((v) => '${v ?? ''}'.trim())
-                  .where((v) => v.isNotEmpty)
-                  .join(' ');
-          profiles[id] = {
-            'name': returnText([fullName, profile['name']], ''),
-            'staffId': publicItemId(
-              returnText([
-                profile['staffId'],
-                profile['publicId'],
-              ], 'Not recorded'),
-            ),
-          };
-        }),
-      );
-      actorName = returnText([profiles[user.id]?['name'], user.name], 'Staff');
-      actorPublicId = returnText([
-        user.publicId,
-        profiles[user.id]?['staffId'],
+      final personalQueries = <Future<QuerySnapshot<Map<String, dynamic>>>>[
+        widget.db
+            .collection('completed_sales')
+            .where('userId', isEqualTo: user.id)
+            .get(),
+        widget.db
+            .collection('stock_adjustments')
+            .where('userId', isEqualTo: user.id)
+            .get(),
+        widget.db
+            .collection('stock_adjustments')
+            .where('staffId', isEqualTo: user.id)
+            .get(),
+      ];
+      final queryResults = await Future.wait([
+        ...inventoryQueries,
+        ...personalQueries,
+        ...branchQueries,
       ]);
-      final branchNames = <String, String>{};
-      for (final id in ids) {
-        final data = (await widget.db.collection('branches').doc(id).get())
-            .data();
-        if (data != null && data['isDeleted'] != true) {
-          branchNames[id] = '${data['name'] ?? data['branchName'] ?? id}';
+      final snapshots = <QueryDocumentSnapshot<Map<String, dynamic>>>[
+        for (final snapshot in queryResults.take(inventoryQueries.length))
+          ...snapshot.docs,
+      ];
+      final personalOffset = inventoryQueries.length;
+      final branchOffset = personalOffset + personalQueries.length;
+      final choices = <Map<String, dynamic>>[];
+      final refunds = {
+        for (final doc in queryResults[personalOffset].docs) doc.id: doc,
+      };
+      final reductions = {
+        for (final snapshot in queryResults.skip(personalOffset + 1).take(2))
+          for (final doc in snapshot.docs) doc.id: doc,
+      };
+      for (var index = 0; index < branchQueries.length; index++) {
+        final snapshot = queryResults[branchOffset + index];
+        final target = index % 3 == 0 ? refunds : reductions;
+        for (final doc in snapshot.docs) {
+          target[doc.id] = doc;
         }
       }
+      actorName = returnText([user.name], 'Staff');
+      actorPublicId = returnText([user.publicId]);
+      final branchNames = <String, String>{
+        for (final id in ids) id: ids.length == 1 ? 'Assigned inventory' : id,
+      };
+      final sourceRecords = <String, Map<String, dynamic>>{};
       void add(
         String collection,
         String id,
@@ -168,6 +135,7 @@ class _ChecklistReturnDialogState extends State<ChecklistReturnDialog> {
         int count,
       ) {
         if (count <= 0 || data['isDeleted'] == true) return;
+        sourceRecords['$collection/$id'] = data;
         final branchId =
             data['branchId'] ??
             (ids.contains(data['staffId']) && data['staffId'] != user.id
@@ -181,7 +149,6 @@ class _ChecklistReturnDialogState extends State<ChecklistReturnDialog> {
                       ?.data()['staffId']);
         if (branchId != null && !ids.contains(branchId)) return;
         final name = returnItemName(item);
-        final profile = profiles['${data['userId'] ?? data['staffId']}'];
         final matches = <Map<String, dynamic>>[];
         for (final stock in snapshots) {
           final saved = stock.data();
@@ -218,27 +185,29 @@ class _ChecklistReturnDialogState extends State<ChecklistReturnDialog> {
           'name': name,
           'sourceItem': item,
           'userId': data['userId'] ?? data['staffId'],
-          'itemDisplayId': '${item['itemDisplayId'] ?? ''}'.trim().isNotEmpty
-              ? item['itemDisplayId']
-              : returnItemCode(item) == '--' || resolved['publicId'] != null
+          'itemDisplayId': returnItemCode(item) == '--'
               ? returnItemCode(resolved)
               : returnItemCode(item),
           'isBundle': item['isBundle'] == true || resolved['isBundle'] == true,
           'isCoffee': item['isCoffee'] == true || resolved['isCoffee'] == true,
           'isAddon': item['isAddon'] == true || resolved['isAddon'] == true,
           'staffName': returnText(
-            [profile?['name'], data['staffName'], data['staffFullName']],
+            [data['staffName'], data['staffFullName']],
             (data['userId'] ?? data['staffId']) == user.id
                 ? actorName
                 : 'Not recorded',
           ),
           'staffPublicId': returnText(
-            [data['staffPublicId'], profile?['staffId']],
+            [data['staffPublicId']],
             (data['userId'] ?? data['staffId']) == user.id
                 ? actorPublicId
                 : 'Not recorded',
           ),
-          'branchName': branchNames[branchId],
+          'branchName': returnText([
+            branchNames[branchId],
+            data['branchName'],
+            data['staffName'],
+          ], 'Not recorded'),
           'comment': returnText([
             item['comment'],
             data['comment'],
@@ -248,7 +217,16 @@ class _ChecklistReturnDialogState extends State<ChecklistReturnDialog> {
           'unitPrice': item['price'] ?? item['unitPrice'] ?? data['unitPrice'],
           'expirationDate':
               item['expirationDate'] ?? resolved['expirationDate'],
-          'date': data['timestamp'] ?? data['createdAt'],
+          'date':
+              data['refundAt'] ??
+              data['reducedAt'] ??
+              data['timestamp'] ??
+              data['createdAt'],
+          'sourceDate':
+              data['refundAt'] ??
+              data['reducedAt'] ??
+              data['timestamp'] ??
+              data['createdAt'],
           'reason': returnText([
             item['refundReason'],
             data['reason'],
@@ -293,23 +271,11 @@ class _ChecklistReturnDialogState extends State<ChecklistReturnDialog> {
         );
       }
       final metadata = ReturnMetadataService(widget.db);
-      await Future.wait(
-        choices.map((item) async {
-          try {
-            final resolved = await metadata
-                .resolve(item)
-                .timeout(const Duration(seconds: 6));
-            item.addAll(resolved);
-            item['staffName'] = resolved['sourceStaffName'];
-            item['staffPublicId'] = resolved['sourceStaffId'];
-          } catch (_) {}
-        }),
-      );
-      if (!mounted) return;
+      if (!mounted || generation != _loadGeneration) return;
       setState(() {
         options
           ..clear()
-          ..addAll(choices);
+          ..addAll(sortReturnRecordsNewestFirst(choices));
         branches
           ..clear()
           ..addAll(branchNames);
@@ -318,15 +284,86 @@ class _ChecklistReturnDialogState extends State<ChecklistReturnDialog> {
         }
         branch = branches.length == 1 ? branches.keys.first : null;
         loading = false;
+        resolvingItemCodes = choices.any(
+          (item) => returnItemCode(item) == '--',
+        );
       });
+      unawaited(_resolveBranches(ids, generation));
+      unawaited(_resolveMetadata(choices, sourceRecords, metadata, generation));
     } catch (e) {
-      if (mounted) {
+      if (mounted && generation == _loadGeneration) {
         setState(() {
           error = 'Unable to load return items: $e';
           loading = false;
         });
       }
     }
+  }
+
+  Future<void> _resolveMetadata(
+    List<Map<String, dynamic>> choices,
+    Map<String, Map<String, dynamic>> sourceRecords,
+    ReturnMetadataService metadata,
+    int generation,
+  ) async {
+    await Future.wait(
+      choices.map((item) async {
+        try {
+          final resolved = await metadata
+              .resolve(
+                item,
+                sourceData:
+                    sourceRecords['${item['collection']}/${item['id']}'],
+              )
+              .timeout(const Duration(seconds: 6));
+          item.addAll(resolved);
+          item['staffName'] = resolved['sourceStaffName'];
+          item['staffPublicId'] = resolved['sourceStaffId'];
+        } catch (_) {}
+      }),
+    );
+    if (!mounted || generation != _loadGeneration) return;
+    setState(() {
+      resolvingItemCodes = false;
+      options
+        ..clear()
+        ..addAll(sortReturnRecordsNewestFirst(choices));
+    });
+  }
+
+  Future<void> _resolveBranches(List<String> ids, int generation) async {
+    try {
+      final docs = await Future.wait(
+        ids.map((id) => widget.db.collection('branches').doc(id).get()),
+      );
+      if (!mounted || generation != _loadGeneration) return;
+      final names = <String, String>{};
+      for (var index = 0; index < docs.length; index++) {
+        final data = docs[index].data();
+        if (data != null && data['isDeleted'] != true) {
+          final id = ids[index];
+          names[id] = '${data['name'] ?? data['branchName'] ?? id}';
+        }
+      }
+      setState(() {
+        branches
+          ..clear()
+          ..addAll(names);
+        for (final id in ids) {
+          branches.putIfAbsent(
+            id,
+            () => ids.length == 1 ? 'Assigned inventory' : id,
+          );
+        }
+        for (final item in options) {
+          final name = branches[item['branchId']];
+          if (name != null) item['branchName'] = name;
+        }
+        if (branches.isEmpty && ids.isNotEmpty) {
+          branches[ids.first] = 'Assigned inventory';
+        }
+      });
+    } catch (_) {}
   }
 
   Future<void> submit(List<Map<String, dynamic>> visible) async {
@@ -497,13 +534,18 @@ class _ChecklistReturnDialogState extends State<ChecklistReturnDialog> {
             alignment: Alignment.centerLeft,
             child: FilledButton.icon(
               onPressed:
-                  loading || saving || (visible.isEmpty && pendingItems == null)
+                  loading ||
+                      resolvingItemCodes ||
+                      saving ||
+                      (visible.isEmpty && pendingItems == null)
                   ? null
                   : () => submit(visible),
               icon: const Icon(Icons.keyboard_return_rounded),
               label: Text(
                 saving
                     ? 'Submitting...'
+                    : resolvingItemCodes
+                    ? 'Loading item details...'
                     : pendingItems != null
                     ? 'Retry same batch'
                     : 'Submit Return ($visibleQuantity)',
