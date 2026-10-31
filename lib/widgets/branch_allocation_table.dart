@@ -68,9 +68,10 @@ class BranchAllocationTable extends StatelessWidget {
     this.inventory = false,
     this.addons = false,
     this.allowRefunds = true,
+    this.showActions = true,
   });
   final List<Map<String, dynamic>> rows;
-  final bool beverages, inventory, addons, allowRefunds;
+  final bool beverages, inventory, addons, allowRefunds, showActions;
   final Widget Function(Map<String, dynamic>) actions;
   String money(dynamic v) => formatMoney(reportValue(v));
   String qty(dynamic v) => v == null ? '—' : reportValue(v).toStringAsFixed(0);
@@ -96,14 +97,13 @@ class BranchAllocationTable extends StatelessWidget {
       if (inventory && addons) ...[
         ('costPrice', 'Cost price'),
         ('price', 'Price'),
-        ('expirationDate', 'Expiry'),
         ('status', 'Availability'),
       ] else if (inventory) ...[
         ('costPrice', 'Cost price'),
         if (!beverages) ('price', 'Price'),
         if (beverages)
           for (final size in beverageSizes) (size, size),
-        ('expirationDate', 'Expiry'),
+        if (!beverages) ('expirationDate', 'Expiry'),
         if (!beverages) ('remaining', 'Stock'),
         ('status', 'Availability'),
       ] else ...[
@@ -127,7 +127,7 @@ class BranchAllocationTable extends StatelessWidget {
         if (!beverages) ('expirationDate', 'Expiration date'),
         ('status', 'Status'),
       ],
-      ('actions', 'Actions'),
+      if (showActions) ('actions', 'Actions'),
     ];
     const totalKeys = {
       'starting',
@@ -141,6 +141,7 @@ class BranchAllocationTable extends StatelessWidget {
     };
     bool low(Map row) =>
         !beverages &&
+        reportValue(row['remaining']) > 0 &&
         inventoryLowStock(
           row['remaining'],
           type: '${row['type'] ?? 'Categories'}',
@@ -207,15 +208,28 @@ class BranchAllocationTable extends StatelessWidget {
         return Text('${row['status'] ?? 'Not recorded'}');
       }
       if (key == 'status') {
+        final stockTracked = !beverages || addons;
+        final soldOut = stockTracked && reportValue(row['remaining']) <= 0;
+        final status = soldOut
+            ? 'Sold Out'
+            : low(row)
+            ? 'Low stock'
+            : near(row)
+            ? 'Near expiry'
+            : 'Available';
         return Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (low(row))
+            if (!soldOut && low(row))
               const Icon(Icons.warning_amber, color: Colors.orange, size: 20),
+            if (!soldOut && near(row))
+              const Icon(Icons.event_busy, color: Colors.deepOrange, size: 20),
             Text(
-              low(row) ? 'Low stock' : 'Available',
+              status,
               style: TextStyle(
-                color: low(row)
+                color: soldOut
+                    ? Colors.red.shade700
+                    : low(row) || near(row)
                     ? Colors.orange.shade800
                     : Colors.green.shade700,
                 fontWeight: FontWeight.w600,
@@ -225,10 +239,11 @@ class BranchAllocationTable extends StatelessWidget {
         );
       }
       if (key == 'remaining') {
+        final soldOut = reportValue(row[key]) <= 0;
         return Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (low(row))
+            if (!soldOut && low(row))
               const Icon(Icons.warning_amber, color: Colors.orange, size: 20),
             Text(qty(row[key])),
           ],

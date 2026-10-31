@@ -1,8 +1,10 @@
 import '../services/refund_value.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../services/bundle_stock_service.dart';
 import '../services/local_database_sync_service.dart';
+import '../services/offline_stock_reduction_service.dart';
 import '../services/report_current_allocations.dart';
 import '../theme/app_colors.dart';
 
@@ -445,6 +447,7 @@ class _StaffRefundDialogState extends State<_StaffRefundDialog> {
   Future<void> _consumeReplacementInventory(
     List<Map<String, dynamic>> lines,
     int requested,
+    String operationId,
   ) async {
     var remaining = requested;
     final operations = <Map<String, dynamic>>[];
@@ -470,6 +473,88 @@ class _StaffRefundDialogState extends State<_StaffRefundDialog> {
     }
     if (remaining > 0) {
       throw StateError('The selected replacement quantity is not available.');
+    }
+
+    final connectivity = await Connectivity().checkConnectivity();
+    if (connectivity.contains(ConnectivityResult.none)) {
+      final cached = await _service.getCachedCollection('staff_inventory');
+      final queuedOperations = <Map<String, dynamic>>[];
+      for (final operation in operations) {
+        final item = operation['item'] as Map<String, dynamic>;
+        final kind = operation['kind'] as String;
+        final count = operation['count'] as int;
+        final docId = operation['docId'] as String;
+        final cacheIndex = cached.indexWhere(
+          (row) => row['_localDocId'] == docId,
+        );
+        if (cacheIndex < 0) {
+          throw StateError('Replacement inventory is not available offline.');
+        }
+        final updated = Map<String, dynamic>.from(cached[cacheIndex]);
+        final operationData = <String, dynamic>{
+          'docId': docId,
+          'kind': kind,
+          'itemId': item['itemId'] ?? item['id'] ?? item['variantId'] ?? '',
+          'itemName': item['name'] ?? '',
+          'variant': item['coffeeSize'] ?? item['variant'] ?? '',
+          'sourceInventoryId': updated['sourceInventoryId'] ?? '',
+          'quantity': count,
+        };
+        if (kind == 'Bundle') {
+          final instances = (updated['bundleInstances'] as List? ?? const [])
+              .whereType<Map>()
+              .map((instance) => Map<String, dynamic>.from(instance))
+              .toList();
+          final selectedIds = <String>[];
+          for (var index = 0; index < instances.length; index++) {
+            if (selectedIds.length >= count ||
+                !bundleInstanceAvailable(instances[index], updated)) {
+              continue;
+            }
+            final id =
+                '${instances[index]['id'] ?? 'offline-refund-$operationId-$index'}';
+            instances[index] = {
+              ...instances[index],
+              'id': id,
+              'status': 'replacement',
+              'replacementAt': DateTime.now().toIso8601String(),
+            };
+            selectedIds.add(id);
+          }
+          if (selectedIds.length != count) {
+            throw StateError('Not enough bundle stock for replacement.');
+          }
+          operationData['bundleInstanceIds'] = selectedIds;
+          updated['bundleInstances'] = instances;
+          updated['bundleCount'] =
+              (_num(updated['bundleCount']).toInt() - count).clamp(0, 1 << 30);
+        } else {
+          final field = kind == 'Beverages' ? 'sizes' : 'items';
+          final reduction = reduceMatchingInventoryRows(
+            rows: (updated[field] as List? ?? const []),
+            itemId: '${operationData['itemId']}',
+            itemName: '${operationData['itemName']}',
+            variant: '${operationData['variant']}',
+            quantity: count,
+            beverage: kind == 'Beverages',
+          );
+          updated[field] = reduction.items;
+        }
+        cached[cacheIndex] = updated;
+        queuedOperations.add(operationData);
+      }
+      await OfflineStockReductionService().enqueue({
+        'id': 'refund_replacement_$operationId',
+        'type': 'refund_inventory_replacement',
+        'inventoryId': operations.first['docId'],
+        'operations': queuedOperations,
+        'userId': widget.uid,
+        'staffId': widget.uid,
+        'reason': 'Refund replacement',
+        'createdAt': DateTime.now().toIso8601String(),
+      });
+      await _service.cacheCollectionDocs('staff_inventory', cached);
+      return;
     }
 
     final grouped = <String, List<Map<String, dynamic>>>{};
@@ -662,9 +747,10 @@ class _StaffRefundDialogState extends State<_StaffRefundDialog> {
       _saving = true;
       _error = '';
     });
+    final operationId = DateTime.now().microsecondsSinceEpoch.toString();
     try {
       if (_refundMethod == 'inventory') {
-        await _consumeReplacementInventory(lines, requested);
+        await _consumeReplacementInventory(lines, requested, operationId);
       }
       var remaining = requested;
       for (final line in lines) {
@@ -675,13 +761,16 @@ class _StaffRefundDialogState extends State<_StaffRefundDialog> {
         final sale = line['sale'] as Map<String, dynamic>;
         final item = line['item'] as Map<String, dynamic>;
         final amount = (line['unit'] as double) * count;
-        final id =
-            'R-${DateTime.now().microsecondsSinceEpoch}-${line['index']}';
+        final id = 'R-$operationId-${line['index']}';
         final cashRefund = _refundMethod == 'cash';
         final refundValue = amount;
         await _service.recordCompletedSale({
           'salesId': id,
           'userId': widget.uid,
+          'staffName': sale['staffName'] ?? 'Staff',
+          'staffPublicId':
+              sale['staffPublicId'] ?? sale['staffId'] ?? widget.uid,
+          'taxClassification': sale['taxClassification'] ?? 'nonVat',
           'branchId': sale['branchId'],
           'originalSalesId': sale['salesId'],
           'source': 'Receipt item',

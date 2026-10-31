@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import '../services/message_account_status.dart';
 import 'profile_avatar.dart';
 
 List<Map<String, dynamic>> messagePreviewContacts(
@@ -12,8 +13,7 @@ List<Map<String, dynamic>> messagePreviewContacts(
     final id = '${account['_id']}';
     if (id == me ||
         account['adminId'] == me ||
-        account['isDeleted'] == true ||
-        ['rejected', 'disabled'].contains('${account['status']}'.toLowerCase())) {
+        !isMessageAccountAvailable(account)) {
       continue;
     }
     final full = '${account['firstName'] ?? ''} ${account['lastName'] ?? ''}'

@@ -4,6 +4,7 @@ import '../services/inventory_display_ids.dart';
 import '../services/staff_allocation_scope.dart';
 import '../services/staff_sales_history_scope.dart';
 import '../services/account_presence.dart';
+import '../services/message_account_status.dart';
 import '../services/super_admin.dart';
 import '../services/receipt_tax.dart';
 import '../services/public_item_id.dart';
@@ -26,6 +27,7 @@ import '../services/inventory_service.dart';
 import '../services/number_format.dart';
 import '../services/cash_drawer_service.dart';
 import '../services/local_database_sync_service.dart';
+import '../services/offline_stock_reduction_service.dart';
 import '../Admin_pages/Admin/Message.dart';
 import 'AllCateg.dart';
 
@@ -166,6 +168,7 @@ class _C {
 class DashboardPage extends StatefulWidget {
   final ScrollController scrollController;
   final VoidCallback onMessage;
+  final bool tabletLayout;
   final Future<void> Function()? onReplayTutorial;
   final void Function({
     required String view,
@@ -186,6 +189,7 @@ class DashboardPage extends StatefulWidget {
     super.key,
     required this.scrollController,
     required this.onMessage,
+    this.tabletLayout = false,
     this.onReplayTutorial,
     this.onOpenSalesGroup,
     this.onOpenAllItems,
@@ -211,6 +215,7 @@ class _DashboardPageState extends State<DashboardPage>
   List<_CachedDoc> _cachedSalesInventoryDocs = const [];
   List<_CachedDoc> _cachedCashDrawerDocs = const [];
   StreamSubscription<String>? _localCacheSubscription;
+  StreamSubscription<void>? _offlineStockReductionSubscription;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>?
   _receiptCacheSubscription;
   final List<StreamSubscription<QuerySnapshot<Map<String, dynamic>>>>
@@ -263,6 +268,8 @@ class _DashboardPageState extends State<DashboardPage>
               collection == 'completed_sales',
         )
         .listen((_) => _loadLocalDashboardCache());
+    _offlineStockReductionSubscription = OfflineStockReductionService().changes
+        .listen((_) => _loadLocalDashboardCache());
     // Refreshes the on-device snapshots in the background when online.  It is
     // intentionally not awaited: cached inventory renders first.
     unawaited(LocalDatabaseSyncService().refreshCoreCollectionsFromFirebase());
@@ -281,13 +288,22 @@ class _DashboardPageState extends State<DashboardPage>
     await service.rolloverCashDrawers();
     // Preserve branch-wide drawer totals, including sales outside business hours.
     final staffInventory = await service.getCachedCollection('staff_inventory');
+    final pendingReductions = await OfflineStockReductionService().pending();
     final salesInventory = await service.getCachedCollection('sales_inventory');
     final cashDrawer = await service.getCachedCollection('staff_cash_drawer');
     if (!mounted) return;
     setState(() {
       _cachedStaffInventoryDocs = staffInventory
           .where((row) => allocationBelongsTo(row, _staffInventoryIds))
-          .map(_CachedDoc.fromMap)
+          .map(
+            (row) => _CachedDoc.fromMap(
+              OfflineStockReductionService().applyPendingToInventory(
+                row,
+                '${row['_localDocId'] ?? row['id'] ?? ''}',
+                pendingReductions,
+              ),
+            ),
+          )
           .toList();
       _cachedSalesInventoryDocs = salesInventory
           .map(_CachedDoc.fromMap)
@@ -456,6 +472,7 @@ class _DashboardPageState extends State<DashboardPage>
     _drawerDayTimer?.cancel();
     InventoryService().removeListener(_onInventoryChanged);
     _localCacheSubscription?.cancel();
+    _offlineStockReductionSubscription?.cancel();
     _receiptCacheSubscription?.cancel();
     for (final subscription in _legacyReceiptCacheSubscriptions) {
       subscription.cancel();
@@ -1283,7 +1300,7 @@ class _DashboardPageState extends State<DashboardPage>
   @override
   Widget build(BuildContext context) {
     final screenWidth = MediaQuery.sizeOf(context).width;
-    final isTablet = screenWidth >= 700;
+    final isTablet = widget.tabletLayout || screenWidth >= 700;
     final contentMaxWidth = isTablet ? 980.0 : double.infinity;
     final inventoryMaxWidth = isTablet ? 980.0 : double.infinity;
     final horizontalPadding = isTablet ? 24.0 : 16.0;
@@ -1337,6 +1354,7 @@ class _DashboardPageState extends State<DashboardPage>
                 flexibleSpace: FlexibleSpaceBar(
                   collapseMode: CollapseMode.parallax,
                   background: _Header(
+                    tabletLayout: widget.tabletLayout,
                     onMessage: widget.onMessage,
                     onReplayTutorial: widget.onReplayTutorial,
                     guideTourKey: widget.guideTourKey,
@@ -1483,7 +1501,7 @@ class _DashboardPageState extends State<DashboardPage>
               // The staff navigation floats over the body. Reserve space after the
               // receipt cards so the last card and the pager remain scrollable into
               // view when there are several receipts.
-              const SliverToBoxAdapter(child: SizedBox(height: 180)),
+              SliverToBoxAdapter(child: SizedBox(height: isTablet ? 24 : 180)),
             ],
           ),
           if (_isResolvingStaffIdentity)
@@ -2647,10 +2665,9 @@ class _ReceiptCard extends StatelessWidget {
                   _ReceiptLine('Staff ID', staffId),
                   if ('${data['branchName'] ?? ''}'.trim().isNotEmpty)
                     _ReceiptLine('Branch', data['branchName']),
-                  if (!isMobile &&
-                      '${data['branchAddress'] ?? ''}'.trim().isNotEmpty)
+                  if ('${data['branchAddress'] ?? ''}'.trim().isNotEmpty)
                     _ReceiptLine('Branch address', data['branchAddress']),
-                  if (!isMobile) _ReceiptLine('Tax classification', taxLabel),
+                  _ReceiptLine('Tax classification', taxLabel),
                   if (taxLabel == 'VAT')
                     if ('${data['taxTin'] ?? ''}'.trim().isNotEmpty)
                       _ReceiptLine('BIR TIN', data['taxTin']),
@@ -2751,6 +2768,7 @@ class _ReceiptLine extends StatelessWidget {
 // ═══════════════════════════════════════════════════════════════════════════
 
 class _Header extends StatelessWidget {
+  final bool tabletLayout;
   final VoidCallback onMessage;
   final Future<void> Function()? onReplayTutorial;
   final List<String> drawerIds;
@@ -2759,6 +2777,7 @@ class _Header extends StatelessWidget {
   final GlobalKey? cashDrawerTourKey;
   final GlobalKey? guideTourKey;
   const _Header({
+    this.tabletLayout = false,
     required this.onMessage,
     this.onReplayTutorial,
     required this.drawerIds,
@@ -2837,13 +2856,14 @@ class _Header extends StatelessWidget {
   }
 
   void _showMessagePreview(BuildContext context, Map<String, String> me) {
+    final isTablet = tabletLayout || MediaQuery.sizeOf(context).width >= 600;
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (sheetContext) {
         return FractionallySizedBox(
-          heightFactor: 0.56,
+          heightFactor: isTablet ? 0.94 : 0.56,
           child: Container(
             decoration: const BoxDecoration(
               color: _C.surface,
@@ -2900,9 +2920,8 @@ class _Header extends StatelessWidget {
                                     QueryDocumentSnapshot<Map<String, dynamic>>
                                   >[]) {
                             final data = doc.data();
-                            final status =
-                                data['status']?.toString().toLowerCase() ?? '';
-                            if (doc.id == me['id'] || status == 'rejected') {
+                            if (doc.id == me['id'] ||
+                                !isMessageAccountAvailable(data)) {
                               continue;
                             }
                             rows[doc.id] = {

@@ -10,6 +10,7 @@ void main() {
     return BranchReportData({
       'branches': [
         {'_id': 'b', 'name': 'Sm dagupan'},
+        {'_id': 'voided', 'name': 'Sm Urdaneta', 'isVoided': true},
       ],
       'staff_cash_drawer': [
         {'_id': 'b', 'dailyOpeningCash': 1200},
@@ -95,6 +96,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Branch sales report'), findsOneWidget);
     expect(find.text('Sm dagupan'), findsOneWidget);
+    expect(find.text('Sm Urdaneta'), findsNothing);
     final dynamic state = tester.state(find.byType(BranchReportDialog));
     final Uint8List bytes =
         await tester.runAsync(
@@ -105,12 +107,57 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('daily sales summary shows reduced count and total loss', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(430, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final data = BranchReportData({
+      'branches': [
+        {'_id': 'b', 'name': 'SM Dagupan'},
+      ],
+      'stock_adjustments': [
+        {
+          '_id': 'reduce-1',
+          'branchId': 'b',
+          'createdAt': DateTime.now(),
+          'quantity': 1,
+          'lossAmount': 100,
+        },
+      ],
+    });
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: BranchReportDialog(
+            branchId: 'b',
+            branchName: 'SM Dagupan',
+            reportData: Future.value(data),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('Sales summary'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Reduced items'), findsOneWidget);
+    expect(find.text('Total loss'), findsOneWidget);
+    expect(find.text('₱100.00'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets(
     'daily analytics use all 24 hours and refund legend opens item details',
     (tester) async {
       final data = fixture();
       final now = DateTime.now();
-      data.collections['branches']!.single['openingMinutes'] = 480;
+      data.collections['branches']!.firstWhere(
+        (branch) => branch['_id'] == 'b',
+      )['openingMinutes'] = 480;
       for (final sale in data.collections['completed_sales']!) {
         sale['timestamp'] = DateTime(now.year, now.month, now.day, 12);
       }

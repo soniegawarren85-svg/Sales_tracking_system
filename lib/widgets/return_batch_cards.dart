@@ -476,26 +476,22 @@ class _ReturnBatchListState extends State<ReturnBatchList> {
                       ),
                     ),
                   ),
-                  const SizedBox(width: 12),
-                  FilledButton.icon(
-                    style: FilledButton.styleFrom(
-                      backgroundColor: AppColors.primaryDark,
-                    ),
-                    icon: const Icon(Icons.visibility_outlined, size: 18),
-                    label: const Text('View'),
-                    onPressed:
-                        !batch.every((doc) => metadata.containsKey(doc.id))
-                        ? null
-                        : () => showDialog<void>(
-                            context: context,
-                            builder: (_) => _ReturnBatchDetails(
-                              docs: batch,
-                              itemBuilder: widget.itemBuilder,
-                              metadata: metadata,
-                            ),
-                          ),
-                  ),
                 ],
+              ),
+              ExpansionTile(
+                key: PageStorageKey('return-items-${batch.first.id}'),
+                initiallyExpanded: true,
+                tilePadding: EdgeInsets.zero,
+                childrenPadding: const EdgeInsets.only(top: 4),
+                title: const Text(
+                  'Returned items',
+                  style: TextStyle(
+                    color: AppColors.primaryDeep,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                children: [for (final doc in batch) widget.itemBuilder(doc)],
               ),
               const SizedBox(height: 6),
               ReturnStaffDetails(
@@ -513,22 +509,26 @@ class _ReturnBatchListState extends State<ReturnBatchList> {
                 ),
               ),
               const SizedBox(height: 10),
-              Wrap(
-                spacing: 6,
-                runSpacing: 6,
-                children: [
-                  for (final type in ['Categories', 'Bundle', 'Beverages'])
-                    Chip(
-                      backgroundColor: AppColors.surfaceTint,
-                      label: Text(
-                        '$type (${batch.where((doc) => AllocationChecklistService.type(metadata[doc.id] ?? doc.data()) == type).length})',
-                        style: const TextStyle(
-                          fontSize: 12,
-                          color: AppColors.primaryDeep,
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: [
+                    for (final type in ['Categories', 'Bundle', 'Beverages'])
+                      Padding(
+                        padding: const EdgeInsets.only(right: 6),
+                        child: Chip(
+                          backgroundColor: AppColors.surfaceTint,
+                          label: Text(
+                            '$type (${batch.where((doc) => AllocationChecklistService.type(metadata[doc.id] ?? doc.data()) == type).length})',
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: AppColors.primaryDeep,
+                            ),
+                          ),
                         ),
                       ),
-                    ),
-                ],
+                  ],
+                ),
               ),
               const SizedBox(height: 6),
               if (completed > 0 || declined.isNotEmpty)

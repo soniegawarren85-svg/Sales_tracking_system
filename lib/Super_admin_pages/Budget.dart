@@ -1,5 +1,6 @@
 import '../services/activity_log.dart';
 import '../services/branch_permissions.dart';
+import '../services/branch_lifecycle.dart';
 import '../widgets/top_edge_refresh.dart';
 import '../widgets/branch_receipts_dialog.dart';
 import '../widgets/screen_loading_region.dart';
@@ -9,7 +10,6 @@ import '../services/refund_value.dart';
 import '../services/session_actor.dart';
 import '../widgets/assign_inventory_tile.dart';
 import '../widgets/horizontal_controls.dart';
-import '../widgets/branch_allocation_history.dart';
 import '../services/branch_report_data.dart'
     show BranchReportData, reportRefund, validReportSale;
 import 'package:firebase_auth/firebase_auth.dart';
@@ -69,7 +69,17 @@ class _RefundBadge extends StatelessWidget {
 }
 
 class BudgetPage extends StatefulWidget {
-  const BudgetPage({super.key});
+  const BudgetPage({
+    super.key,
+    this.initialBranchId,
+    this.initialAllocationType,
+    this.onOpenStaff,
+    this.assignmentOnly = false,
+  });
+  final String? initialBranchId;
+  final String? initialAllocationType;
+  final VoidCallback? onOpenStaff;
+  final bool assignmentOnly;
 
   @override
   State<BudgetPage> createState() => _BudgetPageState();
@@ -216,6 +226,7 @@ class _BudgetPageState extends State<BudgetPage>
   final _allocationSearchController = TextEditingController();
   final _currentAllocations = <String, double>{};
   final _inventorySources = <String, Map<String, dynamic>>{};
+  final _expandedRevenueBreakdowns = <String>{};
   final _displaySubscriptions =
       <StreamSubscription<QuerySnapshot<Map<String, dynamic>>>>[];
   final _branchInventoryStreams =
@@ -227,10 +238,8 @@ class _BudgetPageState extends State<BudgetPage>
   String? _selectedBranchId;
   String _allocationFilter = 'Categories';
   String _allocationSearchQuery = '';
-  bool _branchFabExpanded = false;
   String _activeBranchName = 'Branch';
   List<String> _activeBranchStaffIds = const [];
-  List<String> _activeBranchStaffNames = const [];
   String _analyticsRange = 'Day';
   String _sellingRank = 'All';
   String _sellingType = 'All';
@@ -325,6 +334,165 @@ class _BudgetPageState extends State<BudgetPage>
       end: Offset.zero,
     ).animate(CurvedAnimation(parent: _animController, curve: Curves.easeOut));
     _animController.forward();
+    if (widget.initialBranchId != null &&
+        widget.initialAllocationType != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _openInitialBranchAssignment();
+      });
+    }
+  }
+
+  Future<void> _openInitialBranchAssignment() async {
+    final branchId = widget.initialBranchId;
+    final type = widget.initialAllocationType;
+    if (!mounted || branchId == null || type == null) return;
+    try {
+      final snapshot = await _firestore
+          .collection('branches')
+          .doc(branchId)
+          .get();
+      final branch = snapshot.data();
+      if (!mounted || branch == null || branch['isVoided'] == true) return;
+      final branchName = '${branch['name'] ?? 'Branch'}';
+      final branchStaffIds = (branch['staffIds'] as List? ?? [])
+          .map((id) => '$id')
+          .where((id) => id.isNotEmpty)
+          .toList();
+      setState(() {
+        _selectedBranchId = branchId;
+        _activeBranchName = branchName;
+        _activeBranchStaffIds = branchStaffIds;
+        _allocationFilter = type;
+      });
+      if (branchStaffIds.isEmpty) {
+        await _showStaffRequiredDialog(branchName);
+        _closeAssignmentHost();
+        return;
+      }
+      await _showAssignInventoryDialog(
+        branchId,
+        branchName,
+        isBranch: true,
+        onlyType: type,
+      );
+      _closeAssignmentHost();
+    } catch (error) {
+      debugPrint('Unable to open branch inventory assignment: $error');
+      if (mounted) {
+        _showSnack(
+          'Unable to open inventory assignment. Please try again.',
+          Colors.red.shade600,
+        );
+      }
+    }
+  }
+
+  void _closeAssignmentHost() {
+    if (widget.assignmentOnly && mounted) Navigator.of(context).pop();
+  }
+
+  Future<bool> _showStaffRequiredDialog(String branchName) async {
+    final goToStaff = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => Dialog(
+        backgroundColor: AppColors.surface,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 58,
+                height: 58,
+                decoration: BoxDecoration(
+                  color: kPrimary.withOpacity(0.10),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.people_alt_rounded,
+                  color: kPrimary,
+                  size: 28,
+                ),
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                'Assign staff first?',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: kBannerTop,
+                  fontSize: 20,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Add a staff member to $branchName before allocating inventory or cash.',
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: Color(0xFF77616A),
+                  fontSize: 14,
+                  height: 1.4,
+                ),
+              ),
+              const SizedBox(height: 22),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: () => Navigator.pop(dialogContext, false),
+                      child: const Text('Cancel'),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: FilledButton.icon(
+                      onPressed: () => Navigator.pop(dialogContext, true),
+                      icon: const Icon(Icons.arrow_forward_rounded, size: 18),
+                      label: const Text('Go to Staff'),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: kPrimary,
+                        foregroundColor: Colors.white,
+                        shape: const StadiumBorder(),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (goToStaff == true) {
+      widget.onOpenStaff?.call();
+      return true;
+    }
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        icon: const Icon(Icons.info_outline_rounded, color: kPrimary, size: 34),
+        title: const Text('Staff setup required'),
+        content: const Text(
+          'Sorry, a staff account is needed before this branch can receive inventory or cash. You can assign staff later from the Staff page.',
+          textAlign: TextAlign.center,
+        ),
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            style: FilledButton.styleFrom(
+              backgroundColor: kPrimary,
+              foregroundColor: Colors.white,
+              shape: const StadiumBorder(),
+            ),
+            child: const Text('I understand'),
+          ),
+        ],
+      ),
+    );
+    return false;
   }
 
   @override
@@ -976,7 +1144,10 @@ class _BudgetPageState extends State<BudgetPage>
     }).toList();
   }
 
-  Widget _buildAssignedInventoryPreview(String staffId) {
+  Widget _buildAssignedInventoryPreview(
+    String staffId, {
+    required bool isBranch,
+  }) {
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
       stream: _firestore
           .collection('staff_inventory')
@@ -1007,7 +1178,7 @@ class _BudgetPageState extends State<BudgetPage>
                   ),
                   const SizedBox(width: 8),
                   Text(
-                    'Assigned to this staff (${docs.length})',
+                    'Assigned to this ${isBranch ? 'branch' : 'staff'} (${docs.length})',
                     style: const TextStyle(
                       color: kBannerTop,
                       fontSize: 12,
@@ -1411,6 +1582,7 @@ class _BudgetPageState extends State<BudgetPage>
     }
     final selectedCoffeeIds = <String>{};
     final selectedAddonIds = <String>{};
+    var assignmentSelectionInitialized = false;
     var isAssigning = false;
     var assignmentSucceeded = false;
     var showCategories =
@@ -1474,7 +1646,10 @@ class _BudgetPageState extends State<BudgetPage>
                         ),
                       ),
                       const SizedBox(height: 10),
-                      _buildAssignedInventoryPreview(staffId),
+                      _buildAssignedInventoryPreview(
+                        staffId,
+                        isBranch: isBranch,
+                      ),
                       const SizedBox(height: 14),
                       Flexible(
                         child: ConstrainedBox(
@@ -1507,6 +1682,41 @@ class _BudgetPageState extends State<BudgetPage>
                                   <
                                     QueryDocumentSnapshot<Map<String, dynamic>>
                                   >[];
+                              final currentAssignments = assignedDocs.where((
+                                doc,
+                              ) {
+                                final assignment = doc.data();
+                                return (assignment['staffId'] == staffId ||
+                                        assignment['branchId'] == staffId) &&
+                                    assignment['isDeleted'] != true &&
+                                    assignment['isVoided'] != true &&
+                                    assignment['removedAt'] == null;
+                              }).toList();
+                              if (!assignmentSelectionInitialized) {
+                                selectedCoffeeIds.addAll(
+                                  currentAssignments
+                                      .where(
+                                        (doc) => doc.data()['isCoffee'] == true,
+                                      )
+                                      .map(
+                                        (doc) =>
+                                            '${doc.data()['sourceInventoryId'] ?? ''}',
+                                      )
+                                      .where((id) => id.isNotEmpty),
+                                );
+                                selectedAddonIds.addAll(
+                                  currentAssignments
+                                      .where(
+                                        (doc) => doc.data()['isAddon'] == true,
+                                      )
+                                      .map(
+                                        (doc) =>
+                                            '${doc.data()['sourceInventoryId'] ?? ''}',
+                                      )
+                                      .where((id) => id.isNotEmpty),
+                                );
+                                assignmentSelectionInitialized = true;
+                              }
                               final activeDocs = (inventorySnapshot?.docs ?? [])
                                   .where((doc) {
                                     final data = doc.data();
@@ -1702,19 +1912,44 @@ class _BudgetPageState extends State<BudgetPage>
                                               if (showCoffee) {
                                                 final productId = doc.id;
                                                 final sizes =
-                                                    (data['sizes']
-                                                                as List<
-                                                                  dynamic
-                                                                >? ??
+                                                    (data['sizes'] as List? ??
                                                             [])
-                                                        .length;
+                                                        .whereType<Map>()
+                                                        .toList();
+                                                final sizePrices = sizes
+                                                    .map((size) {
+                                                      final name =
+                                                          '${size['name'] ?? size['size'] ?? ''}'
+                                                              .trim();
+                                                      final price =
+                                                          size['price'] ??
+                                                          size['amount'] ??
+                                                          size['basePrice'] ??
+                                                          ((_parsePrice(
+                                                                data['basePrice'],
+                                                              )) +
+                                                              _parsePrice(
+                                                                size['priceDelta'],
+                                                              ));
+                                                      if (price == null) {
+                                                        return name;
+                                                      }
+                                                      return '${name.isEmpty ? 'Size' : name} P${formatNumber(_parsePrice(price), decimals: 2)}';
+                                                    })
+                                                    .join(' • ');
+                                                final priceSummary =
+                                                    sizePrices.isNotEmpty
+                                                    ? sizePrices
+                                                    : data['basePrice'] == null
+                                                    ? 'Price not set'
+                                                    : 'P${formatNumber(_parsePrice(data['basePrice']), decimals: 2)}';
                                                 return _AssignCoffeeTile(
                                                   title:
                                                       data['name']
                                                           ?.toString() ??
                                                       'Beverages',
                                                   subtitle:
-                                                      '${data['category'] ?? 'Beverages'} - P${formatNumber(_parsePrice(data['basePrice']), decimals: 2)} - $sizes sizes',
+                                                      '${data['category'] ?? 'Beverages'} • $priceSummary',
                                                   selected: selectedCoffeeIds
                                                       .contains(productId),
                                                   onChanged: (checked) {
@@ -4503,55 +4738,53 @@ class _BudgetPageState extends State<BudgetPage>
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppColors.background,
-      floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
-      floatingActionButton: _selectedBranchId == null
-          ? FloatingActionButton(
-              tooltip: 'Create branch',
-              shape: const CircleBorder(),
-              backgroundColor: kPrimary,
-              foregroundColor: Colors.white,
-              onPressed: _showCreateBranchDialog,
-              child: const Icon(Icons.add),
-            )
-          : _buildBranchQuickActions(
-              branchId: _selectedBranchId!,
-              branchName: _activeBranchName,
-              staffIds: _activeBranchStaffIds,
-              staffNames: _activeBranchStaffNames,
-              controller: _budgetControllers.putIfAbsent(
-                _selectedBranchId!,
-                () => TextEditingController(),
-              ),
-              enabled: _activeBranchStaffIds.isNotEmpty,
-            ),
-      body: FadeTransition(
-        opacity: _fadeAnim,
-        child: SlideTransition(
-          position: _slideAnim,
-          child: Column(
-            children: [
-              SizedBox(
-                height: 130,
-                child: _selectedBranchId == null
-                    ? _buildHeader()
-                    : _buildSelectedBranchHeader(),
-              ),
-              if (_selectedBranchId == null)
-                _buildPinnedBudgetControls()
-              else
-                Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 20,
-                    vertical: 12,
-                  ),
-                  child: _buildAllocationSearch(),
+    if (widget.assignmentOnly) {
+      return const Scaffold(
+        backgroundColor: Colors.transparent,
+        body: SizedBox.shrink(),
+      );
+    }
+    return TopEdgeRefresh(
+      color: AppColors.primary,
+      backgroundColor: Colors.white,
+      onRefresh: _refreshBranches,
+      child: Scaffold(
+        backgroundColor: AppColors.background,
+        floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
+        floatingActionButton: _selectedBranchId == null
+            ? FloatingActionButton(
+                tooltip: 'Create branch',
+                shape: const CircleBorder(),
+                backgroundColor: kPrimary,
+                foregroundColor: Colors.white,
+                onPressed: _showCreateBranchDialog,
+                child: const Icon(Icons.add),
+              )
+            : null,
+        body: FadeTransition(
+          opacity: _fadeAnim,
+          child: SlideTransition(
+            position: _slideAnim,
+            child: Column(
+              children: [
+                SizedBox(
+                  height: 130,
+                  child: _selectedBranchId == null
+                      ? _buildHeader()
+                      : _buildSelectedBranchHeader(),
                 ),
-              Expanded(
-                child: ScreenLoadingRegion(
-                  child: TopEdgeRefresh(
-                    onRefresh: _refreshBranches,
+                if (_selectedBranchId == null)
+                  _buildPinnedBudgetControls()
+                else
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 20,
+                      vertical: 12,
+                    ),
+                    child: _buildAllocationSearch(),
+                  ),
+                Expanded(
+                  child: ScreenLoadingRegion(
                     child: ListView(
                       physics: const AlwaysScrollableScrollPhysics(),
                       padding: const EdgeInsets.only(bottom: 32),
@@ -4618,8 +4851,8 @@ class _BudgetPageState extends State<BudgetPage>
                     ),
                   ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
@@ -4860,10 +5093,10 @@ class _BudgetPageState extends State<BudgetPage>
                 ...visibleBranches.map((doc) {
                   final data = doc.data();
                   final name = data['name']?.toString() ?? 'Branch';
-                  final staffIds = (data['staffIds'] as List<dynamic>? ?? [])
-                      .map((id) => id.toString().trim())
-                      .where((id) => id.isNotEmpty)
-                      .toList();
+                  final code =
+                      data['branchCode']?.toString().trim().isNotEmpty == true
+                      ? data['branchCode'].toString().trim()
+                      : _branchCode(doc.id);
                   final branchId = doc.id;
                   return Container(
                     margin: const EdgeInsets.only(bottom: 10),
@@ -4872,18 +5105,22 @@ class _BudgetPageState extends State<BudgetPage>
                       borderRadius: BorderRadius.circular(18),
                       child: InkWell(
                         borderRadius: BorderRadius.circular(18),
-                        onTap: () => setState(() {
-                          _selectedBranchId = branchId;
-                          _activeBranchName = name;
-                          _activeBranchStaffIds =
+                        onTap: () async {
+                          final staffIds =
                               (data['staffIds'] as List<dynamic>? ?? [])
-                                  .map((id) => id.toString())
+                                  .map((id) => id.toString().trim())
+                                  .where((id) => id.isNotEmpty)
                                   .toList();
-                          _activeBranchStaffNames =
-                              (data['staffNames'] as List<dynamic>? ?? [])
-                                  .map((staff) => staff.toString())
-                                  .toList();
-                        }),
+                          if (staffIds.isEmpty) {
+                            await _showStaffRequiredDialog(name);
+                            return;
+                          }
+                          setState(() {
+                            _selectedBranchId = branchId;
+                            _activeBranchName = name;
+                            _activeBranchStaffIds = staffIds;
+                          });
+                        },
                         child: Container(
                           padding: const EdgeInsets.all(14),
                           decoration: BoxDecoration(
@@ -4916,6 +5153,14 @@ class _BudgetPageState extends State<BudgetPage>
                                         color: kBannerTop,
                                         fontSize: 15,
                                         fontWeight: FontWeight.w900,
+                                      ),
+                                    ),
+                                    Text(
+                                      'ID: $code',
+                                      style: const TextStyle(
+                                        color: Color(0xFF8A6671),
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w600,
                                       ),
                                     ),
                                   ],
@@ -4958,19 +5203,11 @@ class _BudgetPageState extends State<BudgetPage>
     final data = doc.data() ?? <String, dynamic>{};
     final branchId = doc.id;
     final branchName = data['name']?.toString() ?? 'Branch';
-    final staffNames = (data['staffNames'] as List<dynamic>? ?? [])
-        .map((name) => name.toString())
-        .where((name) => name.trim().isNotEmpty)
-        .toList();
     final staffIds = (data['staffIds'] as List<dynamic>? ?? [])
         .map((id) => id.toString().trim())
         .where((id) => id.isNotEmpty)
         .toList();
     final hasAssignedStaff = staffIds.isNotEmpty;
-    final controller = _budgetControllers.putIfAbsent(
-      branchId,
-      () => TextEditingController(),
-    );
     if (!_currentAllocations.containsKey(branchId)) {
       _firestore.collection('staff_budget').doc(branchId).get().then((budget) {
         if (!mounted || !budget.exists) return;
@@ -4997,7 +5234,7 @@ class _BudgetPageState extends State<BudgetPage>
                 Padding(
                   padding: const EdgeInsets.only(top: 10),
                   child: Text(
-                    'Assign staff first to allocate items or cash.',
+                    'Assign staff first?',
                     style: TextStyle(
                       color: Colors.orange.shade800,
                       fontWeight: FontWeight.w600,
@@ -5007,20 +5244,13 @@ class _BudgetPageState extends State<BudgetPage>
               const SizedBox(height: 10),
               _buildBranchSalesSummary(branchId),
               const SizedBox(height: 8),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Expanded(child: _buildAllocationCategories()),
-                  AllocationHistoryActions(branchId: branchId),
-                ],
-              ),
+              _buildAllocationCategories(),
               const SizedBox(height: 8),
               _buildBranchItemsTable(branchId),
               const SizedBox(height: 12),
               _buildBranchReportSummary(branchId),
               const SizedBox(height: 16),
               _buildPeriodBranchAnalytics(branchId, branchName),
-              const SizedBox(height: 82),
             ],
           ),
         ),
@@ -5059,7 +5289,37 @@ class _BudgetPageState extends State<BudgetPage>
             range.$1,
             range.$2,
           );
+          final reportData = snapshot.data!;
+          final revenueByMode = reportData.revenueByPaymentMode(
+            branchId,
+            range.$1,
+            range.$2,
+          );
+          final isRevenueExpanded = _expandedRevenueBreakdowns.contains(
+            branchId,
+          );
+          final reducedCount = reportData
+              .losses(branchId, range.$1, range.$2)
+              .fold<double>(
+                0,
+                (count, record) => count + _parsePrice(record['quantity']),
+              );
+          final summaryTotals = totals.entries
+              .where((entry) => entry.key != 'Total loss')
+              .map(
+                (entry) => entry.key == 'Reduce'
+                    ? MapEntry('Reduced items', reducedCount)
+                    : entry,
+              )
+              .toList();
+          summaryTotals.add(
+            MapEntry(
+              'Total loss',
+              (totals['Reduce'] ?? 0) + (totals['Refunds'] ?? 0),
+            ),
+          );
           return Container(
+            width: double.infinity,
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
               color: AppColors.surface,
@@ -5078,29 +5338,97 @@ class _BudgetPageState extends State<BudgetPage>
                   ),
                 ),
                 const SizedBox(height: 10),
-                for (final entry in totals.entries.where(
+                for (final entry in summaryTotals.where(
                   (entry) => entry.key != 'Closing cash drawer',
                 ))
-                  Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 5),
-                    child: Row(
-                      children: [
-                        Expanded(child: Text(entry.key)),
-                        Text(
-                          [
-                                'Total sold',
-                                'Total transactions',
-                              ].contains(entry.key)
-                              ? entry.value.toStringAsFixed(0)
-                              : formatMoney(entry.value),
-                          style: const TextStyle(
-                            color: kDeep,
-                            fontWeight: FontWeight.w800,
+                  if (entry.key == 'Total revenue')
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 5),
+                      child: Column(
+                        children: [
+                          InkWell(
+                            onTap: () => setState(() {
+                              if (!_expandedRevenueBreakdowns.add(branchId)) {
+                                _expandedRevenueBreakdowns.remove(branchId);
+                              }
+                            }),
+                            child: Row(
+                              children: [
+                                const Expanded(child: Text('Total revenue')),
+                                Text(
+                                  formatMoney(entry.value),
+                                  style: const TextStyle(
+                                    color: kDeep,
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
+                                const SizedBox(width: 4),
+                                Icon(
+                                  isRevenueExpanded
+                                      ? Icons.expand_less
+                                      : Icons.expand_more,
+                                  color: kDeep,
+                                  size: 20,
+                                ),
+                              ],
+                            ),
                           ),
-                        ),
-                      ],
+                          if (isRevenueExpanded)
+                            Padding(
+                              padding: const EdgeInsets.only(
+                                left: 16,
+                                top: 4,
+                                bottom: 4,
+                              ),
+                              child: Column(
+                                children: [
+                                  for (final mode in revenueByMode.entries)
+                                    Padding(
+                                      padding: const EdgeInsets.symmetric(
+                                        vertical: 3,
+                                      ),
+                                      child: Row(
+                                        children: [
+                                          Expanded(child: Text(mode.key)),
+                                          Text(
+                                            formatMoney(mode.value),
+                                            style: const TextStyle(
+                                              color: kDeep,
+                                              fontWeight: FontWeight.w700,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                ],
+                              ),
+                            ),
+                        ],
+                      ),
+                    )
+                  else
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 5),
+                      child: Row(
+                        children: [
+                          Expanded(child: Text(entry.key)),
+                          Text(
+                            entry.key == 'Reduced items'
+                                ? entry.value.toStringAsFixed(0)
+                                : [
+                                    'Total sold',
+                                    'Total transactions',
+                                  ].contains(entry.key)
+                                ? entry.value.toStringAsFixed(0)
+                                : formatMoney(entry.value),
+                            style: const TextStyle(
+                              color: kDeep,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
               ],
             ),
           );
@@ -5334,6 +5662,15 @@ class _BudgetPageState extends State<BudgetPage>
                         branchId: branchId,
                         day: selectedDay,
                         compact: true,
+                        onCashAction: () => _showBranchCashDrawerDialog(
+                          branchId,
+                          _activeBranchName,
+                          _budgetControllers.putIfAbsent(
+                            branchId,
+                            () => TextEditingController(),
+                          ),
+                          _activeBranchStaffIds,
+                        ),
                       ),
                     ),
                   ],
@@ -6154,6 +6491,7 @@ class _BudgetPageState extends State<BudgetPage>
       var totalCompleted = 0.0;
       var totalRefund = 0.0;
       var totalReduced = 0.0;
+      var totalReducedCount = 0;
       bool matches(DateTime date) => _analyticsRange == 'Day'
           ? date.year == now.year &&
                 date.month == now.month &&
@@ -6218,6 +6556,7 @@ class _BudgetPageState extends State<BudgetPage>
               : item['name']?.toString().trim() ?? '';
           if (name.isEmpty) continue;
           final quantity = _parseInt(item['quantity'], fallback: 1);
+          if (isReduced) totalReducedCount += quantity;
           // Quantities are used only for the best-selling item ranking.
           // The graph aggregates each receipt total once, above.
 
@@ -6402,9 +6741,17 @@ class _BudgetPageState extends State<BudgetPage>
                       ),
                     ),
                     Text(
-                      'Total Reduced: ${formatMoney(totalReduced)}',
+                      'Reduced items: $totalReducedCount',
                       style: const TextStyle(
                         color: Color(0xFF1976D2),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    Text(
+                      'Total loss: ${formatMoney(totalLoss)}',
+                      style: const TextStyle(
+                        color: Color(0xFFD32F2F),
                         fontSize: 12,
                         fontWeight: FontWeight.w800,
                       ),
@@ -6434,6 +6781,14 @@ class _BudgetPageState extends State<BudgetPage>
                         fontWeight: FontWeight.w900,
                       ),
                     ),
+                    if (_analyticsStatus == 'Reduced')
+                      Text(
+                        'Reduced items: $totalReducedCount',
+                        style: const TextStyle(
+                          color: Color(0xFF1976D2),
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
                     TextButton.icon(
                       onPressed: () => _showBranchLossItems(
                         branchId,
@@ -6563,76 +6918,6 @@ class _BudgetPageState extends State<BudgetPage>
     }),
   );
 
-  Widget _buildBranchQuickActions({
-    required String branchId,
-    required String branchName,
-    required List<String> staffIds,
-    required List<String> staffNames,
-    required TextEditingController controller,
-    required bool enabled,
-  }) => Column(
-    mainAxisSize: MainAxisSize.min,
-    crossAxisAlignment: CrossAxisAlignment.end,
-    children: [
-      if (_branchFabExpanded) ...[
-        _animatedQuickAction(
-          FloatingActionButton.small(
-            heroTag: 'items_$branchId',
-            onPressed: enabled
-                ? () => _showAssignInventoryDialog(
-                    branchId,
-                    branchName,
-                    isBranch: true,
-                  )
-                : null,
-            child: const Icon(Icons.add_box_rounded),
-          ),
-          delay: 90,
-        ),
-        const SizedBox(height: 8),
-        _animatedQuickAction(
-          FloatingActionButton.small(
-            heroTag: 'cash_$branchId',
-            onPressed: enabled
-                ? () => _showBranchCashDrawerDialog(
-                    branchId,
-                    branchName,
-                    controller,
-                    staffIds,
-                  )
-                : null,
-            child: const Icon(Icons.payments_rounded),
-          ),
-          delay: 135,
-        ),
-        const SizedBox(height: 8),
-      ],
-      FloatingActionButton(
-        heroTag: 'quick_$branchId',
-        backgroundColor: kPrimary,
-        onPressed: () =>
-            setState(() => _branchFabExpanded = !_branchFabExpanded),
-        child: Icon(
-          _branchFabExpanded ? Icons.close_rounded : Icons.add_rounded,
-        ),
-      ),
-    ],
-  );
-
-  Widget _animatedQuickAction(Widget child, {required int delay}) =>
-      TweenAnimationBuilder<double>(
-        duration: Duration(milliseconds: 220 + delay),
-        curve: Curves.easeOutBack,
-        tween: Tween(begin: 0, end: 1),
-        builder: (context, value, _) => Opacity(
-          opacity: value.clamp(0, 1),
-          child: Transform.translate(
-            offset: Offset(0, 18 * (1 - value)),
-            child: Transform.scale(scale: value, child: child),
-          ),
-        ),
-      );
-
   Widget _buildAllocationFilters() => Column(
     children: [
       _buildAllocationSearch(),
@@ -6723,7 +7008,7 @@ class _BudgetPageState extends State<BudgetPage>
                           branchName: branchName,
                           controller: controller,
                           staffIds: staffIds,
-                          enabled: true,
+                          enabled: staffIds.isNotEmpty,
                           isSending: isSending,
                           onSavingChanged: (sending) {
                             if (!isClosing && context.mounted) {
@@ -6733,6 +7018,7 @@ class _BudgetPageState extends State<BudgetPage>
                           onSuccess: () {
                             if (context.mounted && !isClosing) {
                               isClosing = true;
+                              controller.clear();
                               Navigator.of(context).pop();
                             }
                           },
@@ -7244,10 +7530,10 @@ class _BudgetPageState extends State<BudgetPage>
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    'Assign staff first before adding items or cash drawer.',
+                    'Assign staff first?',
                     style: TextStyle(
                       color: Colors.grey.shade700,
-                      fontSize: 12,
+                      fontSize: 11,
                       fontWeight: FontWeight.w700,
                     ),
                   ),
@@ -7561,10 +7847,7 @@ class _BudgetPageState extends State<BudgetPage>
     if (confirmed != true) return;
 
     try {
-      await _firestore.collection('branches').doc(branchId).update({
-        'isVoided': true,
-        'voidedAt': FieldValue.serverTimestamp(),
-      });
+      await voidBranchAndUnassignStaff(_firestore, branchId);
       if (!mounted) return;
       if (_selectedBranchId == branchId) {
         setState(() => _selectedBranchId = null);

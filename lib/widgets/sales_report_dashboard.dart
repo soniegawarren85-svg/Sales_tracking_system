@@ -163,7 +163,9 @@ class SalesReportDashboard extends StatelessWidget {
         .toList();
     final branches = {
       for (final b in data.rows('branches'))
-        if (branchId == null || b['_id'] == branchId)
+        if (b['isVoided'] != true &&
+            b['isDeleted'] != true &&
+            (branchId == null || b['_id'] == branchId))
           '${b['_id']}': '${b['name'] ?? b['branchName'] ?? b['_id']}',
     };
     final byBranch = <String, double>{}, payments = <String, double>{};
@@ -348,7 +350,7 @@ class SalesReportDashboard extends StatelessWidget {
       ],
     );
     final overview = panel(
-      'Sales Overview',
+      'Sales Analytics',
       ReportTrendChart(
         labels: labels,
         series: [amounts],

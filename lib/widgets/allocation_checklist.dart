@@ -1,4 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import '../services/session_actor.dart';
 import 'package:flutter/material.dart';
 import '../services/allocation_checklist_service.dart';
@@ -36,10 +37,15 @@ class AllocationChecklistButton extends StatelessWidget {
         final incoming = records.any(ChecklistStatus.incomingOpen);
         final returned = records.any(ChecklistStatus.returnOpen);
         final compact = MediaQuery.sizeOf(context).width < 600;
-        Widget button({required bool returns}) {
+        Widget button({
+          required bool returns,
+          bool hasUnsubmittedReductions = false,
+        }) {
           final label = returns ? 'Returns' : 'Checklist';
           final icon = Badge(
-            isLabelVisible: returns ? returned : incoming,
+            isLabelVisible: returns
+                ? returned || hasUnsubmittedReductions
+                : incoming,
             backgroundColor: Colors.red,
             child: Icon(
               returns
@@ -99,7 +105,39 @@ class AllocationChecklistButton extends StatelessWidget {
             BranchPermissionGate(
               permission: 'allowReturns',
               database: db,
-              child: button(returns: true),
+              child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                stream: FirebaseAuth.instance.currentUser == null
+                    ? null
+                    : db
+                          .collection('stock_adjustments')
+                          .where(
+                            'userId',
+                            isEqualTo: FirebaseAuth.instance.currentUser!.uid,
+                          )
+                          .snapshots(),
+                builder: (context, adjustments) {
+                  final hasUnsubmittedReductions =
+                      adjustments.data?.docs.any((doc) {
+                        final data = doc.data();
+                        if (data['type'] == 'addon_void' ||
+                            data['isDeleted'] == true) {
+                          return false;
+                        }
+                        final total = int.tryParse('${data['quantity']}') ?? 0;
+                        final returned =
+                            int.tryParse(
+                              '${(data['checklistReturnedQuantities'] as Map?)?['item'] ?? 0}',
+                            ) ??
+                            0;
+                        return total > returned;
+                      }) ??
+                      false;
+                  return button(
+                    returns: true,
+                    hasUnsubmittedReductions: hasUnsubmittedReductions,
+                  );
+                },
+              ),
             ),
           ],
         );

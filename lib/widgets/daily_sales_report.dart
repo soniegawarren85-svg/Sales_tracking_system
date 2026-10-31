@@ -722,6 +722,7 @@ class _DailySalesReportState extends State<DailySalesReport> {
                     period: period,
                     branchId: widget.branchId,
                   ),
+                  const SizedBox(height: 12),
                   if (MediaQuery.sizeOf(context).width >= 600)
                     Align(
                       alignment: Alignment.centerRight,

@@ -207,13 +207,21 @@ class AllocationHistoryActions extends StatelessWidget {
           .where('staffId', isEqualTo: branchId)
           .snapshots(),
       builder: (context, snapshot) {
-        final issue =
-            snapshot.data?.docs.any(
-              (doc) =>
-                  doc.data()['kind'] != 'return' &&
-                  ChecklistStatus.label(doc.data()) == ChecklistStatus.issue,
-            ) ??
-            false;
+        final pendingCount =
+            snapshot.data?.docs
+                .where(
+                  (doc) =>
+                      doc.data()['kind'] != 'return' &&
+                      doc.data()['isDeleted'] != true &&
+                      ChecklistStatus.incomingOpen(doc.data()),
+                )
+                .map(
+                  (doc) =>
+                      '${doc.data()['batchId'] ?? doc.data()['allocationId'] ?? doc.id}',
+                )
+                .toSet()
+                .length ??
+            0;
         return Row(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -237,7 +245,8 @@ class AllocationHistoryActions extends StatelessWidget {
                 ),
               ),
               icon: Badge(
-                isLabelVisible: issue,
+                label: Text('$pendingCount'),
+                isLabelVisible: pendingCount > 0,
                 backgroundColor: Colors.red,
                 child: const Icon(Icons.pending_actions),
               ),

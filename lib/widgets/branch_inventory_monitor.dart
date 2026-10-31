@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'branch_inventory_edit_dialog.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -37,10 +38,18 @@ class BranchInventoryMonitor extends StatefulWidget {
     this.firestore,
     this.showBatchHistory = true,
     this.addons = false,
+    this.categoryName,
+    this.onCategoriesChanged,
+    this.allowEdits = true,
+    this.showActions = true,
   });
   final FirebaseFirestore? firestore;
   final bool showBatchHistory;
   final bool addons;
+  final String? categoryName;
+  final ValueChanged<Set<String>>? onCategoriesChanged;
+  final bool allowEdits;
+  final bool showActions;
   final String branchId, type, query;
   @override
   State<BranchInventoryMonitor> createState() => _BranchInventoryMonitorState();
@@ -48,6 +57,7 @@ class BranchInventoryMonitor extends StatefulWidget {
 
 class _BranchInventoryMonitorState extends State<BranchInventoryMonitor> {
   late final _stream = BranchReportData.watch(firestore: widget.firestore);
+  String? _lastNotifiedCategories;
   @override
   Widget build(BuildContext context) => StreamBuilder<BranchReportData>(
     stream: _stream,
@@ -60,6 +70,19 @@ class _BranchInventoryMonitorState extends State<BranchInventoryMonitor> {
       }
       final data = snapshot.data!;
       final all = data.currentInventory(widget.branchId, DateTime.now());
+      final categories = {
+        for (final row in all)
+          if (row['type'] == 'Categories' &&
+              '${row['categoryName'] ?? ''}'.trim().isNotEmpty)
+            '${row['categoryName']}'.trim().toLowerCase(),
+      };
+      final categoryKey = (categories.toList()..sort()).join('|');
+      if (categoryKey != _lastNotifiedCategories) {
+        _lastNotifiedCategories = categoryKey;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) widget.onCategoriesChanged?.call(categories);
+        });
+      }
       bool low(Map row) =>
           inventoryLowStock(
             row['remaining'],
@@ -72,6 +95,10 @@ class _BranchInventoryMonitorState extends State<BranchInventoryMonitor> {
                 (widget.addons
                     ? row['type'] == 'Add-ons'
                     : widget.type == 'All' || row['type'] == widget.type) &&
+                (widget.type != 'Categories' ||
+                    widget.categoryName == null ||
+                    '${row['categoryName'] ?? ''}'.trim().toLowerCase() ==
+                        widget.categoryName!.trim().toLowerCase()) &&
                 '${row['id']} ${row['name']} ${row['expirationDate']} ${low(row) ? 'low stock' : ''} ${inventoryNearExpiry(row['expirationDate']) ? 'near expiry expiring soon malapit ma expire' : ''}'
                     .toLowerCase()
                     .contains(widget.query.trim().toLowerCase()),
@@ -83,11 +110,13 @@ class _BranchInventoryMonitorState extends State<BranchInventoryMonitor> {
             .doc('transactions')
             .snapshots(),
         builder: (context, _) => FutureBuilder<bool>(
-          future: BranchPermissions.allowed(
-            'adminAllowInventoryEdits',
-            database: widget.firestore,
-            branchId: widget.branchId,
-          ),
+          future: widget.allowEdits
+              ? BranchPermissions.allowed(
+                  'adminAllowInventoryEdits',
+                  database: widget.firestore,
+                  branchId: widget.branchId,
+                )
+              : Future<bool>.value(false),
           builder: (context, permission) => _buildInventory(
             context,
             data,
@@ -135,6 +164,7 @@ class _BranchInventoryMonitorState extends State<BranchInventoryMonitor> {
           beverages: widget.type == 'Beverages',
           inventory: true,
           addons: widget.addons,
+          showActions: widget.showActions,
           actions: (row) => Row(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -163,6 +193,11 @@ class _BranchInventoryMonitorState extends State<BranchInventoryMonitor> {
                   icon: const Icon(Icons.edit_outlined),
                   onPressed: () => _editInventoryItem(context, row),
                 ),
+              IconButton(
+                tooltip: 'Void allocation',
+                icon: const Icon(Icons.block_outlined, color: Colors.redAccent),
+                onPressed: () => _voidAllocation(context, row),
+              ),
             ],
           ),
         ),
@@ -173,6 +208,181 @@ class _BranchInventoryMonitorState extends State<BranchInventoryMonitor> {
           ),
       ],
     );
+  }
+
+  Future<void> _voidAllocation(
+    BuildContext context,
+    Map<String, dynamic> item,
+  ) async {
+    final type = '${item['type'] ?? ''}';
+    final isPhysicalInventory = type == 'Categories' || type == 'Bundle';
+    final remaining = num.tryParse('${item['remaining']}')?.toInt();
+    if (!isPhysicalInventory || remaining == null || remaining > 0) {
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => TweenAnimationBuilder<double>(
+          tween: Tween(begin: 0.88, end: 1),
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOutBack,
+          builder: (context, scale, child) =>
+              Transform.scale(scale: scale, child: child),
+          child: AlertDialog(
+            icon: const Icon(
+              Icons.inventory_2_outlined,
+              color: Colors.deepOrange,
+              size: 34,
+            ),
+            title: const Text('Not sold out yet'),
+            content: Text(
+              remaining == null
+                  ? 'Only physical branch inventory can be voided here.'
+                  : 'This item still has $remaining unit${remaining == 1 ? '' : 's'} in stock. Sell out the remaining stock before voiding it.',
+              textAlign: TextAlign.center,
+            ),
+            actions: [
+              FilledButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                style: FilledButton.styleFrom(
+                  backgroundColor: Colors.deepOrange,
+                  foregroundColor: Colors.white,
+                  shape: const StadiumBorder(),
+                ),
+                child: const Text('I understand'),
+              ),
+            ],
+          ),
+        ),
+      );
+      return;
+    }
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Void allocation?'),
+        content: Text(
+          'Remove "${item['name'] ?? 'this item'}" from the branch?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            style: FilledButton.styleFrom(backgroundColor: Colors.redAccent),
+            child: const Text('Void'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !context.mounted) return;
+
+    final db = widget.firestore ?? FirebaseFirestore.instance;
+    final allocationId = '${item['allocationId'] ?? ''}';
+    final itemId = '${item['allocationItemId'] ?? ''}';
+    if (allocationId.isEmpty) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Unable to identify this allocation.')),
+        );
+      }
+      return;
+    }
+
+    var loadingShown = false;
+    try {
+      unawaited(
+        showDialog<void>(
+          context: context,
+          barrierDismissible: false,
+          builder: (_) => const PopScope(
+            canPop: false,
+            child: AlertDialog(
+              content: Row(
+                children: [
+                  SizedBox(
+                    width: 24,
+                    height: 24,
+                    child: CircularProgressIndicator(strokeWidth: 3),
+                  ),
+                  SizedBox(width: 16),
+                  Expanded(child: Text('Voiding allocation...')),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+      loadingShown = true;
+      await db.runTransaction((transaction) async {
+        final ref = db.collection('staff_inventory').doc(allocationId);
+        final snapshot = await transaction.get(ref);
+        final data = snapshot.data();
+        if (data == null || data['isDeleted'] == true) {
+          throw StateError('This allocation is no longer active.');
+        }
+        if (itemId.isEmpty) {
+          if (availableBundleStock(data) > 0) {
+            throw StateError('This bundle is not sold out yet.');
+          }
+          transaction.update(ref, {
+            'isDeleted': true,
+            'voidedAt': FieldValue.serverTimestamp(),
+            'updatedAt': FieldValue.serverTimestamp(),
+          });
+          return;
+        }
+
+        final variants = (data['items'] as List? ?? [])
+            .whereType<Map>()
+            .map((variant) => Map<String, dynamic>.from(variant))
+            .toList();
+        final index = variants.indexWhere(
+          (variant) => '${variant['id'] ?? variant['itemId'] ?? ''}' == itemId,
+        );
+        if (index < 0) {
+          throw StateError('This item is no longer in the branch allocation.');
+        }
+        final stock =
+            num.tryParse(
+              '${variants[index]['stock'] ?? variants[index]['startingStock'] ?? 0}',
+            )?.toInt() ??
+            0;
+        if (stock > 0) {
+          throw StateError('This item is not sold out yet.');
+        }
+        final removed = variants.removeAt(index);
+        transaction.update(ref, {
+          'items': variants,
+          'removedItems': FieldValue.arrayUnion([
+            {
+              ...removed,
+              'removedAt': Timestamp.now(),
+              'voidReason': 'Voided from branch inventory',
+            },
+          ]),
+          'isDeleted': variants.isEmpty,
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
+      });
+      if (context.mounted) {
+        if (loadingShown) Navigator.of(context, rootNavigator: true).pop();
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Allocation voided from branch successfully.'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (error) {
+      if (context.mounted) {
+        if (loadingShown) Navigator.of(context, rootNavigator: true).pop();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Unable to void allocation: $error')),
+        );
+      }
+    }
   }
 
   Future<void> _editInventoryItem(

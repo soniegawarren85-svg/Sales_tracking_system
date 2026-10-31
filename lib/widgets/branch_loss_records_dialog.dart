@@ -77,6 +77,57 @@ List<Map<String, dynamic>> filterLossRecords(
   return results;
 }
 
+int lossRecordItemCount(Iterable<Map<String, dynamic>> records) =>
+    records.fold<int>(0, (total, record) {
+      final items = (record['items'] as List<dynamic>? ?? []).whereType<Map>();
+      if (items.isNotEmpty) {
+        return total +
+            items.fold<int>(
+              0,
+              (count, item) =>
+                  count +
+                  (num.tryParse(
+                        '${item['quantity'] ?? item['qty'] ?? 1}',
+                      )?.toInt().abs() ??
+                      1),
+            );
+      }
+      return total +
+          (num.tryParse('${record['quantity'] ?? 0}')?.toInt().abs() ?? 0);
+    });
+
+double lossRecordTotal(Iterable<Map<String, dynamic>> records) =>
+    records.fold<double>(0, (total, record) {
+      final savedAmount = num.tryParse('${record['lossAmount'] ?? ''}');
+      if (savedAmount != null &&
+          savedAmount.abs() > 0 &&
+          record['_filteredItems'] != true) {
+        return total + savedAmount.abs();
+      }
+      final savedTotal = num.tryParse('${record['total'] ?? ''}');
+      if (savedTotal != null &&
+          savedTotal.abs() > 0 &&
+          record['_filteredItems'] != true) {
+        return total + savedTotal.abs();
+      }
+      final items = (record['items'] as List<dynamic>? ?? []).whereType<Map>();
+      if (items.isNotEmpty) {
+        return total +
+            items.fold<double>(0, (amount, item) {
+              final quantity =
+                  num.tryParse('${item['quantity'] ?? item['qty'] ?? 1}') ?? 1;
+              final price =
+                  num.tryParse('${item['unitPrice'] ?? item['price'] ?? 0}') ??
+                  0;
+              return amount + quantity.abs() * price.abs();
+            });
+      }
+      final quantity = num.tryParse('${record['quantity'] ?? 0}') ?? 0;
+      final price =
+          num.tryParse('${record['unitPrice'] ?? record['price'] ?? 0}') ?? 0;
+      return total + quantity.abs() * price.abs();
+    });
+
 class BranchLossRecordsDialog extends StatefulWidget {
   const BranchLossRecordsDialog({
     super.key,
@@ -123,6 +174,7 @@ class _BranchLossRecordsDialogState extends State<BranchLossRecordsDialog> {
   @override
   Widget build(BuildContext context) {
     final period = lossRecordPeriod(widget.anchor, widget.range);
+    final size = MediaQuery.sizeOf(context);
     final periodLabel = _date != null
         ? _dayLabel(_date!)
         : widget.range == 'Month'
@@ -131,9 +183,10 @@ class _BranchLossRecordsDialogState extends State<BranchLossRecordsDialog> {
         ? '${_dayLabel(period.start)} – ${_dayLabel(period.end.subtract(const Duration(days: 1)))}'
         : _dayLabel(widget.anchor);
     return Dialog(
+      insetPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 16),
       child: SizedBox(
-        width: 800,
-        height: 740,
+        width: size.width < 824 ? size.width - 24 : 800,
+        height: size.height < 772 ? size.height - 32 : 740,
         child: Column(
           children: [
             Padding(
@@ -192,18 +245,19 @@ class _BranchLossRecordsDialogState extends State<BranchLossRecordsDialog> {
                     ),
                   ),
                   const SizedBox(height: 8),
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: Wrap(
-                      spacing: 8,
-                      runSpacing: 4,
+                  SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
                       children: [
                         ...['All', 'Categories', 'Bundle', 'Beverages'].map(
-                          (category) => ChoiceChip(
-                            label: Text(category),
-                            selected: _category == category,
-                            onSelected: (_) =>
-                                setState(() => _category = category),
+                          (category) => Padding(
+                            padding: const EdgeInsets.only(right: 8),
+                            child: ChoiceChip(
+                              label: Text(category),
+                              selected: _category == category,
+                              onSelected: (_) =>
+                                  setState(() => _category = category),
+                            ),
                           ),
                         ),
                         if (_date != null)
@@ -230,56 +284,74 @@ class _BranchLossRecordsDialogState extends State<BranchLossRecordsDialog> {
                     query: _query,
                     category: _category,
                   );
+                  final itemCount = lossRecordItemCount(records);
+                  final totalLoss = lossRecordTotal(records);
                   if (records.isEmpty) {
-                    return const Center(
-                      child: Text('No records match these filters.'),
+                    return Column(
+                      children: [
+                        _lossSummary(itemCount, totalLoss),
+                        const Expanded(
+                          child: Center(
+                            child: Text('No records match these filters.'),
+                          ),
+                        ),
+                      ],
                     );
                   }
-                  return ListView.builder(
-                    padding: const EdgeInsets.all(16),
-                    itemCount: records.length,
-                    itemBuilder: (context, index) {
-                      final record = records[index];
-                      final time = record['timestamp'] as DateTime;
-                      final previous = index == 0
-                          ? null
-                          : records[index - 1]['timestamp'] as DateTime;
-                      final newMonth =
-                          previous == null ||
-                          previous.month != time.month ||
-                          previous.year != time.year;
-                      final newDay =
-                          previous == null ||
-                          !DateUtils.isSameDay(previous, time);
-                      return Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          if (widget.range == 'Month' && newMonth)
-                            Padding(
-                              padding: const EdgeInsets.symmetric(vertical: 12),
-                              child: Text(
-                                '${_months[time.month - 1]} ${time.year}',
-                                style: const TextStyle(
-                                  fontSize: 19,
-                                  fontWeight: FontWeight.w800,
-                                ),
-                              ),
-                            ),
-                          if (newDay)
-                            Padding(
-                              padding: const EdgeInsets.only(bottom: 8),
-                              child: Text(
-                                _dayLabel(time),
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                            ),
-                          widget.cardBuilder(record),
-                          const SizedBox(height: 12),
-                        ],
-                      );
-                    },
+                  return Column(
+                    children: [
+                      _lossSummary(itemCount, totalLoss),
+                      Expanded(
+                        child: ListView.builder(
+                          padding: const EdgeInsets.all(16),
+                          itemCount: records.length,
+                          itemBuilder: (context, index) {
+                            final record = records[index];
+                            final time = record['timestamp'] as DateTime;
+                            final previous = index == 0
+                                ? null
+                                : records[index - 1]['timestamp'] as DateTime;
+                            final newMonth =
+                                previous == null ||
+                                previous.month != time.month ||
+                                previous.year != time.year;
+                            final newDay =
+                                previous == null ||
+                                !DateUtils.isSameDay(previous, time);
+                            return Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                if (widget.range == 'Month' && newMonth)
+                                  Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                      vertical: 12,
+                                    ),
+                                    child: Text(
+                                      '${_months[time.month - 1]} ${time.year}',
+                                      style: const TextStyle(
+                                        fontSize: 19,
+                                        fontWeight: FontWeight.w800,
+                                      ),
+                                    ),
+                                  ),
+                                if (newDay)
+                                  Padding(
+                                    padding: const EdgeInsets.only(bottom: 8),
+                                    child: Text(
+                                      _dayLabel(time),
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                  ),
+                                widget.cardBuilder(record),
+                                const SizedBox(height: 12),
+                              ],
+                            );
+                          },
+                        ),
+                      ),
+                    ],
                   );
                 },
               ),
@@ -289,4 +361,39 @@ class _BranchLossRecordsDialogState extends State<BranchLossRecordsDialog> {
       ),
     );
   }
+
+  Widget _lossSummary(int itemCount, double totalLoss) => Padding(
+    padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+    child: Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceTint,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final itemCountLabel = Text(
+            '${widget.status} items: $itemCount',
+            style: const TextStyle(fontWeight: FontWeight.w700),
+          );
+          final totalLossLabel = Text(
+            'Total loss: ₱${totalLoss.toStringAsFixed(2)}',
+            style: const TextStyle(fontWeight: FontWeight.w800),
+          );
+          return constraints.maxWidth < 300
+              ? Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [itemCountLabel, totalLossLabel],
+                )
+              : Row(
+                  children: [
+                    Expanded(child: itemCountLabel),
+                    totalLossLabel,
+                  ],
+                );
+        },
+      ),
+    ),
+  );
 }

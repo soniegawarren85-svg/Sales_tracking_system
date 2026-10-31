@@ -21,6 +21,9 @@ class InventoryService extends ChangeNotifier {
   bool _initialized = false;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _reportsSub;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _adjustmentsSub;
+  Timer? _cloudRefreshDebounce;
+  Future<void>? _cloudRefresh;
+  bool _refreshQueued = false;
 
   String? get _currentOwnerId => FirebaseAuth.instance.currentUser?.uid;
 
@@ -45,11 +48,27 @@ class InventoryService extends ChangeNotifier {
     _initialized = true;
     await _loadFromDisk();
     _startCloudListeners();
-    unawaited(refreshFromCloud());
   }
 
-  Future<void> refreshFromCloud() async {
-    await _loadFromFirestore();
+  Future<void> refreshFromCloud() {
+    _cloudRefreshDebounce?.cancel();
+    final activeRefresh = _cloudRefresh;
+    if (activeRefresh != null) {
+      _refreshQueued = true;
+      return activeRefresh;
+    }
+
+    final refresh = _loadFromFirestore();
+    _cloudRefresh = refresh;
+    return refresh.whenComplete(() {
+      if (identical(_cloudRefresh, refresh)) {
+        _cloudRefresh = null;
+      }
+      if (_refreshQueued) {
+        _refreshQueued = false;
+        _scheduleCloudRefresh();
+      }
+    });
   }
 
   void clear() {
@@ -60,6 +79,7 @@ class InventoryService extends ChangeNotifier {
 
   @override
   void dispose() {
+    _cloudRefreshDebounce?.cancel();
     _reportsSub?.cancel();
     _adjustmentsSub?.cancel();
     super.dispose();
@@ -68,12 +88,37 @@ class InventoryService extends ChangeNotifier {
   void _startCloudListeners() {
     _reportsSub ??= FirebaseFirestore.instance
         .collection(_reportsCollection)
+        .orderBy('timestamp', descending: true)
+        .limit(500)
         .snapshots()
-        .listen((_) => unawaited(refreshFromCloud()));
+        .listen(
+          (_) => _scheduleCloudRefresh(),
+          onError: (Object error, StackTrace stackTrace) {
+            if (kDebugMode) {
+              debugPrint('Inventory report listener failed: $error');
+            }
+          },
+        );
     _adjustmentsSub ??= FirebaseFirestore.instance
         .collection('stock_adjustments')
+        .orderBy('createdAt', descending: true)
+        .limit(1000)
         .snapshots()
-        .listen((_) => unawaited(refreshFromCloud()));
+        .listen(
+          (_) => _scheduleCloudRefresh(),
+          onError: (Object error, StackTrace stackTrace) {
+            if (kDebugMode) {
+              debugPrint('Stock adjustment listener failed: $error');
+            }
+          },
+        );
+  }
+
+  void _scheduleCloudRefresh() {
+    _cloudRefreshDebounce?.cancel();
+    _cloudRefreshDebounce = Timer(const Duration(milliseconds: 300), () {
+      unawaited(refreshFromCloud());
+    });
   }
 
   bool _sameDay(DateTime a, DateTime b) =>
@@ -458,7 +503,8 @@ class InventoryService extends ChangeNotifier {
           .collection(_reportsCollection)
           .orderBy('timestamp', descending: true)
           .limit(500)
-          .get();
+          .get()
+          .timeout(const Duration(seconds: 20));
 
       for (final doc in snapshot.docs) {
         _mergeEntry(Inventory.fromJson(doc.data()));
@@ -479,7 +525,8 @@ class InventoryService extends ChangeNotifier {
       final snapshot = await FirebaseFirestore.instance
           .collection('staff_inventory')
           .limit(1000)
-          .get();
+          .get()
+          .timeout(const Duration(seconds: 20));
 
       for (var entryIndex = 0; entryIndex < _entries.length; entryIndex++) {
         final entry = _entries[entryIndex];
@@ -601,7 +648,8 @@ class InventoryService extends ChangeNotifier {
           .collection('stock_adjustments')
           .orderBy('createdAt', descending: true)
           .limit(1000)
-          .get();
+          .get()
+          .timeout(const Duration(seconds: 20));
 
       final totals = <String, int>{};
       for (final doc in snapshot.docs) {

@@ -8,6 +8,7 @@ void main() {
     'staffName': 'Ana Cruz',
     'staffPublicId': 'STF-0001',
     'reason': 'Damaged',
+    'lossAmount': 100,
     'items': [
       {'name': 'Cookies', 'quantity': 2},
       {'name': 'Cake bundle', 'isBundle': true, 'quantity': 1},
@@ -71,9 +72,30 @@ void main() {
     );
   });
 
+  test('loss summary counts reduced units and sums recorded loss', () {
+    expect(lossRecordItemCount(records), 4);
+    expect(lossRecordTotal(records), 100);
+    expect(
+      lossRecordItemCount([
+        {'quantity': 2, 'unitPrice': 50},
+      ]),
+      2,
+    );
+    expect(
+      lossRecordTotal([
+        {'quantity': 2, 'unitPrice': 50},
+      ]),
+      100,
+    );
+  });
+
   testWidgets('Gallery groups months and search narrows the visible records', (
     tester,
   ) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
@@ -89,6 +111,12 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+    expect(find.text('Reduced items: 4'), findsOneWidget);
+    expect(find.text('Total loss: ₱100.00'), findsOneWidget);
+    expect(
+      tester.getTopLeft(find.text('Categories')).dy,
+      tester.getTopLeft(find.text('Bundle')).dy,
+    );
     expect(find.text('July 2026'), findsOneWidget);
     expect(find.text('September 2026'), findsOneWidget);
     await tester.enterText(find.byType(TextField), 'Ana');

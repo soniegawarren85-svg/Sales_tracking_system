@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:fake_cloud_firestore/fake_cloud_firestore.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sales_tracking/services/inventory_reconciliation_service.dart';
 import 'package:sales_tracking/services/allocation_checklist_service.dart';
 import 'package:sales_tracking/services/bundle_metadata_service.dart';
@@ -29,6 +30,7 @@ void main() {
   late FakeFirebaseFirestore db;
   late InventoryReconciliationService service;
   setUp(() async {
+    SharedPreferences.setMockInitialValues({});
     db = FakeFirebaseFirestore();
     service = InventoryReconciliationService(db);
     await db.doc('staff_inventory/old').set({

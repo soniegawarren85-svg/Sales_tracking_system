@@ -76,6 +76,7 @@ void main() {
         MaterialApp(
           home: Scaffold(
             body: TopEdgeRefresh(
+              startAreaHeight: 160,
               onRefresh: () async {
                 refreshes++;
               },
@@ -103,6 +104,49 @@ void main() {
       expect(refreshes, 1);
     },
   );
+
+  testWidgets('refresh works from a nested dashboard header', (tester) async {
+    var refreshes = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: TopEdgeRefresh(
+            onRefresh: () async {
+              refreshes++;
+            },
+            child: NestedScrollView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              headerSliverBuilder: (context, innerBoxIsScrolled) => [
+                SliverToBoxAdapter(
+                  child: SizedBox(
+                    height: 180,
+                    child: Center(child: Text('Dashboard header')),
+                  ),
+                ),
+              ],
+              body: ListView.builder(
+                physics: const AlwaysScrollableScrollPhysics(),
+                itemCount: 20,
+                itemBuilder: (context, index) =>
+                    SizedBox(height: 60, child: Text('Dashboard row $index')),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.dragFrom(const Offset(200, 300), const Offset(0, 360));
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
+    expect(refreshes, 0);
+
+    await tester.dragFrom(const Offset(200, 80), const Offset(0, 360));
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
+
+    expect(refreshes, 1);
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets('create branch accepts an optional receipt address', (
     tester,

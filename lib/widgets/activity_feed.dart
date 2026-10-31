@@ -101,6 +101,7 @@ class _ActivityFeedState extends State<ActivityFeed> {
   }
 
   IconData _iconFor(String action) {
+    if (action == 'cashier_made_order') return Icons.point_of_sale_rounded;
     if (action.startsWith('inventory') || action == 'allocation_received') {
       return Icons.inventory_2_outlined;
     }
@@ -167,13 +168,15 @@ class _ActivityFeedState extends State<ActivityFeed> {
                       .map((doc) {
                         final r = doc.data();
                         final returned = r['kind'] == 'return';
+                        final allocatorId = '${r['allocatedByPublicId'] ?? ''}'
+                            .trim();
                         return <String, dynamic>{
                           'action': returned
                               ? 'return_submitted'
                               : 'allocation_received',
                           'description': returned
                               ? 'Submitted items for return to Super Admin'
-                              : 'Received allocation from ${r['allocatedByName'] ?? 'Super admin'}: ${r['name'] ?? 'Items'}',
+                              : 'Received allocation from ${r['allocatedByName'] ?? 'Super admin'}${allocatorId.isEmpty ? '' : ' • ID: $allocatorId'} • ${r['name'] ?? 'Items'}',
                           'actorId': returned
                               ? r['submittedBy']
                               : r['confirmedBy'],
@@ -204,10 +207,11 @@ class _ActivityFeedState extends State<ActivityFeed> {
                     final receipt = '${r['salesId'] ?? doc.id}';
                     final cashier =
                         '${r['cashierName'] ?? r['staffName'] ?? r['userName'] ?? 'Cashier'}';
+                    final total = reportValue(r['total']);
                     return <String, dynamic>{
-                      'action': 'cashier_order',
+                      'action': 'cashier_made_order',
                       'description':
-                          'Cashier order $receipt${items.isEmpty ? '' : ': $items'}',
+                          'Cashier made order • Receipt $receipt${items.isEmpty ? '' : ' • Items: $items'} • Total: ₱${total.toStringAsFixed(2)}',
                       'actorId':
                           r['cashierId'] ??
                           r['staffUid'] ??

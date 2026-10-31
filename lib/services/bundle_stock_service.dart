@@ -37,6 +37,25 @@ String bundleInventoryGroupKey(Map data) {
   return '${data['name'] ?? ''}'.trim().toLowerCase();
 }
 
+String bundleInstanceDisplayId(Map record, Map instance, int index) {
+  final bundleId = '${record['bundleId'] ?? record['publicId'] ?? ''}'.trim();
+  final storedDisplayId = '${instance['displayId'] ?? ''}'.trim();
+  final storedDisplaySuffix = storedDisplayId.startsWith('$bundleId-')
+      ? int.tryParse(storedDisplayId.substring(bundleId.length + 1))
+      : null;
+  if (bundleId.isNotEmpty && storedDisplaySuffix != null) {
+    return storedDisplayId;
+  }
+  final storedId = '${instance['id'] ?? ''}'.trim();
+  final storedSuffix = RegExp(r'-(\d+)$').firstMatch(storedId)?.group(1);
+  final number =
+      int.tryParse('${instance['number'] ?? ''}') ??
+      int.tryParse(storedSuffix ?? '') ??
+      index + 1;
+  if (bundleId.isEmpty) return 'BND-${number.toString().padLeft(3, '0')}';
+  return '$bundleId-$number';
+}
+
 String bundleAllocationVersionKey(Map data) {
   final ingredients =
       bundleRows(data['items'])

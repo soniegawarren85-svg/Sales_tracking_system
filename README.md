@@ -35,6 +35,8 @@ keyPassword=YOUR_KEY_PASSWORD
 ```
 
 Then build the APK with `flutter build apk --release`. The output is
-`build/app/outputs/flutter-apk/app-release.apk`. If the old keystore is
-unavailable, create a new keystore and use this release only after uninstalling
-the existing app; back up the new keystore securely for future updates.
+`build/app/outputs/flutter-apk/app-release.apk`. If the old keystore is unavailable, create a new keystore. Android will not
+install an APK signed with this new key over an app signed with the previous
+key. Uninstall the existing app before installing this release; uninstalling
+deletes local app data. Back up the new keystore and `key.properties` securely
+for future updates, and never commit either file.

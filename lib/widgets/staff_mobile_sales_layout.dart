@@ -10,6 +10,7 @@ class StaffMobileSalesLayout extends StatelessWidget {
     required this.body,
     this.titleTourKey,
     this.actions,
+    this.cartCount = 0,
   });
 
   final bool reviewing;
@@ -18,6 +19,7 @@ class StaffMobileSalesLayout extends StatelessWidget {
   final Widget body;
   final GlobalKey? titleTourKey;
   final Widget? actions;
+  final int cartCount;
 
   @override
   Widget build(BuildContext context) => Column(
@@ -51,6 +53,29 @@ class StaffMobileSalesLayout extends StatelessWidget {
                 ),
               ),
               actions: [
+                if (!reviewing)
+                  Center(
+                    child: Container(
+                      constraints: const BoxConstraints(minWidth: 32),
+                      margin: const EdgeInsets.only(right: 4),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 9,
+                        vertical: 6,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.16),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Text(
+                        '$cartCount',
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                  ),
                 IconButton(
                   tooltip: 'Cashier tools',
                   onPressed: onTools,
@@ -65,7 +90,7 @@ class StaffMobileSalesLayout extends StatelessWidget {
           ],
         ),
       ),
-      ?actions,
+      if (actions != null) actions!,
     ],
   );
 }

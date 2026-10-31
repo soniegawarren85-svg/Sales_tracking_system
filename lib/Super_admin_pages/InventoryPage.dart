@@ -161,9 +161,19 @@ class _AutoImageCarouselState extends State<_AutoImageCarousel> {
 }
 
 class InventoryPage extends StatefulWidget {
-  const InventoryPage({super.key, this.embedded = false, this.initialEntry});
+  const InventoryPage({
+    super.key,
+    this.embedded = false,
+    this.initialEntry,
+    this.onAssignBranchInventory,
+    this.selectedBranchId,
+    this.onBranchSelected,
+  });
   final bool embedded;
   final AdminCatalogEntry? initialEntry;
+  final void Function(String branchId, String type)? onAssignBranchInventory;
+  final String? selectedBranchId;
+  final ValueChanged<String>? onBranchSelected;
   @override
   State<InventoryPage> createState() => _InventoryPageState();
 }
@@ -182,8 +192,17 @@ class _InventoryPageState extends State<InventoryPage>
   late AnimationController _fabController;
 
   @override
+  void didUpdateWidget(covariant InventoryPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.selectedBranchId != oldWidget.selectedBranchId) {
+      _monitorBranch = widget.selectedBranchId ?? '';
+    }
+  }
+
+  @override
   void initState() {
     super.initState();
+    _monitorBranch = widget.selectedBranchId ?? '';
     _fabController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 300),
@@ -3258,8 +3277,22 @@ class _InventoryPageState extends State<InventoryPage>
     return Scaffold(
       resizeToAvoidBottomInset: false,
       backgroundColor: PinkTheme.scaffoldBg,
-      floatingActionButton:
-          _catalogType == 'Categories' && _monitorBranch.isEmpty
+      floatingActionButton: _monitorBranch.isNotEmpty
+          ? FloatingActionButton(
+              heroTag: 'inventory_branch_assign',
+              tooltip: 'Assign inventory to this branch',
+              backgroundColor: AppColors.primaryDark,
+              foregroundColor: Colors.white,
+              shape: const CircleBorder(),
+              onPressed: () => widget.onAssignBranchInventory?.call(
+                _monitorBranch,
+                _catalogType == 'Beverages' && _addonsTab
+                    ? 'Add-on'
+                    : _catalogType,
+              ),
+              child: const Icon(Icons.add_rounded, size: 30),
+            )
+          : _catalogType == 'Categories'
           ? FloatingActionButton(
               heroTag: 'inventory_add_item',
               tooltip: 'Add item',
@@ -3363,8 +3396,13 @@ class _InventoryPageState extends State<InventoryPage>
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(20, 4, 20, 0),
                 child: AdminCatalog(
-                  onBranchChanged: (value) =>
-                      setState(() => _monitorBranch = value),
+                  initialBranchId: widget.selectedBranchId,
+                  onBranchChanged: (value) {
+                    setState(() => _monitorBranch = value);
+                    widget.onBranchSelected?.call(value);
+                  },
+                  allowBranchEdits: false,
+                  showBranchActions: true,
                   pinnedControls: true,
                   compactHeader: _headerCollapsed,
                   scrollController: _inventoryScrollController,

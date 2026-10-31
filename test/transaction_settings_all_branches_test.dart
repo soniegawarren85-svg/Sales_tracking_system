@@ -6,6 +6,144 @@ import 'package:sales_tracking/widgets/activity_feed.dart';
 import 'package:sales_tracking/widgets/transaction_settings_dialog.dart';
 
 void main() {
+  testWidgets('permissions omit inventory edit and voided branches', (
+    tester,
+  ) async {
+    final firestore = FakeFirebaseFirestore();
+    await firestore.collection('branches').doc('alpha').set({'name': 'Alpha'});
+    await firestore.collection('branches').doc('voided').set({
+      'name': 'SM Urdaneta',
+      'isVoided': true,
+    });
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: TransactionSettingsDialog(
+            kind: 'permissions',
+            separateRoles: true,
+            firestore: firestore,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byType(DropdownButtonFormField<String>));
+    await tester.pumpAndSettle();
+    expect(find.text('SM Urdaneta'), findsNothing);
+    await tester.tap(find.text('Alpha').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Admin permissions'));
+    await tester.pumpAndSettle();
+    expect(find.text('Edit inventory'), findsNothing);
+    expect(find.text('Staff permissions'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('branch settings include every non-voided Branch Sales location', (
+    tester,
+  ) async {
+    final firestore = FakeFirebaseFirestore();
+    for (final entry in [
+      ('dagupan', 'SM Dagupan'),
+      ('urdaneta', 'SM Urdaneta'),
+      ('lingayen', 'Lingayen'),
+    ]) {
+      await firestore.collection('branches').doc(entry.$1).set({
+        'name': entry.$2,
+      });
+    }
+    await firestore.collection('branches').doc('voided').set({
+      'name': 'Voided branch',
+      'isVoided': true,
+    });
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: TransactionSettingsDialog(
+            kind: 'tax',
+            firestore: firestore,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byType(DropdownButtonFormField<String>));
+    await tester.pumpAndSettle();
+
+    expect(find.text('SM Dagupan'), findsOneWidget);
+    expect(find.text('SM Urdaneta'), findsOneWidget);
+    expect(find.text('Lingayen'), findsOneWidget);
+    expect(find.text('Voided branch'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('discount control omits insignificant decimal zeros', (
+    tester,
+  ) async {
+    final firestore = FakeFirebaseFirestore();
+    await firestore.collection('branches').doc('alpha').set({'name': 'Alpha'});
+    await firestore.doc('admin_settings/transactions').set({
+      'branchSettings': {
+        'alpha': {
+          'discounts': [
+            {'id': 'senior', 'name': 'Senior', 'percent': 10.0},
+            {'id': 'pwd', 'name': 'PWD', 'percent': 10.5},
+          ],
+        },
+      },
+    });
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: TransactionSettingsDialog(
+            kind: 'discounts',
+            branchId: 'alpha',
+            firestore: firestore,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('10%'), findsOneWidget);
+    expect(find.text('10.5%'), findsOneWidget);
+    expect(find.text('10.0%'), findsNothing);
+  });
+
+  testWidgets('new branch starts with discounts disabled and no records', (
+    tester,
+  ) async {
+    final firestore = FakeFirebaseFirestore();
+    await firestore.collection('branches').doc('new-branch').set({
+      'name': 'New Branch',
+    });
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: TransactionSettingsDialog(
+            kind: 'discounts',
+            firestore: firestore,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byType(DropdownButtonFormField<String>));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('New Branch').last);
+    await tester.pumpAndSettle();
+
+    expect(tester.widget<Switch>(find.byType(Switch)).value, isFalse);
+    expect(find.text('Senior'), findsNothing);
+    expect(find.text('PWD'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('discount settings offer All branches first and apply globally', (
     tester,
   ) async {

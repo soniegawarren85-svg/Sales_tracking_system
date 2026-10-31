@@ -186,7 +186,9 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
 
   Map<String, double> branchAmounts(BranchReportData data) {
     final totals = <String, double>{
-      for (final branch in data.rows('branches')) '${branch['_id']}': 0,
+      for (final branch in data.rows('branches'))
+        if (branch['isVoided'] != true && branch['isDeleted'] != true)
+          '${branch['_id']}': 0,
     };
     for (final id in totals.keys.toList()) {
       final field = _comparison == 'Refund'
@@ -362,7 +364,8 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
     final amounts = branchAmounts(data);
     final names = {
       for (final row in data.rows('branches'))
-        '${row['_id']}': '${row['name']}',
+        if (row['isVoided'] != true && row['isDeleted'] != true)
+          '${row['_id']}': '${row['name']}',
     };
     final chart = widget.branchId == null ? null : bars(data);
     pdf.addPage(
@@ -752,7 +755,8 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
     final amounts = branchAmounts(data);
     final names = {
       for (final row in data.rows('branches'))
-        '${row['_id']}': '${row['name']}',
+        if (row['isVoided'] != true && row['isDeleted'] != true)
+          '${row['_id']}': '${row['name']}',
     };
     final matchingBranchIds = amounts.keys
         .where(
@@ -1030,6 +1034,26 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
     String timeLabel(int minutes) =>
         TimeOfDay(hour: minutes ~/ 60, minute: minutes % 60).format(context);
     final totals = reportTotals(data);
+    final summaryTotals = totals.entries
+        .where((entry) => entry.key != 'Total loss')
+        .map((entry) {
+          if (entry.key != 'Reduce') return entry;
+          final itemCount = data
+              .losses(widget.branchId!, range.$1, range.$2)
+              .fold<double>(
+                0,
+                (count, record) => count + reportValue(record['quantity']),
+              );
+          return MapEntry('Reduced items', itemCount);
+        })
+        .toList();
+    summaryTotals.add(
+      MapEntry(
+        'Total loss',
+        (totals['Reduce'] ?? 0) +
+            (_allowRefunds ? totals['Refunds'] ?? 0 : 0),
+      ),
+    );
     final items = visibleItems(data);
     bool matchesTableType(Map<String, dynamic> row) =>
         row['type'] == (_tableAddons ? 'Add-ons' : _tableType);
@@ -1068,7 +1092,7 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
         'Sales summary',
         Column(
           children: [
-            ...totals.entries
+            ...summaryTotals
                 .where((entry) => _allowRefunds || entry.key != 'Refunds')
                 .map(
                   (entry) => Container(
@@ -1086,7 +1110,9 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
                           ),
                         ),
                         Text(
-                          summaryValue(entry.key, entry.value),
+                          entry.key == 'Reduced items'
+                              ? formatNumber(entry.value)
+                              : summaryValue(entry.key, entry.value),
                           style: const TextStyle(
                             fontWeight: FontWeight.w800,
                             color: AppColors.primaryDark,

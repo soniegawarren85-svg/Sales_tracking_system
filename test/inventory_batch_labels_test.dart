@@ -235,6 +235,20 @@ void main() {
     expect(items.map((item) => item['name']), ['Small', 'Large']);
   });
 
+  test('add-on batch details use the allocated add-on record', () {
+    final addon = {
+      '_id': 'addon-allocation',
+      'isAddon': true,
+      'id': 'add-on-source',
+      'publicId': 'AD-007',
+      'name': 'Extra Cream',
+      'priceDelta': 15,
+    };
+
+    expect(allocationBatchItemsForRecord(addon, itemId: 'AD-007'), [addon]);
+    expect(allocationBatchItemsForRecord(addon, itemId: 'AD-008'), isEmpty);
+  });
+
   test(
     'category allocation batches aggregate stock without hiding batches',
     () {
@@ -333,6 +347,137 @@ void main() {
       allocationInstanceLabel({'id': 'BND-opaque-delivery-id', 'number': 1}, 0),
       'BND-ITM-001',
     );
+    expect(
+      allocationBundleId(
+        {'bundleId': 'BND-003'},
+        {'id': 'BND-003-opaque-batch-25', 'number': 25},
+        24,
+      ),
+      'BND-003-25',
+    );
+  });
+
+  test('shared catalog IDs do not merge different allocated variants', () {
+    final items = aggregateCategoryAllocationItems([
+      {
+        'id': 'shared-cookie',
+        'name': 'Cookie',
+        'variant': 'Chocolate',
+        'stock': 0,
+        'assignedStartingStock': 2,
+      },
+      {
+        'id': 'shared-cookie',
+        'name': 'Cookie',
+        'variant': 'Pistachio',
+        'stock': 8,
+        'assignedStartingStock': 10,
+      },
+    ]);
+
+    expect(items, hasLength(2));
+    expect(
+      items.singleWhere((item) => item['variant'] == 'Pistachio')['stock'],
+      8,
+    );
+    expect(
+      allocationItemSoldQuantity(
+        items.singleWhere((item) => item['variant'] == 'Pistachio'),
+        [
+          {
+            'itemId': 'shared-cookie',
+            'name': 'Cookie',
+            'variant': 'Chocolate',
+            'quantity': 4,
+          },
+          {
+            'itemId': 'shared-cookie',
+            'name': 'Cookie',
+            'variant': 'Pistachio',
+            'quantity': 2,
+          },
+        ],
+      ),
+      2,
+    );
+  });
+
+  test(
+    'beverage batch rows are unique by size and use current size prices',
+    () {
+      final sizes = uniqueBeverageAllocationItems([
+        {'name': 'Small', 'price': 100},
+        {'coffeeSize': 'Small', 'price': 100},
+        {'name': 'Medium', 'price': 120},
+        {'name': 'Large', 'price': 140},
+      ]);
+
+      expect(sizes, hasLength(3));
+      expect(
+        allocationCurrentCatalogPrice(
+          {'name': 'Small', 'coffeeSize': 'Small'},
+          [
+            {'name': 'Small', 'price': 100},
+            {'name': 'Medium', 'price': 120},
+          ],
+        ),
+        100,
+      );
+    },
+  );
+
+  test(
+    'beverage batch rows drop root-name duplicates and parse size labels',
+    () {
+      final sizes = uniqueBeverageAllocationItems([
+        {'name': 'Dubai Chewy Smoothie', 'price': 110},
+        {'name': 'Small', 'coffeeSize': 'Small', 'price': 110},
+        {'name': 'Dubai Chewy Smoothie - Small', 'price': 110},
+        {'name': 'Medium', 'coffeeSize': 'Medium', 'price': 120},
+      ], productName: 'Dubai Chewy Smoothie');
+
+      expect(sizes, hasLength(2));
+      expect(
+        beverageAllocationSize({
+          'name': 'Dubai Chewy Smoothie - Small',
+        }, productName: 'Dubai Chewy Smoothie'),
+        'Small',
+      );
+      expect(
+        beverageAllocationSize({
+          'name': 'Dubai Chewy Smoothie',
+        }, productName: 'Dubai Chewy Smoothie'),
+        '',
+      );
+    },
+  );
+
+  test('batch sales are limited to the requested calendar day', () {
+    final day = DateTime(2026, 10, 30);
+    expect(
+      allocationSaleInDateRange(
+        {'soldAt': Timestamp.fromDate(DateTime(2026, 10, 30, 9))},
+        day,
+        day,
+      ),
+      isTrue,
+    );
+    expect(
+      allocationSaleInDateRange(
+        {'soldAt': Timestamp.fromDate(DateTime(2026, 10, 29, 23))},
+        day,
+        day,
+      ),
+      isFalse,
+    );
+  });
+
+  test('sale history retains transaction-time prices', () {
+    expect(
+      allocationSaleUnitPrice({'quantity': 6, 'price': 99, 'lineTotal': 594}),
+      99,
+    );
+    expect(allocationSaleUnitPrice({'quantity': 6, 'lineTotal': 600}), 100);
   });
 
   test('updated bundle choices exclude returned and older batches', () {

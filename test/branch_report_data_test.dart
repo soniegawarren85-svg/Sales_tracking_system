@@ -13,6 +13,42 @@ void main() {
     expect(reportRefund({'status': 'completed', 'total': 99}), isFalse);
   });
 
+  test('revenue breakdown separates cash and GCash, excluding refunds', () {
+    final data = BranchReportData({
+      'completed_sales': [
+        {
+          'branchId': 'b',
+          'timestamp': '2026-10-04T10:00:00',
+          'total': 306.10,
+          'paymentMode': 'Cash',
+        },
+        {
+          'branchId': 'b',
+          'timestamp': '2026-10-04T11:00:00',
+          'total': 400,
+          'paymentMode': 'GCash - 123',
+        },
+        {
+          'branchId': 'b',
+          'timestamp': '2026-10-04T12:00:00',
+          'total': -50,
+          'paymentMode': 'Cash',
+          'type': 'refund',
+        },
+      ],
+    });
+
+    final breakdown = data.revenueByPaymentMode(
+      'b',
+      DateTime(2026, 10, 4),
+      DateTime(2026, 10, 5),
+    );
+
+    expect(breakdown['GCash'], 400);
+    expect(breakdown['Cash'], 306.10);
+    expect(breakdown.values.reduce((total, value) => total + value), 706.10);
+  });
+
   test(
     'item sales total uses recorded quantity and price, excluding refunds',
     () {

@@ -10,6 +10,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/account_presence.dart';
 import '../services/message_account_status.dart';
+import '../services/message_delivery.dart';
 import '../widgets/cash_float_conversation_card.dart';
 
 const _chatPink = AppColors.primary;
@@ -31,6 +32,7 @@ class _MessagePageState extends State<MessagePage> {
   String _search = '';
   String? _selectedId;
   Timer? _searchDebounce;
+  final Set<String> _deliveryUpdates = {};
 
   @override
   void initState() {
@@ -76,6 +78,34 @@ class _MessagePageState extends State<MessagePage> {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setStringList('pinned_messages_$meId', next.toList());
     if (mounted) setState(() => _pinnedIds = next);
+  }
+
+  void _markLatestMessagesDelivered(
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> chats,
+    String readerId,
+  ) {
+    final pending = chats.where((chat) {
+      final data = chat.data();
+      final messageId = '${data['lastMessageId'] ?? ''}';
+      final key = '${chat.id}|$messageId';
+      return messageId.isNotEmpty &&
+          data['lastMessageSenderId'] != readerId &&
+          data['lastMessageDeliveredAt'] == null &&
+          _deliveryUpdates.add(key);
+    }).toList();
+    if (pending.isEmpty) return;
+    unawaited(
+      markLatestMessagesDelivered(
+        firestore: FirebaseFirestore.instance,
+        chats: pending,
+        readerId: readerId,
+      ).catchError((Object error) {
+        for (final chat in pending) {
+          _deliveryUpdates.remove('${chat.id}|${chat.data()['lastMessageId']}');
+        }
+        debugPrint('Failed to mark messages delivered: $error');
+      }),
+    );
   }
 
   Future<void> _deleteConversation(String chatId) async {
@@ -192,6 +222,12 @@ class _MessagePageState extends State<MessagePage> {
                         .where('participantIds', arrayContains: me['id'])
                         .snapshots(),
                     builder: (context, chatSnapshot) {
+                      if (chatSnapshot.hasData) {
+                        _markLatestMessagesDelivered(
+                          chatSnapshot.data!.docs,
+                          me['id']!,
+                        );
+                      }
                       final rows = <String, _InboxRow>{};
                       final latestChatTimes = <String, DateTime>{};
                       final contactIds = <String>{
@@ -562,6 +598,7 @@ class _ConversationPanel extends StatefulWidget {
 
 class _ConversationPanelState extends State<_ConversationPanel> {
   final _controller = TextEditingController();
+  final Set<String> _readUpdates = {};
 
   @override
   void initState() {
@@ -584,6 +621,29 @@ class _ConversationPanelState extends State<_ConversationPanel> {
         }, SetOptions(merge: true));
   }
 
+  void _markMessagesRead(
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> messages,
+  ) {
+    final pending = messages.where((message) {
+      return message.data()['senderId'] != widget.me['id'] &&
+          message.data()['readAt'] == null &&
+          _readUpdates.add(message.id);
+    }).toList();
+    if (pending.isEmpty) return;
+    unawaited(
+      markConversationMessagesRead(
+        firestore: FirebaseFirestore.instance,
+        messages: pending,
+        readerId: widget.me['id']!,
+      ).catchError((Object error) {
+        for (final message in pending) {
+          _readUpdates.remove(message.id);
+        }
+        debugPrint('Failed to mark messages seen: $error');
+      }),
+    );
+  }
+
   Future<void> _send() async {
     final text = _controller.text.trim();
     if (text.isEmpty) return;
@@ -593,7 +653,9 @@ class _ConversationPanelState extends State<_ConversationPanel> {
         .collection('messages')
         .doc(widget.chatId);
 
-    await chatRef.set({
+    final messageRef = chatRef.collection('items').doc();
+    final batch = FirebaseFirestore.instance.batch();
+    batch.set(chatRef, {
       'participantIds': [widget.me['id'], widget.other.id],
       'participantNames': {
         widget.me['id']: widget.me['name'],
@@ -604,16 +666,20 @@ class _ConversationPanelState extends State<_ConversationPanel> {
         widget.other.id: widget.other.photoUrl ?? '',
       },
       'lastMessage': text,
+      'lastMessageId': messageRef.id,
+      'lastMessageSenderId': widget.me['id'],
+      'lastMessageDeliveredAt': null,
+      'lastMessageReadAt': null,
       'updatedAt': FieldValue.serverTimestamp(),
       'unreadBy': {widget.other.id: FieldValue.increment(1)},
     }, SetOptions(merge: true));
-
-    await chatRef.collection('items').add({
+    batch.set(messageRef, {
       'senderId': widget.me['id'],
       'senderName': widget.me['name'],
       'text': text,
       'createdAt': FieldValue.serverTimestamp(),
     });
+    await batch.commit();
   }
 
   @override
@@ -752,6 +818,7 @@ class _ConversationPanelState extends State<_ConversationPanel> {
                   .snapshots(),
               builder: (context, snapshot) {
                 final docs = snapshot.data?.docs ?? [];
+                if (snapshot.hasData) _markMessagesRead(docs);
 
                 if (docs.isEmpty) {
                   return Center(
@@ -828,21 +895,29 @@ class _ConversationPanelState extends State<_ConversationPanel> {
                               ),
                             ],
                           ),
-                          child: data['type'] == 'cash_float'
-                              ? CashFloatConversationCard(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.end,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              if (data['type'] == 'cash_float')
+                                CashFloatConversationCard(
                                   requestId:
                                       data['cashFloatRequestId']?.toString() ??
                                       '',
                                   chatId: widget.chatId,
                                   role: widget.me['role'] ?? 'super_admin',
                                 )
-                              : Text(
+                              else
+                                Text(
                                   data['text']?.toString() ?? '',
                                   style: TextStyle(
                                     color: mine ? Colors.white : Colors.black87,
                                     fontWeight: FontWeight.w600,
                                   ),
                                 ),
+                              messageMetadata(context, data, mine: mine),
+                            ],
+                          ),
                         ),
                       ),
                     );
@@ -1478,6 +1553,7 @@ class ChatThreadPage extends StatefulWidget {
 
 class _ChatThreadPageState extends State<ChatThreadPage> {
   final _controller = TextEditingController();
+  final Set<String> _readUpdates = {};
 
   @override
   void initState() {
@@ -1494,6 +1570,29 @@ class _ChatThreadPageState extends State<ChatThreadPage> {
         }, SetOptions(merge: true));
   }
 
+  void _markMessagesRead(
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> messages,
+  ) {
+    final pending = messages.where((message) {
+      return message.data()['senderId'] != widget.me['id'] &&
+          message.data()['readAt'] == null &&
+          _readUpdates.add(message.id);
+    }).toList();
+    if (pending.isEmpty) return;
+    unawaited(
+      markConversationMessagesRead(
+        firestore: FirebaseFirestore.instance,
+        messages: pending,
+        readerId: widget.me['id']!,
+      ).catchError((Object error) {
+        for (final message in pending) {
+          _readUpdates.remove(message.id);
+        }
+        debugPrint('Failed to mark messages seen: $error');
+      }),
+    );
+  }
+
   @override
   void dispose() {
     _controller.dispose();
@@ -1507,22 +1606,29 @@ class _ChatThreadPageState extends State<ChatThreadPage> {
     final chatRef = FirebaseFirestore.instance
         .collection('messages')
         .doc(widget.chatId);
-    await chatRef.set({
+    final messageRef = chatRef.collection('items').doc();
+    final batch = FirebaseFirestore.instance.batch();
+    batch.set(chatRef, {
       'participantIds': [widget.me['id'], widget.otherId],
       'participantNames': {
         widget.me['id']: widget.me['name'],
         widget.otherId: widget.otherName,
       },
       'lastMessage': text,
+      'lastMessageId': messageRef.id,
+      'lastMessageSenderId': widget.me['id'],
+      'lastMessageDeliveredAt': null,
+      'lastMessageReadAt': null,
       'updatedAt': FieldValue.serverTimestamp(),
       'unreadBy': {widget.otherId: FieldValue.increment(1)},
     }, SetOptions(merge: true));
-    await chatRef.collection('items').add({
+    batch.set(messageRef, {
       'senderId': widget.me['id'],
       'senderName': widget.me['name'],
       'text': text,
       'createdAt': FieldValue.serverTimestamp(),
     });
+    await batch.commit();
   }
 
   @override
@@ -1590,6 +1696,7 @@ class _ChatThreadPageState extends State<ChatThreadPage> {
                     .snapshots(),
                 builder: (context, snapshot) {
                   final docs = snapshot.data?.docs ?? [];
+                  if (snapshot.hasData) _markMessagesRead(docs);
                   if (docs.isEmpty) {
                     return Center(
                       child: Column(
@@ -1665,12 +1772,19 @@ class _ChatThreadPageState extends State<ChatThreadPage> {
                                 ),
                               ],
                             ),
-                            child: Text(
-                              data['text']?.toString() ?? '',
-                              style: TextStyle(
-                                color: mine ? Colors.white : Colors.black87,
-                                fontWeight: FontWeight.w600,
-                              ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.end,
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  data['text']?.toString() ?? '',
+                                  style: TextStyle(
+                                    color: mine ? Colors.white : Colors.black87,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                                messageMetadata(context, data, mine: mine),
+                              ],
                             ),
                           ),
                         ),

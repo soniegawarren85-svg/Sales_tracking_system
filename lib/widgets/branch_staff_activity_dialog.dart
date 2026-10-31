@@ -45,13 +45,92 @@ class BranchStaffActivityDialog extends StatefulWidget {
 class _BranchStaffActivityDialogState extends State<BranchStaffActivityDialog> {
   String _search = '';
   DateTime? _date = DateUtils.dateOnly(DateTime.now());
-  late final sessions = (widget.firestore ?? FirebaseFirestore.instance)
-      .collection('staff_login_sessions')
-      .where(
-        widget.userId == null ? 'branchId' : 'userId',
-        isEqualTo: widget.userId ?? widget.branchId,
-      )
-      .snapshots();
+  FirebaseFirestore get _firestore =>
+      widget.firestore ?? FirebaseFirestore.instance;
+
+  List<Query<Map<String, dynamic>>> _sessionQueries(
+    List<String> assignedUserIds,
+  ) {
+    final collection = _firestore.collection('staff_login_sessions');
+    if (widget.userId != null) {
+      return [collection.where('userId', isEqualTo: widget.userId)];
+    }
+    if (assignedUserIds.isEmpty) {
+      return [collection.where('branchId', isEqualTo: widget.branchId)];
+    }
+    return [
+      for (var start = 0; start < assignedUserIds.length; start += 30)
+        collection.where(
+          'userId',
+          whereIn: assignedUserIds.skip(start).take(30).toList(),
+        ),
+    ];
+  }
+
+  Widget _sessionList(List<String> assignedUserIds) => _sessionQueryList(
+    _sessionQueries(assignedUserIds),
+    0,
+    const [],
+  );
+
+  Widget _sessionQueryList(
+    List<Query<Map<String, dynamic>>> queries,
+    int index,
+    List<Map<String, dynamic>> records,
+  ) {
+    if (index == queries.length) return _filteredSessions(records);
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+        stream: queries[index].snapshots(),
+        builder: (context, snapshot) {
+          if (snapshot.hasError) {
+            return const Center(
+              child: Text(
+                'Unable to load session logs. Check connection and access permissions.',
+              ),
+            );
+          }
+          if (!snapshot.hasData) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          return _sessionQueryList(
+            queries,
+            index + 1,
+            [...records, ...snapshot.data!.docs.map((doc) => doc.data())],
+          );
+        },
+      );
+  }
+
+  Widget _filteredSessions(List<Map<String, dynamic>> records) {
+    records.sort(
+      (a, b) => (sessionTime(b['loginAt']) ?? DateTime(1970))
+          .compareTo(sessionTime(a['loginAt']) ?? DateTime(1970)),
+    );
+    final filtered = records.where((row) {
+      final date = sessionTime(row['loginAt']);
+      final role = _sessionRole(row);
+      return (_date == null ||
+              (date != null &&
+                  date.year == _date!.year &&
+                  date.month == _date!.month &&
+                  date.day == _date!.day)) &&
+          ('$role ${row.values.join(' ')} ${publicItemId((row['staffId'] ?? '').toString())}')
+              .toLowerCase()
+              .contains(_search);
+    }).toList();
+    return StaffSessionTable(sessions: filtered);
+  }
+
+  String _sessionRole(Map<String, dynamic> session) {
+    final role = '${session['role'] ?? session['type'] ?? ''}'
+        .trim()
+        .toLowerCase();
+    return switch (role) {
+      'admin' => 'Admin',
+      'super_admin' => 'Super Admin',
+      _ => 'Staff',
+    };
+  }
   @override
   Widget build(BuildContext context) => Dialog(
     backgroundColor: Colors.white,
@@ -97,7 +176,7 @@ class _BranchStaffActivityDialogState extends State<BranchStaffActivityDialog> {
                 Expanded(
                   child: TextField(
                     decoration: const InputDecoration(
-                      hintText: 'Search staff name or ID',
+                      hintText: 'Search account, role, name or ID',
                       prefixIcon: Icon(Icons.search),
                     ),
                     onChanged: (value) =>
@@ -128,41 +207,34 @@ class _BranchStaffActivityDialogState extends State<BranchStaffActivityDialog> {
             ),
           ),
           Expanded(
-            child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-              stream: sessions,
-              builder: (context, snapshot) {
-                if (snapshot.hasError) {
-                  return const Center(
-                    child: Text(
-                      'Unable to load session logs. Check connection and access permissions.',
-                    ),
-                  );
-                }
-                if (!snapshot.hasData) {
-                  return const Center(child: CircularProgressIndicator());
-                }
-                final records = snapshot.data!.docs
-                    .map((doc) => doc.data())
-                    .toList();
-                records.sort(
-                  (a, b) => (sessionTime(b['loginAt']) ?? DateTime(1970))
-                      .compareTo(sessionTime(a['loginAt']) ?? DateTime(1970)),
-                );
-                final latest = records;
-                final filtered = latest.where((row) {
-                  final date = sessionTime(row['loginAt']);
-                  return (_date == null ||
-                          (date != null &&
-                              date.year == _date!.year &&
-                              date.month == _date!.month &&
-                              date.day == _date!.day)) &&
-                      ('${row.values.join(' ')} ${publicItemId((row['staffId'] ?? '').toString())}')
-                          .toLowerCase()
-                          .contains(_search);
-                }).toList();
-                return StaffSessionTable(sessions: filtered);
-              },
-            ),
+            child: widget.userId != null
+                ? _sessionList(const [])
+                : StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+                    stream: _firestore
+                        .collection('branches')
+                        .doc(widget.branchId)
+                        .snapshots(),
+                    builder: (context, branch) {
+                      if (branch.hasError) {
+                        return const Center(
+                          child: Text('Unable to load branch staff.'),
+                        );
+                      }
+                      if (!branch.hasData) {
+                        return const Center(
+                          child: CircularProgressIndicator(),
+                        );
+                      }
+                      final userIds = (branch.data!.data()?['staffIds']
+                                  as List? ??
+                              [])
+                          .map((id) => '$id'.trim())
+                          .where((id) => id.isNotEmpty)
+                          .toSet()
+                          .toList();
+                      return _sessionList(userIds);
+                    },
+                  ),
           ),
         ],
       ),
@@ -222,18 +294,29 @@ class StaffSessionTable extends StatelessWidget {
         headings: const [
           'Staff ID',
           'Staff',
+          'Account',
           'Login',
           'Logout',
           'Status',
           'Hours',
           'IP address',
         ],
-        flex: const {0: 1, 1: 2, 2: 1.8, 3: 1.8, 4: 1, 5: .8, 6: 1.5},
+        flex: const {
+          0: 1,
+          1: 2,
+          2: 1,
+          3: 1.8,
+          4: 1.8,
+          5: 1,
+          6: .8,
+          7: 1.5,
+        },
         rows: sessions
             .map(
               (session) => <Widget>[
                 Text(publicItemId('${session['staffId'] ?? 'Not recorded'}')),
                 Text('${session['staffName'] ?? 'Not recorded'}'),
+                Text(_roleLabel(session)),
                 Text(date(session['loginAt'])),
                 Text(
                   session['logoutAt'] == null ? '—' : date(session['logoutAt']),
@@ -254,5 +337,16 @@ class StaffSessionTable extends StatelessWidget {
             .toList(),
       ),
     );
+  }
+
+  String _roleLabel(Map<String, dynamic> session) {
+    final role = '${session['role'] ?? session['type'] ?? ''}'
+        .trim()
+        .toLowerCase();
+    return switch (role) {
+      'admin' => 'Admin',
+      'super_admin' => 'Super Admin',
+      _ => 'Staff',
+    };
   }
 }

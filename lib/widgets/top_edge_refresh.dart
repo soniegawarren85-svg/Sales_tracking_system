@@ -12,11 +12,13 @@ class TopEdgeRefresh extends StatefulWidget {
     this.backgroundColor,
     this.notificationPredicate,
     this.displacement = 40,
+    this.startAreaHeight = 100,
   });
   final Widget child;
   final Future<void> Function() onRefresh;
   final Color? color, backgroundColor;
   final double displacement;
+  final double startAreaHeight;
   final bool Function(ScrollNotification)? notificationPredicate;
   @override
   State<TopEdgeRefresh> createState() => _TopEdgeRefreshState();
@@ -24,8 +26,7 @@ class TopEdgeRefresh extends StatefulWidget {
 
 class _TopEdgeRefreshState extends State<TopEdgeRefresh> {
   bool _refreshInProgress = false;
-  bool nearTop = false;
-  final offsets = <int, double>{};
+  bool _startedNearTop = false;
 
   Future<void> _refresh() async {
     if (_refreshInProgress) return;
@@ -82,9 +83,8 @@ class _TopEdgeRefreshState extends State<TopEdgeRefresh> {
 
   @override
   Widget build(BuildContext context) => Listener(
-    onPointerDown: (event) => nearTop =
-        event.localPosition.dy <= 160 &&
-        offsets.values.every((offset) => offset <= 0),
+    onPointerDown: (event) =>
+        _startedNearTop = event.localPosition.dy <= widget.startAreaHeight,
     child: RefreshIndicator(
       color: widget.color,
       backgroundColor: widget.backgroundColor,
@@ -92,10 +92,8 @@ class _TopEdgeRefreshState extends State<TopEdgeRefresh> {
       triggerMode: RefreshIndicatorTriggerMode.onEdge,
       notificationPredicate: (notification) {
         if (notification.metrics.axis != Axis.vertical) return false;
-        offsets[notification.depth] = notification.metrics.extentBefore;
-        return nearTop &&
-            (widget.notificationPredicate?.call(notification) ??
-                notification.depth == 0);
+        return _startedNearTop &&
+            (widget.notificationPredicate?.call(notification) ?? true);
       },
       onRefresh: _refresh,
       child: widget.child,

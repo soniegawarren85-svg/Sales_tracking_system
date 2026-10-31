@@ -7,6 +7,7 @@ import '../services/inventory_display_ids.dart';
 import '../services/public_item_id.dart';
 import '../services/beverage_sales_summary.dart';
 import '../services/local_database_sync_service.dart';
+import '../services/offline_stock_reduction_service.dart';
 import '../services/sale_stock.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -14,6 +15,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -28,6 +30,7 @@ class AllCategPage extends StatefulWidget {
   final bool selectedIsBundle;
   final bool selectedIsCoffee;
   final bool embedded;
+  final bool tabletLayout;
   final GlobalKey? inventoryActionsTourKey;
   final GlobalKey? inventoryChecklistTourKey;
   final GlobalKey? inventoryReturnsTourKey;
@@ -40,6 +43,7 @@ class AllCategPage extends StatefulWidget {
     this.selectedIsBundle = false,
     this.selectedIsCoffee = false,
     this.embedded = false,
+    this.tabletLayout = false,
     this.inventoryActionsTourKey,
     this.inventoryChecklistTourKey,
     this.inventoryReturnsTourKey,
@@ -69,7 +73,12 @@ class _AllCategPageState extends State<AllCategPage>
   Stream<QuerySnapshot>? _staffInventoryStreamCache;
   late final Stream<QuerySnapshot> _rootInventoryStream;
   StreamSubscription<String>? _offlineSalesSubscription;
+  StreamSubscription<String>? _offlineInventorySubscription;
+  StreamSubscription<void>? _offlineReductionsSubscription;
+  StreamSubscription<List<ConnectivityResult>>? _connectivitySubscription;
   List<Map<String, dynamic>> _pendingOfflineSales = const [];
+  List<Map<String, dynamic>> _pendingOfflineReductions = const [];
+  bool _inventoryOnline = false;
 
   bool get _isFilteredCategory =>
       (widget.selectedCategoryName?.trim().isNotEmpty ?? false) ||
@@ -88,7 +97,22 @@ class _AllCategPageState extends State<AllCategPage>
     _offlineSalesSubscription = LocalDatabaseSyncService().collectionUpdates
         .where((collection) => collection == 'completed_sales')
         .listen((_) => _loadPendingOfflineSales());
+    _offlineInventorySubscription = LocalDatabaseSyncService().collectionUpdates
+        .where((collection) => collection == 'staff_inventory')
+        .listen((_) => _loadPendingOfflineReductions());
+    _offlineReductionsSubscription = OfflineStockReductionService().changes
+        .listen((_) => _loadPendingOfflineReductions());
+    _connectivitySubscription = Connectivity().onConnectivityChanged.listen((
+      results,
+    ) {
+      final online = !results.contains(ConnectivityResult.none);
+      if (online != _inventoryOnline) {
+        _inventoryOnline = online;
+        unawaited(_loadPendingOfflineReductions());
+      }
+    });
     unawaited(_loadPendingOfflineSales());
+    unawaited(_loadPendingOfflineReductions());
     _initStaffIdentity();
     _headerAnimController = AnimationController(
       vsync: this,
@@ -153,6 +177,11 @@ class _AllCategPageState extends State<AllCategPage>
 
   Future<void> _refreshInventory() async {
     try {
+      final connectivity = await Connectivity().checkConnectivity();
+      if (!connectivity.contains(ConnectivityResult.none)) {
+        await OfflineStockReductionService().sync(FirebaseFirestore.instance);
+        await _loadPendingOfflineReductions();
+      }
       final prefs = await SharedPreferences.getInstance();
       final uid =
           FirebaseAuth.instance.currentUser?.uid ??
@@ -226,6 +255,9 @@ class _AllCategPageState extends State<AllCategPage>
   @override
   void dispose() {
     _offlineSalesSubscription?.cancel();
+    _offlineInventorySubscription?.cancel();
+    _offlineReductionsSubscription?.cancel();
+    _connectivitySubscription?.cancel();
     _headerAnimController.dispose();
     super.dispose();
   }
@@ -245,14 +277,68 @@ class _AllCategPageState extends State<AllCategPage>
     }
   }
 
+  Future<void> _loadPendingOfflineReductions() async {
+    try {
+      final connectivity = await Connectivity().checkConnectivity();
+      final online = !connectivity.contains(ConnectivityResult.none);
+      final service = OfflineStockReductionService();
+      var pending = await service.pending();
+      if (online && pending.isNotEmpty) {
+        await service.sync(FirebaseFirestore.instance);
+        pending = await service.pending();
+      }
+      if (!mounted) return;
+      final sameQueue =
+          jsonEncode(_pendingOfflineReductions) == jsonEncode(pending);
+      if (_inventoryOnline != online || !sameQueue) {
+        setState(() {
+          _inventoryOnline = online;
+          _pendingOfflineReductions = pending;
+        });
+      }
+    } catch (error) {
+      debugPrint('Unable to load pending stock reductions: $error');
+    }
+  }
+
+  Future<void> _queueOfflineStockReduction({
+    required String id,
+    required String inventoryId,
+    required Map<String, dynamic> item,
+    required int quantity,
+    required String categoryName,
+    required String reason,
+    required String comment,
+    required String staffId,
+    required String staffName,
+  }) async {
+    await OfflineStockReductionService().enqueue({
+      'id': id,
+      'inventoryId': inventoryId,
+      'itemId':
+          item['id']?.toString() ??
+          item['itemId']?.toString() ??
+          item['variantId']?.toString() ??
+          '',
+      'itemName': item['name']?.toString() ?? '',
+      'variant': item['variant']?.toString() ?? '',
+      'sourceInventoryId': item['sourceInventoryId']?.toString() ?? '',
+      'quantity': quantity,
+      'unitPrice': _parsePrice(item['price']),
+      'categoryName': categoryName,
+      'reason': reason,
+      'comment': comment,
+      'staffId': staffId,
+      'staffName': staffName,
+    });
+    await _loadPendingOfflineReductions();
+  }
+
   Map<String, dynamic> _inventoryDataWithPendingSales(
-    QueryDocumentSnapshot document,
+    Map<String, dynamic> rawData,
+    String documentId,
   ) {
-    final rawData = document.data();
-    var data = <String, dynamic>{
-      if (rawData is Map<String, dynamic>) ...rawData,
-      '_localDocId': document.id,
-    };
+    var data = <String, dynamic>{...rawData, '_localDocId': documentId};
     for (final sale in _pendingOfflineSales) {
       final saleId = sale['salesId']?.toString() ?? '';
       if (saleId.isEmpty) continue;
@@ -260,7 +346,7 @@ class _AllCategPageState extends State<AllCategPage>
         (sale['items'] as List? ?? []).whereType<Map>().map(
           (item) => Map<String, dynamic>.from(item),
         ),
-      ).where((line) => line['staffInventoryDocId'] == document.id).toList();
+      ).where((line) => line['staffInventoryDocId'] == documentId).toList();
       if (lines.isEmpty) continue;
       data = applySaleStock(data, saleId, lines);
     }
@@ -308,6 +394,89 @@ class _AllCategPageState extends State<AllCategPage>
     }
     return const Color(0xFF2E7D32);
   }
+
+  bool _isNearExpiry(dynamic value) {
+    final expiry = value is Timestamp
+        ? value.toDate()
+        : value is DateTime
+        ? value
+        : DateTime.tryParse('${value ?? ''}');
+    if (expiry == null) return false;
+    final today = DateUtils.dateOnly(DateTime.now());
+    final expiryDay = DateUtils.dateOnly(expiry);
+    return !expiryDay.isBefore(today) &&
+        !expiryDay.isAfter(today.add(const Duration(days: 5)));
+  }
+
+  bool _isExpiredDate(dynamic value) {
+    final expiry = value is Timestamp
+        ? value.toDate()
+        : value is DateTime
+        ? value
+        : DateTime.tryParse('${value ?? ''}');
+    return expiry != null &&
+        DateUtils.dateOnly(expiry).isBefore(DateUtils.dateOnly(DateTime.now()));
+  }
+
+  bool _hasExpiredBundleInventory(Map<String, dynamic> bundle) {
+    if (_isExpiredDate(bundle['expirationDate'])) return true;
+    final instances = bundleRows(bundle['bundleInstances']);
+    if (instances.isEmpty) {
+      return bundleRows(
+        bundle['items'],
+      ).any((item) => _isExpiredDate(item['expirationDate']));
+    }
+    final availableInstances = instances.where((instance) {
+      final status = '${instance['status'] ?? 'available'}'.toLowerCase();
+      return instance['isDeleted'] != true &&
+          instance['isVoided'] != true &&
+          (status.isEmpty || status == 'available');
+    }).toList();
+    return availableInstances.isNotEmpty &&
+        availableInstances.every((instance) {
+          if (_isExpiredDate(instance['expirationDate'])) return true;
+          final items = bundleRows(instance['items']);
+          final expiryItems = items.isEmpty
+              ? bundleRows(bundle['items'])
+              : items;
+          return expiryItems.any(
+            (item) => _isExpiredDate(item['expirationDate']),
+          );
+        });
+  }
+
+  String _availabilityLabel({
+    required int stock,
+    required dynamic expirationDate,
+    required String type,
+    bool expiredBundle = false,
+  }) {
+    if (_isExpiredDate(expirationDate) || (expiredBundle && stock == 0)) {
+      return 'Expired';
+    }
+    if (stock <= 0) return 'Sold Out';
+    final lowStock = inventoryLowStock(stock, type: type);
+    final nearExpiry = _isNearExpiry(expirationDate);
+    if (lowStock && nearExpiry) return 'Low Stock/Near Expiry';
+    if (lowStock) return 'Low Stock';
+    if (nearExpiry) return 'Near Expiry';
+    return 'Available';
+  }
+
+  Color _availabilityColor(String status) {
+    if (status == 'Expired' || status == 'Sold Out') return Colors.red.shade700;
+    if (status.contains('Low Stock') || status == 'Near Expiry') {
+      return Colors.deepOrange.shade700;
+    }
+    return const Color(0xFF2E7D32);
+  }
+
+  DataCell _availabilityCell(String status) => _tableCell(
+    status,
+    width: 150,
+    color: _availabilityColor(status),
+    weight: FontWeight.w800,
+  );
 
   double _parsePrice(dynamic value) {
     if (value is num) return value.toDouble();
@@ -493,6 +662,12 @@ class _AllCategPageState extends State<AllCategPage>
   int _bundleStockForData(Map<String, dynamic> data) =>
       availableBundleStock(data);
 
+  int _pendingBundleCount(Map<String, dynamic> data) =>
+      (data['bundleInstances'] as List? ?? const [])
+          .whereType<Map>()
+          .where((instance) => instance['status'] == 'reconciliation_pending')
+          .length;
+
   List<Map<String, dynamic>> _groupBundleAllocations(
     Iterable<Map<String, dynamic>> records,
   ) {
@@ -545,7 +720,12 @@ class _AllCategPageState extends State<AllCategPage>
           'expirationDate',
           'items',
         ]) {
-          if (record.containsKey(field)) group[field] = record[field];
+          if (record.containsKey(field) &&
+              (field != 'price' ||
+                  _parsePrice(record[field]) > 0 ||
+                  _parsePrice(group[field]) <= 0)) {
+            group[field] = record[field];
+          }
         }
       }
     }
@@ -720,7 +900,7 @@ class _AllCategPageState extends State<AllCategPage>
                                       size: 16,
                                       color: AppColors.primaryDark,
                                     ),
-                                    const SizedBox(width: 8),
+                                    const SizedBox(width: 5),
                                     Text(
                                       'Current Stock: $currentStock',
                                       style: const TextStyle(
@@ -733,12 +913,42 @@ class _AllCategPageState extends State<AllCategPage>
                                 ),
                               ),
                               const SizedBox(height: 18),
-                              _PinkTextField(
-                                controller: qtyController,
-                                label: 'Quantity to reduce',
-                                hint: 'Enter quantity',
-                                icon: Icons.remove_circle_outline,
-                                keyboardType: TextInputType.number,
+                              Row(
+                                children: [
+                                  IconButton.filledTonal(
+                                    tooltip: 'Decrease quantity',
+                                    onPressed: () {
+                                      final value =
+                                          int.tryParse(qtyController.text) ?? 0;
+                                      if (value > 1) {
+                                        qtyController.text = '${value - 1}';
+                                      }
+                                    },
+                                    icon: const Icon(Icons.remove_rounded),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: _PinkTextField(
+                                      controller: qtyController,
+                                      label: 'Quantity to reduce',
+                                      hint: 'Enter quantity',
+                                      icon: Icons.remove_circle_outline,
+                                      keyboardType: TextInputType.number,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  IconButton.filledTonal(
+                                    tooltip: 'Increase quantity',
+                                    onPressed: () {
+                                      final value =
+                                          int.tryParse(qtyController.text) ?? 0;
+                                      if (value < currentStock) {
+                                        qtyController.text = '${value + 1}';
+                                      }
+                                    },
+                                    icon: const Icon(Icons.add_rounded),
+                                  ),
+                                ],
                               ),
                               const SizedBox(height: 14),
                               DropdownButtonFormField<String>(
@@ -840,6 +1050,12 @@ class _AllCategPageState extends State<AllCategPage>
                                       }
 
                                       setState(() => isSaving = true);
+                                      var queuedOffline = false;
+                                      final reductionId = FirebaseFirestore
+                                          .instance
+                                          .collection('stock_adjustments')
+                                          .doc()
+                                          .id;
                                       try {
                                         final firestore =
                                             FirebaseFirestore.instance;
@@ -848,12 +1064,15 @@ class _AllCategPageState extends State<AllCategPage>
                                             .doc(sourceDocId);
                                         final adjustmentRef = firestore
                                             .collection('stock_adjustments')
-                                            .doc();
+                                            .doc(reductionId);
                                         final notificationRef = firestore
                                             .collection('admin_notifications')
                                             .doc();
                                         final itemId =
-                                            item['id']?.toString() ?? '';
+                                            item['id']?.toString() ??
+                                            item['itemId']?.toString() ??
+                                            item['variantId']?.toString() ??
+                                            '';
                                         final itemName =
                                             item['name']?.toString() ?? '';
                                         final itemVariant =
@@ -871,143 +1090,222 @@ class _AllCategPageState extends State<AllCategPage>
                                                       .first ??
                                                   'Staff';
 
-                                        await firestore.runTransaction<void>((
-                                          transaction,
-                                        ) async {
-                                          final snapshot = await transaction
-                                              .get(docRef);
-                                          final data = snapshot.data();
-                                          if (!snapshot.exists ||
-                                              data == null) {
+                                        final connectivity =
+                                            await Connectivity()
+                                                .checkConnectivity();
+                                        if (connectivity.contains(
+                                          ConnectivityResult.none,
+                                        )) {
+                                          await _queueOfflineStockReduction(
+                                            id: adjustmentRef.id,
+                                            inventoryId: sourceDocId,
+                                            item: item,
+                                            quantity: quantity,
+                                            categoryName: categoryName,
+                                            reason: reason,
+                                            comment: comment,
+                                            staffId: currentUser?.uid ?? '',
+                                            staffName: staffName,
+                                          );
+                                          queuedOffline = true;
+                                        } else {
+                                          final initialSnapshot = await docRef
+                                              .get();
+                                          final initialData = initialSnapshot
+                                              .data();
+                                          if (initialData == null) {
                                             throw StateError(
                                               'Inventory item no longer exists.',
                                             );
                                           }
-
-                                          int stockValue(dynamic value) =>
-                                              value is num
-                                              ? value.toInt()
-                                              : int.tryParse(
-                                                      value?.toString() ?? '',
-                                                    ) ??
-                                                    0;
-
-                                          var matched = false;
-                                          var previousStock = 0;
-                                          var newStock = 0;
-                                          var lossAmount = 0.0;
-                                          final updatedItems = <dynamic>[];
-                                          for (final rawEntry
-                                              in data['items'] as List? ??
-                                                  const []) {
-                                            if (rawEntry is! Map) {
-                                              updatedItems.add(rawEntry);
-                                              continue;
+                                          final sourceInventoryId =
+                                              '${initialData['sourceInventoryId'] ?? item['sourceInventoryId'] ?? ''}'
+                                                  .trim();
+                                          final allocationRefs =
+                                              <
+                                                String,
+                                                DocumentReference<
+                                                  Map<String, dynamic>
+                                                >
+                                              >{docRef.id: docRef};
+                                          final branchId =
+                                              '${initialData['staffId'] ?? ''}'
+                                                  .trim();
+                                          if (branchId.isNotEmpty &&
+                                              sourceInventoryId.isNotEmpty) {
+                                            final allocations = await firestore
+                                                .collection('staff_inventory')
+                                                .where(
+                                                  'staffId',
+                                                  isEqualTo: branchId,
+                                                )
+                                                .get();
+                                            for (final allocation
+                                                in allocations.docs) {
+                                              if (allocation
+                                                      .data()['sourceInventoryId'] ==
+                                                  sourceInventoryId) {
+                                                allocationRefs[allocation.id] =
+                                                    allocation.reference;
+                                              }
                                             }
-                                            final entry =
-                                                Map<String, dynamic>.from(
-                                                  rawEntry,
-                                                );
-                                            final entryId =
-                                                entry['id']?.toString() ?? '';
-                                            final isMatchingEntry =
-                                                itemId.isNotEmpty
-                                                ? entryId == itemId
-                                                : (entry['name']?.toString() ??
-                                                              '') ==
-                                                          itemName &&
-                                                      (entry['variant']
-                                                                  ?.toString() ??
-                                                              '') ==
-                                                          itemVariant;
-                                            if (!isMatchingEntry || matched) {
-                                              updatedItems.add(entry);
-                                              continue;
-                                            }
-
-                                            final hasStockField =
-                                                entry.containsKey('stock') &&
-                                                entry['stock'] != null;
-                                            previousStock = hasStockField
-                                                ? stockValue(entry['stock'])
-                                                : stockValue(
-                                                    entry['startingStock'],
-                                                  );
-                                            if (quantity > previousStock) {
+                                          }
+                                          await firestore.runTransaction<void>((
+                                            transaction,
+                                          ) async {
+                                            final snapshots = await Future.wait(
+                                              allocationRefs.values.map(
+                                                transaction.get,
+                                              ),
+                                            );
+                                            final snapshotsById = {
+                                              for (final inventorySnapshot
+                                                  in snapshots)
+                                                inventorySnapshot.id:
+                                                    inventorySnapshot,
+                                            };
+                                            final snapshot =
+                                                snapshotsById[docRef.id];
+                                            final data = snapshot?.data();
+                                            if (snapshot == null ||
+                                                !snapshot.exists ||
+                                                data == null) {
                                               throw StateError(
-                                                'Stock changed. Only $previousStock item(s) remain.',
+                                                'Inventory item no longer exists.',
                                               );
                                             }
-                                            newStock = previousStock - quantity;
-                                            lossAmount =
-                                                _parsePrice(entry['price']) *
-                                                quantity;
-                                            final reducedQuantity = stockValue(
-                                              entry['reducedQuantity'],
-                                            );
-                                            updatedItems.add({
-                                              ...entry,
-                                              'stock': newStock,
-                                              'reducedQuantity':
-                                                  reducedQuantity + quantity,
-                                              if (!hasStockField)
-                                                'startingStock': newStock,
-                                            });
-                                            matched = true;
-                                          }
-                                          if (!matched) {
-                                            throw StateError(
-                                              'Selected inventory item no longer exists.',
-                                            );
-                                          }
+                                            final actualSourceInventoryId =
+                                                '${data['sourceInventoryId'] ?? sourceInventoryId}'
+                                                    .trim();
+                                            final staffId =
+                                                '${data['staffId'] ?? ''}'
+                                                    .trim();
+                                            final allocationDocuments =
+                                                <
+                                                  String,
+                                                  Map<String, dynamic>
+                                                >{};
+                                            for (final allocationSnapshot
+                                                in snapshots) {
+                                              final allocationData =
+                                                  allocationSnapshot.data();
+                                              if (allocationData == null ||
+                                                  allocationData['isDeleted'] ==
+                                                      true) {
+                                                continue;
+                                              }
+                                              final sameScope =
+                                                  allocationSnapshot.id ==
+                                                      docRef.id ||
+                                                  (staffId.isNotEmpty &&
+                                                      actualSourceInventoryId
+                                                          .isNotEmpty &&
+                                                      allocationData['staffId'] ==
+                                                          staffId &&
+                                                      allocationData['sourceInventoryId'] ==
+                                                          actualSourceInventoryId);
+                                              if (sameScope) {
+                                                allocationDocuments[allocationSnapshot
+                                                        .id] =
+                                                    allocationData;
+                                              }
+                                            }
+                                            final result =
+                                                reduceMatchingInventoryDocuments(
+                                                  documents:
+                                                      allocationDocuments,
+                                                  itemId: itemId,
+                                                  itemName: itemName,
+                                                  variant: itemVariant,
+                                                  quantity: quantity,
+                                                  beverage: false,
+                                                  fallbackUnitPrice:
+                                                      _parsePrice(
+                                                        item['price'],
+                                                      ),
+                                                );
+                                            final previousStock =
+                                                result.previousStock;
+                                            final newStock = result.newStock;
+                                            final lossAmount =
+                                                result.unitPrice * quantity;
 
-                                          final variantLabel =
-                                              itemVariant.isNotEmpty
-                                              ? ' ($itemVariant)'
-                                              : '';
-                                          transaction.update(docRef, {
-                                            'items': updatedItems,
+                                            final variantLabel =
+                                                itemVariant.isNotEmpty
+                                                ? ' ($itemVariant)'
+                                                : '';
+                                            for (final entry
+                                                in result
+                                                    .itemsByDocument
+                                                    .entries) {
+                                              final field =
+                                                  allocationDocuments[entry
+                                                          .key]!['items']
+                                                      is List
+                                                  ? 'items'
+                                                  : 'sizes';
+                                              transaction.update(
+                                                firestore
+                                                    .collection(
+                                                      'staff_inventory',
+                                                    )
+                                                    .doc(entry.key),
+                                                {field: entry.value},
+                                              );
+                                            }
+                                            transaction.set(adjustmentRef, {
+                                              'type': 'stock_adjustment',
+                                              'userId': currentUser?.uid,
+                                              'staffId': currentUser?.uid,
+                                              'branchId': data['staffId'],
+                                              'branchName':
+                                                  data['branchName'] ??
+                                                  data['staffName'] ??
+                                                  '',
+                                              'categoryName': categoryName,
+                                              'categoryId': sourceDocId,
+                                              if (actualSourceInventoryId
+                                                  .isNotEmpty)
+                                                'sourceInventoryId':
+                                                    actualSourceInventoryId,
+                                              'itemId':
+                                                  item['id'] ??
+                                                  item['itemId'] ??
+                                                  item['variantId'] ??
+                                                  '',
+                                              'itemName': itemName,
+                                              'variant': itemVariant,
+                                              'quantity': quantity,
+                                              'unitPrice': result.unitPrice,
+                                              'lossAmount':
+                                                  result.unitPrice * quantity,
+                                              'previousStock':
+                                                  result.previousStock,
+                                              'newStock': result.newStock,
+                                              'reason': reason,
+                                              'comment': comment,
+                                              'createdAt':
+                                                  FieldValue.serverTimestamp(),
+                                            });
+                                            transaction.set(notificationRef, {
+                                              'title': 'Stock reduced',
+                                              'message':
+                                                  '$staffName reduced $quantity x $itemName$variantLabel from $previousStock to $newStock. Expected sales decreased by ${formatMoney(lossAmount)}.',
+                                              'category': 'Stock',
+                                              'type': 'stock_adjustment',
+                                              'itemName': itemName,
+                                              'variant': itemVariant,
+                                              'quantity': quantity,
+                                              'reductionAmount': lossAmount,
+                                              'categoryName': categoryName,
+                                              'staffId': currentUser?.uid,
+                                              'staffName': staffName,
+                                              'isRead': false,
+                                              'createdAt':
+                                                  FieldValue.serverTimestamp(),
+                                            });
                                           });
-                                          transaction.set(adjustmentRef, {
-                                            'userId': currentUser?.uid,
-                                            'staffId': currentUser?.uid,
-                                            'categoryName': categoryName,
-                                            'categoryId': sourceDocId,
-                                            'itemId':
-                                                item['id'] ??
-                                                item['itemId'] ??
-                                                item['variantId'] ??
-                                                '',
-                                            'itemName': itemName,
-                                            'variant': itemVariant,
-                                            'quantity': quantity,
-                                            'unitPrice': lossAmount / quantity,
-                                            'lossAmount': lossAmount,
-                                            'previousStock': previousStock,
-                                            'newStock': newStock,
-                                            'reason': reason,
-                                            'comment': comment,
-                                            'createdAt':
-                                                FieldValue.serverTimestamp(),
-                                          });
-                                          transaction.set(notificationRef, {
-                                            'title': 'Stock reduced',
-                                            'message':
-                                                '$staffName reduced $quantity x $itemName$variantLabel from $previousStock to $newStock. Expected sales decreased by ${formatMoney(lossAmount)}.',
-                                            'category': 'Stock',
-                                            'type': 'stock_adjustment',
-                                            'itemName': itemName,
-                                            'variant': itemVariant,
-                                            'quantity': quantity,
-                                            'reductionAmount': lossAmount,
-                                            'categoryName': categoryName,
-                                            'staffId': currentUser?.uid,
-                                            'staffName': staffName,
-                                            'isRead': false,
-                                            'createdAt':
-                                                FieldValue.serverTimestamp(),
-                                          });
-                                        });
+                                        }
 
                                         final selectedItemId =
                                             item['id']?.toString() ?? '';
@@ -1024,10 +1322,60 @@ class _AllCategPageState extends State<AllCategPage>
                                           Navigator.of(context).pop();
                                           showTopNotification(
                                             pageContext,
-                                            'Stock reduced successfully!',
+                                            queuedOffline
+                                                ? 'Stock reduction saved offline. It will sync when online.'
+                                                : 'Stock reduced successfully!',
                                           );
                                         }
                                       } catch (e) {
+                                        if (e is FirebaseException &&
+                                            const {
+                                              'unavailable',
+                                              'deadline-exceeded',
+                                              'network-request-failed',
+                                            }.contains(e.code)) {
+                                          final currentUser =
+                                              FirebaseAuth.instance.currentUser;
+                                          final staffName =
+                                              currentUser?.displayName
+                                                      ?.trim()
+                                                      .isNotEmpty ==
+                                                  true
+                                              ? currentUser!.displayName!
+                                              : currentUser?.email
+                                                        ?.split('@')
+                                                        .first ??
+                                                    'Staff';
+                                          await _queueOfflineStockReduction(
+                                            id: reductionId,
+                                            inventoryId: sourceDocId,
+                                            item: item,
+                                            quantity: quantity,
+                                            categoryName: categoryName,
+                                            reason: reason,
+                                            comment: comment,
+                                            staffId: currentUser?.uid ?? '',
+                                            staffName: staffName,
+                                          );
+                                          InventoryService()
+                                              .recordStockReduction(
+                                                itemName: categoryName,
+                                                variantName:
+                                                    item['id']?.toString() ??
+                                                    item['name']?.toString() ??
+                                                    '',
+                                                quantity: quantity,
+                                                sourceInventoryId: sourceDocId,
+                                              );
+                                          if (mounted) {
+                                            Navigator.of(context).pop();
+                                            showTopNotification(
+                                              pageContext,
+                                              'Stock reduction saved offline. It will sync when online.',
+                                            );
+                                          }
+                                          return;
+                                        }
                                         if (mounted) {
                                           setState(() => isSaving = false);
                                           ScaffoldMessenger.of(
@@ -1837,12 +2185,41 @@ class _AllCategPageState extends State<AllCategPage>
                               setState(() => selectedSize = value),
                         ),
                         const SizedBox(height: 12),
-                        _PinkTextField(
-                          controller: quantityController,
-                          label: 'Quantity to void',
-                          hint: 'Enter quantity',
-                          icon: Icons.remove_circle_outline,
-                          keyboardType: TextInputType.number,
+                        Row(
+                          children: [
+                            IconButton.filledTonal(
+                              tooltip: 'Decrease quantity',
+                              onPressed: () {
+                                final value = _parseInt(
+                                  quantityController.text,
+                                );
+                                quantityController.text =
+                                    '${value > 1 ? value - 1 : 1}';
+                                setState(() {});
+                              },
+                              icon: const Icon(Icons.remove),
+                            ),
+                            Expanded(
+                              child: _PinkTextField(
+                                controller: quantityController,
+                                label: 'Quantity to void',
+                                hint: 'Enter quantity',
+                                icon: Icons.remove_circle_outline,
+                                keyboardType: TextInputType.number,
+                              ),
+                            ),
+                            IconButton.filledTonal(
+                              tooltip: 'Increase quantity',
+                              onPressed: () {
+                                final value = _parseInt(
+                                  quantityController.text,
+                                );
+                                quantityController.text = '${value + 1}';
+                                setState(() {});
+                              },
+                              icon: const Icon(Icons.add),
+                            ),
+                          ],
                         ),
                         const SizedBox(height: 12),
                         DropdownButtonFormField<String>(
@@ -1928,6 +2305,63 @@ class _AllCategPageState extends State<AllCategPage>
                                       }
                                       setState(() => isSaving = true);
                                       try {
+                                        final connectivity =
+                                            await Connectivity()
+                                                .checkConnectivity();
+                                        if (connectivity.contains(
+                                          ConnectivityResult.none,
+                                        )) {
+                                          final user =
+                                              FirebaseAuth.instance.currentUser;
+                                          final userName =
+                                              user?.displayName
+                                                      ?.trim()
+                                                      .isNotEmpty ==
+                                                  true
+                                              ? user!.displayName!
+                                              : user?.email?.split('@').first ??
+                                                    'Staff';
+                                          await OfflineStockReductionService()
+                                              .enqueue({
+                                                'id': FirebaseFirestore.instance
+                                                    .collection(
+                                                      'stock_adjustments',
+                                                    )
+                                                    .doc()
+                                                    .id,
+                                                'type': 'coffee_void',
+                                                'inventoryId': sourceDocId,
+                                                'coffeeId':
+                                                    category['coffeeId']
+                                                        ?.toString() ??
+                                                    '',
+                                                'itemId': '',
+                                                'itemName': coffeeName,
+                                                'variant': selectedSize,
+                                                'quantity': quantity,
+                                                'unitPrice': _parsePrice(
+                                                  selectedItem['price'],
+                                                ),
+                                                'categoryName': coffeeName,
+                                                'reason': selectedReason,
+                                                'comment':
+                                                    selectedReason == 'Other'
+                                                    ? commentController.text
+                                                          .trim()
+                                                    : '',
+                                                'staffId': user?.uid ?? '',
+                                                'staffName': userName,
+                                              });
+                                          await _loadPendingOfflineReductions();
+                                          if (mounted) {
+                                            Navigator.pop(context);
+                                            showTopNotification(
+                                              context,
+                                              'Beverages reduction saved offline. It will sync when online.',
+                                            );
+                                          }
+                                          return;
+                                        }
                                         if (sourceDocId.trim().isEmpty) {
                                           throw StateError(
                                             'Beverages inventory record was not found.',
@@ -1937,140 +2371,90 @@ class _AllCategPageState extends State<AllCategPage>
                                             .instance
                                             .collection('staff_inventory')
                                             .doc(sourceDocId);
-                                        final snapshot = await docRef.get();
-                                        if (!snapshot.exists) {
-                                          throw StateError(
-                                            'Beverages inventory record was not found.',
-                                          );
-                                        }
-                                        final snapshotData = snapshot.data()!;
-                                        final inventoryField =
-                                            snapshotData['items'] is List
-                                            ? 'items'
-                                            : 'sizes';
-                                        final rawInventoryItems =
-                                            (snapshotData[inventoryField]
-                                                as List?) ??
-                                            [];
-                                        final storedItems = rawInventoryItems
-                                            .whereType<Map>()
-                                            .map(
-                                              (item) =>
-                                                  Map<String, dynamic>.from(
-                                                    item,
-                                                  ),
-                                            )
-                                            .toList();
-                                        final normalizedSize = selectedSize!
-                                            .trim()
-                                            .toLowerCase();
-                                        var matched = false;
-                                        final updatedItems = storedItems.map((
-                                          entry,
-                                        ) {
-                                          final entryName =
-                                              entry['name']
-                                                  ?.toString()
-                                                  .trim() ??
-                                              '';
-                                          final entryVariant =
-                                              entry['variant']
-                                                  ?.toString()
-                                                  .trim() ??
-                                              '';
-                                          final entrySize =
-                                              entry['size']
-                                                  ?.toString()
-                                                  .trim() ??
-                                              '';
-                                          if (entryName.toLowerCase() !=
-                                                  normalizedSize &&
-                                              entryVariant.toLowerCase() !=
-                                                  normalizedSize &&
-                                              entrySize.toLowerCase() !=
-                                                  normalizedSize) {
-                                            return entry;
-                                          }
-                                          matched = true;
-                                          final hasStockField = entry
-                                              .containsKey('stock');
-                                          final hasStartingStockField = entry
-                                              .containsKey('startingStock');
-                                          final hasAssignedStockField = entry
-                                              .containsKey(
-                                                'assignedStartingStock',
-                                              );
-                                          final current = _parseInt(
-                                            hasStockField
-                                                ? entry['stock']
-                                                : hasStartingStockField
-                                                ? entry['startingStock']
-                                                : hasAssignedStockField
-                                                ? entry['assignedStartingStock']
-                                                : quantity,
-                                          );
-                                          if (quantity > current) {
-                                            throw StateError(
-                                              'Not enough stock for $selectedSize.',
-                                            );
-                                          }
-                                          return {
-                                            ...entry,
-                                            'stock': current - quantity,
-                                          };
-                                        }).toList();
-                                        if (!matched) {
-                                          throw StateError(
-                                            'Selected beverage size was not found in inventory.',
-                                          );
-                                        }
-
-                                        final batch = FirebaseFirestore.instance
-                                            .batch();
-                                        batch.update(docRef, {
-                                          inventoryField: updatedItems,
-                                          'updatedAt':
-                                              FieldValue.serverTimestamp(),
-                                        });
                                         final historyRef = FirebaseFirestore
                                             .instance
                                             .collection('stock_adjustments')
                                             .doc();
-                                        batch.set(historyRef, {
-                                          'type': 'coffee_void',
-                                          'categoryId': sourceDocId,
-                                          'categoryName': coffeeName,
-                                          'coffeeId':
-                                              category['coffeeId']
-                                                  ?.toString() ??
-                                              '',
-                                          'itemName': coffeeName,
-                                          'variant': selectedSize,
-                                          'quantity': quantity,
-                                          'unitPrice': _parsePrice(
-                                            selectedItem['price'],
-                                          ),
-                                          'reason': reason,
-                                          'comment': selectedReason == 'Other'
-                                              ? commentController.text.trim()
-                                              : '',
-                                          'userId': FirebaseAuth
-                                              .instance
-                                              .currentUser
-                                              ?.uid,
-                                          'staffId': FirebaseAuth
-                                              .instance
-                                              .currentUser
-                                              ?.uid,
-                                          'createdAt':
-                                              FieldValue.serverTimestamp(),
-                                        });
-                                        await batch.commit().timeout(
-                                          const Duration(seconds: 15),
-                                          onTimeout: () => throw TimeoutException(
-                                            'Saving took too long. Please check your connection and try again.',
-                                          ),
-                                        );
+                                        final user =
+                                            FirebaseAuth.instance.currentUser;
+                                        await FirebaseFirestore.instance
+                                            .runTransaction<void>((
+                                              transaction,
+                                            ) async {
+                                              final snapshot = await transaction
+                                                  .get(docRef);
+                                              final snapshotData = snapshot
+                                                  .data();
+                                              if (!snapshot.exists ||
+                                                  snapshotData == null) {
+                                                throw StateError(
+                                                  'Beverages inventory record was not found.',
+                                                );
+                                              }
+                                              final inventoryField =
+                                                  snapshotData['items'] is List
+                                                  ? 'items'
+                                                  : 'sizes';
+                                              final result =
+                                                  reduceMatchingInventoryRows(
+                                                    rows:
+                                                        snapshotData[inventoryField]
+                                                            as List? ??
+                                                        const [],
+                                                    itemId: '',
+                                                    itemName: coffeeName,
+                                                    variant: selectedSize!,
+                                                    quantity: quantity,
+                                                    beverage: true,
+                                                    fallbackUnitPrice:
+                                                        _parsePrice(
+                                                          selectedItem['price'],
+                                                        ),
+                                                  );
+                                              transaction.update(docRef, {
+                                                inventoryField: result.items,
+                                                'updatedAt':
+                                                    FieldValue.serverTimestamp(),
+                                              });
+                                              transaction.set(historyRef, {
+                                                'type': 'coffee_void',
+                                                'categoryId': sourceDocId,
+                                                'categoryName': coffeeName,
+                                                'coffeeId':
+                                                    category['coffeeId']
+                                                        ?.toString() ??
+                                                    '',
+                                                'isCoffee': true,
+                                                'coffeeSize': selectedSize,
+                                                'branchId':
+                                                    snapshotData['staffId'],
+                                                'branchName':
+                                                    snapshotData['branchName'] ??
+                                                    snapshotData['staffName'] ??
+                                                    '',
+                                                'itemName': coffeeName,
+                                                'variant': selectedSize,
+                                                'quantity': quantity,
+                                                'unitPrice': result.unitPrice,
+                                                'reason': reason,
+                                                'comment':
+                                                    selectedReason == 'Other'
+                                                    ? commentController.text
+                                                          .trim()
+                                                    : '',
+                                                'userId': user?.uid,
+                                                'staffId': user?.uid,
+                                                'createdAt':
+                                                    FieldValue.serverTimestamp(),
+                                              });
+                                            })
+                                            .timeout(
+                                              const Duration(seconds: 15),
+                                              onTimeout: () =>
+                                                  throw TimeoutException(
+                                                    'Saving took too long. Please check your connection and try again.',
+                                                  ),
+                                            );
                                         if (!mounted) return;
                                         Navigator.pop(context);
                                         showTopNotification(
@@ -2551,10 +2935,12 @@ class _AllCategPageState extends State<AllCategPage>
             final filteredBundleInstances = availableBundleInstances.where((
               instance,
             ) {
-              final index = availableBundleInstances.indexOf(instance);
-              final instanceId =
-                  instance['id']?.toString() ??
-                  _bundleInstanceId(bundleId, index);
+              final index = bundleInstances.indexOf(instance);
+              final instanceId = bundleInstanceDisplayId(
+                bundle,
+                instance,
+                index,
+              );
               final itemNames = (instance['items'] as List<dynamic>? ?? [])
                   .whereType<Map>()
                   .map((item) => item['name']?.toString() ?? '')
@@ -2730,9 +3116,14 @@ class _AllCategPageState extends State<AllCategPage>
                                       filteredBundleInstances[index];
                                   final items =
                                       instance['items'] as List<dynamic>? ?? [];
-                                  final instanceId =
-                                      instance['id']?.toString() ??
-                                      _bundleInstanceId(bundleId, index);
+                                  final originalIndex = bundleInstances.indexOf(
+                                    instance,
+                                  );
+                                  final instanceId = bundleInstanceDisplayId(
+                                    bundle,
+                                    instance,
+                                    originalIndex,
+                                  );
 
                                   return Container(
                                     padding: const EdgeInsets.all(14),
@@ -2889,6 +3280,7 @@ class _AllCategPageState extends State<AllCategPage>
   Future<void> _showBundleReductionDialog(Map<String, dynamic> bundle) async {
     final bundleIdController = TextEditingController();
     final commentController = TextEditingController();
+    final quantityController = TextEditingController(text: '1');
     final selectedBundleIds = <String>[];
     String? selectedReason;
     String? validationMessage;
@@ -2903,6 +3295,16 @@ class _AllCategPageState extends State<AllCategPage>
     final bundleName = bundle['name']?.toString() ?? 'Bundle';
     final sourceDocId = bundle['sourceDocId']?.toString() ?? '';
     final currentStock = _bundleStockForData(bundle);
+    final availableInstances = _bundleInstancesFromData(bundle)
+        .asMap()
+        .entries
+        .where((entry) {
+          return bundleInstanceAvailable(entry.value, bundle);
+        })
+        .toList();
+    final maxReductionQuantity = currentStock < availableInstances.length
+        ? currentStock
+        : availableInstances.length;
 
     await showDialog<void>(
       context: context,
@@ -2920,352 +3322,593 @@ class _AllCategPageState extends State<AllCategPage>
               backgroundColor: Colors.white,
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 560),
-                child: Padding(
-                  padding: const EdgeInsets.all(14),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Container(
-                        margin: const EdgeInsets.only(bottom: 10),
-                        padding: const EdgeInsets.fromLTRB(12, 10, 6, 10),
-                        decoration: const BoxDecoration(
-                          color: AppColors.primaryDark,
-                          borderRadius: BorderRadius.vertical(
-                            top: Radius.circular(20),
-                          ),
-                        ),
-                        child: Row(
-                          children: [
-                            const Icon(
-                              Icons.remove_circle_outline_rounded,
-                              color: Colors.white,
-                              size: 22,
-                            ),
-                            const SizedBox(width: 10),
-                            const Expanded(
-                              child: Text(
-                                'Reduce Bundle',
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.w900,
-                                ),
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxHeight: MediaQuery.sizeOf(context).height * 0.78,
+                  ),
+                  child: SingleChildScrollView(
+                    child: Padding(
+                      padding: const EdgeInsets.all(14),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Container(
+                            margin: const EdgeInsets.only(bottom: 10),
+                            padding: const EdgeInsets.fromLTRB(12, 10, 6, 10),
+                            decoration: const BoxDecoration(
+                              color: AppColors.primaryDark,
+                              borderRadius: BorderRadius.vertical(
+                                top: Radius.circular(20),
                               ),
                             ),
-                            IconButton(
-                              onPressed: () => Navigator.pop(context),
-                              icon: const Icon(Icons.close_rounded),
-                              color: Colors.white,
-                              visualDensity: VisualDensity.compact,
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      _InfoChip(
-                        icon: Icons.inventory_2_rounded,
-                        label: '$bundleName - Bundle stock: $currentStock',
-                        color: AppColors.primaryDark,
-                      ),
-                      const SizedBox(height: 10),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: _PinkTextField(
-                              controller: bundleIdController,
-                              label: 'Bundle ID',
-                              hint: 'e.g. 13000 113-001',
-                              icon: Icons.confirmation_number_outlined,
+                            child: Row(
+                              children: [
+                                const Icon(
+                                  Icons.remove_circle_outline_rounded,
+                                  color: Colors.white,
+                                  size: 22,
+                                ),
+                                const SizedBox(width: 10),
+                                const Expanded(
+                                  child: Text(
+                                    'Reduce Bundle',
+                                    style: TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 18,
+                                      fontWeight: FontWeight.w900,
+                                    ),
+                                  ),
+                                ),
+                                IconButton(
+                                  onPressed: () => Navigator.pop(context),
+                                  icon: const Icon(Icons.close_rounded),
+                                  color: Colors.white,
+                                  visualDensity: VisualDensity.compact,
+                                ),
+                              ],
                             ),
                           ),
-                          const SizedBox(width: 8),
-                          IconButton.filled(
-                            tooltip: 'Add bundle ID',
-                            onPressed: () {
-                              final enteredId = bundleIdController.text.trim();
-                              final instances = _bundleInstancesFromData(
-                                bundle,
-                              );
-                              final matchingIndex = instances.indexWhere((
-                                instance,
-                              ) {
-                                final index = instances.indexOf(instance);
-                                final instanceId =
-                                    instance['id']?.toString().trim() ??
-                                    _bundleInstanceId(
-                                      bundle['bundleId']?.toString() ?? '',
-                                      index,
-                                    );
-                                return instanceId == enteredId;
-                              });
-                              final status = matchingIndex < 0
-                                  ? ''
-                                  : instances[matchingIndex]['status']
-                                            ?.toString()
-                                            .trim()
-                                            .toLowerCase() ??
-                                        'available';
-                              if (enteredId.isEmpty ||
-                                  matchingIndex < 0 ||
-                                  status != 'available' ||
-                                  !bundleInstanceAvailable(
-                                    instances[matchingIndex],
+                          const SizedBox(height: 4),
+                          _InfoChip(
+                            icon: Icons.inventory_2_rounded,
+                            label: '$bundleName - Bundle stock: $currentStock',
+                            color: AppColors.primaryDark,
+                          ),
+                          const SizedBox(height: 10),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: _PinkTextField(
+                                  controller: bundleIdController,
+                                  label: 'Bundle ID',
+                                  hint: 'e.g. 13000 113-001',
+                                  icon: Icons.confirmation_number_outlined,
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              IconButton.filled(
+                                tooltip: 'Add bundle ID',
+                                onPressed: () {
+                                  final enteredId = bundleIdController.text
+                                      .trim();
+                                  final instances = _bundleInstancesFromData(
                                     bundle,
-                                  )) {
-                                setDialogState(() {
-                                  validationMessage =
-                                      'Invalid bundle ID number.';
-                                });
-                                return;
-                              }
-                              if (selectedBundleIds.contains(enteredId)) {
-                                setDialogState(() {
-                                  validationMessage =
-                                      'Bundle ID already added.';
-                                });
-                                return;
-                              }
-                              setDialogState(() {
-                                selectedBundleIds.add(enteredId);
-                                bundleIdController.clear();
-                                validationMessage = null;
-                              });
-                            },
-                            icon: const Icon(Icons.add_rounded),
-                            style: IconButton.styleFrom(
-                              backgroundColor: AppColors.primaryDark,
-                              foregroundColor: Colors.white,
+                                  );
+                                  final matchingIndex = instances.indexWhere((
+                                    instance,
+                                  ) {
+                                    final index = instances.indexOf(instance);
+                                    final instanceId =
+                                        '${instance['id'] ?? ''}'
+                                            .trim()
+                                            .isNotEmpty
+                                        ? '${instance['id']}'.trim()
+                                        : _bundleInstanceId(
+                                            bundle['bundleId']?.toString() ??
+                                                '',
+                                            index,
+                                          );
+                                    return instanceId == enteredId ||
+                                        bundleInstanceDisplayId(
+                                              bundle,
+                                              instance,
+                                              index,
+                                            ) ==
+                                            enteredId;
+                                  });
+                                  final status = matchingIndex < 0
+                                      ? ''
+                                      : instances[matchingIndex]['status']
+                                                ?.toString()
+                                                .trim()
+                                                .toLowerCase() ??
+                                            'available';
+                                  if (enteredId.isEmpty ||
+                                      matchingIndex < 0 ||
+                                      status != 'available' ||
+                                      !bundleInstanceAvailable(
+                                        instances[matchingIndex],
+                                        bundle,
+                                      )) {
+                                    setDialogState(() {
+                                      validationMessage =
+                                          'Invalid bundle ID number.';
+                                    });
+                                    return;
+                                  }
+                                  final instance = instances[matchingIndex];
+                                  final actualId =
+                                      '${instance['id'] ?? ''}'
+                                          .trim()
+                                          .isNotEmpty
+                                      ? '${instance['id']}'.trim()
+                                      : _bundleInstanceId(
+                                          bundle['bundleId']?.toString() ?? '',
+                                          matchingIndex,
+                                        );
+                                  if (selectedBundleIds.contains(actualId)) {
+                                    setDialogState(() {
+                                      validationMessage =
+                                          'Bundle ID already added.';
+                                    });
+                                    return;
+                                  }
+                                  setDialogState(() {
+                                    selectedBundleIds.add(actualId);
+                                    bundleIdController.clear();
+                                    validationMessage = null;
+                                  });
+                                },
+                                icon: const Icon(Icons.add_rounded),
+                                style: IconButton.styleFrom(
+                                  backgroundColor: AppColors.primaryDark,
+                                  foregroundColor: Colors.white,
+                                ),
+                              ),
+                            ],
+                          ),
+                          if (selectedBundleIds.isNotEmpty) ...[
+                            const SizedBox(height: 8),
+                            SingleChildScrollView(
+                              scrollDirection: Axis.horizontal,
+                              child: Row(
+                                children: selectedBundleIds.map((id) {
+                                  final index = availableInstances.indexWhere((
+                                    entry,
+                                  ) {
+                                    final actualId =
+                                        '${entry.value['id'] ?? ''}'.trim();
+                                    return (actualId.isNotEmpty
+                                            ? actualId
+                                            : _bundleInstanceId(
+                                                bundle['bundleId']
+                                                        ?.toString() ??
+                                                    '',
+                                                entry.key,
+                                              )) ==
+                                        id;
+                                  });
+                                  if (index < 0) {
+                                    return const SizedBox.shrink();
+                                  }
+                                  final entry = availableInstances[index];
+                                  final displayId = bundleInstanceDisplayId(
+                                    bundle,
+                                    entry.value,
+                                    entry.key,
+                                  );
+                                  return Padding(
+                                    padding: const EdgeInsets.only(right: 6),
+                                    child: Chip(
+                                      label: Text(displayId),
+                                      deleteIcon: const Icon(
+                                        Icons.close,
+                                        size: 15,
+                                      ),
+                                      onDeleted: () => setDialogState(
+                                        () => selectedBundleIds.remove(id),
+                                      ),
+                                      backgroundColor: const Color(0xFFE8F5E9),
+                                      side: const BorderSide(
+                                        color: Color(0xFF81C784),
+                                      ),
+                                      labelStyle: const TextStyle(
+                                        color: Color(0xFF2E7D32),
+                                        fontWeight: FontWeight.w800,
+                                        fontSize: 11,
+                                      ),
+                                    ),
+                                  );
+                                }).toList(),
+                              ),
+                            ),
+                          ],
+                          const SizedBox(height: 8),
+                          const Text(
+                            'Or reduce by quantity. Added bundle IDs take priority.',
+                            style: TextStyle(
+                              color: AppColors.textMuted,
+                              fontSize: 12,
+                            ),
+                          ),
+                          Row(
+                            children: [
+                              IconButton.filledTonal(
+                                tooltip: 'Decrease quantity',
+                                onPressed:
+                                    _parseInt(quantityController.text) <= 1
+                                    ? null
+                                    : () {
+                                        quantityController.text =
+                                            '${_parseInt(quantityController.text) - 1}';
+                                        setDialogState(() {});
+                                      },
+                                icon: const Icon(Icons.remove),
+                              ),
+                              Expanded(
+                                child: _PinkTextField(
+                                  controller: quantityController,
+                                  label: 'Quantity',
+                                  hint: 'Enter quantity',
+                                  icon: Icons.inventory_2_outlined,
+                                  keyboardType: TextInputType.number,
+                                ),
+                              ),
+                              IconButton.filledTonal(
+                                tooltip: 'Increase quantity',
+                                onPressed:
+                                    _parseInt(quantityController.text) >=
+                                        maxReductionQuantity
+                                    ? null
+                                    : () {
+                                        quantityController.text =
+                                            '${_parseInt(quantityController.text) + 1}';
+                                        setDialogState(() {});
+                                      },
+                                icon: const Icon(Icons.add),
+                              ),
+                            ],
+                          ),
+                          if (validationMessage != null) ...[
+                            const SizedBox(height: 4),
+                            Text(
+                              validationMessage!,
+                              style: const TextStyle(
+                                color: Color(0xFFC62828),
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ],
+                          const SizedBox(height: 10),
+                          DropdownButtonFormField<String>(
+                            initialValue: selectedReason,
+                            decoration: InputDecoration(
+                              labelText: 'Reason',
+                              prefixIcon: const Icon(
+                                Icons.flag_outlined,
+                                color: AppColors.primaryDark,
+                              ),
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(14),
+                              ),
+                            ),
+                            items: reasonOptions
+                                .map(
+                                  (reason) => DropdownMenuItem(
+                                    value: reason,
+                                    child: Text(reason),
+                                  ),
+                                )
+                                .toList(),
+                            onChanged: (value) =>
+                                setDialogState(() => selectedReason = value),
+                          ),
+                          if (selectedReason == 'Other') ...[
+                            const SizedBox(height: 12),
+                            _PinkTextField(
+                              controller: commentController,
+                              label: 'Comment',
+                              hint: 'Optional note',
+                              icon: Icons.notes_rounded,
+                              maxLines: 2,
+                            ),
+                          ],
+                          const SizedBox(height: 14),
+                          Align(
+                            alignment: Alignment.centerRight,
+                            child: ElevatedButton.icon(
+                              onPressed: isSaving
+                                  ? null
+                                  : () async {
+                                      final reason =
+                                          selectedReason?.trim() ?? '';
+                                      final instances =
+                                          _bundleInstancesFromData(bundle);
+                                      final requestedQuantity =
+                                          selectedBundleIds.isEmpty
+                                          ? _parseInt(quantityController.text)
+                                          : selectedBundleIds.length;
+                                      if (selectedBundleIds.isEmpty &&
+                                          (requestedQuantity <= 0 ||
+                                              requestedQuantity >
+                                                  maxReductionQuantity)) {
+                                        setDialogState(() {
+                                          validationMessage =
+                                              'Enter a quantity from 1 to $maxReductionQuantity.';
+                                        });
+                                        return;
+                                      }
+                                      final idsToReduce =
+                                          selectedBundleIds.isEmpty
+                                          ? availableInstances
+                                                .skip(
+                                                  (availableInstances.length -
+                                                          requestedQuantity)
+                                                      .clamp(
+                                                        0,
+                                                        availableInstances
+                                                            .length,
+                                                      )
+                                                      .toInt(),
+                                                )
+                                                .take(requestedQuantity)
+                                                .map((entry) {
+                                                  return entry.value['id']
+                                                              ?.toString()
+                                                              .trim()
+                                                              .isNotEmpty ==
+                                                          true
+                                                      ? entry.value['id']
+                                                            .toString()
+                                                      : _bundleInstanceId(
+                                                          bundle['bundleId']
+                                                                  ?.toString() ??
+                                                              '',
+                                                          entry.key,
+                                                        );
+                                                })
+                                                .toList()
+                                          : List<String>.from(
+                                              selectedBundleIds,
+                                            );
+                                      if (idsToReduce.isEmpty ||
+                                          idsToReduce.length >
+                                              maxReductionQuantity) {
+                                        setDialogState(() {
+                                          validationMessage =
+                                              'Enter a valid bundle quantity or bundle ID.';
+                                        });
+                                        return;
+                                      }
+                                      if (reason.isEmpty) {
+                                        setDialogState(
+                                          () => validationMessage =
+                                              'Please select a reason.',
+                                        );
+                                        return;
+                                      }
+
+                                      setDialogState(() {
+                                        isSaving = true;
+                                        validationMessage = null;
+                                      });
+
+                                      try {
+                                        for (final selectedId in idsToReduce) {
+                                          final instanceIndex = instances
+                                              .indexWhere((instance) {
+                                                final index = instances.indexOf(
+                                                  instance,
+                                                );
+                                                final instanceId =
+                                                    instance['id']
+                                                        ?.toString()
+                                                        .trim() ??
+                                                    _bundleInstanceId(
+                                                      bundle['bundleId']
+                                                              ?.toString() ??
+                                                          '',
+                                                      index,
+                                                    );
+                                                return instanceId == selectedId;
+                                              });
+                                          if (instanceIndex < 0) {
+                                            throw StateError(
+                                              'One selected bundle ID is no longer available.',
+                                            );
+                                          }
+                                          final instance =
+                                              instances[instanceIndex];
+                                          instances[instanceIndex] = {
+                                            ...instance,
+                                            'status': 'reduced',
+                                            'displayId':
+                                                bundleInstanceDisplayId(
+                                                  bundle,
+                                                  instance,
+                                                  instanceIndex,
+                                                ),
+                                            'reductionReason': reason,
+                                            'reductionComment':
+                                                selectedReason == 'Other'
+                                                ? commentController.text.trim()
+                                                : '',
+                                            'reducedAt': Timestamp.now(),
+                                          };
+                                        }
+
+                                        final user =
+                                            FirebaseAuth.instance.currentUser;
+                                        final docRef = FirebaseFirestore
+                                            .instance
+                                            .collection('staff_inventory')
+                                            .doc(sourceDocId);
+                                        final batch = FirebaseFirestore.instance
+                                            .batch();
+                                        batch.update(docRef, {
+                                          'bundleInstances': instances,
+                                          'bundleCount':
+                                              currentStock - idsToReduce.length,
+                                          'updatedAt':
+                                              FieldValue.serverTimestamp(),
+                                        });
+                                        final historyRef = FirebaseFirestore
+                                            .instance
+                                            .collection('stock_adjustments')
+                                            .doc();
+                                        final displayIds = idsToReduce.map((
+                                          id,
+                                        ) {
+                                          final index = instances.indexWhere(
+                                            (instance) =>
+                                                '${instance['id'] ?? ''}'
+                                                    .trim() ==
+                                                id,
+                                          );
+                                          if (index < 0) return id;
+                                          return bundleInstanceDisplayId(
+                                            bundle,
+                                            instances[index],
+                                            index,
+                                          );
+                                        }).toList();
+                                        final connectivity =
+                                            await Connectivity()
+                                                .checkConnectivity();
+                                        if (connectivity.contains(
+                                          ConnectivityResult.none,
+                                        )) {
+                                          await OfflineStockReductionService()
+                                              .enqueue({
+                                                'id': historyRef.id,
+                                                'type':
+                                                    'bundle_instance_adjustment',
+                                                'inventoryId': sourceDocId,
+                                                'sourceInventoryId':
+                                                    bundle['sourceInventoryId'] ??
+                                                    '',
+                                                'bundleId':
+                                                    bundle['bundleId'] ?? '',
+                                                'bundleInstanceIds':
+                                                    idsToReduce,
+                                                'bundleDisplayIds': displayIds,
+                                                'itemDisplayId':
+                                                    displayIds.length == 1
+                                                    ? displayIds.single
+                                                    : '${bundle['bundleId'] ?? 'BND'}-${displayIds.length} items',
+                                                'quantity': idsToReduce.length,
+                                                'unitPrice': _parsePrice(
+                                                  bundle['price'],
+                                                ),
+                                                'categoryName': bundleName,
+                                                'reason': reason,
+                                                'comment':
+                                                    selectedReason == 'Other'
+                                                    ? commentController.text
+                                                          .trim()
+                                                    : '',
+                                                'staffId': user?.uid,
+                                                'staffName':
+                                                    user?.displayName ??
+                                                    user?.email
+                                                        ?.split('@')
+                                                        .first ??
+                                                    'Staff',
+                                              });
+                                          await _loadPendingOfflineReductions();
+                                          if (!mounted) return;
+                                          Navigator.pop(context);
+                                          showTopNotification(
+                                            context,
+                                            '${idsToReduce.length} bundle(s) saved offline and will sync when online.',
+                                          );
+                                          return;
+                                        }
+                                        batch.set(historyRef, {
+                                          'type': 'bundle_stock_adjustment',
+                                          'userId': user?.uid,
+                                          'staffId': user?.uid,
+                                          'branchId': bundle['staffId'],
+                                          'branchName':
+                                              bundle['branchName'] ??
+                                              bundle['staffName'] ??
+                                              '',
+                                          'isBundle': true,
+                                          'bundleId': bundle['bundleId'] ?? '',
+                                          'itemDisplayId':
+                                              displayIds.length == 1
+                                              ? displayIds.single
+                                              : '${bundle['bundleId'] ?? 'BND'}-${displayIds.length} items',
+                                          'categoryId': sourceDocId,
+                                          'categoryName': bundleName,
+                                          'itemName': bundleName,
+                                          'bundlePrice': _parsePrice(
+                                            bundle['price'],
+                                          ),
+                                          'bundleInstanceIds': idsToReduce,
+                                          'bundleDisplayIds': displayIds,
+                                          'quantity': idsToReduce.length,
+                                          'previousStock': currentStock,
+                                          'newStock':
+                                              currentStock - idsToReduce.length,
+                                          'reason': reason,
+                                          'comment': selectedReason == 'Other'
+                                              ? commentController.text.trim()
+                                              : '',
+                                          'createdAt':
+                                              FieldValue.serverTimestamp(),
+                                        });
+                                        await batch.commit();
+                                      } catch (error) {
+                                        if (context.mounted) {
+                                          setDialogState(() {
+                                            isSaving = false;
+                                            validationMessage =
+                                                'Failed to reduce bundle: $error';
+                                          });
+                                        }
+                                        return;
+                                      }
+
+                                      if (!mounted) return;
+                                      Navigator.pop(context);
+                                      showTopNotification(
+                                        context,
+                                        '${idsToReduce.length} bundle(s) reduced successfully!',
+                                      );
+                                    },
+                              icon: const Icon(
+                                Icons.remove_circle_outline_rounded,
+                              ),
+                              label: isSaving
+                                  ? const SizedBox(
+                                      width: 18,
+                                      height: 18,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        color: Colors.white,
+                                      ),
+                                    )
+                                  : const Text('Reduce Bundle'),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: AppColors.primaryDark,
+                                foregroundColor: Colors.white,
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 10,
+                                ),
+                                minimumSize: const Size(190, 42),
+                                maximumSize: const Size(210, 42),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(16),
+                                ),
+                              ),
                             ),
                           ),
                         ],
                       ),
-                      if (selectedBundleIds.isNotEmpty) ...[
-                        const SizedBox(height: 8),
-                        SingleChildScrollView(
-                          scrollDirection: Axis.horizontal,
-                          child: Row(
-                            children: selectedBundleIds.map((id) {
-                              return Padding(
-                                padding: const EdgeInsets.only(right: 6),
-                                child: Chip(
-                                  label: Text(id),
-                                  deleteIcon: const Icon(Icons.close, size: 15),
-                                  onDeleted: () => setDialogState(
-                                    () => selectedBundleIds.remove(id),
-                                  ),
-                                  backgroundColor: const Color(0xFFE8F5E9),
-                                  side: const BorderSide(
-                                    color: Color(0xFF81C784),
-                                  ),
-                                  labelStyle: const TextStyle(
-                                    color: Color(0xFF2E7D32),
-                                    fontWeight: FontWeight.w800,
-                                    fontSize: 11,
-                                  ),
-                                ),
-                              );
-                            }).toList(),
-                          ),
-                        ),
-                      ],
-                      if (validationMessage != null) ...[
-                        const SizedBox(height: 4),
-                        Text(
-                          validationMessage!,
-                          style: const TextStyle(
-                            color: Color(0xFFC62828),
-                            fontSize: 12,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ],
-                      const SizedBox(height: 10),
-                      DropdownButtonFormField<String>(
-                        initialValue: selectedReason,
-                        decoration: InputDecoration(
-                          labelText: 'Reason',
-                          prefixIcon: const Icon(
-                            Icons.flag_outlined,
-                            color: AppColors.primaryDark,
-                          ),
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(14),
-                          ),
-                        ),
-                        items: reasonOptions
-                            .map(
-                              (reason) => DropdownMenuItem(
-                                value: reason,
-                                child: Text(reason),
-                              ),
-                            )
-                            .toList(),
-                        onChanged: (value) =>
-                            setDialogState(() => selectedReason = value),
-                      ),
-                      if (selectedReason == 'Other') ...[
-                        const SizedBox(height: 12),
-                        _PinkTextField(
-                          controller: commentController,
-                          label: 'Comment',
-                          hint: 'Optional note',
-                          icon: Icons.notes_rounded,
-                          maxLines: 2,
-                        ),
-                      ],
-                      const SizedBox(height: 14),
-                      Align(
-                        alignment: Alignment.centerRight,
-                        child: ElevatedButton.icon(
-                          onPressed: isSaving
-                              ? null
-                              : () async {
-                                  final reason = selectedReason?.trim() ?? '';
-                                  final instances = _bundleInstancesFromData(
-                                    bundle,
-                                  );
-                                  if (selectedBundleIds.isEmpty) {
-                                    setDialogState(() {
-                                      validationMessage =
-                                          'Invalid Bundle ID number.';
-                                    });
-                                    return;
-                                  }
-                                  if (reason.isEmpty) {
-                                    setDialogState(
-                                      () => validationMessage =
-                                          'Please select a reason.',
-                                    );
-                                    return;
-                                  }
-
-                                  setDialogState(() {
-                                    isSaving = true;
-                                    validationMessage = null;
-                                  });
-
-                                  try {
-                                    for (final selectedId
-                                        in selectedBundleIds) {
-                                      final instanceIndex = instances
-                                          .indexWhere((instance) {
-                                            final index = instances.indexOf(
-                                              instance,
-                                            );
-                                            final instanceId =
-                                                instance['id']
-                                                    ?.toString()
-                                                    .trim() ??
-                                                _bundleInstanceId(
-                                                  bundle['bundleId']
-                                                          ?.toString() ??
-                                                      '',
-                                                  index,
-                                                );
-                                            return instanceId == selectedId;
-                                          });
-                                      if (instanceIndex < 0) {
-                                        throw StateError(
-                                          'One selected bundle ID is no longer available.',
-                                        );
-                                      }
-                                      final instance = instances[instanceIndex];
-                                      instances[instanceIndex] = {
-                                        ...instance,
-                                        'status': 'reduced',
-                                        'reductionReason': reason,
-                                        'reductionComment':
-                                            selectedReason == 'Other'
-                                            ? commentController.text.trim()
-                                            : '',
-                                        'reducedAt': Timestamp.now(),
-                                      };
-                                    }
-
-                                    final user =
-                                        FirebaseAuth.instance.currentUser;
-                                    final docRef = FirebaseFirestore.instance
-                                        .collection('staff_inventory')
-                                        .doc(sourceDocId);
-                                    final batch = FirebaseFirestore.instance
-                                        .batch();
-                                    batch.update(docRef, {
-                                      'bundleInstances': instances,
-                                      'bundleCount':
-                                          currentStock -
-                                          selectedBundleIds.length,
-                                      'updatedAt': FieldValue.serverTimestamp(),
-                                    });
-                                    final historyRef = FirebaseFirestore
-                                        .instance
-                                        .collection('stock_adjustments')
-                                        .doc();
-                                    batch.set(historyRef, {
-                                      'type': 'bundle_stock_adjustment',
-                                      'userId': user?.uid,
-                                      'staffId': user?.uid,
-                                      'categoryId': sourceDocId,
-                                      'categoryName': bundleName,
-                                      'itemName': bundleName,
-                                      'bundlePrice': _parsePrice(
-                                        bundle['price'],
-                                      ),
-                                      'bundleInstanceIds': selectedBundleIds,
-                                      'quantity': selectedBundleIds.length,
-                                      'previousStock': currentStock,
-                                      'newStock':
-                                          currentStock -
-                                          selectedBundleIds.length,
-                                      'reason': reason,
-                                      'comment': selectedReason == 'Other'
-                                          ? commentController.text.trim()
-                                          : '',
-                                      'createdAt': FieldValue.serverTimestamp(),
-                                    });
-                                    await batch.commit();
-                                  } catch (error) {
-                                    if (context.mounted) {
-                                      setDialogState(() {
-                                        isSaving = false;
-                                        validationMessage =
-                                            'Failed to reduce bundle: $error';
-                                      });
-                                    }
-                                    return;
-                                  }
-
-                                  if (!mounted) return;
-                                  Navigator.pop(context);
-                                  showTopNotification(
-                                    context,
-                                    '${selectedBundleIds.length} bundle(s) reduced successfully!',
-                                  );
-                                },
-                          icon: const Icon(Icons.remove_circle_outline_rounded),
-                          label: isSaving
-                              ? const SizedBox(
-                                  width: 18,
-                                  height: 18,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                    color: Colors.white,
-                                  ),
-                                )
-                              : const Text('Reduce Bundle'),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: AppColors.primaryDark,
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(vertical: 10),
-                            minimumSize: const Size(190, 42),
-                            maximumSize: const Size(210, 42),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(16),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
+                    ),
                   ),
                 ),
               ),
@@ -3277,6 +3920,7 @@ class _AllCategPageState extends State<AllCategPage>
 
     bundleIdController.dispose();
     commentController.dispose();
+    quantityController.dispose();
   }
 
   Future<void> _showBundleInstanceReductionDialog({
@@ -3296,9 +3940,18 @@ class _AllCategPageState extends State<AllCategPage>
     final bundleName = bundle['name']?.toString() ?? 'Bundle';
     final sourceDocId = bundle['sourceDocId']?.toString() ?? '';
     final currentStock = _bundleStockForData(bundle);
-    final instanceId =
-        instance['id']?.toString() ??
-        _bundleInstanceId(bundle['bundleId']?.toString() ?? '', instanceIndex);
+    final instanceId = bundleInstanceDisplayId(bundle, instance, instanceIndex);
+    final availableInstances = _bundleInstancesFromData(bundle)
+        .asMap()
+        .entries
+        .where((entry) {
+          return bundleInstanceAvailable(entry.value, bundle);
+        })
+        .toList();
+    final maxReductionQuantity = currentStock < availableInstances.length
+        ? currentStock
+        : availableInstances.length;
+    var reductionQuantity = maxReductionQuantity > 0 ? 1 : 0;
 
     await showDialog<void>(
       context: context,
@@ -3344,6 +3997,47 @@ class _AllCategPageState extends State<AllCategPage>
                       icon: Icons.inventory_2_rounded,
                       label: '$bundleName - $instanceId',
                       color: AppColors.primaryDark,
+                    ),
+                    const SizedBox(height: 10),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        IconButton(
+                          tooltip: 'Reduce quantity',
+                          onPressed: reductionQuantity <= 1
+                              ? null
+                              : () => setDialogState(() => reductionQuantity--),
+                          icon: const Icon(Icons.remove_circle_outline),
+                        ),
+                        Text(
+                          '$reductionQuantity / $maxReductionQuantity',
+                          style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                        IconButton(
+                          tooltip: 'Increase quantity',
+                          onPressed: reductionQuantity >= maxReductionQuantity
+                              ? null
+                              : () => setDialogState(() => reductionQuantity++),
+                          icon: const Icon(Icons.add_circle_outline),
+                        ),
+                        IconButton(
+                          tooltip: 'Copy bundle ID',
+                          onPressed: () async {
+                            await Clipboard.setData(
+                              ClipboardData(text: instanceId),
+                            );
+                            if (context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                _buildSnackBar('Bundle ID copied'),
+                              );
+                            }
+                          },
+                          icon: const Icon(Icons.copy_rounded),
+                        ),
+                      ],
                     ),
                     const SizedBox(height: 14),
                     DropdownButtonFormField<String>(
@@ -3396,7 +4090,9 @@ class _AllCategPageState extends State<AllCategPage>
                         final instances = _bundleInstancesFromData(bundle);
                         if (instanceIndex < 0 ||
                             instanceIndex >= instances.length ||
-                            sourceDocId.isEmpty) {
+                            sourceDocId.isEmpty ||
+                            reductionQuantity <= 0 ||
+                            reductionQuantity > maxReductionQuantity) {
                           ScaffoldMessenger.of(context).showSnackBar(
                             _buildSnackBar(
                               'Unable to reduce this bundle',
@@ -3405,15 +4101,42 @@ class _AllCategPageState extends State<AllCategPage>
                           );
                           return;
                         }
-                        instances[instanceIndex] = {
-                          ...instances[instanceIndex],
-                          'status': 'reduced',
-                          'reductionReason': reason,
-                          'reductionComment': selectedReason == 'Other'
-                              ? commentController.text.trim()
-                              : '',
-                          'reducedAt': Timestamp.now(),
-                        };
+                        final reducedEntries = availableInstances
+                            .skip(availableInstances.length - reductionQuantity)
+                            .toList();
+                        final reducedIds = <String>[];
+                        final reducedDisplayIds = <String>[];
+                        for (final entry in reducedEntries) {
+                          final id =
+                              '${entry.value['id'] ?? ''}'.trim().isNotEmpty
+                              ? '${entry.value['id']}'.trim()
+                              : _bundleInstanceId(
+                                  bundle['bundleId']?.toString() ?? '',
+                                  entry.key,
+                                );
+                          reducedIds.add(id);
+                          instances[entry.key] = {
+                            ...instances[entry.key],
+                            'status': 'reduced',
+                            'displayId': bundleInstanceDisplayId(
+                              bundle,
+                              entry.value,
+                              entry.key,
+                            ),
+                            'reductionReason': reason,
+                            'reductionComment': selectedReason == 'Other'
+                                ? commentController.text.trim()
+                                : '',
+                            'reducedAt': Timestamp.now(),
+                          };
+                          reducedDisplayIds.add(
+                            bundleInstanceDisplayId(
+                              bundle,
+                              entry.value,
+                              entry.key,
+                            ),
+                          );
+                        }
 
                         final user = FirebaseAuth.instance.currentUser;
                         final docRef = FirebaseFirestore.instance
@@ -3421,9 +4144,8 @@ class _AllCategPageState extends State<AllCategPage>
                             .doc(sourceDocId);
                         await docRef.update({
                           'bundleInstances': instances,
-                          'bundleCount': currentStock > 0
-                              ? currentStock - 1
-                              : currentStock,
+                          'bundleCount': (currentStock - reductionQuantity)
+                              .clamp(0, currentStock),
                           'updatedAt': FieldValue.serverTimestamp(),
                         });
                         await FirebaseFirestore.instance
@@ -3432,15 +4154,26 @@ class _AllCategPageState extends State<AllCategPage>
                               'type': 'bundle_instance_adjustment',
                               'userId': user?.uid,
                               'staffId': user?.uid,
+                              'branchId': bundle['staffId'],
+                              'branchName':
+                                  bundle['branchName'] ??
+                                  bundle['staffName'] ??
+                                  '',
+                              'isBundle': true,
+                              'bundleId': bundle['bundleId'] ?? '',
+                              'itemDisplayId': reducedDisplayIds.length == 1
+                                  ? reducedDisplayIds.single
+                                  : '${bundle['bundleId'] ?? 'BND'}-${reducedDisplayIds.length} items',
                               'categoryId': sourceDocId,
                               'categoryName': bundleName,
                               'itemName': bundleName,
                               'bundleInstanceId': instanceId,
-                              'quantity': 1,
+                              'bundleInstanceIds': reducedIds,
+                              'bundleDisplayIds': reducedDisplayIds,
+                              'quantity': reductionQuantity,
                               'previousStock': currentStock,
-                              'newStock': currentStock > 0
-                                  ? currentStock - 1
-                                  : currentStock,
+                              'newStock': (currentStock - reductionQuantity)
+                                  .clamp(0, currentStock),
                               'reason': reason,
                               'comment': selectedReason == 'Other'
                                   ? commentController.text.trim()
@@ -3881,6 +4614,9 @@ class _AllCategPageState extends State<AllCategPage>
     required int coffeeCount,
     required int addonCount,
   }) {
+    final tabletLayout =
+        widget.tabletLayout || MediaQuery.sizeOf(context).width >= 600;
+
     Widget option({
       required bool selected,
       required String label,
@@ -3893,7 +4629,10 @@ class _AllCategPageState extends State<AllCategPage>
           onTap: onTap,
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 220),
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 14),
+            padding: EdgeInsets.symmetric(
+              horizontal: 8,
+              vertical: tabletLayout ? 10 : 14,
+            ),
             decoration: BoxDecoration(
               color: selected ? AppColors.primaryDark : Colors.white,
               borderRadius: BorderRadius.circular(18),
@@ -3940,7 +4679,7 @@ class _AllCategPageState extends State<AllCategPage>
     }
 
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 18, 16, 0),
+      padding: EdgeInsets.fromLTRB(16, tabletLayout ? 10 : 18, 16, 0),
       child: Row(
         children: [
           option(
@@ -4254,16 +4993,20 @@ class _AllCategPageState extends State<AllCategPage>
   }
 
   String _allocationDateLabel(dynamic value) {
-    final date = value is Timestamp
-        ? value.toDate()
-        : value is DateTime
-        ? value
-        : DateTime.tryParse(value?.toString() ?? '');
+    final date = _allocationDateTime(value);
     if (date == null) return '--';
     final year = date.year.toString().padLeft(4, '0');
     final month = date.month.toString().padLeft(2, '0');
     final day = date.day.toString().padLeft(2, '0');
     return '$year-$month-$day';
+  }
+
+  DateTime? _allocationDateTime(dynamic value) {
+    return value is Timestamp
+        ? value.toDate()
+        : value is DateTime
+        ? value
+        : DateTime.tryParse(value?.toString() ?? '');
   }
 
   Widget _tableReduceButton({
@@ -4308,7 +5051,10 @@ class _AllCategPageState extends State<AllCategPage>
       );
     }
 
-    final availableBundleCount = bundleDocs.length;
+    final availableBundleCount = bundleDocs.fold<int>(
+      0,
+      (total, bundle) => total + _bundleStockForData(bundle),
+    );
 
     return ListView(
       padding: const EdgeInsets.only(bottom: 30),
@@ -4316,9 +5062,6 @@ class _AllCategPageState extends State<AllCategPage>
         _tableBlock(
           title: 'Bundles',
           subtitle: 'Available bundles: $availableBundleCount',
-          onView: bundleDocs.length == 1
-              ? () => _showBundleItemsDialog(bundleDocs.first)
-              : null,
           onHistory: () => _showStaffActivityHistory(
             kind: 'bundle',
             categoryName: 'Bundle',
@@ -4326,19 +5069,29 @@ class _AllCategPageState extends State<AllCategPage>
           ),
           columns: [
             _tableColumn('ID'),
-            _tableColumn('Allocated'),
+            _tableColumn('Allocated date'),
             _tableColumn('Bundle Name'),
             _tableColumn('Price'),
             _tableColumn('Stock'),
             _tableColumn('Expire date'),
+            _tableColumn('Availability'),
             _tableColumn('Action'),
           ],
           rows: bundleDocs.map((bundle) {
             final bundleName = bundle['name']?.toString() ?? 'Bundle';
             final bundleStock = _bundleStockForData(bundle);
+            final bundlePending = _pendingBundleCount(bundle);
             final bundlePrice = _parsePrice(bundle['price']);
             final bundleId = _displayItemId(bundle);
             final bundleExpirationDate = _bundleExpirationDate(bundle);
+            final availability = bundleStock == 0 && bundlePending > 0
+                ? 'Pending confirmation'
+                : _availabilityLabel(
+                    stock: bundleStock,
+                    expirationDate: bundleExpirationDate,
+                    type: 'Bundle',
+                    expiredBundle: _hasExpiredBundleInventory(bundle),
+                  );
 
             return DataRow(
               cells: [
@@ -4361,6 +5114,7 @@ class _AllCategPageState extends State<AllCategPage>
                   color: _stockColor(bundleStock, type: 'Bundle'),
                 ),
                 _tableCell(bundleExpirationDate, width: 120),
+                _availabilityCell(availability),
                 DataCell(
                   Row(
                     mainAxisSize: MainAxisSize.min,
@@ -4453,15 +5207,62 @@ class _AllCategPageState extends State<AllCategPage>
           },
         );
 
+        int addonSoldQuantity(Map<String, dynamic> addon) {
+          final addonName = '${addon['name'] ?? ''}'.trim().toLowerCase();
+          if (addonName.isEmpty) return 0;
+          var sold = 0;
+          for (final doc in salesSnapshot.data?.docs ?? const []) {
+            final sale = doc.data();
+            if (sale['isVoided'] == true ||
+                sale['isDeleted'] == true ||
+                ![
+                  'void',
+                  'voided',
+                  'cancelled',
+                  'canceled',
+                ].contains('${sale['status'] ?? ''}'.toLowerCase()) ||
+                (!_staffInventoryIds.contains('${sale['branchId'] ?? ''}') &&
+                    !_staffInventoryIds.contains('${sale['userId'] ?? ''}'))) {
+              continue;
+            }
+            for (final rawLine
+                in (sale['items'] as List? ?? const []).whereType<Map>()) {
+              final line = Map<String, dynamic>.from(rawLine);
+              final lineQuantity = _parseInt(line['quantity'], fallback: 1);
+              final nestedAddons = [
+                ...(line['addons'] as List? ?? const []),
+                ...(line['addOns'] as List? ?? const []),
+                ...(line['selectedAddons'] as List? ?? const []),
+              ].whereType<Map>();
+              if (nestedAddons.isNotEmpty) {
+                for (final rawAddon in nestedAddons) {
+                  if ('${rawAddon['name'] ?? ''}'.trim().toLowerCase() ==
+                      addonName) {
+                    sold +=
+                        lineQuantity *
+                        _parseInt(
+                          rawAddon['quantity'] ?? rawAddon['count'],
+                          fallback: 1,
+                        );
+                  }
+                }
+              } else if ('${line['addonName'] ?? ''}'.trim().toLowerCase() ==
+                  addonName) {
+                sold += lineQuantity;
+              }
+            }
+          }
+          return sold;
+        }
+
         final beverageTable = _tableBlock(
           title: 'Beverages',
-          subtitle:
-              'Assigned by Super Admin · ${_allocationDateLabel(category['assignedAt'] ?? category['allocatedAt'])}',
+          subtitle: 'Available Beverages: ${items.isEmpty ? 0 : 1}',
           onHistory: showBeverageHistory,
           compact: true,
           columns: [
             _tableColumn('ID'),
-            _tableColumn('Allocated'),
+            _tableColumn('Allocated date'),
             _tableColumn('Beverages Name'),
             _tableColumn('Small'),
             _tableColumn('Medium'),
@@ -4541,66 +5342,56 @@ class _AllCategPageState extends State<AllCategPage>
               })(),
           ],
         );
+        final addonQuery = _tableSearchQuery.trim().toLowerCase();
+        final searchedAddons = addonDocs.where((addon) {
+          if (addonQuery.isEmpty) return true;
+          return [
+            addon['name']?.toString() ?? '',
+            _displayItemId(addon),
+            addon['priceDelta']?.toString() ?? addon['price']?.toString() ?? '',
+          ].join(' ').toLowerCase().contains(addonQuery);
+        }).toList();
         final addonsTable = _tableBlock(
           title: 'Beverages Add-ons',
-          subtitle: '${addonDocs.length} assigned by Super Admin',
+          subtitle: 'Available Add-ons: ${searchedAddons.length}',
           onHistory: showAddonHistory,
           compact: true,
           columns: [
             _tableColumn('ID'),
-            _tableColumn('Allocated'),
-            _tableColumn('Add-on'),
-            _tableColumn('Expire date'),
-            _tableColumn('Status'),
+            _tableColumn('Allocated date'),
+            _tableColumn('Add-on name'),
             _tableColumn('Price'),
+            _tableColumn('Sold'),
+            _tableColumn('Action'),
           ],
-          rows: [
-            for (final addon in addonDocs)
-              DataRow(
-                cells: [
-                  _tableCell(
-                    _displayItemId(addon),
-                    width: 110,
-                    color: AppColors.primaryDark,
+          rows: searchedAddons.map((addon) {
+            return DataRow(
+              cells: [
+                _tableCell(_displayItemId(addon), width: 100),
+                _tableCell(
+                  _allocationDateLabel(
+                    addon['assignedAt'] ??
+                        addon['allocatedAt'] ??
+                        category['assignedAt'],
                   ),
-                  _tableCell(
-                    _allocationDateLabel(
-                      addon['allocatedAt'] ??
-                          addon['assignedAt'] ??
-                          category['assignedAt'] ??
-                          category['allocatedAt'],
-                    ),
-                    width: 120,
+                  width: 120,
+                ),
+                _tableCell(
+                  addon['name']?.toString() ?? 'Add-on',
+                  width: 170,
+                  weight: FontWeight.w800,
+                ),
+                _tableCell(
+                  formatMoney(
+                    _parsePrice(addon['priceDelta'] ?? addon['price']),
                   ),
-                  _tableCell(
-                    addon['name']?.toString() ?? 'Add-on',
-                    width: 170,
-                    weight: FontWeight.w900,
-                  ),
-                  _tableCell(
-                    addon['expirationDate']?.toString().trim().isNotEmpty ==
-                            true
-                        ? addon['expirationDate'].toString()
-                        : '--',
-                    width: 120,
-                  ),
-                  _tableCell(
-                    addon['status']?.toString() ??
-                        (addon['isAvailable'] == false
-                            ? 'Unavailable'
-                            : 'Available'),
-                    width: 110,
-                  ),
-                  _tableCell(
-                    formatMoney(
-                      _parsePrice(addon['priceDelta'] ?? addon['price']),
-                    ),
-                    width: 90,
-                    color: const Color(0xFF2E7D32),
-                  ),
-                ],
-              ),
-          ],
+                  width: 100,
+                ),
+                _tableCell('${addonSoldQuantity(addon)}', width: 70),
+                DataCell(_batchButton(addon, itemId: _displayItemId(addon))),
+              ],
+            );
+          }).toList(),
         );
 
         return _AnimatedCategorySection(
@@ -5477,15 +6268,21 @@ class _AllCategPageState extends State<AllCategPage>
         ),
         columns: [
           _tableColumn('ID'),
-          _tableColumn('Allocated'),
+          _tableColumn('Allocated date'),
           _tableColumn('Items Name'),
           _tableColumn('Price'),
           _tableColumn('Stock'),
           _tableColumn('Expire date'),
+          _tableColumn('Availability'),
           _tableColumn('Action'),
         ],
         rows: items.map((item) {
           final itemStock = _stockForItem(item);
+          final availability = _availabilityLabel(
+            stock: itemStock,
+            expirationDate: item['expirationDate'],
+            type: 'Categories',
+          );
           return DataRow(
             cells: [
               _tableCell(
@@ -5523,6 +6320,7 @@ class _AllCategPageState extends State<AllCategPage>
                     : '--',
                 width: 120,
               ),
+              _availabilityCell(availability),
               DataCell(
                 Row(
                   mainAxisSize: MainAxisSize.min,
@@ -5559,7 +6357,7 @@ class _AllCategPageState extends State<AllCategPage>
     List<Map<String, dynamic>> categoryDocs, {
     String emptyMessage = 'No items found.',
   }) {
-    final compact = MediaQuery.sizeOf(context).width < 600;
+    final compact = MediaQuery.sizeOf(context).width < 900;
     if (categoryDocs.isEmpty) {
       return _buildEmptyInventoryState(
         icon: Icons.category_outlined,
@@ -6066,8 +6864,10 @@ class _AllCategPageState extends State<AllCategPage>
 
   @override
   Widget build(BuildContext context) {
-    final tabletLayout = MediaQuery.sizeOf(context).width >= 600;
+    final tabletLayout =
+        widget.tabletLayout || MediaQuery.sizeOf(context).width >= 600;
     return Scaffold(
+      resizeToAvoidBottomInset: false,
       backgroundColor: AppColors.surfaceTint,
       body: TopEdgeRefresh(
         displacement: 24,
@@ -6079,7 +6879,7 @@ class _AllCategPageState extends State<AllCategPage>
           headerSliverBuilder: (context, innerBoxIsScrolled) => [
             SliverAppBar(
               automaticallyImplyLeading: false,
-              expandedHeight: tabletLayout ? 120 : 160,
+              expandedHeight: tabletLayout ? 146 : 160,
               floating: false,
               pinned: true,
               elevation: 0,
@@ -6296,13 +7096,26 @@ class _AllCategPageState extends State<AllCategPage>
                     }
                   }
 
+                  final projectedDocs = OfflineStockReductionService()
+                      .applyPendingToInventoryDocuments(
+                        docs.map((doc) {
+                          final data = doc.data() as Map<String, dynamic>;
+                          return {...data, '_localDocId': doc.id};
+                        }),
+                        _pendingOfflineReductions,
+                      );
                   final visibleDocs = <Map<String, dynamic>>[];
-                  for (final doc in docs) {
-                    final data = _inventoryDataWithPendingSales(doc);
+                  for (final projectedData in projectedDocs) {
+                    final documentId =
+                        projectedData['_localDocId']?.toString() ?? '';
+                    final data = _inventoryDataWithPendingSales(
+                      projectedData,
+                      documentId,
+                    );
                     if (data['isDeleted'] == true) continue;
                     if (data['isAddon'] == true) {
                       if (bundleExpired(data, DateTime.now())) continue;
-                      visibleDocs.add({...data, 'sourceDocId': doc.id});
+                      visibleDocs.add({...data, 'sourceDocId': documentId});
                       continue;
                     }
                     final sourceId =
@@ -6317,7 +7130,7 @@ class _AllCategPageState extends State<AllCategPage>
                       final matchesSource =
                           selectedSourceId.isNotEmpty &&
                           (sourceId == selectedSourceId ||
-                              doc.id == selectedSourceId);
+                              documentId == selectedSourceId);
                       final matchesName =
                           selectedSourceId.isEmpty &&
                           selectedName.isNotEmpty &&
@@ -6357,7 +7170,7 @@ class _AllCategPageState extends State<AllCategPage>
                             .whereType<Map>()
                             .map((addon) => Map<String, dynamic>.from(addon))
                             .toList(),
-                        'sourceDocId': doc.id,
+                        'sourceDocId': documentId,
                         'isCoffee': true,
                       });
                       continue;
@@ -6367,13 +7180,21 @@ class _AllCategPageState extends State<AllCategPage>
                       if (rootData['isBundle'] != true) continue;
 
                       if (_hasExpiredBundleItem(data)) continue;
-                      if (_bundleStockForData(data) <= 0) continue;
+                      if (_bundleStockForData(data) <= 0 &&
+                          _pendingBundleCount(data) == 0) {
+                        continue;
+                      }
                       visibleDocs.add({
                         ...data,
                         'name': rootData['name'] ?? data['name'],
                         'publicId': rootData['publicId'] ?? data['publicId'],
                         'imageUrl': rootData['imageUrl'] ?? data['imageUrl'],
-                        'sourceDocId': doc.id,
+                        'price':
+                            _parsePrice(data['price'] ?? data['bundlePrice']) >
+                                0
+                            ? data['price'] ?? data['bundlePrice']
+                            : rootData['price'] ?? rootData['bundlePrice'],
+                        'sourceDocId': documentId,
                       });
                       continue;
                     }
@@ -6409,7 +7230,7 @@ class _AllCategPageState extends State<AllCategPage>
                       'publicId': rootData['publicId'] ?? data['publicId'],
                       'imageUrl': rootData['imageUrl'] ?? data['imageUrl'],
                       'items': activeItems,
-                      'sourceDocId': doc.id,
+                      'sourceDocId': documentId,
                     });
                   }
 
@@ -6427,9 +7248,12 @@ class _AllCategPageState extends State<AllCategPage>
                     final itemRecords = items.map((item) {
                       final itemData = Map<String, dynamic>.from(item);
                       itemData['sourceDocId'] = data['sourceDocId'];
+                      itemData['sourceInventoryId'] = data['sourceInventoryId'];
                       itemData['categoryName'] = categoryName;
                       itemData['allocatedAt'] =
-                          itemData['assignedAt'] ?? data['assignedAt'];
+                          itemData['assignedAt'] ??
+                          data['assignedAt'] ??
+                          data['allocatedAt'];
                       return itemData;
                     }).toList();
                     if (itemRecords.isEmpty) continue;
@@ -6441,6 +7265,14 @@ class _AllCategPageState extends State<AllCategPage>
                             true
                         ? data['sourceInventoryId'].toString()
                         : data['sourceDocId']?.toString() ?? categoryName;
+                    final previousCategory = groupedCategories[categoryKey];
+                    final allocationDate =
+                        data['assignedAt'] ?? data['allocatedAt'];
+                    final currentAllocationDate =
+                        _allocationDateTime(allocationDate) ?? DateTime(1970);
+                    final previousAllocationDate =
+                        _allocationDateTime(previousCategory?['allocatedAt']) ??
+                        DateTime(1970);
                     groupedCategories[categoryKey] = {
                       'categoryName': categoryName,
                       'categoryId':
@@ -6463,7 +7295,10 @@ class _AllCategPageState extends State<AllCategPage>
                       'sourceDocId': data['sourceDocId'],
                       'publicId': data['publicId'],
                       'coffeeId': data['coffeeId'],
-                      'allocatedAt': data['assignedAt'] ?? data['allocatedAt'],
+                      'allocatedAt':
+                          currentAllocationDate.isAfter(previousAllocationDate)
+                          ? allocationDate
+                          : previousCategory?['allocatedAt'] ?? allocationDate,
                       'isLowStock': data['isLowStock'] == true,
                     };
                   }
@@ -6607,6 +7442,26 @@ class _AllCategPageState extends State<AllCategPage>
 
                   return Column(
                     children: [
+                      if (!_inventoryOnline &&
+                          _pendingOfflineReductions.isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 8, 16, 2),
+                          child: Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFFFF3E0),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Text(
+                              '${_pendingOfflineReductions.length} stock reduction(s) saved offline and waiting to sync.',
+                              style: TextStyle(
+                                color: const Color(0xFF8A4B08),
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                        ),
                       if (!_isFilteredCategory)
                         _buildInventoryToggle(
                           categoryCount: categoryDocs.length,
@@ -6615,7 +7470,12 @@ class _AllCategPageState extends State<AllCategPage>
                           addonCount: addonDocs.length,
                         ),
                       Padding(
-                        padding: const EdgeInsets.fromLTRB(20, 10, 20, 12),
+                        padding: EdgeInsets.fromLTRB(
+                          tabletLayout ? 16 : 20,
+                          tabletLayout ? 6 : 10,
+                          tabletLayout ? 16 : 20,
+                          tabletLayout ? 8 : 12,
+                        ),
                         child: TextField(
                           onChanged: (value) =>
                               setState(() => _tableSearchQuery = value),

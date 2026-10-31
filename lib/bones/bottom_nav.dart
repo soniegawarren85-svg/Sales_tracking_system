@@ -12,6 +12,10 @@ import 'package:tutorial_coach_mark/tutorial_coach_mark.dart';
 import '../services/inventory_service.dart';
 import '../services/staff_onboarding_service.dart';
 import '../services/held_order_store.dart';
+import '../services/staff_login_session.dart';
+import '../services/session_actor.dart';
+import '../widgets/logout_progress.dart';
+import '../Login/Login/Login.dart';
 import '../Staff_pages/dashboard_page.dart';
 import '../Staff_pages/AllCateg.dart';
 import '../Staff_pages/profile_page.dart';
@@ -52,6 +56,9 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
   bool _openPendingOnSalesLaunch = false;
   String? _sessionUserId;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _loginSubscription;
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>?
+  _profileSubscription;
+  bool _branchAssignmentLogoutStarted = false;
   TutorialCoachMark? _tutorialCoachMark;
   final ValueNotifier<_TutorialCardState> _tutorialCardState = ValueNotifier(
     const _TutorialCardState(),
@@ -60,6 +67,8 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
   bool _onboardingCheckStarted = false;
   bool _tutorialIsReplay = false;
   bool _tutorialStarting = false;
+  bool _tabletSidebarExpanded = false;
+  bool _tabletSidebarLabelsVisible = false;
 
   Future<void> _watchLogins() async {
     final prefs = await SharedPreferences.getInstance();
@@ -74,6 +83,25 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
         : savedUserId;
     if (uid.isNotEmpty && mounted) {
       setState(() => _sessionUserId = uid);
+      _profileSubscription = FirebaseFirestore.instance
+          .collection('staff_requests')
+          .doc(uid)
+          .snapshots()
+          .listen(
+            (snapshot) {
+              final profile = snapshot.data();
+              final branchIds = (profile?['branchIds'] as List? ?? [])
+                  .map((id) => '$id'.trim())
+                  .where((id) => id.isNotEmpty);
+              if (profile?['requiresBranchAssignment'] == true &&
+                  branchIds.isEmpty) {
+                unawaited(_logoutAfterBranchUnassigned());
+              }
+            },
+            onError: (Object error) {
+              debugPrint('Branch assignment monitor: $error');
+            },
+          );
     }
     final ownId = prefs.getString('staffLoginSessionId');
     if (uid.isEmpty || ownId == null) return;
@@ -143,11 +171,44 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
   @override
   void dispose() {
     _loginSubscription?.cancel();
+    _profileSubscription?.cancel();
     _tutorialCoachMark?.finish();
     _tutorialCardState.dispose();
     InventoryService().removeListener(_onInventoryChanged);
     _scrollController.dispose();
     super.dispose();
+  }
+
+  Future<void> _logoutAfterBranchUnassigned() async {
+    if (_branchAssignmentLogoutStarted || !mounted) return;
+    _branchAssignmentLogoutStarted = true;
+    final navigator = Navigator.of(context);
+    try {
+      await runWithLogoutProgress(context, () async {
+        try {
+          await StaffLoginSession.close();
+        } catch (error) {
+          debugPrint('Unable to close staff session after branch void: $error');
+        }
+        final preferences = await SharedPreferences.getInstance();
+        await clearPersistedAccountSession(preferences);
+        await FirebaseAuth.instance.signOut();
+      });
+    } catch (error) {
+      debugPrint('Unable to complete forced staff logout: $error');
+    }
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'Your branch assignment was removed. Please sign in again after an administrator assigns you to a branch.',
+        ),
+      ),
+    );
+    navigator.pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const LoginScreen()),
+      (_) => false,
+    );
   }
 
   void _onInventoryChanged() {
@@ -190,6 +251,7 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
         return _buildProfilePage();
       case 3:
         return DailyStockPage(
+          tabletSideNavigation: MediaQuery.sizeOf(context).width >= 600,
           initialView: _salesInitialView,
           initialGroupName: _salesInitialGroup,
           openPendingOnStart: _openPendingOnSalesLaunch,
@@ -206,6 +268,7 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
     return DashboardPage(
       scrollController: _scrollController,
       onMessage: _onMessagePressed,
+      tabletLayout: MediaQuery.sizeOf(context).width >= 600,
       onReplayTutorial: () => _startStaffTutorial(isReplay: true),
       guideTourKey: _guideTourKey,
       dashboardTourKey: _dashboardTourKey,
@@ -238,11 +301,13 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
   }
 
   Widget _buildAllItemsPage() {
-    // Keep the last row above the pending badge as well as the navigation bar.
     return Padding(
-      padding: const EdgeInsets.only(bottom: 64),
+      padding: EdgeInsets.only(
+        bottom: MediaQuery.sizeOf(context).width >= 600 ? 0 : 64,
+      ),
       child: AllCategPage(
         embedded: true,
+        tabletLayout: MediaQuery.sizeOf(context).width >= 600,
         inventoryChecklistTourKey: _inventoryChecklistTourKey,
         inventoryReturnsTourKey: _inventoryReturnsTourKey,
         inventoryTourKey: _inventoryTableTourKey,
@@ -253,9 +318,54 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
   Widget _buildProfilePage() {
     return ProfilePage(
       onMessage: _onMessagePressed,
+      showLogoutButton: MediaQuery.sizeOf(context).width < 600,
       tourTargetKey: _profileInfoTourKey,
       editProfileTourKey: _profileEditTourKey,
     );
+  }
+
+  Future<void> _logoutFromSidebar() async {
+    final navigator = Navigator.of(context);
+    final shouldLogout = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Log out?'),
+        content: const Text(
+          'Are you sure you want to log out of your account?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Log out'),
+          ),
+        ],
+      ),
+    );
+    if (shouldLogout != true || !mounted) return;
+    try {
+      await runWithLogoutProgress(context, () async {
+        await StaffLoginSession.close();
+        final preferences = await SharedPreferences.getInstance();
+        await clearPersistedAccountSession(preferences);
+        await FirebaseAuth.instance.signOut();
+      });
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('$error'.replaceFirst('Bad state: ', ''))),
+      );
+      return;
+    }
+    if (mounted) {
+      navigator.pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const LoginScreen()),
+        (_) => false,
+      );
+    }
   }
 
   Future<void> _checkFirstLoginOnboarding() async {
@@ -367,7 +477,7 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
       title: 'Dashboard',
       description:
           'This is your Staff dashboard, with your account overview and daily work at a glance.',
-      contentAlign: ContentAlign.bottom,
+      contentAlign: ContentAlign.top,
     ),
     _StaffTourStep(
       key: _dashboardCategoriesTourKey,
@@ -648,37 +758,46 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
     }
 
     final size = MediaQuery.sizeOf(context);
+    final isTabletLayout = size.width >= 600;
     final hasTabletCanvas =
         size.shortestSide >= 600 || (size.width >= 900 && size.height >= 520);
-    final isTabletLandscape = size.width > size.height && hasTabletCanvas;
 
     return Scaffold(
       resizeToAvoidBottomInset: false,
       backgroundColor: Colors.white,
-      extendBody: _selectedIndex != 3 || hasTabletCanvas,
-      body: IndexedStack(
-        index: _selectedIndex,
+      extendBody: !isTabletLayout && (_selectedIndex != 3 || hasTabletCanvas),
+      body: Row(
         children: [
-          _buildDashboardPage(),
-          _buildAllItemsPage(),
-          _buildProfilePage(),
-          DailyStockPage(
-            initialView: _salesInitialView,
-            initialGroupName: _salesInitialGroup,
-            openPendingOnStart: _openPendingOnSalesLaunch,
-            launchToken: _salesLaunchToken,
-            salesTourKey: _salesProcessTourKey,
+          if (isTabletLayout) _buildTabletSidebar(),
+          Expanded(
+            child: IndexedStack(
+              index: _selectedIndex,
+              children: [
+                _buildDashboardPage(),
+                _buildAllItemsPage(),
+                _buildProfilePage(),
+                DailyStockPage(
+                  tabletSideNavigation: isTabletLayout,
+                  initialView: _salesInitialView,
+                  initialGroupName: _salesInitialGroup,
+                  openPendingOnStart: _openPendingOnSalesLaunch,
+                  launchToken: _salesLaunchToken,
+                  salesTourKey: _salesProcessTourKey,
+                ),
+              ],
+            ),
           ),
         ],
       ),
-      bottomNavigationBar: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (_selectedIndex != 2 && (_selectedIndex != 3 || hasTabletCanvas))
-            _buildPendingOrdersBadge(),
-          isTabletLandscape
-              ? _buildLandscapeNav()
-              : Stack(
+      bottomNavigationBar: isTabletLayout
+          ? null
+          : Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (_selectedIndex != 2 &&
+                    (_selectedIndex != 3 || hasTabletCanvas))
+                  _buildPendingOrdersBadge(),
+                Stack(
                   children: [
                     CurvedNavigationBar(
                       index: _selectedIndex,
@@ -750,7 +869,273 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
                     ),
                   ],
                 ),
-        ],
+              ],
+            ),
+    );
+  }
+
+  void _toggleTabletSidebar() {
+    if (_tabletSidebarExpanded) {
+      setState(() => _tabletSidebarLabelsVisible = false);
+      Future<void>.delayed(const Duration(milliseconds: 170), () {
+        if (mounted) setState(() => _tabletSidebarExpanded = false);
+      });
+      return;
+    }
+    setState(() => _tabletSidebarExpanded = true);
+    Future<void>.delayed(const Duration(milliseconds: 130), () {
+      if (mounted && _tabletSidebarExpanded && _selectedIndex != 3) {
+        setState(() => _tabletSidebarLabelsVisible = true);
+      }
+    });
+  }
+
+  Widget _buildTabletSidebar() {
+    const destinations = [
+      (Icons.home_rounded, 'Dashboard'),
+      (Icons.inventory_2_rounded, 'Inventory'),
+      (Icons.person_outline_rounded, 'Profile'),
+      (Icons.point_of_sale_rounded, 'Sales Process'),
+    ];
+    final salesProcessSelected = _selectedIndex == 3;
+    final expanded = _tabletSidebarExpanded && !salesProcessSelected;
+    final showLabels = expanded && _tabletSidebarLabelsVisible;
+    return SafeArea(
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 420),
+        curve: Curves.easeInOutQuart,
+        width: expanded ? 176 : 64,
+        decoration: BoxDecoration(
+          color: AppColors.primaryDark,
+          boxShadow: [
+            BoxShadow(
+              color: AppColors.primaryDark.withOpacity(0.14),
+              blurRadius: 12,
+              offset: const Offset(3, 0),
+            ),
+          ],
+        ),
+        child: Column(
+          children: [
+            const SizedBox(height: 8),
+            if (!salesProcessSelected)
+              Align(
+                alignment: Alignment.centerRight,
+                child: Padding(
+                  padding: const EdgeInsets.only(right: 6),
+                  child: IconButton.filledTonal(
+                    tooltip: expanded
+                        ? 'Collapse navigation'
+                        : 'Expand navigation',
+                    onPressed: _toggleTabletSidebar,
+                    style: IconButton.styleFrom(
+                      backgroundColor: Colors.white.withOpacity(0.14),
+                      foregroundColor: Colors.white,
+                      fixedSize: const Size(30, 30),
+                      padding: EdgeInsets.zero,
+                    ),
+                    icon: Icon(
+                      expanded
+                          ? Icons.chevron_left_rounded
+                          : Icons.chevron_right_rounded,
+                      size: 20,
+                    ),
+                  ),
+                ),
+              ),
+            SizedBox(height: salesProcessSelected ? 8 : 2),
+            Container(
+              width: expanded ? 44 : 36,
+              height: expanded ? 44 : 36,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                border: Border.all(color: Colors.white, width: 2),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Colors.black26,
+                    blurRadius: 6,
+                    offset: Offset(0, 3),
+                  ),
+                ],
+              ),
+              child: ClipOval(
+                child: Image.asset(
+                  'Assets/Image/ob.jpg',
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, _, _) => const ColoredBox(
+                    color: Colors.white,
+                    child: Icon(
+                      Icons.cake_rounded,
+                      color: AppColors.primaryDark,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            AnimatedSwitcher(
+              duration: const Duration(milliseconds: 220),
+              switchInCurve: Curves.easeOutCubic,
+              switchOutCurve: Curves.easeInCubic,
+              child: showLabels
+                  ? Padding(
+                      key: const ValueKey('staff-sidebar-brand'),
+                      padding: const EdgeInsets.only(top: 7),
+                      child: Column(
+                        children: [
+                          const Text(
+                            "Angel'Z Bites Cupcakes",
+                            textAlign: TextAlign.center,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 10,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                          const SizedBox(height: 3),
+                          Text(
+                            'STAFF',
+                            style: TextStyle(
+                              color: Colors.white.withOpacity(0.68),
+                              fontSize: 8,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: 2,
+                            ),
+                          ),
+                        ],
+                      ),
+                    )
+                  : const SizedBox.shrink(
+                      key: ValueKey('staff-sidebar-brand-hidden'),
+                    ),
+            ),
+            SizedBox(height: showLabels ? 14 : 10),
+            for (var index = 0; index < destinations.length; index++)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                child: _buildTabletNavItem(
+                  icon: destinations[index].$1,
+                  label: destinations[index].$2,
+                  index: index,
+                  key: switch (index) {
+                    0 => _dashboardNavTourKey,
+                    1 => _productsTourKey,
+                    2 => _profileNavTourKey,
+                    _ => _salesTourKey,
+                  },
+                  expanded: showLabels,
+                ),
+              ),
+            const Spacer(),
+            _buildTabletHeldOrdersButton(expanded: showLabels),
+            const SizedBox(height: 8),
+            if (showLabels)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+                child: SizedBox(
+                  width: double.infinity,
+                  height: 44,
+                  child: FilledButton.icon(
+                    onPressed: _logoutFromSidebar,
+                    icon: const Icon(Icons.logout_rounded, size: 18),
+                    label: const Text('Log out'),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: AppColors.primary,
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(13),
+                      ),
+                    ),
+                  ),
+                ),
+              )
+            else
+              IconButton(
+                tooltip: 'Log out',
+                onPressed: _logoutFromSidebar,
+                icon: const Icon(Icons.logout_rounded),
+                color: Colors.white,
+                style: IconButton.styleFrom(
+                  backgroundColor: AppColors.primary,
+                  fixedSize: const Size(44, 44),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(13),
+                  ),
+                ),
+              ),
+            const SizedBox(height: 10),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTabletNavItem({
+    required IconData icon,
+    required String label,
+    required int index,
+    required Key key,
+    required bool expanded,
+  }) {
+    final selected = _selectedIndex == index;
+    return Material(
+      color: selected ? AppColors.primary : Colors.transparent,
+      borderRadius: BorderRadius.circular(14),
+      child: InkWell(
+        key: key,
+        borderRadius: BorderRadius.circular(14),
+        onTap: () => setState(() {
+          if (index != 3) _openPendingOnSalesLaunch = false;
+          if (index == 3) {
+            _tabletSidebarExpanded = false;
+            _tabletSidebarLabelsVisible = false;
+          }
+          _selectedIndex = index;
+        }),
+        child: Padding(
+          padding: EdgeInsets.symmetric(
+            horizontal: expanded ? 12 : 0,
+            vertical: 12,
+          ),
+          child: Row(
+            mainAxisAlignment: expanded
+                ? MainAxisAlignment.start
+                : MainAxisAlignment.center,
+            children: [
+              if (index == 1)
+                StaffInventoryBadge(
+                  userId: _sessionUserId,
+                  child: Icon(
+                    icon,
+                    size: 21,
+                    color: Colors.white.withOpacity(selected ? 1 : 0.8),
+                  ),
+                )
+              else
+                Icon(
+                  icon,
+                  size: 21,
+                  color: Colors.white.withOpacity(selected ? 1 : 0.8),
+                ),
+              if (expanded) ...[
+                const SizedBox(width: 11),
+                Expanded(
+                  child: Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: Colors.white.withOpacity(selected ? 1 : 0.82),
+                      fontSize: 12,
+                      fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -793,71 +1178,94 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
     );
   }
 
-  Widget _buildLandscapeNav() {
-    return SafeArea(
-      top: false,
-      child: Align(
-        heightFactor: 1,
-        alignment: Alignment.bottomCenter,
-        child: Container(
-          width: 380,
-          height: 58,
-          margin: const EdgeInsets.only(bottom: 10),
-          padding: const EdgeInsets.symmetric(horizontal: 10),
-          decoration: BoxDecoration(
-            color: AppColors.primaryDark,
-            borderRadius: BorderRadius.circular(24),
-            boxShadow: [
-              BoxShadow(
-                color: AppColors.primary.withOpacity(0.18),
-                blurRadius: 18,
-                offset: const Offset(0, 8),
+  Widget _buildTabletHeldOrdersButton({required bool expanded}) {
+    final uid = FirebaseAuth.instance.currentUser?.uid ?? _sessionUserId;
+    if (uid == null || uid.isEmpty) return const SizedBox.shrink();
+    return StreamBuilder<List<HeldOrder>>(
+      stream: HeldOrderStore.instance.watch(uid),
+      builder: (context, snapshot) {
+        final count = snapshot.data?.length ?? 0;
+        if (count == 0) return const SizedBox.shrink();
+        return Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          child: SizedBox(
+            width: expanded ? double.infinity : 42,
+            height: 42,
+            child: Tooltip(
+              message: '$count held order${count == 1 ? '' : 's'}',
+              child: FilledButton(
+                style: FilledButton.styleFrom(
+                  backgroundColor: AppColors.primary,
+                  foregroundColor: Colors.white,
+                  padding: EdgeInsets.zero,
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(13),
+                  ),
+                ),
+                onPressed: () => setState(() {
+                  _salesInitialView = null;
+                  _salesInitialGroup = null;
+                  _openPendingOnSalesLaunch = true;
+                  _salesLaunchToken++;
+                  _tabletSidebarExpanded = false;
+                  _tabletSidebarLabelsVisible = false;
+                  _selectedIndex = 3;
+                }),
+                child: expanded
+                    ? Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const Icon(Icons.bookmark_rounded, size: 17),
+                          const SizedBox(width: 6),
+                          Flexible(
+                            child: Text(
+                              '$count held',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                        ],
+                      )
+                    : Stack(
+                        clipBehavior: Clip.none,
+                        children: [
+                          const Center(
+                            child: Icon(Icons.bookmark_rounded, size: 18),
+                          ),
+                          Positioned(
+                            right: -3,
+                            top: -5,
+                            child: DecoratedBox(
+                              decoration: const BoxDecoration(
+                                color: Colors.white,
+                                shape: BoxShape.circle,
+                              ),
+                              child: Padding(
+                                padding: const EdgeInsets.all(2),
+                                child: Text(
+                                  count > 99 ? '99+' : '$count',
+                                  style: const TextStyle(
+                                    color: AppColors.primary,
+                                    fontSize: 8,
+                                    fontWeight: FontWeight.w900,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
               ),
-            ],
-          ),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-            children: [
-              _landscapeNavItem(Icons.home_rounded, 0),
-              _landscapeNavItem(Icons.inventory_2_rounded, 1),
-              _landscapeNavItem(Icons.person_outline_rounded, 2),
-              _landscapeNavItem(Icons.point_of_sale_rounded, 3),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _landscapeNavItem(IconData icon, int index) {
-    final selected = _selectedIndex == index;
-    final targetKey = switch (index) {
-      0 => _dashboardNavTourKey,
-      1 => _productsTourKey,
-      2 => _profileNavTourKey,
-      3 => _salesTourKey,
-      _ => null,
-    };
-    return IconButton(
-      key: targetKey,
-      onPressed: () => setState(() => _selectedIndex = index),
-      style: IconButton.styleFrom(
-        backgroundColor: selected
-            ? AppColors.primary
-            : Colors.white.withOpacity(0.12),
-        fixedSize: const Size(46, 46),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-      ),
-      icon: index == 1
-          ? StaffInventoryBadge(
-              userId: _sessionUserId,
-              child: Icon(icon, size: selected ? 26 : 23, color: Colors.white),
-            )
-          : Icon(
-              icon,
-              size: selected ? 26 : 23,
-              color: selected ? Colors.white : Colors.white.withOpacity(0.82),
             ),
+          ),
+        );
+      },
     );
   }
 }

@@ -1,6 +1,7 @@
 import '../services/refund_value.dart';
 import 'package:sales_tracking/widgets/top_edge_refresh.dart';
 import 'package:sales_tracking/theme/app_colors.dart';
+import 'dart:async';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -40,9 +41,15 @@ class _SalesPageState extends State<SalesPage> with TickerProviderStateMixin {
   final Set<String> _pendingStaffNameLoads = {};
   Set<String> _branchStaffIds = <String>{};
   bool _receiptGroupsLoaded = false;
+  bool _receiptGroupsLoading = false;
+  bool _receiptLoadError = false;
+  int _receiptRequestGeneration = 0;
+  Timer? _searchDebounce;
   Set<String> _receiptPrimaryKeys = <String>{};
   final Map<String, Map<String, dynamic>> _receiptByPrimaryKey = {};
   List<Inventory> _receiptEntries = const [];
+  DateTime? _cachedSalesDate;
+  List<QueryDocumentSnapshot<Map<String, dynamic>>>? _cachedSalesDocs;
 
   @override
   void initState() {
@@ -52,12 +59,9 @@ class _SalesPageState extends State<SalesPage> with TickerProviderStateMixin {
       duration: const Duration(milliseconds: 500),
     )..forward();
     // Initialize InventoryService to load data
-    InventoryService()
-        .initialize()
-        .then((_) => InventoryService().refreshFromCloud())
-        .then((_) {
-          if (mounted) setState(() {});
-        });
+    InventoryService().initialize().then((_) {
+      if (mounted) setState(() {});
+    });
     // Listen to changes
     InventoryService().addListener(_onInventoryChanged);
     BranchSession.instance.addListener(_loadBranchStaff);
@@ -67,7 +71,12 @@ class _SalesPageState extends State<SalesPage> with TickerProviderStateMixin {
   Future<void> _loadBranchStaff() async {
     final branchId = BranchSession.instance.branchId;
     if (branchId == null) {
-      if (mounted) setState(() => _branchStaffIds = <String>{});
+      if (mounted) {
+        setState(() {
+          _branchStaffIds = <String>{};
+          _invalidateReceiptGroups();
+        });
+      }
       return;
     }
     final doc = await FirebaseFirestore.instance
@@ -80,18 +89,29 @@ class _SalesPageState extends State<SalesPage> with TickerProviderStateMixin {
     if (mounted && BranchSession.instance.branchId == branchId) {
       setState(() {
         _branchStaffIds = ids;
-        _receiptGroupsLoaded = false;
+        _invalidateReceiptGroups(refreshSales: true);
       });
+    }
+  }
+
+  void _invalidateReceiptGroups({bool refreshSales = false}) {
+    _receiptRequestGeneration++;
+    _receiptGroupsLoading = false;
+    _receiptGroupsLoaded = false;
+    _receiptLoadError = false;
+    _receiptPrimaryKeys = <String>{};
+    _receiptByPrimaryKey.clear();
+    _receiptEntries = const [];
+    if (refreshSales) {
+      _cachedSalesDate = null;
+      _cachedSalesDocs = null;
     }
   }
 
   void _onInventoryChanged() {
     if (mounted) {
       setState(() {
-        _receiptGroupsLoaded = false;
-        _receiptPrimaryKeys = <String>{};
-        _receiptByPrimaryKey.clear();
-        _receiptEntries = const [];
+        _invalidateReceiptGroups(refreshSales: true);
       });
     }
   }
@@ -103,71 +123,81 @@ class _SalesPageState extends State<SalesPage> with TickerProviderStateMixin {
   ].join('|');
 
   Future<void> _groupEntriesByReceipt(List<Inventory> entries) async {
-    final sales = await FirebaseFirestore.instance
-        .collection('completed_sales')
-        .get();
-    final receiptByPrimaryKey = <String, Map<String, dynamic>>{};
-    final receiptEntries = <Inventory>[];
+    if (_receiptGroupsLoading) return;
+    _receiptGroupsLoading = true;
+    final requestGeneration = _receiptRequestGeneration;
+    final selectedDate = _selectedDate;
 
-    // A completed_sale is the receipt source of truth.  Each one is assigned
-    // to one inventory row only so a multi-item order can never be split into
-    // separate cards or borrow items from a neighbouring receipt.
-    final receiptDocs =
-        sales.docs.where((doc) {
-          final data = doc.data();
-          final timestamp = (data['timestamp'] as Timestamp?)?.toDate();
-          return timestamp != null &&
-              _isSameDay(timestamp, _selectedDate) &&
-              (BranchSession.instance.isMainBranch ||
-                  _branchStaffIds.contains(data['userId']?.toString())) &&
-              (data['items'] as List<dynamic>? ?? [])
-                  .whereType<Map>()
-                  .isNotEmpty;
-        }).toList()..sort((a, b) {
-          final aTime = (a.data()['timestamp'] as Timestamp).toDate();
-          final bTime = (b.data()['timestamp'] as Timestamp).toDate();
-          return bTime.compareTo(aTime);
-        });
-
-    for (final doc in receiptDocs) {
-      final receipt = doc.data();
-      final userId = receipt['userId']?.toString().trim() ?? '';
-      final receiptTime = (receipt['timestamp'] as Timestamp).toDate();
-      final receiptItems = (receipt['items'] as List<dynamic>? ?? [])
-          .whereType<Map>()
-          .map((item) => Map<String, dynamic>.from(item))
-          .toList();
-      final query = _searchQuery.trim().toLowerCase();
-      final searchableItems = receiptItems
-          .map((item) => '${item['name'] ?? ''} ${item['variant'] ?? ''}')
-          .join(' ')
-          .toLowerCase();
-      final staffName = _staffNameCache[userId]?.toLowerCase() ?? '';
-      if (query.isNotEmpty &&
-          !searchableItems.contains(query) &&
-          !userId.toLowerCase().contains(query) &&
-          !staffName.contains(query)) {
-        continue;
-      }
-
-      // Build a display entry for every receipt.  Inventory snapshots are not
-      // used to decide which receipts appear; staff history is the source.
-      final primary = Inventory(
-        item: receiptItems.first['name']?.toString(),
-        ownerId: userId,
-        sourceInventoryId: 'receipt-${doc.id}',
-        items: receiptItems,
-        totalSalesRevenue:
-            double.tryParse(receipt['total']?.toString() ?? '') ?? 0,
-        timestamp: receiptTime,
+    try {
+      final dayStart = DateTime(
+        selectedDate.year,
+        selectedDate.month,
+        selectedDate.day,
       );
-      receiptEntries.add(primary);
-      receiptByPrimaryKey[_inventoryEntryKey(primary)] = {
-        ...receipt,
-        '_documentId': doc.id,
-      };
-    }
-    if (mounted) {
+      final nextDay = dayStart.add(const Duration(days: 1));
+      var receiptDocs = _cachedSalesDate == dayStart ? _cachedSalesDocs : null;
+      if (receiptDocs == null) {
+        final sales = await FirebaseFirestore.instance
+            .collection('completed_sales')
+            .where(
+              'timestamp',
+              isGreaterThanOrEqualTo: Timestamp.fromDate(dayStart),
+            )
+            .where('timestamp', isLessThan: Timestamp.fromDate(nextDay))
+            .orderBy('timestamp', descending: true)
+            .get()
+            .timeout(const Duration(seconds: 20));
+        receiptDocs = sales.docs;
+      }
+      if (!mounted || requestGeneration != _receiptRequestGeneration) return;
+      _cachedSalesDate = dayStart;
+      _cachedSalesDocs = receiptDocs;
+
+      final receiptByPrimaryKey = <String, Map<String, dynamic>>{};
+      final receiptEntries = <Inventory>[];
+
+      for (final doc in receiptDocs) {
+        final receipt = doc.data();
+        final userId = receipt['userId']?.toString().trim() ?? '';
+        if (!BranchSession.instance.isMainBranch &&
+            !_branchStaffIds.contains(userId)) {
+          continue;
+        }
+        final receiptItems = (receipt['items'] as List<dynamic>? ?? [])
+            .whereType<Map>()
+            .map((item) => Map<String, dynamic>.from(item))
+            .toList();
+        if (receiptItems.isEmpty) continue;
+
+        final receiptTime = (receipt['timestamp'] as Timestamp).toDate();
+        final query = _searchQuery.trim().toLowerCase();
+        final searchableItems = receiptItems
+            .map((item) => '${item['name'] ?? ''} ${item['variant'] ?? ''}')
+            .join(' ')
+            .toLowerCase();
+        final staffName = _staffNameCache[userId]?.toLowerCase() ?? '';
+        if (query.isNotEmpty &&
+            !searchableItems.contains(query) &&
+            !userId.toLowerCase().contains(query) &&
+            !staffName.contains(query)) {
+          continue;
+        }
+
+        final primary = Inventory(
+          item: receiptItems.first['name']?.toString(),
+          ownerId: userId,
+          sourceInventoryId: 'receipt-${doc.id}',
+          items: receiptItems,
+          totalSalesRevenue:
+              double.tryParse(receipt['total']?.toString() ?? '') ?? 0,
+          timestamp: receiptTime,
+        );
+        receiptEntries.add(primary);
+        receiptByPrimaryKey[_inventoryEntryKey(primary)] = {
+          ...receipt,
+          '_documentId': doc.id,
+        };
+      }
       setState(() {
         _receiptPrimaryKeys = receiptByPrimaryKey.keys.toSet();
         _receiptByPrimaryKey
@@ -175,7 +205,20 @@ class _SalesPageState extends State<SalesPage> with TickerProviderStateMixin {
           ..addAll(receiptByPrimaryKey);
         _receiptEntries = receiptEntries;
         _receiptGroupsLoaded = true;
+        _receiptLoadError = false;
       });
+    } catch (error) {
+      if (mounted && requestGeneration == _receiptRequestGeneration) {
+        debugPrint('Failed to load completed sales: $error');
+        setState(() {
+          _receiptGroupsLoaded = true;
+          _receiptLoadError = true;
+        });
+      }
+    } finally {
+      if (mounted && requestGeneration == _receiptRequestGeneration) {
+        setState(() => _receiptGroupsLoading = false);
+      }
     }
   }
 
@@ -183,6 +226,7 @@ class _SalesPageState extends State<SalesPage> with TickerProviderStateMixin {
   void dispose() {
     InventoryService().removeListener(_onInventoryChanged);
     BranchSession.instance.removeListener(_loadBranchStaff);
+    _searchDebounce?.cancel();
     _fadeCtrl.dispose();
     super.dispose();
   }
@@ -337,7 +381,6 @@ class _SalesPageState extends State<SalesPage> with TickerProviderStateMixin {
       ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
 
     _prefetchStaffNamesForEntries(sortedEntries);
-
     final filteredEntries = _filterEntries(sortedEntries);
     if (!_receiptGroupsLoaded) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -357,9 +400,7 @@ class _SalesPageState extends State<SalesPage> with TickerProviderStateMixin {
           await InventoryService().refreshFromCloud();
           if (mounted) {
             setState(() {
-              _receiptGroupsLoaded = false;
-              _receiptEntries = const [];
-              _receiptByPrimaryKey.clear();
+              _invalidateReceiptGroups(refreshSales: true);
             });
           }
         },
@@ -430,10 +471,20 @@ class _SalesPageState extends State<SalesPage> with TickerProviderStateMixin {
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
                 child: TextField(
-                  onChanged: (value) => setState(() {
+                  onChanged: (value) {
                     _searchQuery = value;
-                    _receiptGroupsLoaded = false;
-                  }),
+                    _searchDebounce?.cancel();
+                    _searchDebounce = Timer(
+                      const Duration(milliseconds: 300),
+                      () {
+                        if (!mounted) return;
+                        setState(() {
+                          _receiptGroupsLoaded = false;
+                          _receiptLoadError = false;
+                        });
+                      },
+                    );
+                  },
                   decoration: InputDecoration(
                     hintText: 'Search staff name or item',
                     prefixIcon: const Icon(Icons.search),
@@ -474,10 +525,7 @@ class _SalesPageState extends State<SalesPage> with TickerProviderStateMixin {
                     if (picked != null && picked != _selectedDate) {
                       setState(() {
                         _selectedDate = picked;
-                        _receiptGroupsLoaded = false;
-                        _receiptPrimaryKeys = <String>{};
-                        _receiptByPrimaryKey.clear();
-                        _receiptEntries = const [];
+                        _invalidateReceiptGroups();
                       });
                     }
                   },
@@ -515,7 +563,30 @@ class _SalesPageState extends State<SalesPage> with TickerProviderStateMixin {
             // ── Cards ───────────────────────────────────────
             SliverPadding(
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 32),
-              sliver: visibleEntries.isEmpty
+              sliver: _receiptLoadError
+                  ? SliverToBoxAdapter(
+                      child: Center(
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 32),
+                          child: Column(
+                            children: [
+                              const Text('Could not load sales records.'),
+                              const SizedBox(height: 8),
+                              TextButton.icon(
+                                onPressed: () => setState(
+                                  () => _invalidateReceiptGroups(
+                                    refreshSales: true,
+                                  ),
+                                ),
+                                icon: const Icon(Icons.refresh),
+                                label: const Text('Retry'),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    )
+                  : visibleEntries.isEmpty
                   ? SliverToBoxAdapter(
                       child: Center(
                         child: Padding(
@@ -697,6 +768,9 @@ class _ReceiptStaffDetails {
 }
 
 class _AdminReceiptCard extends StatelessWidget {
+  static final Map<String, Future<_ReceiptStaffDetails?>>
+  _staffDetailsRequests = {};
+
   final Map<String, dynamic> _data;
   Map<String, dynamic> get data => refundValueRecord(_data);
   const _AdminReceiptCard({required Map<String, dynamic> data}) : _data = data;
@@ -708,9 +782,41 @@ class _AdminReceiptCard extends StatelessWidget {
   int _quantity(dynamic value) =>
       value is num ? value.toInt() : int.tryParse(value?.toString() ?? '') ?? 0;
 
-  Future<_ReceiptStaffDetails?> _loadStaffDetails() async {
+  Future<_ReceiptStaffDetails?> _loadStaffDetails() {
     final userId = data['userId']?.toString().trim() ?? '';
-    if (userId.isEmpty) return null;
+    if (userId.isEmpty) return Future.value(null);
+    final receiptName = data['staffName']?.toString().trim() ?? '';
+    final receiptStaffId =
+        data['staffPublicId']?.toString().trim() ??
+        data['staffId']?.toString().trim() ??
+        '';
+    final receiptBranch = data['branchName']?.toString().trim() ?? '';
+    if (receiptName.isNotEmpty && receiptBranch.isNotEmpty) {
+      return Future.value(
+        _ReceiptStaffDetails(
+          name: receiptName,
+          staffId: receiptStaffId.isEmpty ? userId : receiptStaffId,
+          branch: receiptBranch,
+        ),
+      );
+    }
+
+    final branchId = data['branchId']?.toString().trim() ?? '';
+    final cacheKey = '$userId|$branchId';
+    final cached = _staffDetailsRequests[cacheKey];
+    if (cached != null) return cached;
+    final request = _fetchStaffDetails(userId);
+    _staffDetailsRequests[cacheKey] = request;
+    request.then((details) {
+      if (details == null &&
+          identical(_staffDetailsRequests[cacheKey], request)) {
+        _staffDetailsRequests.remove(cacheKey);
+      }
+    });
+    return request;
+  }
+
+  Future<_ReceiptStaffDetails?> _fetchStaffDetails(String userId) async {
     try {
       final staffDoc = await FirebaseFirestore.instance
           .collection('staff_requests')
@@ -731,17 +837,28 @@ class _AdminReceiptCard extends StatelessWidget {
         if (value.isNotEmpty) identifiers.add(value);
       }
 
-      final branches = await FirebaseFirestore.instance
-          .collection('branches')
-          .get();
       String branchName = 'Main Branch';
-      for (final branch in branches.docs) {
-        if (branch.data()['isVoided'] == true) continue;
-        final staffIds = (branch.data()['staffIds'] as List<dynamic>? ?? [])
-            .map((id) => id.toString().trim());
-        if (staffIds.any(identifiers.contains)) {
-          branchName = branch.data()['name']?.toString().trim() ?? 'Branch';
-          break;
+      final branchId = data['branchId']?.toString().trim() ?? '';
+      if (branchId.isNotEmpty) {
+        final branch = await FirebaseFirestore.instance
+            .collection('branches')
+            .doc(branchId)
+            .get();
+        if (branch.data()?['isVoided'] != true) {
+          branchName = branch.data()?['name']?.toString().trim() ?? 'Branch';
+        }
+      } else {
+        final branches = await FirebaseFirestore.instance
+            .collection('branches')
+            .get();
+        for (final branch in branches.docs) {
+          if (branch.data()['isVoided'] == true) continue;
+          final staffIds = (branch.data()['staffIds'] as List<dynamic>? ?? [])
+              .map((id) => id.toString().trim());
+          if (staffIds.any(identifiers.contains)) {
+            branchName = branch.data()['name']?.toString().trim() ?? 'Branch';
+            break;
+          }
         }
       }
       return _ReceiptStaffDetails(
@@ -749,7 +866,8 @@ class _AdminReceiptCard extends StatelessWidget {
         staffId: staffId,
         branch: branchName.isEmpty ? 'Branch' : branchName,
       );
-    } catch (_) {
+    } catch (error) {
+      debugPrint('Failed to load receipt staff details: $error');
       return null;
     }
   }

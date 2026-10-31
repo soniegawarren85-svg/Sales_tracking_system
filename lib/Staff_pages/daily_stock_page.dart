@@ -4,6 +4,7 @@ import '../services/transaction_settings.dart';
 import '../widgets/bundle_beverage_dialog.dart';
 import 'package:sales_tracking/theme/app_colors.dart';
 import '../services/inventory_display_ids.dart';
+import '../services/offline_stock_reduction_service.dart';
 import '../services/staff_allocation_scope.dart';
 import '../services/bundle_stock_service.dart';
 import '../services/beverage_sales_summary.dart';
@@ -14,6 +15,7 @@ import 'dart:convert';
 import 'dart:math';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -77,6 +79,9 @@ class _OrderConfirmationResult {
   final String discountProofId;
   final String paymentMode;
   final String gcashTransactionId;
+  final String providerPaymentId;
+  final String providerReferenceNumber;
+  final DateTime? paymentTransactionAt;
 
   const _OrderConfirmationResult({
     required this.totalDue,
@@ -86,6 +91,9 @@ class _OrderConfirmationResult {
     required this.discountProofId,
     required this.paymentMode,
     required this.gcashTransactionId,
+    required this.providerPaymentId,
+    required this.providerReferenceNumber,
+    required this.paymentTransactionAt,
   });
 }
 
@@ -102,6 +110,7 @@ bool _isExpiredItem(String expirationDate) {
 }
 
 class DailyStockPage extends StatefulWidget {
+  final bool tabletSideNavigation;
   final bool openRefundOnStart;
   final bool openPendingOnStart;
   final String? initialView;
@@ -111,6 +120,7 @@ class DailyStockPage extends StatefulWidget {
 
   const DailyStockPage({
     super.key,
+    this.tabletSideNavigation = false,
     this.openRefundOnStart = false,
     this.openPendingOnStart = false,
     this.initialView,
@@ -132,11 +142,14 @@ class _DailyStockPageState extends State<DailyStockPage>
   _rootSalesInventoryStream;
   Stream<QuerySnapshot<Map<String, dynamic>>>? _staffInventoryStreamCache;
   StreamSubscription? _pendingOrdersSubscription;
+  StreamSubscription<void>? _pendingReductionsSubscription;
+  StreamSubscription<List<ConnectivityResult>>? _connectivitySubscription;
   final Map<String, int> _cart = {};
   final Map<String, Map<String, dynamic>> _cartItemLookup = {};
   final Map<String, TextEditingController> _qtyControllers = {};
   List<String> _staffInventoryIds = const [];
   List<_CachedDoc> _cachedStaffInventoryDocs = const [];
+  List<Map<String, dynamic>> _pendingOfflineReductions = const [];
   List<_CachedDoc> _cachedSalesInventoryDocs = const [];
   List<_CachedDoc> _cachedStaffRequestDocs = const [];
   List<_CachedDoc> _cachedBranchDocs = const [];
@@ -299,6 +312,15 @@ class _DailyStockPageState extends State<DailyStockPage>
           ].contains(name),
         )
         .listen((_) => _loadLocalOrderCache());
+    _pendingReductionsSubscription = OfflineStockReductionService().changes
+        .listen((_) => _loadLocalOrderCache());
+    _connectivitySubscription = Connectivity().onConnectivityChanged.listen((
+      results,
+    ) {
+      if (results.contains(ConnectivityResult.none)) return;
+      unawaited(_syncOfflineStockReductions());
+    });
+    unawaited(_syncOfflineStockReductions());
     WidgetsBinding.instance.addObserver(this);
     _budgetRequestController = TextEditingController();
     _orderSearchController = TextEditingController();
@@ -423,8 +445,10 @@ class _DailyStockPageState extends State<DailyStockPage>
       final staffRequests = await service.getCachedCollection('staff_requests');
       final branches = await service.getCachedCollection('branches');
       final drawers = await service.getCachedCollection('staff_cash_drawer');
+      final pendingReductions = await OfflineStockReductionService().pending();
       if (!mounted) return;
       setState(() {
+        _pendingOfflineReductions = pendingReductions;
         _cachedStaffInventoryDocs = staffInventory
             .where((row) => allocationBelongsTo(row, _staffInventoryIds))
             .map(_CachedDoc.fromMap)
@@ -445,6 +469,19 @@ class _DailyStockPageState extends State<DailyStockPage>
       });
     } catch (e) {
       debugPrint('Local order cache load failed: $e');
+    }
+  }
+
+  Future<void> _syncOfflineStockReductions() async {
+    try {
+      final connectivity = await Connectivity().checkConnectivity();
+      if (connectivity.contains(ConnectivityResult.none)) return;
+      await OfflineStockReductionService().sync(FirebaseFirestore.instance);
+      final pending = await OfflineStockReductionService().pending();
+      if (!mounted) return;
+      setState(() => _pendingOfflineReductions = pending);
+    } catch (error) {
+      debugPrint('Unable to sync offline inventory reductions: $error');
     }
   }
 
@@ -604,6 +641,8 @@ class _DailyStockPageState extends State<DailyStockPage>
     _settingsRevision.dispose();
     _drawerDayTimer?.cancel();
     _localDataSubscription?.cancel();
+    _pendingReductionsSubscription?.cancel();
+    _connectivitySubscription?.cancel();
     _allocationScopeSubscription?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     InventoryService().removeListener(_onInventoryChanged);
@@ -1491,12 +1530,80 @@ class _DailyStockPageState extends State<DailyStockPage>
     });
   }
 
+  Future<List<Map<String, dynamic>>> _refreshCoffeeAddonVariants(
+    List<Map<String, dynamic>> variants,
+  ) async {
+    final addonIds = variants
+        .map((variant) => '${variant['addonId'] ?? ''}'.trim())
+        .where((id) => id.isNotEmpty)
+        .toSet()
+        .toList();
+    if (addonIds.isEmpty) return variants;
+
+    final addonsById = <String, Map<String, dynamic>>{};
+    try {
+      for (final addon in await LocalDatabaseSyncService().getCachedCollection(
+        'coffee_addons',
+      )) {
+        final id = '${addon['_localDocId'] ?? addon['id'] ?? ''}'.trim();
+        if (addonIds.contains(id)) addonsById[id] = addon;
+      }
+    } catch (error) {
+      debugPrint('Unable to load cached add-on images: $error');
+    }
+
+    try {
+      final fetched = <Map<String, dynamic>>[];
+      for (var start = 0; start < addonIds.length; start += 10) {
+        final batch = addonIds.skip(start).take(10).toList();
+        final snapshot = await FirebaseFirestore.instance
+            .collection('coffee_addons')
+            .where(FieldPath.documentId, whereIn: batch)
+            .get(const GetOptions(source: Source.server))
+            .timeout(const Duration(seconds: 4));
+        fetched.addAll(
+          snapshot.docs.map((doc) => {...doc.data(), '_localDocId': doc.id}),
+        );
+      }
+      for (final addon in fetched) {
+        final id = '${addon['_localDocId']}';
+        addonsById[id] = addon;
+      }
+      if (fetched.isNotEmpty) {
+        await LocalDatabaseSyncService().cacheCollectionDocs(
+          'coffee_addons',
+          fetched,
+        );
+      }
+    } catch (error) {
+      debugPrint('Unable to refresh current add-on catalog images: $error');
+    }
+
+    return variants.map((variant) {
+      final addonId = '${variant['addonId'] ?? ''}'.trim();
+      final addon = addonsById[addonId];
+      if (addon == null) return variant;
+      final addonDelta = _parsePrice(addon['priceDelta']);
+      final basePrice =
+          _parsePrice(variant['basePrice']) +
+          _parsePrice(variant['sizePriceDelta']);
+      return {
+        ...variant,
+        'addonName': addon['name'] ?? variant['addonName'],
+        'addonImageUrl': addon['imageUrl'] ?? variant['addonImageUrl'] ?? '',
+        'addonPriceDelta': addonDelta,
+        'price': basePrice + addonDelta,
+      };
+    }).toList();
+  }
+
   Future<void> _showCoffeeCustomizeDialog({
     required String flavorName,
     required String coffeeId,
     required List<Map<String, dynamic>> variants,
   }) async {
     if (variants.isEmpty) return;
+    variants = await _refreshCoffeeAddonVariants(variants);
 
     final sizeGroups = <String, List<Map<String, dynamic>>>{};
     for (final variant in variants) {
@@ -1510,7 +1617,10 @@ class _DailyStockPageState extends State<DailyStockPage>
     String selectedSize = sizeGroups.keys.first;
     String selectedAddon = '';
     String selectedSugar = '0%';
+    String addonSearchQuery = '';
+    bool showingAddonPage = false;
     int quantity = 1;
+    final quantityController = TextEditingController(text: '1');
 
     Map<String, dynamic> selectedItem() {
       final sizeVariants = sizeGroups[selectedSize] ?? variants;
@@ -1552,6 +1662,48 @@ class _DailyStockPageState extends State<DailyStockPage>
                 .where((name) => name.isNotEmpty)
                 .toSet()
                 .toList();
+            final visibleAddonOptions = addonOptions
+                .where(
+                  (name) => name.toLowerCase().contains(
+                    addonSearchQuery.trim().toLowerCase(),
+                  ),
+                )
+                .toList();
+
+            Future<void> addSelectedOrder() async {
+              if (quantity > 20) {
+                final confirmed = await showDialog<bool>(
+                  context: dialogContext,
+                  builder: (confirmationContext) => AlertDialog(
+                    title: const Text('Confirm large beverage order'),
+                    content: Text(
+                      'You are adding $quantity beverages. Continue with this quantity?',
+                    ),
+                    actions: [
+                      TextButton(
+                        onPressed: () =>
+                            Navigator.of(confirmationContext).pop(false),
+                        child: const Text('Review quantity'),
+                      ),
+                      FilledButton(
+                        onPressed: () =>
+                            Navigator.of(confirmationContext).pop(true),
+                        child: const Text('Continue'),
+                      ),
+                    ],
+                  ),
+                );
+                if (confirmed != true) return;
+              }
+              final chosenItem = selectedItem();
+              _addCoffeeSelection(chosenItem, quantity);
+              if (dialogContext.mounted) {
+                Navigator.of(dialogContext).pop();
+                _showStyledSnackBar(
+                  '$quantity x ${chosenItem['name']} added to cart',
+                );
+              }
+            }
 
             return Dialog(
               insetPadding: const EdgeInsets.symmetric(
@@ -1647,59 +1799,23 @@ class _DailyStockPageState extends State<DailyStockPage>
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Wrap(
-                              spacing: 8,
-                              runSpacing: 8,
-                              children: [
-                                _MiniTag(
-                                  label: 'Size: $selectedSize',
-                                  bgColor: _AppColors.primary.withOpacity(0.10),
-                                  textColor: _AppColors.primary,
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 18),
-                            const Text(
-                              'Size',
-                              style: TextStyle(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w800,
-                                color: _AppColors.textMid,
+                            if (!showingAddonPage) ...[
+                              Wrap(
+                                spacing: 8,
+                                runSpacing: 8,
+                                children: [
+                                  _MiniTag(
+                                    label: 'Size: $selectedSize',
+                                    bgColor: _AppColors.primary.withOpacity(
+                                      0.10,
+                                    ),
+                                    textColor: _AppColors.primary,
+                                  ),
+                                ],
                               ),
-                            ),
-                            const SizedBox(height: 10),
-                            Wrap(
-                              spacing: 8,
-                              runSpacing: 8,
-                              children: sizeGroups.keys.map((sizeName) {
-                                final isSelected = selectedSize == sizeName;
-                                return ChoiceChip(
-                                  selected: isSelected,
-                                  onSelected: (_) => setDialogState(() {
-                                    selectedSize = sizeName;
-                                    selectedAddon = '';
-                                  }),
-                                  label: Text(sizeName),
-                                  labelStyle: TextStyle(
-                                    color: isSelected
-                                        ? Colors.white
-                                        : _AppColors.primary,
-                                    fontWeight: FontWeight.w800,
-                                  ),
-                                  selectedColor: _AppColors.primary,
-                                  backgroundColor: _AppColors.cardBg,
-                                  side: BorderSide(
-                                    color: isSelected
-                                        ? _AppColors.primary
-                                        : _AppColors.border,
-                                  ),
-                                );
-                              }).toList(),
-                            ),
-                            const SizedBox(height: 18),
-                            if (addonOptions.isNotEmpty) ...[
+                              const SizedBox(height: 18),
                               const Text(
-                                'Add-ons',
+                                'Size',
                                 style: TextStyle(
                                   fontSize: 14,
                                   fontWeight: FontWeight.w800,
@@ -1710,75 +1826,15 @@ class _DailyStockPageState extends State<DailyStockPage>
                               Wrap(
                                 spacing: 8,
                                 runSpacing: 8,
-                                children: [
-                                  ...addonOptions.map((addonName) {
-                                    final addonVariant = activeSizeVariants
-                                        .firstWhere(
-                                          (variant) =>
-                                              (variant['addonName']
-                                                      ?.toString() ??
-                                                  '') ==
-                                              addonName,
-                                          orElse: () =>
-                                              activeSizeVariants.first,
-                                        );
-                                    final addonPrice = _parsePrice(
-                                      addonVariant['addonPriceDelta'],
-                                    );
-                                    final isSelected =
-                                        selectedAddon == addonName;
-                                    return ChoiceChip(
-                                      selected: isSelected,
-                                      onSelected: (_) => setDialogState(
-                                        () => selectedAddon = isSelected
-                                            ? ''
-                                            : addonName,
-                                      ),
-                                      label: Text(
-                                        addonPrice > 0
-                                            ? '$addonName (+${formatMoney(addonPrice)})'
-                                            : addonName,
-                                      ),
-                                      labelStyle: TextStyle(
-                                        color: isSelected
-                                            ? Colors.white
-                                            : _AppColors.primary,
-                                        fontWeight: FontWeight.w700,
-                                      ),
-                                      selectedColor: _AppColors.primary,
-                                      backgroundColor: _AppColors.cardBg,
-                                      side: BorderSide(
-                                        color: isSelected
-                                            ? _AppColors.primary
-                                            : _AppColors.border,
-                                      ),
-                                    );
-                                  }),
-                                ],
-                              ),
-                              const SizedBox(height: 18),
-                            ],
-                            const Text(
-                              'Sugar Level',
-                              style: TextStyle(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w800,
-                                color: _AppColors.textMid,
-                              ),
-                            ),
-                            const SizedBox(height: 10),
-                            Wrap(
-                              spacing: 8,
-                              runSpacing: 8,
-                              children: ['0%', '25%', '50%', '75%', '100%'].map(
-                                (sugar) {
-                                  final isSelected = selectedSugar == sugar;
+                                children: sizeGroups.keys.map((sizeName) {
+                                  final isSelected = selectedSize == sizeName;
                                   return ChoiceChip(
                                     selected: isSelected,
-                                    onSelected: (_) => setDialogState(
-                                      () => selectedSugar = sugar,
-                                    ),
-                                    label: Text(sugar),
+                                    onSelected: (_) => setDialogState(() {
+                                      selectedSize = sizeName;
+                                      selectedAddon = '';
+                                    }),
+                                    label: Text(sizeName),
                                     labelStyle: TextStyle(
                                       color: isSelected
                                           ? Colors.white
@@ -1793,45 +1849,297 @@ class _DailyStockPageState extends State<DailyStockPage>
                                           : _AppColors.border,
                                     ),
                                   );
-                                },
-                              ).toList(),
+                                }).toList(),
+                              ),
+                              const SizedBox(height: 18),
+                            ],
+                            AnimatedSwitcher(
+                              duration: const Duration(milliseconds: 220),
+                              switchInCurve: Curves.easeOutCubic,
+                              switchOutCurve: Curves.easeInCubic,
+                              child: addonOptions.isNotEmpty && showingAddonPage
+                                  ? Column(
+                                      key: const ValueKey('addon-picker'),
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.stretch,
+                                      children: [
+                                        Row(
+                                          children: [
+                                            IconButton(
+                                              tooltip: 'Back to beverage',
+                                              onPressed: () =>
+                                                  setDialogState(() {
+                                                    showingAddonPage = false;
+                                                    addonSearchQuery = '';
+                                                  }),
+                                              icon: const Icon(
+                                                Icons.arrow_back_rounded,
+                                              ),
+                                            ),
+                                            const Expanded(
+                                              child: Text(
+                                                'Choose add-ons',
+                                                style: TextStyle(
+                                                  fontSize: 16,
+                                                  fontWeight: FontWeight.w800,
+                                                  color: _AppColors.textMid,
+                                                ),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                        TextField(
+                                          onChanged: (value) => setDialogState(
+                                            () => addonSearchQuery = value,
+                                          ),
+                                          decoration: InputDecoration(
+                                            hintText: 'Search add-ons',
+                                            prefixIcon: const Icon(
+                                              Icons.search_rounded,
+                                            ),
+                                            isDense: true,
+                                            filled: true,
+                                            fillColor: _AppColors.cardBg,
+                                            border: OutlineInputBorder(
+                                              borderRadius:
+                                                  BorderRadius.circular(14),
+                                              borderSide: BorderSide.none,
+                                            ),
+                                          ),
+                                        ),
+                                        const SizedBox(height: 12),
+                                        if (visibleAddonOptions.isEmpty)
+                                          const Padding(
+                                            padding: EdgeInsets.all(16),
+                                            child: Text(
+                                              'No add-ons match your search.',
+                                              textAlign: TextAlign.center,
+                                              style: TextStyle(
+                                                color: _AppColors.textSoft,
+                                              ),
+                                            ),
+                                          )
+                                        else
+                                          Wrap(
+                                            spacing: 8,
+                                            runSpacing: 8,
+                                            children: [
+                                              ...visibleAddonOptions.map((
+                                                addonName,
+                                              ) {
+                                                final addonVariant =
+                                                    activeSizeVariants.firstWhere(
+                                                      (variant) =>
+                                                          (variant['addonName']
+                                                                  ?.toString() ??
+                                                              '') ==
+                                                          addonName,
+                                                      orElse: () =>
+                                                          activeSizeVariants
+                                                              .first,
+                                                    );
+                                                final addonPrice = _parsePrice(
+                                                  addonVariant['addonPriceDelta'],
+                                                );
+                                                final isSelected =
+                                                    selectedAddon == addonName;
+                                                return InkWell(
+                                                  onTap: () => setDialogState(
+                                                    () => selectedAddon =
+                                                        isSelected
+                                                        ? ''
+                                                        : addonName,
+                                                  ),
+                                                  borderRadius:
+                                                      BorderRadius.circular(12),
+                                                  child: Container(
+                                                    width: 190,
+                                                    padding:
+                                                        const EdgeInsets.all(7),
+                                                    decoration: BoxDecoration(
+                                                      color: isSelected
+                                                          ? _AppColors.primary
+                                                                .withOpacity(
+                                                                  0.08,
+                                                                )
+                                                          : _AppColors.cardBg,
+                                                      borderRadius:
+                                                          BorderRadius.circular(
+                                                            12,
+                                                          ),
+                                                      border: Border.all(
+                                                        color: isSelected
+                                                            ? _AppColors.primary
+                                                            : _AppColors.border,
+                                                      ),
+                                                    ),
+                                                    child: Row(
+                                                      children: [
+                                                        _orderImageBox(
+                                                          addonVariant['addonImageUrl']
+                                                                  ?.toString() ??
+                                                              addonVariant['imageUrl']
+                                                                  ?.toString() ??
+                                                              '',
+                                                          fallbackIcon: Icons
+                                                              .add_circle_outline,
+                                                          size: 34,
+                                                          width: 38,
+                                                          height: 38,
+                                                        ),
+                                                        const SizedBox(
+                                                          width: 7,
+                                                        ),
+                                                        Expanded(
+                                                          child: Column(
+                                                            crossAxisAlignment:
+                                                                CrossAxisAlignment
+                                                                    .start,
+                                                            mainAxisSize:
+                                                                MainAxisSize
+                                                                    .min,
+                                                            children: [
+                                                              Text(
+                                                                addonName,
+                                                                maxLines: 1,
+                                                                overflow:
+                                                                    TextOverflow
+                                                                        .ellipsis,
+                                                                style: TextStyle(
+                                                                  color:
+                                                                      isSelected
+                                                                      ? _AppColors
+                                                                            .primary
+                                                                      : _AppColors
+                                                                            .textMid,
+                                                                  fontSize: 11,
+                                                                  fontWeight:
+                                                                      FontWeight
+                                                                          .w800,
+                                                                ),
+                                                              ),
+                                                              Text(
+                                                                addonPrice > 0
+                                                                    ? '+${formatMoney(addonPrice)}'
+                                                                    : 'Included',
+                                                                style: const TextStyle(
+                                                                  color: _AppColors
+                                                                      .textSoft,
+                                                                  fontSize: 10,
+                                                                ),
+                                                              ),
+                                                            ],
+                                                          ),
+                                                        ),
+                                                        if (isSelected)
+                                                          const Icon(
+                                                            Icons.check_circle,
+                                                            color: _AppColors
+                                                                .primary,
+                                                            size: 16,
+                                                          ),
+                                                      ],
+                                                    ),
+                                                  ),
+                                                );
+                                              }),
+                                            ],
+                                          ),
+                                      ],
+                                    )
+                                  : const SizedBox.shrink(
+                                      key: ValueKey('addon-picker-empty'),
+                                    ),
                             ),
-                            const SizedBox(height: 18),
-                            Row(
-                              children: [
-                                const Text(
-                                  'Quantity',
-                                  style: TextStyle(
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.w800,
-                                    color: _AppColors.textMid,
-                                  ),
+                            if (!showingAddonPage) ...[
+                              const Text(
+                                'Sugar Level',
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w800,
+                                  color: _AppColors.textMid,
                                 ),
-                                const Spacer(),
-                                Container(
-                                  decoration: BoxDecoration(
-                                    color: _AppColors.cardBg,
-                                    borderRadius: BorderRadius.circular(14),
-                                    border: Border.all(
-                                      color: _AppColors.border,
+                              ),
+                              const SizedBox(height: 10),
+                              Wrap(
+                                spacing: 8,
+                                runSpacing: 8,
+                                children: ['0%', '25%', '50%', '75%', '100%']
+                                    .map((sugar) {
+                                      final isSelected = selectedSugar == sugar;
+                                      return ChoiceChip(
+                                        selected: isSelected,
+                                        onSelected: (_) => setDialogState(
+                                          () => selectedSugar = sugar,
+                                        ),
+                                        label: Text(sugar),
+                                        labelStyle: TextStyle(
+                                          color: isSelected
+                                              ? Colors.white
+                                              : _AppColors.primary,
+                                          fontWeight: FontWeight.w800,
+                                        ),
+                                        selectedColor: _AppColors.primary,
+                                        backgroundColor: _AppColors.cardBg,
+                                        side: BorderSide(
+                                          color: isSelected
+                                              ? _AppColors.primary
+                                              : _AppColors.border,
+                                        ),
+                                      );
+                                    })
+                                    .toList(),
+                              ),
+                              const SizedBox(height: 18),
+                              Row(
+                                children: [
+                                  const Text(
+                                    'Quantity',
+                                    style: TextStyle(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w800,
+                                      color: _AppColors.textMid,
                                     ),
                                   ),
-                                  child: Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      _StepperButton(
-                                        icon: Icons.remove_rounded,
-                                        onPressed: quantity > 1
-                                            ? () => setDialogState(
-                                                () => quantity -= 1,
-                                              )
-                                            : null,
+                                  const Spacer(),
+                                  Container(
+                                    decoration: BoxDecoration(
+                                      color: _AppColors.cardBg,
+                                      borderRadius: BorderRadius.circular(14),
+                                      border: Border.all(
+                                        color: _AppColors.border,
                                       ),
-                                      SizedBox(
-                                        width: 48,
-                                        child: Center(
-                                          child: Text(
-                                            '$quantity',
+                                    ),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        SizedBox(
+                                          width: 64,
+                                          child: TextField(
+                                            controller: quantityController,
+                                            textAlign: TextAlign.center,
+                                            keyboardType: TextInputType.number,
+                                            inputFormatters: [
+                                              FilteringTextInputFormatter
+                                                  .digitsOnly,
+                                            ],
+                                            decoration: const InputDecoration(
+                                              isDense: true,
+                                              border: InputBorder.none,
+                                              contentPadding:
+                                                  EdgeInsets.symmetric(
+                                                    vertical: 8,
+                                                  ),
+                                            ),
+                                            onChanged: (value) {
+                                              final parsed =
+                                                  int.tryParse(value) ?? 0;
+                                              if (parsed > 0) {
+                                                setDialogState(
+                                                  () => quantity = parsed,
+                                                );
+                                              }
+                                            },
                                             style: const TextStyle(
                                               fontSize: 15,
                                               fontWeight: FontWeight.w800,
@@ -1839,49 +2147,94 @@ class _DailyStockPageState extends State<DailyStockPage>
                                             ),
                                           ),
                                         ),
-                                      ),
-                                      _StepperButton(
-                                        icon: Icons.add_rounded,
-                                        onPressed: () =>
-                                            setDialogState(() => quantity += 1),
-                                        isAdd: true,
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 20),
-                            Container(
-                              width: double.infinity,
-                              padding: const EdgeInsets.all(14),
-                              decoration: BoxDecoration(
-                                color: _AppColors.primary.withOpacity(0.08),
-                                borderRadius: BorderRadius.circular(16),
-                              ),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    'Selected: ${chosen['variant'] ?? selectedSize}',
-                                    style: const TextStyle(
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w700,
-                                      color: _AppColors.textSoft,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    formatMoney(totalPrice),
-                                    style: const TextStyle(
-                                      fontSize: 22,
-                                      fontWeight: FontWeight.w900,
-                                      color: _AppColors.primary,
+                                        IconButton(
+                                          tooltip: 'Decrease quantity',
+                                          visualDensity: VisualDensity.compact,
+                                          onPressed: quantity > 1
+                                              ? () => setDialogState(() {
+                                                  quantity--;
+                                                  quantityController.text =
+                                                      '$quantity';
+                                                })
+                                              : null,
+                                          icon: const Icon(
+                                            Icons.remove_circle_outline,
+                                            size: 20,
+                                          ),
+                                        ),
+                                        IconButton(
+                                          tooltip: 'Increase quantity',
+                                          visualDensity: VisualDensity.compact,
+                                          onPressed: () => setDialogState(() {
+                                            quantity++;
+                                            quantityController.text =
+                                                '$quantity';
+                                          }),
+                                          icon: const Icon(
+                                            Icons.add_circle_outline,
+                                            size: 20,
+                                          ),
+                                        ),
+                                      ],
                                     ),
                                   ),
                                 ],
                               ),
-                            ),
+                              if (addonOptions.isNotEmpty) ...[
+                                const SizedBox(height: 16),
+                                OutlinedButton.icon(
+                                  onPressed: () => setDialogState(
+                                    () => showingAddonPage = true,
+                                  ),
+                                  icon: const Icon(Icons.add_circle_outline),
+                                  label: const Text('Add add-ons?'),
+                                  style: OutlinedButton.styleFrom(
+                                    foregroundColor: _AppColors.primary,
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 16,
+                                      vertical: 12,
+                                    ),
+                                    side: const BorderSide(
+                                      color: _AppColors.border,
+                                    ),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(14),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                              const SizedBox(height: 20),
+                              Container(
+                                width: double.infinity,
+                                padding: const EdgeInsets.all(14),
+                                decoration: BoxDecoration(
+                                  color: _AppColors.primary.withOpacity(0.08),
+                                  borderRadius: BorderRadius.circular(16),
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      'Selected: ${chosen['variant'] ?? selectedSize}',
+                                      style: const TextStyle(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w700,
+                                        color: _AppColors.textSoft,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      formatMoney(totalPrice),
+                                      style: const TextStyle(
+                                        fontSize: 22,
+                                        fontWeight: FontWeight.w900,
+                                        color: _AppColors.primary,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
                           ],
                         ),
                       ),
@@ -1916,14 +2269,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                           const SizedBox(width: 12),
                           Expanded(
                             child: ElevatedButton.icon(
-                              onPressed: () {
-                                final chosenItem = selectedItem();
-                                _addCoffeeSelection(chosenItem, quantity);
-                                Navigator.of(dialogContext).pop();
-                                _showStyledSnackBar(
-                                  '$quantity x ${chosenItem['name']} added to cart',
-                                );
-                              },
+                              onPressed: addSelectedOrder,
                               icon: const Icon(Icons.check_rounded),
                               label: const Text('Done'),
                               style: ElevatedButton.styleFrom(
@@ -1949,6 +2295,7 @@ class _DailyStockPageState extends State<DailyStockPage>
         );
       },
     );
+    quantityController.dispose();
   }
 
   Future<void> _showBundleItemsDialog(String bundleName) async {
@@ -4351,13 +4698,35 @@ class _DailyStockPageState extends State<DailyStockPage>
     String discountProofId, {
     String paymentMode = 'Cash',
     String gcashTransactionId = '',
+    String providerPaymentId = '',
+    String providerReferenceNumber = '',
+    DateTime? paymentTransactionAt,
+    Map<String, dynamic>? paymentSettingsSnapshot,
+    bool? seniorDiscountSnapshot,
+    bool? pwdDiscountSnapshot,
   }) async {
     var processingDialogVisible = false;
     try {
       if (!_settingsReady) {
         throw StateError('Wait for payment settings to load.');
       }
-      if ((orderTotal - _discountedTotal(orderItems)).abs() > .01) {
+      final saleSettings = paymentSettingsSnapshot ?? _transactionSettings;
+      final saleSeniorDiscount = seniorDiscountSnapshot ?? _seniorDiscount;
+      final salePwdDiscount = pwdDiscountSnapshot ?? _pwdDiscount;
+      final saleDiscountRate = saleSeniorDiscount || salePwdDiscount
+          ? discountFraction(saleSettings, _selectedDiscountId)
+          : 0.0;
+      final orderSubtotal = roundTransactionMoney(_cartTotal(orderItems));
+      final orderDiscount = roundTransactionMoney(
+        (saleSeniorDiscount || salePwdDiscount)
+            ? orderSubtotal * saleDiscountRate
+            : 0,
+      );
+      final expectedOrderTotal = transactionTaxBreakdown(
+        saleSettings,
+        grossAmount: orderSubtotal - orderDiscount,
+      ).total;
+      if ((orderTotal - expectedOrderTotal).abs() > .01) {
         throw StateError(
           'Discount settings changed. Review the updated total before paying.',
         );
@@ -4380,11 +4749,13 @@ class _DailyStockPageState extends State<DailyStockPage>
       }).toList();
       final subtotal = roundTransactionMoney(_cartTotal(orderItems));
       final discountAmount = roundTransactionMoney(
-        (_seniorDiscount || _pwdDiscount) ? subtotal * _discountRate : 0.0,
+        (saleSeniorDiscount || salePwdDiscount)
+            ? subtotal * saleDiscountRate
+            : 0.0,
       );
-      final taxRate = transactionTaxRate(_transactionSettings);
+      final taxRate = transactionTaxRate(saleSettings);
       final taxBreakdown = transactionTaxBreakdown(
-        _transactionSettings,
+        saleSettings,
         grossAmount: subtotal - discountAmount,
       );
       final saleTotal = taxBreakdown.total;
@@ -4394,10 +4765,14 @@ class _DailyStockPageState extends State<DailyStockPage>
         );
       }
       final taxAmount = taxBreakdown.vatAmount;
-      final discountType = _discountName;
+      final discountType = saleSeniorDiscount || salePwdDiscount
+          ? '${selectedDiscount(saleSettings, _selectedDiscountId)['name'] ?? 'Discount'}'
+          : 'None';
 
       final drawerId = _drawerIdForOrder(orderItems);
-      if (!_paymentOptions.any((method) => method['name'] == paymentMode)) {
+      if (!_paymentOptions.any((method) => method['name'] == paymentMode) &&
+          !(paymentMode.toLowerCase() == 'gcash' &&
+              providerPaymentId.isNotEmpty)) {
         throw StateError(
           'Payment method is no longer available. Select another method.',
         );
@@ -4422,16 +4797,21 @@ class _DailyStockPageState extends State<DailyStockPage>
         'vatableSales': taxBreakdown.vatableSales,
         'taxRate': taxRate,
         'taxClassification':
-            _transactionSettings['taxClassification']?.toString() ?? 'nonVat',
-        if (taxRate > 0 &&
-            '${_transactionSettings['taxTin'] ?? ''}'.trim().isNotEmpty)
-          'taxTin': '${_transactionSettings['taxTin']}'.trim(),
+            saleSettings['taxClassification']?.toString() ?? 'nonVat',
+        if (taxRate > 0 && '${saleSettings['taxTin'] ?? ''}'.trim().isNotEmpty)
+          'taxTin': '${saleSettings['taxTin']}'.trim(),
         'discountProofId': discountProofId.trim(),
         'total': saleTotal,
         'paidAmount': paidAmount,
         'change': change,
         'paymentMode': paymentMode,
         'gcashTransactionId': gcashTransactionId.trim(),
+        if (providerPaymentId.isNotEmpty) 'paymentId': providerPaymentId,
+        if (paymentMode.toLowerCase() == 'gcash') 'paymentGateway': 'Branch QR',
+        if (providerReferenceNumber.isNotEmpty)
+          'providerReferenceNumber': providerReferenceNumber,
+        if (paymentTransactionAt != null)
+          'paymentTransactionAt': paymentTransactionAt,
         'cashDrawerDelta': isCashPayment ? paidAmount - change : 0.0,
         'items': receiptEntries.map((entry) {
           final item = _knownOrderItems(orderItems).firstWhere(
@@ -4497,7 +4877,7 @@ class _DailyStockPageState extends State<DailyStockPage>
           }
           return line;
         }).toList(),
-        'timestamp': DateTime.now(),
+        'timestamp': paymentTransactionAt ?? DateTime.now(),
         'status': 'completed',
         'receiptPrintStatus': 'pending',
         'receiptPrintError': null,
@@ -4556,13 +4936,16 @@ class _DailyStockPageState extends State<DailyStockPage>
         'vatableSales': taxBreakdown.vatableSales,
         'taxRate': taxRate,
         'taxClassification':
-            _transactionSettings['taxClassification']?.toString() ?? 'nonVat',
-        if (taxRate > 0 &&
-            '${_transactionSettings['taxTin'] ?? ''}'.trim().isNotEmpty)
-          'taxTin': '${_transactionSettings['taxTin']}'.trim(),
+            saleSettings['taxClassification']?.toString() ?? 'nonVat',
+        if (taxRate > 0 && '${saleSettings['taxTin'] ?? ''}'.trim().isNotEmpty)
+          'taxTin': '${saleSettings['taxTin']}'.trim(),
         'total': saleTotal,
         'paymentMode': paymentMode,
         'gcashTransactionId': gcashTransactionId,
+        if (providerPaymentId.isNotEmpty) 'paymentId': providerPaymentId,
+        if (paymentMode.toLowerCase() == 'gcash') 'paymentGateway': 'Branch QR',
+        if (providerReferenceNumber.isNotEmpty)
+          'providerReferenceNumber': providerReferenceNumber,
         'paidAmount': paidAmount,
         'change': change,
       };
@@ -4590,6 +4973,7 @@ class _DailyStockPageState extends State<DailyStockPage>
         printResult: printResult,
         paymentMode: paymentMode,
         paymentReference: gcashTransactionId,
+        providerPaymentId: providerPaymentId,
         onRetryPrint: () => _printSavedReceipt(receipt),
       );
     } catch (e) {
@@ -4717,6 +5101,7 @@ class _DailyStockPageState extends State<DailyStockPage>
     required Future<bool> printResult,
     required String paymentMode,
     required String paymentReference,
+    required String providerPaymentId,
     required Future<bool> Function() onRetryPrint,
   }) async {
     if (!mounted) return;
@@ -4746,6 +5131,7 @@ class _DailyStockPageState extends State<DailyStockPage>
           printResult: printResult,
           paymentMode: paymentMode,
           paymentReference: paymentReference,
+          providerPaymentId: providerPaymentId,
           onRetryPrint: onRetryPrint,
         );
       },
@@ -4961,9 +5347,31 @@ class _DailyStockPageState extends State<DailyStockPage>
         builder: (context, snapshot) {
           final orders = snapshot.data ?? const <HeldOrder>[];
           return AlertDialog(
-            title: const Text('Pending Orders'),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(24),
+            ),
+            title: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+              decoration: BoxDecoration(
+                color: _AppColors.primary,
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: const Row(
+                children: [
+                  Icon(Icons.pause_circle_outline, color: Colors.white),
+                  SizedBox(width: 10),
+                  Text(
+                    'Pending Orders',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ],
+              ),
+            ),
             content: SizedBox(
-              width: 520,
+              width: min(MediaQuery.sizeOf(context).width * .88, 680),
               height: MediaQuery.sizeOf(context).height * .62,
               child: snapshot.hasError
                   ? const Center(child: Text('Unable to load saved orders.'))
@@ -4984,7 +5392,13 @@ class _DailyStockPageState extends State<DailyStockPage>
                             ? (data['createdAt'] as Timestamp).toDate()
                             : DateTime.tryParse('${data['createdAt']}');
                         return Card(
-                          margin: const EdgeInsets.only(bottom: 10),
+                          elevation: 2,
+                          color: const Color(0xFFFFF8FA),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(18),
+                            side: const BorderSide(color: _AppColors.border),
+                          ),
+                          margin: const EdgeInsets.only(bottom: 12),
                           child: Padding(
                             padding: const EdgeInsets.all(12),
                             child: Column(
@@ -7256,7 +7670,7 @@ class _DailyStockPageState extends State<DailyStockPage>
           : bundleDrinkServings(item).length;
       return sum + entry.value * servings;
     });
-    if (beverageCount >= 50) {
+    if (beverageCount > 20) {
       final confirmed = await showDialog<bool>(
         context: context,
         builder: (dialogContext) => AlertDialog(
@@ -7314,9 +7728,7 @@ class _DailyStockPageState extends State<DailyStockPage>
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text(
-                'This order will use all remaining stock for:',
-              ),
+              const Text('This order will use all remaining stock for:'),
               const SizedBox(height: 12),
               ...soldOutItems.map(
                 (item) => Padding(
@@ -7349,6 +7761,9 @@ class _DailyStockPageState extends State<DailyStockPage>
     final paymentController = TextEditingController();
     final gcashTransactionController = TextEditingController();
     final discountProofController = TextEditingController();
+    Map<String, dynamic>? saleSettingsSnapshot;
+    bool? saleSeniorDiscountSnapshot;
+    bool? salePwdDiscountSnapshot;
     var paymentMode = 'Cash';
     var isDiscountExpanded = _seniorDiscount || _pwdDiscount;
     double paidAmount = 0;
@@ -7368,29 +7783,52 @@ class _DailyStockPageState extends State<DailyStockPage>
                 paymentMode = 'Cash';
               }
               final hasDiscount = _seniorDiscount || _pwdDiscount;
-              final totalDue = double.parse(
+              final currentTotalDue = double.parse(
                 _discountedTotal(orderItems).toStringAsFixed(2),
               );
+              final totalDue = currentTotalDue;
+              final isGcashPayment = paymentMode.toLowerCase() == 'gcash';
+              final branchQrName = _activeBranchName.trim().isEmpty
+                  ? 'Branch'
+                  : '${_activeBranchName.trim()}${_activeBranchName.toLowerCase().endsWith('branch') ? '' : ' Branch'}';
               final enteredAmount = paymentController.text.trim();
+              final enteredAmountValue = double.tryParse(enteredAmount) ?? 0;
+              final validGcashAmountFormat = RegExp(
+                r'^\d+(\.\d{0,2})?$',
+              ).hasMatch(enteredAmount);
+              final exactTotalCents = (totalDue * 100).round();
+              final enteredAmountCents = (enteredAmountValue * 100).round();
+              final isExactGcashAmount =
+                  isGcashPayment &&
+                  enteredAmount.isNotEmpty &&
+                  validGcashAmountFormat &&
+                  enteredAmountCents == exactTotalCents;
+              final gcashAmountError =
+                  !isGcashPayment || enteredAmount.isEmpty || isExactGcashAmount
+                  ? null
+                  : !validGcashAmountFormat
+                  ? 'Enter a valid amount with up to 2 decimal places.'
+                  : enteredAmountValue < totalDue
+                  ? 'Enter the exact amount of ${formatMoney(totalDue)}. The amount is short.'
+                  : 'Enter the exact amount of ${formatMoney(totalDue)}. The amount is too high.';
+              final isGcashPaid = isExactGcashAmount;
               final hasPaidAmount = enteredAmount.isNotEmpty;
-              paidAmount = enteredAmount.isEmpty
-                  ? 0
-                  : double.tryParse(
-                    paymentController.text.trim().replaceAll(
-                      RegExp(r'[^0-9.]'),
-                      '',
-                    ),
-                  ) ??
-                  0;
-              change = enteredAmount.isEmpty ? -totalDue : paidAmount - totalDue;
+              paidAmount = isGcashPaid ? totalDue : enteredAmountValue;
+              change = isGcashPayment
+                  ? (isExactGcashAmount ? 0 : -totalDue)
+                  : enteredAmount.isEmpty
+                  ? -totalDue
+                  : paidAmount - totalDue;
               final hasEnoughCashForChange =
+                  isGcashPayment ||
                   paymentMode != 'Cash' ||
                   change <= 0 ||
                   _cashDrawer + 0.001 >= change;
-              final canConfirm =
-                  enteredAmount.isNotEmpty &&
-                  paidAmount >= totalDue &&
-                  hasEnoughCashForChange;
+              final canConfirm = isGcashPayment
+                  ? isExactGcashAmount
+                  : enteredAmount.isNotEmpty &&
+                        paidAmount >= totalDue &&
+                        hasEnoughCashForChange;
               return Dialog(
                 insetPadding: const EdgeInsets.symmetric(
                   horizontal: 16,
@@ -7627,9 +8065,14 @@ class _DailyStockPageState extends State<DailyStockPage>
                                       ),
                                     )
                                     .toList(),
-                                onChanged: (value) => setState(() {
-                                  paymentMode = value ?? 'Cash';
-                                }),
+                                onChanged: (value) {
+                                  final nextMode = value ?? 'Cash';
+                                  setState(() {
+                                    paymentMode = nextMode;
+                                    paymentController.clear();
+                                    gcashTransactionController.clear();
+                                  });
+                                },
                               ),
                               const SizedBox(height: 12),
                               if (paymentMode != 'Cash') ...[
@@ -7649,7 +8092,9 @@ class _DailyStockPageState extends State<DailyStockPage>
                                 ),
                                 Center(
                                   child: Text(
-                                    _activeBranchName.isEmpty
+                                    isGcashPayment
+                                        ? '$branchQrName GCash QR Code · Exact amount ${formatMoney(totalDue)}'
+                                        : _activeBranchName.isEmpty
                                         ? 'QR Code'
                                         : 'QR Code $_activeBranchName${_activeBranchName.toLowerCase().endsWith('branch') ? '' : ' Branch'}',
                                     style: const TextStyle(
@@ -7657,6 +8102,27 @@ class _DailyStockPageState extends State<DailyStockPage>
                                     ),
                                   ),
                                 ),
+                                if (isGcashPayment) ...[
+                                  const SizedBox(height: 6),
+                                  Center(
+                                    child: Text(
+                                      'Scan this branch QR, then enter the exact amount received.',
+                                      textAlign: TextAlign.center,
+                                      style: const TextStyle(
+                                        color: _AppColors.textSoft,
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                  ),
+                                  Center(
+                                    child: Text(
+                                      'Payment reference: $salesId',
+                                      textAlign: TextAlign.center,
+                                      style: const TextStyle(fontSize: 11),
+                                    ),
+                                  ),
+                                ],
                                 const SizedBox(height: 12),
                               ],
                               if (_discountsAllowed)
@@ -7724,13 +8190,14 @@ class _DailyStockPageState extends State<DailyStockPage>
                                               subtitle:
                                                   '20% off for senior citizens',
                                               value: _seniorDiscount,
-                                              onChanged: (value) =>
-                                                  setState(() {
-                                                    _seniorDiscount = value;
-                                                    if (value) {
-                                                      _pwdDiscount = false;
-                                                    }
-                                                  }),
+                                              onChanged: (value) {
+                                                setState(() {
+                                                  _seniorDiscount = value;
+                                                  if (value) {
+                                                    _pwdDiscount = false;
+                                                  }
+                                                });
+                                              },
                                               icon: Icons.elderly_rounded,
                                             ),
                                             const SizedBox(height: 8),
@@ -7739,13 +8206,14 @@ class _DailyStockPageState extends State<DailyStockPage>
                                               subtitle:
                                                   '20% off for persons with disability',
                                               value: _pwdDiscount,
-                                              onChanged: (value) =>
-                                                  setState(() {
-                                                    _pwdDiscount = value;
-                                                    if (value) {
-                                                      _seniorDiscount = false;
-                                                    }
-                                                  }),
+                                              onChanged: (value) {
+                                                setState(() {
+                                                  _pwdDiscount = value;
+                                                  if (value) {
+                                                    _seniorDiscount = false;
+                                                  }
+                                                });
+                                              },
                                               icon: Icons.accessible_rounded,
                                             ),
                                             if (hasDiscount) ...[
@@ -7759,15 +8227,28 @@ class _DailyStockPageState extends State<DailyStockPage>
                               _PinkTextField(
                                 controller: paymentController,
                                 label: 'Customer Paid',
-                                hint: totalDue.toStringAsFixed(2),
+                                hint: isGcashPayment
+                                    ? totalDue.toStringAsFixed(2)
+                                    : totalDue.toStringAsFixed(2),
                                 icon: Icons.payments_outlined,
                                 keyboardType:
                                     const TextInputType.numberWithOptions(
                                       decimal: true,
                                     ),
                                 prefixText: '₱',
+                                errorText: gcashAmountError,
                                 onChanged: (_) => setState(() {}),
                               ),
+                              if (isGcashPayment) ...[
+                                const SizedBox(height: 12),
+                                _PinkTextField(
+                                  controller: gcashTransactionController,
+                                  label: 'Reference Number (Optional)',
+                                  hint: 'Enter the GCash reference number',
+                                  icon: Icons.tag_rounded,
+                                  onChanged: (_) => setState(() {}),
+                                ),
+                              ],
                               const SizedBox(height: 12),
                               Container(
                                 padding: const EdgeInsets.symmetric(
@@ -7798,7 +8279,9 @@ class _DailyStockPageState extends State<DailyStockPage>
                                       ),
                                     ),
                                     Text(
-                                      hasPaidAmount
+                                      hasPaidAmount &&
+                                              (!isGcashPayment ||
+                                                  isExactGcashAmount)
                                           ? formatMoney(
                                               change >= 0 ? change : 0,
                                             )
@@ -7903,14 +8386,19 @@ class _DailyStockPageState extends State<DailyStockPage>
                                     ? () {
                                         final finalPaidAmount =
                                             double.tryParse(
-                                              paymentController.text
-                                                  .trim()
-                                                  .replaceAll(
-                                                    RegExp(r'[^0-9.]'),
-                                                    '',
-                                                  ),
+                                              paymentController.text.trim(),
                                             ) ??
                                             0;
+                                        if (isGcashPayment) {
+                                          saleSettingsSnapshot =
+                                              Map<String, dynamic>.from(
+                                                _transactionSettings,
+                                              );
+                                          saleSeniorDiscountSnapshot =
+                                              _seniorDiscount;
+                                          salePwdDiscountSnapshot =
+                                              _pwdDiscount;
+                                        }
                                         Navigator.of(
                                           dialogContext,
                                           rootNavigator: true,
@@ -7924,7 +8412,14 @@ class _DailyStockPageState extends State<DailyStockPage>
                                                 discountProofController.text,
                                             paymentMode: paymentMode,
                                             gcashTransactionId:
-                                                gcashTransactionController.text,
+                                                gcashTransactionController.text
+                                                    .trim(),
+                                            providerPaymentId: '',
+                                            providerReferenceNumber:
+                                                gcashTransactionController.text
+                                                    .trim(),
+                                            paymentTransactionAt:
+                                                DateTime.now(),
                                           ),
                                         );
                                       }
@@ -7941,9 +8436,11 @@ class _DailyStockPageState extends State<DailyStockPage>
                                     vertical: 14,
                                   ),
                                 ),
-                                child: const Text(
+                                child: Text(
                                   'Confirm',
-                                  style: TextStyle(fontWeight: FontWeight.w700),
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w700,
+                                  ),
                                 ),
                               ),
                             ),
@@ -7975,6 +8472,12 @@ class _DailyStockPageState extends State<DailyStockPage>
       result.discountProofId,
       paymentMode: result.paymentMode,
       gcashTransactionId: result.gcashTransactionId,
+      providerPaymentId: result.providerPaymentId,
+      providerReferenceNumber: result.providerReferenceNumber,
+      paymentTransactionAt: result.paymentTransactionAt,
+      paymentSettingsSnapshot: saleSettingsSnapshot,
+      seniorDiscountSnapshot: saleSeniorDiscountSnapshot,
+      pwdDiscountSnapshot: salePwdDiscountSnapshot,
     );
   }
 
@@ -8381,12 +8884,19 @@ class _DailyStockPageState extends State<DailyStockPage>
         // Firestore's offline snapshot can predate a sale made on this device.
         // The local cache has already applied queued sale stock movements, so
         // prefer it until the server-backed inventory snapshot arrives.
-        final docs =
+        final sourceDocs =
             (firestoreDocs == null ||
                 (firestoreDocs.isEmpty && hasLocalInventory) ||
                 (firestoreIsCached && hasLocalInventory))
             ? _cachedStaffInventoryDocs
             : firestoreDocs;
+        final docs = OfflineStockReductionService()
+            .applyPendingToInventoryDocuments(
+              sourceDocs.map((doc) => {...doc.data(), '_localDocId': doc.id}),
+              _pendingOfflineReductions,
+            )
+            .map(_CachedDoc.fromMap)
+            .toList();
         return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
           stream: _rootSalesInventoryStream,
           builder: (context, rootSnapshot) {
@@ -8457,6 +8967,18 @@ class _DailyStockPageState extends State<DailyStockPage>
                             rootItems.any(
                               (root) => inventoryVariantsMatch(root, item),
                             ));
+                  })
+                  .map((item) {
+                    final rootItem = rootItems
+                        .where((root) => inventoryVariantsMatch(root, item))
+                        .firstOrNull;
+                    if (rootItem == null) return item;
+                    return {
+                      ...item,
+                      if (rootItem['price'] != null) 'price': rootItem['price'],
+                      if (rootItem['costPrice'] != null)
+                        'costPrice': rootItem['costPrice'],
+                    };
                   })
                   .toList();
             }
@@ -8589,7 +9111,9 @@ class _DailyStockPageState extends State<DailyStockPage>
                       'basePrice': basePrice,
                       'sizePriceDelta': delta,
                       'addonName': addonName,
+                      'addonId': addon['id']?.toString() ?? '',
                       'addonPriceDelta': addonDelta,
+                      'addonImageUrl': addon['imageUrl']?.toString() ?? '',
                       'stock': 999,
                       'startingStock': 999,
                       'imageUrl': data['imageUrl']?.toString() ?? '',
@@ -8885,7 +9409,11 @@ class _DailyStockPageState extends State<DailyStockPage>
             top: false,
             bottom: false,
             child: Padding(
-              padding: const EdgeInsets.only(bottom: _staffBottomNavReserve),
+              padding: EdgeInsets.only(
+                bottom: widget.tabletSideNavigation
+                    ? 0
+                    : _staffBottomNavReserve,
+              ),
               child: Column(
                 children: [
                   _buildTabletSalesHeader(),
@@ -9514,7 +10042,8 @@ class _DailyStockPageState extends State<DailyStockPage>
         _buildOrderControlExpansionTile(orderItems),
         const SizedBox(height: 14),
         _buildDiscountExpansionTile(orderItems: orderItems),
-        if (MediaQuery.sizeOf(context).shortestSide >= 600) ...[
+        if (widget.tabletSideNavigation ||
+            MediaQuery.sizeOf(context).shortestSide >= 600) ...[
           const SizedBox(height: 14),
           _buildAdvancedOptionsExpansionTile(),
         ],
@@ -12327,11 +12856,10 @@ class _DailyStockPageState extends State<DailyStockPage>
   }
 
   Widget _buildInventoryModeToggle() {
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: Row(
-        children: [
-          _modeButton(
+    return Row(
+      children: [
+        Expanded(
+          child: _modeButton(
             label: 'Category',
             icon: Icons.category_rounded,
             selected: !_showBundleView && !_showCoffeeView,
@@ -12342,8 +12870,10 @@ class _DailyStockPageState extends State<DailyStockPage>
               _showCartReview = false;
             }),
           ),
-          const SizedBox(width: 10),
-          _modeButton(
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: _modeButton(
             label: 'Bundle',
             icon: Icons.inventory_2_rounded,
             selected: _showBundleView,
@@ -12354,8 +12884,10 @@ class _DailyStockPageState extends State<DailyStockPage>
               _showCartReview = false;
             }),
           ),
-          const SizedBox(width: 10),
-          _modeButton(
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: _modeButton(
             label: 'Beverages',
             icon: Icons.local_cafe_rounded,
             selected: _showCoffeeView,
@@ -12366,8 +12898,8 @@ class _DailyStockPageState extends State<DailyStockPage>
               _showCartReview = false;
             }),
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 
@@ -12381,12 +12913,10 @@ class _DailyStockPageState extends State<DailyStockPage>
       onTap: onTap,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 250),
-        width: MediaQuery.sizeOf(context).shortestSide < 600
-            ? (MediaQuery.sizeOf(context).width - 44) / 3
-            : 150,
+        width: double.infinity,
         padding: EdgeInsets.symmetric(
-          vertical: MediaQuery.sizeOf(context).shortestSide < 600 ? 10 : 14,
-          horizontal: MediaQuery.sizeOf(context).shortestSide < 600 ? 6 : 16,
+          vertical: MediaQuery.sizeOf(context).shortestSide < 600 ? 10 : 12,
+          horizontal: MediaQuery.sizeOf(context).shortestSide < 600 ? 6 : 8,
         ),
         decoration: BoxDecoration(
           color: selected ? _AppColors.primary : _AppColors.cardBg,
@@ -12401,11 +12931,11 @@ class _DailyStockPageState extends State<DailyStockPage>
           children: [
             Icon(
               icon,
-              size: MediaQuery.sizeOf(context).shortestSide < 600 ? 15 : 17,
+              size: MediaQuery.sizeOf(context).shortestSide < 600 ? 15 : 16,
               color: selected ? Colors.white : _AppColors.textMid,
             ),
             SizedBox(
-              width: MediaQuery.sizeOf(context).shortestSide < 600 ? 4 : 8,
+              width: MediaQuery.sizeOf(context).shortestSide < 600 ? 4 : 5,
             ),
             Text(
               label,
@@ -12414,7 +12944,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                 fontWeight: FontWeight.w800,
                 fontSize: MediaQuery.sizeOf(context).shortestSide < 600
                     ? 11
-                    : 14,
+                    : 12,
               ),
             ),
           ],
@@ -12427,6 +12957,7 @@ class _DailyStockPageState extends State<DailyStockPage>
   Widget build(BuildContext context) {
     final isTabletLandscape = _isTabletLandscape(context);
     return Scaffold(
+      resizeToAvoidBottomInset: false,
       backgroundColor: _AppColors.bg,
       body: TopEdgeRefresh(
         displacement: 24,
@@ -12442,6 +12973,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                     _showTabletToolsDrawer(_knownOrderItems(_latestOrderItems)),
                 titleTourKey: widget.salesTourKey,
                 body: _buildOrderSection(),
+                cartCount: _cartItemCount,
                 actions:
                     !_showCartReview &&
                         (!_showBundleView || _selectedGroupName == null)
@@ -12485,7 +13017,7 @@ class _DailyStockPageState extends State<DailyStockPage>
         MediaQuery.sizeOf(context).shortestSide < 600 ? 12 : 16,
         MediaQuery.sizeOf(context).shortestSide < 600
             ? 32
-            : 6 + _staffBottomNavReserve,
+            : 6 + (widget.tabletSideNavigation ? 0 : _staffBottomNavReserve),
       ),
       decoration: BoxDecoration(
         color: _AppColors.bg.withOpacity(0.96),
@@ -12880,6 +13412,7 @@ class _ReceiptGenerationDialog extends StatefulWidget {
     required this.printResult,
     required this.paymentMode,
     required this.paymentReference,
+    required this.providerPaymentId,
     required this.onRetryPrint,
   });
 
@@ -12904,6 +13437,7 @@ class _ReceiptGenerationDialog extends StatefulWidget {
   final Future<bool> printResult;
   final String paymentMode;
   final String paymentReference;
+  final String providerPaymentId;
   final Future<bool> Function() onRetryPrint;
 
   @override
@@ -12911,31 +13445,7 @@ class _ReceiptGenerationDialog extends StatefulWidget {
       _ReceiptGenerationDialogState();
 }
 
-class _ReceiptGenerationDialogState extends State<_ReceiptGenerationDialog>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _paperController;
-  late final Animation<double> _paperProgress;
-
-  @override
-  void initState() {
-    super.initState();
-    _paperController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 3200),
-    );
-    _paperProgress = CurvedAnimation(
-      parent: _paperController,
-      curve: Curves.linear,
-    );
-    _paperController.forward();
-  }
-
-  @override
-  void dispose() {
-    _paperController.dispose();
-    super.dispose();
-  }
-
+class _ReceiptGenerationDialogState extends State<_ReceiptGenerationDialog> {
   @override
   Widget build(BuildContext context) {
     final screen = MediaQuery.sizeOf(context);
@@ -13048,32 +13558,7 @@ class _ReceiptGenerationDialogState extends State<_ReceiptGenerationDialog>
                   child: Column(
                     children: [
                       const _ReceiptPrinterGraphic(),
-                      ClipRect(
-                        child: AnimatedBuilder(
-                          animation: _paperProgress,
-                          builder: (context, child) {
-                            final progress = _paperProgress.value;
-                            final swing =
-                                sin(progress * pi * 8) * (1 - progress);
-                            return Align(
-                              alignment: Alignment.topCenter,
-                              heightFactor: progress,
-                              child: Transform.rotate(
-                                angle: swing * .018,
-                                alignment: Alignment.topCenter,
-                                child: Transform.translate(
-                                  offset: Offset(
-                                    swing * 2.5,
-                                    -24 * (1 - progress) + swing * 1.5,
-                                  ),
-                                  child: child,
-                                ),
-                              ),
-                            );
-                          },
-                          child: _buildReceipt(date),
-                        ),
-                      ),
+                      _buildReceipt(date),
                     ],
                   ),
                 ),
@@ -13161,6 +13646,27 @@ class _ReceiptGenerationDialogState extends State<_ReceiptGenerationDialog>
                 fontWeight: FontWeight.w700,
               ),
             ),
+            if (widget.providerPaymentId.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFE8F5E9),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Text(
+                  'PAYMENT SUCCESSFUL · VERIFIED BY XENDIT',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Color(0xFF267542),
+                    fontSize: 9,
+                    letterSpacing: 0.3,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+            ],
             const SizedBox(height: 14),
             _receiptMeta('RECEIPT ID', widget.salesId),
             _receiptMeta('DATE', dateTime),
@@ -13228,6 +13734,8 @@ class _ReceiptGenerationDialogState extends State<_ReceiptGenerationDialog>
             if (widget.paymentMode.toLowerCase() != 'cash' &&
                 widget.paymentReference.trim().isNotEmpty)
               _receiptMeta('REFERENCE', widget.paymentReference),
+            if (widget.providerPaymentId.isNotEmpty)
+              _receiptMeta('XENDIT PAYMENT ID', widget.providerPaymentId),
             const SizedBox(height: 10),
             const _ReceiptDottedRule(),
             const SizedBox(height: 11),
@@ -13648,7 +14156,9 @@ class _PinkTextField extends StatelessWidget {
   final IconData icon;
   final TextInputType? keyboardType;
   final String? prefixText;
+  final String? errorText;
   final ValueChanged<String>? onChanged;
+  final bool readOnly;
 
   const _PinkTextField({
     required this.controller,
@@ -13657,7 +14167,9 @@ class _PinkTextField extends StatelessWidget {
     required this.icon,
     this.keyboardType,
     this.prefixText,
+    this.errorText,
     this.onChanged,
+    this.readOnly = false,
   });
 
   @override
@@ -13665,11 +14177,13 @@ class _PinkTextField extends StatelessWidget {
     return TextField(
       controller: controller,
       keyboardType: keyboardType,
+      readOnly: readOnly,
       onChanged: onChanged,
       decoration: InputDecoration(
         labelText: label,
         hintText: hint,
         prefixText: prefixText,
+        errorText: errorText,
         prefixIcon: Icon(icon, color: _AppColors.primary, size: 18),
         labelStyle: const TextStyle(color: _AppColors.primary),
         hintStyle: TextStyle(

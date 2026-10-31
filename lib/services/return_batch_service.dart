@@ -10,15 +10,37 @@ String returnText(
     .map((v) => '${v ?? ''}'.trim())
     .firstWhere((v) => v.isNotEmpty, orElse: () => fallback);
 
-String returnItemName(Map item) => returnText([
-  item['flavor'],
-  item['variant'],
-  item['itemName'],
-  item['name'],
-  item['categoryName'],
-], 'Item');
+String returnItemName(Map item) {
+  final isCoffee =
+      item['isCoffee'] == true || '${item['coffeeId'] ?? ''}'.isNotEmpty;
+  if (isCoffee) {
+    final name = returnText([
+      item['flavor'],
+      item['coffeeName'],
+      item['name'],
+      item['itemName'],
+      item['categoryName'],
+    ], 'Beverage');
+    final size = returnText([item['coffeeSize'], item['variant']], '');
+    if (size.isNotEmpty && !name.toLowerCase().contains(size.toLowerCase())) {
+      return '$name ($size)';
+    }
+    return name;
+  }
+  return returnText([
+    item['flavor'],
+    item['variant'],
+    item['itemName'],
+    item['name'],
+    item['categoryName'],
+  ], 'Item');
+}
 
 String returnItemCode(Map item) => inventoryDisplayId({
+  if ('${item['itemDisplayId'] ?? ''}'.trim().isNotEmpty)
+    'publicId': item['itemDisplayId'],
+  if ('${item['bundleDisplayId'] ?? ''}'.trim().isNotEmpty)
+    'publicId': item['bundleDisplayId'],
   for (final key in [
     'publicId',
     'itemPublicId',

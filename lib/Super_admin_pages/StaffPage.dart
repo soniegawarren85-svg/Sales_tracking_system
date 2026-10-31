@@ -111,6 +111,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
 
   String _createRole = 'staff';
   String _roleFilter = 'all';
+  String _accountSearch = '';
   bool _showAdminPanel = false;
   bool _isCreatingStaff = false;
   final _creating = ValueNotifier(false);
@@ -128,6 +129,33 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
   final _confirmPasswordFieldKey = GlobalKey<FormFieldState<String>>();
   bool _showCreatePassword = false;
   bool _showConfirmPassword = false;
+
+  bool _matchesAccountSearch(AdminModel member) {
+    final terms = _accountSearch.trim().toLowerCase().split(
+      RegExp(r'\s+'),
+    )..removeWhere((term) => term.isEmpty);
+    if (terms.isEmpty) return true;
+    final inactive =
+        member.status == 'deactivated' || member.isInactiveByLogin;
+    final searchable = [
+      member.id,
+      member.publicId,
+      member.firstName,
+      member.lastName,
+      member.email,
+      member.phone,
+      member.address,
+      member.role,
+      if (member.role == 'staff') 'cashier',
+      member.status,
+      if (inactive) 'inactive deactivated',
+      if (member.status == 'accepted' && !inactive) 'active',
+      ...member.details.values.where(
+        (value) => value is String || value is num || value is bool,
+      ),
+    ].join(' ').toLowerCase();
+    return terms.every(searchable.contains);
+  }
 
   // ─── STREAMS ──────────────────────────────────────────────
   Stream<QuerySnapshot<Map<String, dynamic>>> get _staffStream =>
@@ -295,6 +323,16 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
         final deactivated = staff
             .where((member) => member.status == 'deactivated')
             .toList();
+        final matchingStaff = staff.where(_matchesAccountSearch).toList();
+        final accountRows = _accountSearch.trim().isEmpty
+            ? accepted
+            : matchingStaff
+                  .where(
+                    (member) =>
+                        member.status == 'accepted' ||
+                        member.status == 'deactivated',
+                  )
+                  .toList();
         final inactive = accepted
             .where((member) => member.isInactiveByLogin)
             .length;
@@ -388,30 +426,22 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                 ),
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 16),
-                  child: DropdownButtonFormField<String>(
-                    initialValue: _roleFilter,
+                  child: TextField(
+                    onChanged: (value) =>
+                        setState(() => _accountSearch = value),
                     decoration: const InputDecoration(
-                      labelText: 'Account role',
+                      hintText: 'Search name, ID, role, email or status',
+                      prefixIcon: Icon(Icons.search),
+                      border: OutlineInputBorder(),
                     ),
-                    items: const [
-                      DropdownMenuItem(
-                        value: 'all',
-                        child: Text('All accounts'),
-                      ),
-                      DropdownMenuItem(value: 'admin', child: Text('Admin')),
-                      DropdownMenuItem(value: 'staff', child: Text('Cashier')),
-                    ],
-                    onChanged: (value) => setState(() => _roleFilter = value!),
                   ),
                 ),
-                if (accepted.isEmpty)
+                if (accountRows.isEmpty)
                   const Padding(
                     padding: EdgeInsets.all(24),
-                    child: Text(
-                      'No active staff accounts. Tap + to create one.',
-                    ),
+                    child: Text('No matching staff accounts.'),
                   ),
-                ...accepted.asMap().entries.map(
+                ...accountRows.asMap().entries.map(
                   (entry) => Padding(
                     padding: const EdgeInsets.symmetric(
                       horizontal: 16,
@@ -458,6 +488,10 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
           final deactivatedStaff = staff
               .where((member) => member.status == 'deactivated')
               .toList();
+          final matchingStaff = staff.where(_matchesAccountSearch).toList();
+          final accountRows = _accountSearch.trim().isEmpty
+              ? visibleStaff
+              : matchingStaff;
 
           final totalStaff = visibleStaff.length;
           final activeStaff = visibleStaff
@@ -517,6 +551,18 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                     child: _buildDeactivatedStaffButton(deactivatedStaff),
                   ),
                   const SizedBox(height: 18),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                    child: TextField(
+                      onChanged: (value) =>
+                          setState(() => _accountSearch = value),
+                      decoration: const InputDecoration(
+                        hintText: 'Search name, ID, role, email or status',
+                        prefixIcon: Icon(Icons.search),
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                  ),
 
                   // Section label
                   Padding(
@@ -566,24 +612,24 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                   // Admin list
                   Expanded(
                     child:
-                        visibleStaff.isEmpty &&
+                        accountRows.isEmpty &&
                             snapshot.connectionState != ConnectionState.waiting
                         ? _buildAdminEmptyState()
                         : ListView.builder(
                             padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
-                            itemCount: visibleStaff.length,
+                            itemCount: accountRows.length,
                             itemBuilder: (context, index) {
                               return _AnimatedAdminCard(
                                 index: index,
-                                admin: visibleStaff[index],
+                                admin: accountRows[index],
                                 isInactiveByLogin:
-                                    visibleStaff[index].isInactiveByLogin,
+                                    accountRows[index].isInactiveByLogin,
                                 onDeactivate: () => _updateAdminStatus(
-                                  visibleStaff[index],
+                                  accountRows[index],
                                   'deactivated',
                                 ),
                                 onActivate: () => _updateAdminStatus(
-                                  visibleStaff[index],
+                                  accountRows[index],
                                   'accepted',
                                 ),
                               );

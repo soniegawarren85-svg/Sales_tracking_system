@@ -57,7 +57,7 @@ class AccountPresenceService with WidgetsBindingObserver {
           database: database ?? FirebaseFirestore.instance,
         );
     service._profile = null;
-    await _writeOffline(profile, logout: true);
+        unawaited(_writeOffline(profile, logout: true));
   }
 
   Future<void> _writeOnline(bool updateLoginTime) async {

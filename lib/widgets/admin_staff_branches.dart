@@ -313,6 +313,7 @@ class _BranchStaffSheetState extends State<_BranchStaffSheet> {
           'branchIds': assign
               ? FieldValue.arrayUnion([widget.branch.id])
               : FieldValue.arrayRemove([widget.branch.id]),
+          if (assign) 'requiresBranchAssignment': false,
         });
       });
     } catch (_) {

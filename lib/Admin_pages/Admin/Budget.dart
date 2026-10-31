@@ -748,7 +748,9 @@ class _BudgetPageState extends State<BudgetPage>
                   item['expirationDate']?.toString() ?? '',
                 ) &&
                 (rootItems.isEmpty ||
-                    rootItems.any((root) => inventoryVariantsMatch(root, item)));
+                    rootItems.any(
+                      (root) => inventoryVariantsMatch(root, item),
+                    ));
           })
           .toList();
       return activeItems.isNotEmpty;
@@ -871,7 +873,10 @@ class _BudgetPageState extends State<BudgetPage>
     }).toList();
   }
 
-  Widget _buildAssignedInventoryPreview(String staffId) {
+  Widget _buildAssignedInventoryPreview(
+    String staffId, {
+    required bool isBranch,
+  }) {
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
       stream: _firestore
           .collection('staff_inventory')
@@ -902,7 +907,7 @@ class _BudgetPageState extends State<BudgetPage>
                   ),
                   const SizedBox(width: 8),
                   Text(
-                    'Assigned to this staff (${docs.length})',
+                    'Assigned to this ${isBranch ? 'branch' : 'staff'} (${docs.length})',
                     style: const TextStyle(
                       color: kBannerTop,
                       fontSize: 12,
@@ -1306,6 +1311,7 @@ class _BudgetPageState extends State<BudgetPage>
     }
     final selectedCoffeeIds = <String>{};
     final selectedAddonIds = <String>{};
+    var assignmentSelectionInitialized = false;
     var isAssigning = false;
     var assignmentSucceeded = false;
     var showCategories =
@@ -1369,7 +1375,10 @@ class _BudgetPageState extends State<BudgetPage>
                         ),
                       ),
                       const SizedBox(height: 10),
-                      _buildAssignedInventoryPreview(staffId),
+                      _buildAssignedInventoryPreview(
+                        staffId,
+                        isBranch: isBranch,
+                      ),
                       const SizedBox(height: 14),
                       Flexible(
                         child: ConstrainedBox(
@@ -1402,6 +1411,41 @@ class _BudgetPageState extends State<BudgetPage>
                                   <
                                     QueryDocumentSnapshot<Map<String, dynamic>>
                                   >[];
+                              final currentAssignments = assignedDocs.where((
+                                doc,
+                              ) {
+                                final assignment = doc.data();
+                                return (assignment['staffId'] == staffId ||
+                                        assignment['branchId'] == staffId) &&
+                                    assignment['isDeleted'] != true &&
+                                    assignment['isVoided'] != true &&
+                                    assignment['removedAt'] == null;
+                              }).toList();
+                              if (!assignmentSelectionInitialized) {
+                                selectedCoffeeIds.addAll(
+                                  currentAssignments
+                                      .where(
+                                        (doc) => doc.data()['isCoffee'] == true,
+                                      )
+                                      .map(
+                                        (doc) =>
+                                            '${doc.data()['sourceInventoryId'] ?? ''}',
+                                      )
+                                      .where((id) => id.isNotEmpty),
+                                );
+                                selectedAddonIds.addAll(
+                                  currentAssignments
+                                      .where(
+                                        (doc) => doc.data()['isAddon'] == true,
+                                      )
+                                      .map(
+                                        (doc) =>
+                                            '${doc.data()['sourceInventoryId'] ?? ''}',
+                                      )
+                                      .where((id) => id.isNotEmpty),
+                                );
+                                assignmentSelectionInitialized = true;
+                              }
                               final activeDocs = (inventorySnapshot?.docs ?? [])
                                   .where((doc) {
                                     final data = doc.data();
@@ -1597,19 +1641,44 @@ class _BudgetPageState extends State<BudgetPage>
                                               if (showCoffee) {
                                                 final productId = doc.id;
                                                 final sizes =
-                                                    (data['sizes']
-                                                                as List<
-                                                                  dynamic
-                                                                >? ??
+                                                    (data['sizes'] as List? ??
                                                             [])
-                                                        .length;
+                                                        .whereType<Map>()
+                                                        .toList();
+                                                final sizePrices = sizes
+                                                    .map((size) {
+                                                      final name =
+                                                          '${size['name'] ?? size['size'] ?? ''}'
+                                                              .trim();
+                                                      final price =
+                                                          size['price'] ??
+                                                          size['amount'] ??
+                                                          size['basePrice'] ??
+                                                          ((_parsePrice(
+                                                                data['basePrice'],
+                                                              )) +
+                                                              _parsePrice(
+                                                                size['priceDelta'],
+                                                              ));
+                                                      if (price == null) {
+                                                        return name;
+                                                      }
+                                                      return '${name.isEmpty ? 'Size' : name} P${formatNumber(_parsePrice(price), decimals: 2)}';
+                                                    })
+                                                    .join(' • ');
+                                                final priceSummary =
+                                                    sizePrices.isNotEmpty
+                                                    ? sizePrices
+                                                    : data['basePrice'] == null
+                                                    ? 'Price not set'
+                                                    : 'P${formatNumber(_parsePrice(data['basePrice']), decimals: 2)}';
                                                 return _AssignCoffeeTile(
                                                   title:
                                                       data['name']
                                                           ?.toString() ??
                                                       'Beverages',
                                                   subtitle:
-                                                      '${data['category'] ?? 'Beverages'} - P${formatNumber(_parsePrice(data['basePrice']), decimals: 2)} - $sizes sizes',
+                                                      '${data['category'] ?? 'Beverages'} • $priceSummary',
                                                   selected: selectedCoffeeIds
                                                       .contains(productId),
                                                   onChanged: (checked) {
@@ -4352,27 +4421,29 @@ class _BudgetPageState extends State<BudgetPage>
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppColors.background,
-      floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
-      floatingActionButton: null,
-      body: FadeTransition(
-        opacity: _fadeAnim,
-        child: SlideTransition(
-          position: _slideAnim,
-          child: Column(
-            children: [
-              SizedBox(
-                height: 130,
-                child: _selectedBranchId == null
-                    ? _buildHeader()
-                    : _buildSelectedBranchHeader(),
-              ),
-              if (_selectedBranchId == null) _buildPinnedBudgetControls(),
-              Expanded(
-                child: ScreenLoadingRegion(
-                  child: TopEdgeRefresh(
-                    onRefresh: _refreshBranches,
+    return TopEdgeRefresh(
+      color: AppColors.primary,
+      backgroundColor: Colors.white,
+      onRefresh: _refreshBranches,
+      child: Scaffold(
+        backgroundColor: AppColors.background,
+        floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
+        floatingActionButton: null,
+        body: FadeTransition(
+          opacity: _fadeAnim,
+          child: SlideTransition(
+            position: _slideAnim,
+            child: Column(
+              children: [
+                SizedBox(
+                  height: 130,
+                  child: _selectedBranchId == null
+                      ? _buildHeader()
+                      : _buildSelectedBranchHeader(),
+                ),
+                if (_selectedBranchId == null) _buildPinnedBudgetControls(),
+                Expanded(
+                  child: ScreenLoadingRegion(
                     child: ListView(
                       physics: const AlwaysScrollableScrollPhysics(),
                       padding: const EdgeInsets.only(bottom: 32),
@@ -4393,8 +4464,8 @@ class _BudgetPageState extends State<BudgetPage>
                     ),
                   ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
@@ -4635,6 +4706,10 @@ class _BudgetPageState extends State<BudgetPage>
                 ...visibleBranches.map((doc) {
                   final data = doc.data();
                   final name = data['name']?.toString() ?? 'Branch';
+                  final code =
+                      data['branchCode']?.toString().trim().isNotEmpty == true
+                      ? data['branchCode'].toString().trim()
+                      : _branchCode(doc.id);
                   final staffIds = (data['staffIds'] as List<dynamic>? ?? [])
                       .map((id) => id.toString().trim())
                       .where((id) => id.isNotEmpty)
@@ -4691,6 +4766,14 @@ class _BudgetPageState extends State<BudgetPage>
                                         color: kBannerTop,
                                         fontSize: 15,
                                         fontWeight: FontWeight.w900,
+                                      ),
+                                    ),
+                                    Text(
+                                      'ID: $code',
+                                      style: const TextStyle(
+                                        color: Color(0xFF8A6671),
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w600,
                                       ),
                                     ),
                                   ],
@@ -4828,7 +4911,29 @@ class _BudgetPageState extends State<BudgetPage>
             range.$1,
             range.$2,
           );
+          final reportData = snapshot.data!;
+          final reducedCount = reportData
+              .losses(branchId, range.$1, range.$2)
+              .fold<double>(
+                0,
+                (count, record) => count + _parsePrice(record['quantity']),
+              );
+          final summaryTotals = totals.entries
+              .where((entry) => entry.key != 'Total loss')
+              .map(
+                (entry) => entry.key == 'Reduce'
+                    ? MapEntry('Reduced items', reducedCount)
+                    : entry,
+              )
+              .toList();
+          summaryTotals.add(
+            MapEntry(
+              'Total loss',
+              (totals['Reduce'] ?? 0) + (totals['Refunds'] ?? 0),
+            ),
+          );
           return Container(
+            width: double.infinity,
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
               color: AppColors.surface,
@@ -4847,7 +4952,7 @@ class _BudgetPageState extends State<BudgetPage>
                   ),
                 ),
                 const SizedBox(height: 10),
-                for (final entry in totals.entries.where(
+                for (final entry in summaryTotals.where(
                   (entry) => entry.key != 'Closing cash drawer',
                 ))
                   Padding(
@@ -4856,10 +4961,12 @@ class _BudgetPageState extends State<BudgetPage>
                       children: [
                         Expanded(child: Text(entry.key)),
                         Text(
-                          [
-                                'Total sold',
-                                'Total transactions',
-                              ].contains(entry.key)
+                          entry.key == 'Reduced items'
+                              ? entry.value.toStringAsFixed(0)
+                              : [
+                                  'Total sold',
+                                  'Total transactions',
+                                ].contains(entry.key)
                               ? entry.value.toStringAsFixed(0)
                               : formatMoney(entry.value),
                           style: const TextStyle(

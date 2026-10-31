@@ -1,9 +1,11 @@
 import 'package:sales_tracking/theme/app_colors.dart';
 import '../services/short_id_service.dart';
 import '../services/public_item_id.dart';
+import '../services/branch_status.dart';
 import 'admin_addons.dart';
 import 'inventory_header_transition.dart';
 import 'branch_inventory_monitor.dart';
+import 'branch_allocation_history.dart';
 import '../services/bundle_stock_service.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -164,9 +166,7 @@ List<AdminCatalogEntry> adminCatalogEntries(
           .toSet()
           .toList();
   final result = <AdminCatalogEntry>[];
-  for (final data in products.where(
-    (data) => catalogItemActive(data, day),
-  )) {
+  for (final data in products.where((data) => catalogItemActive(data, day))) {
     final items = (data['items'] as List? ?? [])
         .whereType<Map>()
         .where((item) => catalogItemActive(item, day))
@@ -245,7 +245,9 @@ List<AdminCatalogEntry> adminCatalogEntries(
         details: data,
         images: images(data, []),
         stock: stock,
-        available: data['isAvailable'] != false && (stock == null || stock > 0),
+        // Beverage catalog entries represent menu availability. Their stock
+        // field may be zero for products that are not stock-tracked.
+        available: data['isAvailable'] != false,
       ),
     );
   }
@@ -269,6 +271,9 @@ class AdminCatalog extends StatefulWidget {
     this.onViewBatches,
     this.firestore,
     this.onBranchChanged,
+    this.initialBranchId,
+    this.allowBranchEdits = true,
+    this.showBranchActions = true,
     this.scrollController,
     this.lockedBranchId,
     this.lockedBranchName,
@@ -276,6 +281,9 @@ class AdminCatalog extends StatefulWidget {
   });
   final FirebaseFirestore? firestore;
   final ValueChanged<String>? onBranchChanged;
+  final String? initialBranchId;
+  final bool allowBranchEdits;
+  final bool showBranchActions;
   final ScrollController? scrollController;
   final String? lockedBranchId;
   final String? lockedBranchName;
@@ -373,45 +381,106 @@ class _AdminCatalogState extends State<AdminCatalog> {
   @override
   void initState() {
     super.initState();
-    _branch = widget.lockedBranchId ?? '';
+    _branch = widget.lockedBranchId ?? widget.initialBranchId ?? '';
     if (widget.firestore == null) {
       ShortIdService.refresh().catchError((Object _) {});
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant AdminCatalog oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.initialBranchId != oldWidget.initialBranchId ||
+        widget.lockedBranchId != oldWidget.lockedBranchId) {
+      final nextBranch = widget.lockedBranchId ?? widget.initialBranchId ?? '';
+      if (_branch != nextBranch) {
+        _branch = nextBranch;
+        _category = null;
+        _branchCategoryKeys = <String>{};
+      }
     }
   }
 
   String _filter = 'All';
   String _query = '';
   String _branch = '';
+  Set<String> _branchCategoryKeys = <String>{};
+  bool _branchResetScheduled = false;
   Widget _branchPicker() => StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
     stream: (widget.firestore ?? FirebaseFirestore.instance)
         .collection('branches')
         .snapshots(),
     builder: (context, snapshot) {
       final branches =
-          snapshot.data?.docs ??
-          <QueryDocumentSnapshot<Map<String, dynamic>>>[];
+          (snapshot.data?.docs ??
+                  <QueryDocumentSnapshot<Map<String, dynamic>>>[])
+              .where((branch) => isVisibleInBranchPerformance(branch.data()))
+              .toList();
       final selectedBranchExists =
-          _branch.isEmpty || branches.any((branch) => branch.id == _branch);
-      return DropdownButtonFormField<String>(
-        initialValue: _branch,
-        decoration: const InputDecoration(
-          labelText: 'Inventory location',
-          border: OutlineInputBorder(),
-        ),
-        items: [
-          const DropdownMenuItem(value: '', child: Text('Main branch')),
-          if (!selectedBranchExists)
-            DropdownMenuItem(value: _branch, child: Text(_branch)),
-          for (final doc in branches)
-            DropdownMenuItem(
-              value: doc.id,
-              child: Text('${doc.data()['name'] ?? doc.id}'),
+          _branch.isEmpty ||
+          !snapshot.hasData ||
+          snapshot.hasError ||
+          branches.any((branch) => branch.id == _branch);
+      if (snapshot.hasData &&
+          !snapshot.hasError &&
+          !selectedBranchExists &&
+          !_branchResetScheduled) {
+        _branchResetScheduled = true;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _branchResetScheduled = false;
+          if (!mounted || _branch.isEmpty) return;
+          if (branches.any((branch) => branch.id == _branch)) return;
+          setState(() {
+            _branch = '';
+            _category = null;
+            _branchCategoryKeys = <String>{};
+          });
+          widget.onBranchChanged?.call('');
+        });
+      }
+      return Row(
+        children: [
+          Expanded(
+            child: DropdownButtonFormField<String>(
+              key: ValueKey(_branch),
+              initialValue: selectedBranchExists ? _branch : '',
+              decoration: const InputDecoration(
+                labelText: 'Inventory location',
+                border: OutlineInputBorder(),
+              ),
+              items: [
+                const DropdownMenuItem(value: '', child: Text('Main branch')),
+                if (_branch.isNotEmpty && !snapshot.hasData)
+                  DropdownMenuItem(
+                    value: _branch,
+                    child: const Text('Loading branch...'),
+                  ),
+                for (final doc in branches)
+                  DropdownMenuItem(
+                    value: doc.id,
+                    child: Text('${doc.data()['name'] ?? doc.id}'),
+                  ),
+              ],
+              onChanged: (value) {
+                final nextBranch = value ?? '';
+                if (_branch == nextBranch) return;
+                setState(() {
+                  _branch = nextBranch;
+                  _category = null;
+                  _branchCategoryKeys = <String>{};
+                });
+                widget.onBranchChanged?.call(_branch);
+              },
             ),
+          ),
+          if (_branch.isNotEmpty) ...[
+            const SizedBox(width: 4),
+            AllocationHistoryActions(
+              branchId: _branch,
+              database: widget.firestore,
+            ),
+          ],
         ],
-        onChanged: (value) {
-          setState(() => _branch = value ?? '');
-          widget.onBranchChanged?.call(_branch);
-        },
       );
     },
   );
@@ -489,11 +558,20 @@ class _AdminCatalogState extends State<AdminCatalog> {
               .map((doc) => {...doc.data(), 'id': doc.id})
               .toList(),
         );
+        final visibleCategories = _branch.isEmpty
+            ? categories
+            : categories
+                  .where(
+                    (category) => _branchCategoryKeys.contains(
+                      catalogCategoryKey(category),
+                    ),
+                  )
+                  .toList();
         final selected =
-            categories
+            visibleCategories
                 .where((category) => catalogCategoryKey(category) == _category)
                 .firstOrNull ??
-            categories.firstOrNull;
+            visibleCategories.firstOrNull;
         if (widget.type == 'Categories') {
           _category = selected == null ? null : catalogCategoryKey(selected);
           WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -526,7 +604,7 @@ class _AdminCatalogState extends State<AdminCatalog> {
           child: widget.type == 'Categories'
               ? Row(
                   spacing: 8,
-                  children: categories
+                  children: visibleCategories
                       .map(
                         (doc) => ChoiceChip(
                           padding: const EdgeInsets.symmetric(
@@ -551,28 +629,31 @@ class _AdminCatalogState extends State<AdminCatalog> {
                       )
                       .toList(),
                 )
-              : Row(
-                  spacing: 8,
-                  children: [
-                    if (!widget.gallery && widget.type == 'Beverages')
-                      for (final addon in [false, true])
-                        ChoiceChip(
-                          label: Text(addon ? 'Add-ons' : 'Beverages'),
-                          selected: _showAddons == addon,
-                          selectedColor: AppColors.primaryDark,
-                          checkmarkColor: Colors.white,
-                          labelStyle: TextStyle(
-                            color: _showAddons == addon
-                                ? Colors.white
-                                : AppColors.primaryDark,
-                            fontWeight: FontWeight.w700,
+              : SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    spacing: 8,
+                    children: [
+                      if (!widget.gallery && widget.type == 'Beverages')
+                        for (final addon in [false, true])
+                          ChoiceChip(
+                            label: Text(addon ? 'Add-ons' : 'Beverages'),
+                            selected: _showAddons == addon,
+                            selectedColor: AppColors.primaryDark,
+                            checkmarkColor: Colors.white,
+                            labelStyle: TextStyle(
+                              color: _showAddons == addon
+                                  ? Colors.white
+                                  : AppColors.primaryDark,
+                              fontWeight: FontWeight.w700,
+                            ),
+                            onSelected: (_) => setState(() {
+                              _showAddons = addon;
+                              widget.onBeverageTabChanged?.call(addon);
+                            }),
                           ),
-                          onSelected: (_) => setState(() {
-                            _showAddons = addon;
-                            widget.onBeverageTabChanged?.call(addon);
-                          }),
-                        ),
-                  ],
+                    ],
+                  ),
                 ),
         );
         final categoryAndActions = Flex(
@@ -666,7 +747,19 @@ class _AdminCatalogState extends State<AdminCatalog> {
               query: _query,
               firestore: widget.firestore,
               showBatchHistory: widget.showBatchHistory,
+              showActions: widget.showBranchActions,
               addons: widget.type == 'Beverages' && _showAddons,
+              categoryName: _branch.isNotEmpty && widget.type == 'Categories'
+                  ? (_category ?? '__no_allocated_category__')
+                  : null,
+              onCategoriesChanged: (categories) {
+                if (_branchCategoryKeys.length == categories.length &&
+                    _branchCategoryKeys.containsAll(categories)) {
+                  return;
+                }
+                setState(() => _branchCategoryKeys = categories);
+              },
+              allowEdits: widget.allowBranchEdits,
             )
           else if (!widget.gallery && widget.type == 'Beverages' && _showAddons)
             AdminAddonsTable(query: _query, firestore: widget.firestore)
@@ -871,31 +964,46 @@ class _AdminCatalogState extends State<AdminCatalog> {
           ),
         ],
       );
-      Widget status(AdminCatalogEntry entry) => Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (_low(entry))
-            const Icon(Icons.warning_amber, color: Colors.orange, size: 19),
-          if (_near(entry))
-            const Icon(Icons.event_busy, color: Colors.deepOrange, size: 19),
-          Text(
-            _low(entry)
-                ? 'Low stock'
-                : entry.available
-                ? 'Available'
-                : 'Unavailable',
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-              color: _low(entry)
-                  ? Colors.orange.shade800
+      Widget status(AdminCatalogEntry entry) {
+        final soldOut =
+            entry.type != 'Beverages' &&
+            entry.stock != null &&
+            entry.stock! <= 0;
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (!soldOut && _low(entry))
+              const Icon(Icons.warning_amber, color: Colors.orange, size: 19),
+            if (!soldOut && _near(entry))
+              const Icon(Icons.event_busy, color: Colors.deepOrange, size: 19),
+            Text(
+              soldOut
+                  ? 'Sold Out'
+                  : _low(entry) && _near(entry)
+                  ? 'Low stock/Near expiry'
+                  : _low(entry)
+                  ? 'Low stock'
+                  : _near(entry)
+                  ? 'Near expiry'
                   : entry.available
-                  ? Colors.green.shade700
-                  : Colors.red.shade700,
+                  ? 'Available'
+                  : 'Unavailable',
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: soldOut
+                    ? Colors.red.shade700
+                    : _low(entry) || _near(entry)
+                    ? Colors.orange.shade800
+                    : entry.available
+                    ? Colors.green.shade700
+                    : Colors.red.shade700,
+              ),
             ),
-          ),
-        ],
-      );
+          ],
+        );
+      }
+
       Widget cell(Widget child, [int flex = 1]) => Expanded(
         flex: flex,
         child: Padding(
@@ -942,7 +1050,7 @@ class _AdminCatalogState extends State<AdminCatalog> {
                             ].map((size) => cell(Text('$size\nCost / Sell')))
                           else ...[
                             cell(const Text('Price')),
-                            cell(const Text('Expiry'), 2),
+                            if (!beverages) cell(const Text('Expiry'), 2),
                             cell(const Text('Stock')),
                           ],
                           cell(

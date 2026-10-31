@@ -261,6 +261,22 @@ class AllocationChecklistService {
         'createdAt': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),
       });
+      tx.set(
+        db.collection('admin_notifications').doc('return_request_$requestId'),
+        {
+          'title': 'Inventory return request',
+          'message':
+              '$actorName submitted ${count} ${item['name'] ?? 'item'} return(s) from $branchName for approval.',
+          'type': 'allocation_return',
+          'category': 'Inventory',
+          'requestId': requestId,
+          'branchId': branchId,
+          'staffId': actorId,
+          'isRead': false,
+          'toastShown': false,
+          'createdAt': FieldValue.serverTimestamp(),
+        },
+      );
       return true;
     });
   }

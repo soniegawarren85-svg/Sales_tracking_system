@@ -3,6 +3,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import '../services/branch_session.dart';
+import '../services/branch_lifecycle.dart';
 import '../services/inventory_display_ids.dart';
 import '../services/number_format.dart';
 
@@ -722,11 +723,20 @@ class _BranchAccessPageState extends State<BranchAccessPage> {
       ),
     );
     if (confirmed != true) return;
-    await _firestore.collection('branches').doc(branchId).update({
-      'isVoided': true,
-      'voidedAt': FieldValue.serverTimestamp(),
-      'updatedAt': FieldValue.serverTimestamp(),
-    });
+    try {
+      await voidBranchAndUnassignStaff(_firestore, branchId);
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('$branchName was voided.')));
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Unable to void branch: $error')),
+        );
+      }
+    }
   }
 
   @override

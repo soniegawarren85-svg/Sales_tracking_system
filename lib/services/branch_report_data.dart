@@ -197,6 +197,31 @@ class BranchReportData {
       )
       .toList();
 
+  Map<String, double> revenueByPaymentMode(
+    String? branch,
+    DateTime start,
+    DateTime end,
+  ) {
+    final totals = <String, double>{'GCash': 0, 'Cash': 0};
+    for (final sale in sales(branch, start, end)) {
+      if (reportRefund(sale)) continue;
+      final mode = '${sale['paymentMode'] ?? sale['paymentMethod'] ?? 'Cash'}'
+          .trim();
+      final normalized = mode.toLowerCase();
+      final label = normalized.startsWith('gcash')
+          ? 'GCash'
+          : normalized.isEmpty || normalized == 'cash'
+          ? 'Cash'
+          : mode;
+      totals.update(
+        label,
+        (total) => total + reportValue(sale['total']),
+        ifAbsent: () => reportValue(sale['total']),
+      );
+    }
+    return totals;
+  }
+
   List<Map<String, dynamic>> losses(
     String branch,
     DateTime start,
@@ -317,11 +342,10 @@ class BranchReportData {
         ? DateUtils.dateOnly(DateTime.now())
         : lastDay;
     final closingRows = selected.where(
-      (row) =>
-          DateUtils.isSameDay(
-            cashRecordDate(row['timestamp'] ?? row['createdAt']),
-            closingDay,
-          ),
+      (row) => DateUtils.isSameDay(
+        cashRecordDate(row['timestamp'] ?? row['createdAt']),
+        closingDay,
+      ),
     );
     final cash = closingRows
         .where(
@@ -501,17 +525,27 @@ class BranchReportData {
           usable(row),
     )) {
       final sourceId = '${allocation['sourceInventoryId'] ?? ''}';
-      final source = [
+      final sources = [
         ...rows('sales_inventory'),
         ...rows('coffee_products'),
         ...rows('coffee_addons'),
-      ].where((r) => r['_id'] == sourceId).firstOrNull;
-      // Allocations with a missing/deleted source must not resurrect old catalog items.
+      ];
+      final source =
+          sources.where((r) => r['_id'] == sourceId).firstOrNull ??
+          (sourceId.isEmpty
+              ? sources
+                    .where(
+                      (r) =>
+                          r['isBundle'] != true &&
+                          '${r['name'] ?? ''}'.trim().toLowerCase() ==
+                              '${allocation['categoryName'] ?? allocation['parentName'] ?? allocation['name'] ?? ''}'
+                                  .trim()
+                                  .toLowerCase(),
+                    )
+                    .firstOrNull
+              : null);
+      // Allocations with a deleted source must not resurrect old catalog items.
       if (sourceId.isNotEmpty && (source == null || !usable(source))) continue;
-      if (allocation['isBundle'] == true &&
-          availableBundleStock(allocation, now: start) == 0) {
-        continue;
-      }
       final variants =
           allocation['isBundle'] == true ||
               allocation['isCoffee'] == true ||
@@ -534,11 +568,20 @@ class BranchReportData {
           if (currentVariant == null || !usable(currentVariant)) continue;
         }
         final catalogItem = currentVariant ?? source;
+        final allocatedCost = variant['costPrice'];
+        final catalogCost = catalogItem?['costPrice'];
+        final costPrice =
+            allocatedCost == null ||
+                (reportValue(allocatedCost) == 0 &&
+                    catalogCost != null &&
+                    reportValue(catalogCost) != 0)
+            ? catalogCost
+            : allocatedCost;
         final resolvedItem = resolveItem({
           ...variant,
           'sourceInventoryId': sourceId,
           if (catalogItem != null) ...{
-            'costPrice': variant['costPrice'] ?? catalogItem['costPrice'],
+            'costPrice': costPrice,
             'price': variant['price'] ?? catalogItem['price'],
             if (catalogItem['imageUrl'] != null)
               'imageUrl': catalogItem['imageUrl'],
@@ -570,6 +613,11 @@ class BranchReportData {
                   allocation['isAddon'] == true
               ? null
               : variant['id'] ?? variant['itemId'],
+          'categoryName':
+              source?['name'] ??
+              allocation['categoryName'] ??
+              allocation['parentName'] ??
+              '',
           'remaining':
               reportValue(previous?['remaining']) +
               (allocation['isBundle'] == true

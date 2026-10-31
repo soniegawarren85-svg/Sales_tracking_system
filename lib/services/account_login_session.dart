@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'activity_log.dart';
@@ -66,6 +67,7 @@ class AccountLoginSession {
     final db = database ?? FirebaseFirestore.instance;
     final role = prefs.getString('lastRole') ?? '';
     final userId = prefs.getString('lastUserId') ?? '';
+    await prefs.remove(_sessionPreference);
     if (role.isNotEmpty && userId.isNotEmpty) {
       await AccountPresenceService.stop(
         role: role,
@@ -75,20 +77,21 @@ class AccountLoginSession {
     }
     if (sessionId == null || sessionId.isEmpty) return;
     final ref = db.collection('staff_login_sessions').doc(sessionId);
-    final snapshot = await ref.get();
-    final session = snapshot.data();
-    if (snapshot.exists) {
-      await ref.set({
-        'logoutAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+    try {
+      await Future.wait([
+        ref.set({
+          'logoutAt': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true)),
+        ActivityLog.record(
+          'account_logout',
+          '${role.isEmpty ? 'Account' : role} account signed out.',
+          database: db,
+          eventId: 'account_logout_$sessionId',
+          details: {'sessionId': sessionId},
+        ),
+      ]).timeout(const Duration(seconds: 2));
+    } catch (error) {
+      debugPrint('Logout record queued or deferred: $error');
     }
-    await prefs.remove(_sessionPreference);
-    await ActivityLog.record(
-      'account_logout',
-      '${session?['type'] ?? 'Account'} account signed out.',
-      database: db,
-      eventId: 'account_logout_$sessionId',
-      details: {'sessionId': sessionId},
-    );
   }
 }

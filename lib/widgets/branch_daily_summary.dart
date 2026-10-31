@@ -86,10 +86,12 @@ class BranchDailySummary extends StatefulWidget {
     required this.branchId,
     required this.day,
     this.compact = false,
+    this.onCashAction,
   });
   final String branchId;
   final DateTime day;
   final bool compact;
+  final VoidCallback? onCashAction;
   @override
   State<BranchDailySummary> createState() => _BranchDailySummaryState();
 }
@@ -168,18 +170,74 @@ class _BranchDailySummaryState extends State<BranchDailySummary> {
         return const Center(child: ScreenLoadingIndicator());
       }
       if (widget.compact) {
+        final startingFund = snapshot.data!['Starting fund'] ?? 0;
+        final hasStartingCash = startingFund > 0;
         return Column(
           crossAxisAlignment: CrossAxisAlignment.end,
+          mainAxisSize: MainAxisSize.min,
           children: [
-            const Text('Cash Drawer', style: TextStyle(color: Colors.white70)),
-            Text(
-              '₱${snapshot.data!['Closing cash drawer']!.toStringAsFixed(2)}',
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-              ),
+            const Text(
+              'Cash Drawer',
+              style: TextStyle(color: Colors.white70, fontSize: 13),
             ),
+            const SizedBox(height: 5),
+            if (hasStartingCash)
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    '₱${snapshot.data!['Closing cash drawer']!.toStringAsFixed(2)}',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  if (widget.onCashAction != null)
+                    Padding(
+                      padding: const EdgeInsets.only(left: 6),
+                      child: IconButton.filled(
+                        tooltip: 'Add cash allocation',
+                        visualDensity: VisualDensity.compact,
+                        onPressed: widget.onCashAction,
+                        style: IconButton.styleFrom(
+                          backgroundColor: Colors.white.withValues(alpha: .18),
+                          foregroundColor: Colors.white,
+                        ),
+                        icon: const Icon(Icons.add_rounded),
+                      ),
+                    ),
+                ],
+              )
+            else if (widget.onCashAction != null)
+              FilledButton.icon(
+                onPressed: widget.onCashAction,
+                icon: const Icon(Icons.payments_outlined, size: 17),
+                label: const Text(
+                  'Set Starting Cash',
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800),
+                ),
+                style: FilledButton.styleFrom(
+                  backgroundColor: AppColors.rose,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 9,
+                  ),
+                  minimumSize: const Size(0, 38),
+                  shape: const StadiumBorder(),
+                  elevation: 1,
+                ),
+              )
+            else
+              const Text(
+                'Not set',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 17,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
           ],
         );
       }

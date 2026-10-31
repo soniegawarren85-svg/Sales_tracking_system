@@ -1,12 +1,15 @@
-import 'package:sales_tracking/theme/app_colors.dart';
 import 'dart:async';
 
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
+import 'package:sales_tracking/theme/app_colors.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../services/held_order_store.dart';
 import '../services/local_database_sync_service.dart';
+import '../services/offline_stock_reduction_service.dart';
+import '../services/staff_onboarding_service.dart';
 
 class NetworkStatusBanner extends StatefulWidget {
   final Widget child;
@@ -43,9 +46,7 @@ class _NetworkStatusBannerState extends State<NetworkStatusBanner> {
           (_lastSync == null ||
               DateTime.now().difference(_lastSync!).inSeconds >= 20)) {
         _lastSync = DateTime.now();
-        unawaited(LocalDatabaseSyncService().syncPendingSales());
-        unawaited(LocalDatabaseSyncService().syncPendingCashDrawerChanges());
-        unawaited(_syncPendingHeldOrders());
+        unawaited(_syncPendingChanges());
       }
     } catch (_) {}
   }
@@ -70,10 +71,19 @@ class _NetworkStatusBannerState extends State<NetworkStatusBanner> {
         }
       });
     } else {
-      unawaited(LocalDatabaseSyncService().syncPendingSales());
-      unawaited(LocalDatabaseSyncService().syncPendingCashDrawerChanges());
-      unawaited(_syncPendingHeldOrders());
+      unawaited(_syncPendingChanges());
     }
+  }
+
+  Future<void> _syncPendingChanges() async {
+    final database = FirebaseFirestore.instance;
+    await OfflineStockReductionService().sync(database);
+    await LocalDatabaseSyncService().syncPendingSales();
+    await LocalDatabaseSyncService().syncPendingCashDrawerChanges();
+    await StaffOnboardingService.syncPendingTutorialCompletions(
+      database: database,
+    );
+    await _syncPendingHeldOrders();
   }
 
   Future<void> _syncPendingHeldOrders() async {

@@ -191,9 +191,9 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      expect(find.text('Sales & reductions'), findsOneWidget);
+      expect(find.text('Sales Analytics'), findsOneWidget);
       expect(find.textContaining('Refund'), findsNothing);
-      expect(find.text('Reduced'), findsOneWidget);
+      expect(find.text('Reduced'), findsNothing);
     },
   );
 

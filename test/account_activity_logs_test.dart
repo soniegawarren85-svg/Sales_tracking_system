@@ -40,6 +40,12 @@ void main() {
       expect(sessions.docs.single.data()['role'], 'admin');
 
       await AccountLoginSession.close(database: firestore);
+      expect(
+        (await SharedPreferences.getInstance()).containsKey(
+          'accountLoginSessionId',
+        ),
+        isFalse,
+      );
       final closedSession = await sessions.docs.single.reference.get();
       expect(closedSession.data()?['logoutAt'], isNotNull);
       final logs = await firestore

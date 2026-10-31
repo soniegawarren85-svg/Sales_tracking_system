@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:sales_tracking/theme/app_colors.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -44,6 +46,9 @@ class _AnalyticsPageState extends State<AnalyticsPage>
   List<String> _allItems = [];
   List<String> _filtered = [];
   bool _isLoadingItems = true;
+  bool _inventoryReloadPending = false;
+  Timer? _searchDebounce;
+  Timer? _inventoryReloadDebounce;
 
   bool get _hasQuery => _controller.text.trim().isNotEmpty;
 
@@ -71,6 +76,8 @@ class _AnalyticsPageState extends State<AnalyticsPage>
   @override
   void dispose() {
     _pulseCtrl.dispose();
+    _searchDebounce?.cancel();
+    _inventoryReloadDebounce?.cancel();
     _controller.removeListener(_onSearchChanged);
     _controller.dispose();
     _focusNode.dispose();
@@ -78,7 +85,26 @@ class _AnalyticsPageState extends State<AnalyticsPage>
     super.dispose();
   }
 
-  void _onInventoryUpdated() => _loadItems();
+  void _onInventoryUpdated() {
+    _inventoryReloadDebounce?.cancel();
+    _inventoryReloadDebounce = Timer(const Duration(milliseconds: 300), () {
+      if (_isLoadingItems) {
+        _inventoryReloadPending = true;
+      } else {
+        unawaited(_loadItems());
+      }
+    });
+  }
+
+  void _completeItemsLoad() {
+    if (!mounted) return;
+    if (_inventoryReloadPending) {
+      _inventoryReloadPending = false;
+      unawaited(_loadItems());
+      return;
+    }
+    setState(() => _isLoadingItems = false);
+  }
 
   bool _isExpiredInventoryItem(String expirationDate) {
     try {
@@ -106,7 +132,7 @@ class _AnalyticsPageState extends State<AnalyticsPage>
       if (userId == null) {
         _allItems = [];
         _filtered = [];
-        if (mounted) setState(() => _isLoadingItems = false);
+        _completeItemsLoad();
         return;
       }
 
@@ -116,7 +142,8 @@ class _AnalyticsPageState extends State<AnalyticsPage>
         final staffDoc = await FirebaseFirestore.instance
             .collection('staff_requests')
             .doc(userId)
-            .get();
+            .get()
+            .timeout(const Duration(seconds: 20));
         final staffData = staffDoc.data();
         publicStaffId = staffData?['staffId']?.toString().trim() ?? '';
         if (publicStaffId.isNotEmpty) ids.add(publicStaffId);
@@ -130,24 +157,33 @@ class _AnalyticsPageState extends State<AnalyticsPage>
         final byUid = await FirebaseFirestore.instance
             .collection('branches')
             .where('staffIds', arrayContains: userId)
-            .get();
+            .get()
+            .timeout(const Duration(seconds: 20));
         ids.addAll(byUid.docs.map((doc) => doc.id));
         if (publicStaffId.isNotEmpty) {
           final byPublicId = await FirebaseFirestore.instance
               .collection('branches')
               .where('staffIds', arrayContains: publicStaffId)
-              .get();
+              .get()
+              .timeout(const Duration(seconds: 20));
           ids.addAll(byPublicId.docs.map((doc) => doc.id));
         }
       } catch (_) {}
 
       final query = FirebaseFirestore.instance.collection('staff_inventory');
       final snapshot = ids.length == 1
-          ? await query.where('staffId', isEqualTo: ids.first).get()
-          : await query.where('staffId', whereIn: ids.take(10).toList()).get();
+          ? await query
+                .where('staffId', isEqualTo: ids.first)
+                .get()
+                .timeout(const Duration(seconds: 20))
+          : await query
+                .where('staffId', whereIn: ids.take(10).toList())
+                .get()
+                .timeout(const Duration(seconds: 20));
       final rootSnapshot = await FirebaseFirestore.instance
           .collection('sales_inventory')
-          .get();
+          .get()
+          .timeout(const Duration(seconds: 20));
       final activeRootById = <String, Map<String, dynamic>>{};
       final activeRootByName = <String, Map<String, dynamic>>{};
       for (final rootDoc in rootSnapshot.docs) {
@@ -274,17 +310,21 @@ class _AnalyticsPageState extends State<AnalyticsPage>
       ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
     _filtered = [];
 
-    if (mounted) setState(() => _isLoadingItems = false);
+    _completeItemsLoad();
   }
 
   void _onSearchChanged() {
-    final query = _controller.text.trim().toLowerCase();
-    setState(() {
-      _filtered = query.isEmpty
-          ? []
-          : _allItems
-                .where((item) => item.toLowerCase().contains(query))
-                .toList();
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(const Duration(milliseconds: 300), () {
+      if (!mounted) return;
+      final query = _controller.text.trim().toLowerCase();
+      setState(() {
+        _filtered = query.isEmpty
+            ? []
+            : _allItems
+                  .where((item) => item.toLowerCase().contains(query))
+                  .toList();
+      });
     });
   }
 

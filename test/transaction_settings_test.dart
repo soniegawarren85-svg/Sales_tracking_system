@@ -58,7 +58,7 @@ void main() {
         settingRows(lingayen, 'payments').every((row) => row['qrUrl'] == null),
         isTrue,
       );
-      expect(settingRows(lingayen, 'discounts').first['name'], 'Senior');
+      expect(settingRows(lingayen, 'discounts'), isEmpty);
       expect(
         settingsForBranch(settings, 'sm-dagupan')['allowRefunds'],
         isFalse,
@@ -70,12 +70,17 @@ void main() {
         ).single['qrUrl'],
         'dagupan-qr',
       );
+      final newBranch = settingsForBranch(settings, 'new-branch');
+      expect(newBranch['discountsEnabled'], isFalse);
+      expect(settingRows(newBranch, 'discounts'), isEmpty);
     });
 
     test('tax is disabled by default and is only charged for enabled VAT', () {
       final defaults = settingsForBranch({}, 'lingayen');
       expect(defaults['taxEnabled'], isFalse);
       expect(defaults['taxClassification'], 'nonVat');
+      expect(defaults['discountsEnabled'], isFalse);
+      expect(settingRows(defaults, 'discounts'), isEmpty);
       expect(transactionTaxAmount(defaults, grossAmount: 100), 0);
 
       final vat = settingsForBranch({

@@ -60,6 +60,53 @@ void main() {
       expect(aligned['sourceInventoryId'], 'root');
     },
   );
+  test(
+    'allocation inventory prices follow the matching current catalog variant',
+    () {
+      final aligned = alignInventoryDisplayIds(
+        {
+          'items': [
+            {
+              'id': 'shared-category-id',
+              'name': 'Cookie',
+              'variant': 'Pistachio',
+              'price': 100,
+              'stock': 17,
+            },
+          ],
+        },
+        {
+          'items': [
+            {
+              'id': 'shared-category-id',
+              'name': 'Cookie',
+              'variant': 'Chocolate',
+              'price': 99,
+            },
+            {
+              'id': 'shared-category-id',
+              'name': 'Cookie',
+              'variant': 'Pistachio',
+              'price': 120,
+            },
+          ],
+        },
+      );
+
+      final item = (aligned['items'] as List).single as Map<String, dynamic>;
+      expect(item['price'], 120);
+      expect(item['stock'], 17);
+    },
+  );
+  test('shared catalog ID cannot match a different inventory variant', () {
+    expect(
+      inventoryVariantsMatch(
+        {'id': 'shared', 'name': 'Cookie', 'variant': 'Chocolate'},
+        {'id': 'shared', 'name': 'Cookie', 'variant': 'Pistachio'},
+      ),
+      isFalse,
+    );
+  });
   test('beverages and bundles use the same public code as admin', () {
     expect(
       inventoryDisplayId({'publicId': 'CF-002', 'coffeeId': '2026715-002'}),

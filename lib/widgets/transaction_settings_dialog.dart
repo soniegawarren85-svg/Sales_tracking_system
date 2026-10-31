@@ -7,6 +7,16 @@ import 'package:image_picker/image_picker.dart';
 import '../services/transaction_settings.dart';
 import '../services/catalog_image_service.dart';
 import '../services/activity_log.dart';
+import '../services/branch_status.dart';
+
+String _formatDiscountPercent(dynamic value) {
+  final percent = num.tryParse('$value');
+  if (percent == null) return '$value';
+  return percent
+      .toString()
+      .replaceFirst(RegExp(r'\.0+$'), '')
+      .replaceFirst(RegExp(r'(\.\d*?)0+$'), r'$1');
+}
 
 Future<bool> confirmSetting(BuildContext context, String message) async =>
     await showDialog<bool>(
@@ -393,6 +403,8 @@ class _TransactionSettingsDialogState extends State<TransactionSettingsDialog> {
 
   @override
   Widget build(BuildContext context) => AlertDialog(
+    insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+    constraints: const BoxConstraints(maxWidth: 700),
     backgroundColor: AppColors.surface,
     titleTextStyle: const TextStyle(
       color: AppColors.primaryDeep,
@@ -438,9 +450,12 @@ class _TransactionSettingsDialogState extends State<TransactionSettingsDialog> {
           if (!branchSnapshot.hasData) {
             return const Center(child: CircularProgressIndicator());
           }
-          final branches = branchSnapshot.data!.docs;
+          final branches = branchSnapshot.data!.docs.where((branch) {
+            final data = branch.data();
+            return isVisibleInBranchPerformance(data);
+          }).toList();
           if (branches.isEmpty) {
-            return const Text('Create a branch before configuring settings.');
+            return const Text('No active branches are available.');
           }
           if (_isBranchScoped &&
               !branches.any((branch) => branch.id == widget.branchId)) {
@@ -628,9 +643,46 @@ class _TransactionSettingsDialogState extends State<TransactionSettingsDialog> {
                         ),
                       const SizedBox(height: 8),
                       if (widget.separateRoles)
-                        ExpansionTile(
-                          title: const Text('Admin permissions'),
-                          children: adminPermissions.entries
+                        Card(
+                          margin: const EdgeInsets.symmetric(vertical: 6),
+                          child: ExpansionTile(
+                            title: const Text('Admin permissions'),
+                            children: adminPermissions.entries
+                                .map(
+                                  (entry) => SwitchListTile(
+                                    title: Text(entry.value),
+                                    value: isAllBranches
+                                        ? branches.every(
+                                            (branch) =>
+                                                settingsForBranch(
+                                                  rawSettings,
+                                                  branch.id,
+                                                )[entry.key] !=
+                                                false,
+                                          )
+                                        : data[entry.key] != false,
+                                    onChanged: busy
+                                        ? null
+                                        : (value) => saveBranches(
+                                            isAllBranches
+                                                ? branches
+                                                      .map((b) => b.id)
+                                                      .toList()
+                                                : [branchId],
+                                            {entry.key: value},
+                                            'Admin permission updated.',
+                                          ),
+                                  ),
+                                )
+                                .toList(),
+                          ),
+                        ),
+                      Card(
+                        margin: const EdgeInsets.symmetric(vertical: 6),
+                        child: ExpansionTile(
+                          initiallyExpanded: !widget.separateRoles,
+                          title: const Text('Staff permissions'),
+                          children: staffPermissions.entries
                               .map(
                                 (entry) => SwitchListTile(
                                   title: Text(entry.value),
@@ -646,54 +698,23 @@ class _TransactionSettingsDialogState extends State<TransactionSettingsDialog> {
                                       : data[entry.key] != false,
                                   onChanged: busy
                                       ? null
-                                      : (value) => saveBranches(
-                                          isAllBranches
-                                              ? branches
-                                                    .map((b) => b.id)
-                                                    .toList()
-                                              : [branchId],
-                                          {entry.key: value},
-                                          'Admin permission updated.',
-                                        ),
+                                      : (value) => isAllBranches
+                                            ? saveBranches(
+                                                branches
+                                                    .map((branch) => branch.id)
+                                                    .toList(),
+                                                {entry.key: value},
+                                                'Permission updated for all branches.',
+                                              )
+                                            : save(
+                                                branchId,
+                                                {entry.key: value},
+                                                '$branchName permission updated successfully.',
+                                              ),
                                 ),
                               )
                               .toList(),
                         ),
-                      ExpansionTile(
-                        initiallyExpanded: !widget.separateRoles,
-                        title: const Text('Cashier permissions'),
-                        children: staffPermissions.entries
-                            .map(
-                              (entry) => SwitchListTile(
-                                title: Text(entry.value),
-                                value: isAllBranches
-                                    ? branches.every(
-                                        (branch) =>
-                                            settingsForBranch(
-                                              rawSettings,
-                                              branch.id,
-                                            )[entry.key] !=
-                                            false,
-                                      )
-                                    : data[entry.key] != false,
-                                onChanged: busy
-                                    ? null
-                                    : (value) => isAllBranches
-                                          ? saveBranches(
-                                              branches
-                                                  .map((branch) => branch.id)
-                                                  .toList(),
-                                              {entry.key: value},
-                                              'Permission updated for all branches.',
-                                            )
-                                          : save(
-                                              branchId,
-                                              {entry.key: value},
-                                              '$branchName permission updated successfully.',
-                                            ),
-                              ),
-                            )
-                            .toList(),
                       ),
                     ],
                   ),
@@ -709,10 +730,10 @@ class _TransactionSettingsDialogState extends State<TransactionSettingsDialog> {
                           settingsForBranch(
                             rawSettings,
                             branch.id,
-                          )['discountsEnabled'] !=
-                          false,
+                          )['discountsEnabled'] ==
+                          true,
                     )
-                  : data['discountsEnabled'] != false;
+                  : data['discountsEnabled'] == true;
               return SingleChildScrollView(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
@@ -778,7 +799,9 @@ class _TransactionSettingsDialogState extends State<TransactionSettingsDialog> {
                           return ListTile(
                             title: Text('${row['name']}'),
                             subtitle: widget.kind == 'discounts'
-                                ? Text('${row['percent']}%')
+                                ? Text(
+                                    '${_formatDiscountPercent(row['percent'])}%',
+                                  )
                                 : null,
                             trailing: cash
                                 ? null

@@ -374,7 +374,7 @@ class _AdminDashboardState extends State<AdminDashboard>
     switch (_selectedIndex) {
       case 1:
         // Budget page displays without the admin collapsible header
-        return _refreshablePage(const BudgetPage());
+        return const BudgetPage();
       case 2:
         // Inventory is part of the main admin navigation.
         return _refreshablePage(
@@ -420,7 +420,7 @@ class _AdminDashboardState extends State<AdminDashboard>
     color: AppColors.primary,
     backgroundColor: Colors.white,
     notificationPredicate: (notification) =>
-        notification.depth == 0 && notification.metrics.axis == Axis.vertical,
+        notification.metrics.axis == Axis.vertical,
     onRefresh: _refreshCurrentPage,
     child: KeyedSubtree(key: ValueKey(_pageRefreshVersion), child: child),
   );
@@ -468,8 +468,9 @@ class _AdminDashboardState extends State<AdminDashboard>
     return TopEdgeRefresh(
       color: AppColors.primary,
       backgroundColor: Colors.white,
+      startAreaHeight: 420,
       notificationPredicate: (notification) =>
-          notification.depth == 0 && notification.metrics.axis == Axis.vertical,
+          notification.metrics.axis == Axis.vertical,
       onRefresh: () async {
         try {
           await Future.wait(

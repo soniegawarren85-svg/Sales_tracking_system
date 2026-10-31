@@ -181,9 +181,9 @@ List<Map<String, dynamic>> staffInventoryHistoryEntries({
         for (final rawAddon in addonRows) {
           final addon = Map<String, dynamic>.from(rawAddon);
           if (!belongsToItem(addon)) continue;
-          final quantity = _historyQuantity(
-            addon['quantity'] ?? addon['count'] ?? 1,
-          );
+          final quantity =
+              _historyQuantity(addon['quantity'] ?? addon['count'] ?? 1) *
+              _historyQuantity(item['quantity'] ?? 1);
           if (quantity <= 0) continue;
           result.add({
             'activity': refund ? 'Refund' : 'Sold',

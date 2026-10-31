@@ -1,5 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../theme/app_colors.dart';
 import '../services/allocation_checklist_service.dart';
 import '../services/bundle_stock_service.dart';
@@ -7,6 +9,7 @@ import '../services/inventory_reconciliation_service.dart';
 import '../services/session_actor.dart';
 import '../services/number_format.dart';
 import '../services/sale_stock.dart';
+import '../services/local_database_sync_service.dart';
 
 Future<void> showMainInventoryBatches(
   BuildContext context,
@@ -55,8 +58,7 @@ class _MainInventoryBatchesDialogState
       context: context,
       firstDate: DateTime(2000),
       lastDate: DateTime(today.year + 5),
-      initialDateRange: _dateRange ??
-          DateTimeRange(start: today, end: today),
+      initialDateRange: _dateRange ?? DateTimeRange(start: today, end: today),
     );
     if (range != null && mounted) setState(() => _dateRange = range);
   }
@@ -209,8 +211,7 @@ class _MainInventoryBatchesDialogState
                     : ListView.separated(
                         padding: const EdgeInsets.only(bottom: 8),
                         itemCount: filteredBatches.length,
-                        separatorBuilder: (_, _) =>
-                            const SizedBox(height: 10),
+                        separatorBuilder: (_, _) => const SizedBox(height: 10),
                         itemBuilder: (context, index) {
                           final (batchIndex, batch) = filteredBatches[index];
                           return _InventoryBatchCard(
@@ -463,7 +464,9 @@ List<Map<String, dynamic>> aggregateCategoryAllocationItems(
             .firstWhere((value) => value.isNotEmpty, orElse: () => '');
     final name = '${item['name'] ?? ''}'.trim().toLowerCase();
     final variant = '${item['variant'] ?? ''}'.trim().toLowerCase();
-    final key = id.isNotEmpty ? id.toLowerCase() : '$name|$variant';
+    final key = id.isNotEmpty
+        ? '${id.toLowerCase()}|$variant'
+        : '$name|$variant';
     final current = aggregated[key];
     final stock = quantity(item['stock'] ?? item['startingStock']);
     if (current == null) {
@@ -497,6 +500,200 @@ List<Map<String, dynamic>> aggregateCategoryAllocationItems(
           ..remove('unbundledQuantity'),
       )
       .toList();
+}
+
+bool allocationItemMatchesSale(
+  Map<String, dynamic> item,
+  Map<String, dynamic> sale,
+) {
+  String normalized(dynamic value) => '${value ?? ''}'.trim().toLowerCase();
+
+  final itemIds = [
+    item['id'],
+    item['itemId'],
+    item['variantId'],
+    item['publicId'],
+    item['itemPublicId'],
+    item['sourceItemId'],
+  ].map(normalized).where((id) => id.isNotEmpty).toSet();
+  final saleIds = [
+    sale['id'],
+    sale['itemId'],
+    sale['variantId'],
+    sale['publicId'],
+    sale['itemPublicId'],
+    sale['sourceItemId'],
+  ].map(normalized).where((id) => id.isNotEmpty).toSet();
+  final itemVariant = normalized(
+    item['variant'] ?? item['coffeeSize'] ?? item['size'],
+  );
+  final saleVariant = normalized(
+    sale['variant'] ?? sale['coffeeSize'] ?? sale['size'],
+  );
+  if (itemIds.intersection(saleIds).isNotEmpty) {
+    return itemVariant.isEmpty ||
+        saleVariant.isEmpty ||
+        itemVariant == saleVariant;
+  }
+
+  final itemName = normalized(item['name']);
+  final saleName = normalized(sale['name']);
+  return itemName.isNotEmpty &&
+      (itemName == saleName ||
+          (itemVariant.isNotEmpty &&
+              saleVariant.isNotEmpty &&
+              itemVariant == saleVariant)) &&
+      (itemVariant.isEmpty ||
+          saleVariant.isEmpty ||
+          itemVariant == saleVariant);
+}
+
+int allocationItemSoldQuantity(
+  Map<String, dynamic> item,
+  Iterable<Map<String, dynamic>> sales,
+) => sales
+    .where((sale) => allocationItemMatchesSale(item, sale))
+    .fold<int>(
+      0,
+      (total, sale) => total + (int.tryParse('${sale['quantity'] ?? 0}') ?? 0),
+    );
+
+String beverageAllocationSize(
+  Map<String, dynamic> item, {
+  String productName = '',
+}) {
+  final explicitSize =
+      '${item['coffeeSize'] ?? item['variant'] ?? item['size'] ?? ''}'.trim();
+  final name = explicitSize.isEmpty
+      ? '${item['name'] ?? ''}'.trim()
+      : explicitSize;
+  final normalizedName = name.toLowerCase();
+  final normalizedProduct = productName.trim().toLowerCase();
+  if (normalizedProduct.isNotEmpty) {
+    if (normalizedName == normalizedProduct) return '';
+    final prefix = '$normalizedProduct - ';
+    if (normalizedName.startsWith(prefix)) {
+      return name.substring(prefix.length).trim();
+    }
+    final parenthesizedPrefix = '$normalizedProduct (';
+    if (normalizedName.startsWith(parenthesizedPrefix) && name.endsWith(')')) {
+      return name.substring(parenthesizedPrefix.length, name.length - 1).trim();
+    }
+  }
+  return name;
+}
+
+List<Map<String, dynamic>> uniqueBeverageAllocationItems(
+  Iterable<Map<String, dynamic>> items, {
+  String productName = '',
+}) {
+  String normalizedSize(Map<String, dynamic> item) =>
+      beverageAllocationSize(item, productName: productName).toLowerCase();
+
+  final bySize = <String, Map<String, dynamic>>{};
+  for (final item in items) {
+    final size = normalizedSize(item);
+    if (size.isNotEmpty) bySize.putIfAbsent(size, () => item);
+  }
+  return bySize.values.toList();
+}
+
+num? allocationCurrentCatalogPrice(
+  Map<String, dynamic> item,
+  Iterable<Map<String, dynamic>> catalogItems,
+) {
+  String normalized(dynamic value) => '${value ?? ''}'.trim().toLowerCase();
+
+  final itemIds = [
+    item['id'],
+    item['itemId'],
+    item['variantId'],
+    item['publicId'],
+    item['itemPublicId'],
+    item['sourceItemId'],
+  ].map(normalized).where((id) => id.isNotEmpty).toSet();
+  final itemName = normalized(item['name']);
+  final itemVariant = normalized(
+    item['variant'] ?? item['coffeeSize'] ?? item['size'],
+  );
+  final candidates = <Map<String, dynamic>>[];
+  for (final candidate in catalogItems) {
+    final candidateIds = [
+      candidate['id'],
+      candidate['itemId'],
+      candidate['variantId'],
+      candidate['publicId'],
+      candidate['itemPublicId'],
+      candidate['sourceItemId'],
+    ].map(normalized).where((id) => id.isNotEmpty).toSet();
+    final candidateName = normalized(candidate['name']);
+    final candidateVariant = normalized(
+      candidate['variant'] ?? candidate['coffeeSize'] ?? candidate['size'],
+    );
+    final nameMatches =
+        itemName.isEmpty || candidateName.isEmpty || itemName == candidateName;
+    final variantMatches =
+        itemVariant.isEmpty ||
+        candidateVariant.isEmpty ||
+        itemVariant == candidateVariant;
+    final idsMatch = itemIds.intersection(candidateIds).isNotEmpty;
+    if ((!idsMatch && (itemName.isEmpty || candidateName != itemName)) ||
+        !nameMatches ||
+        !variantMatches) {
+      continue;
+    }
+    candidates.add(candidate);
+  }
+  if (candidates.isEmpty) return null;
+  if (itemVariant.isNotEmpty) {
+    final exactVariant = candidates.where(
+      (candidate) =>
+          normalized(
+            candidate['variant'] ??
+                candidate['coffeeSize'] ??
+                candidate['size'],
+          ) ==
+          itemVariant,
+    );
+    if (exactVariant.length == 1) {
+      return num.tryParse('${exactVariant.single['price'] ?? ''}');
+    }
+    if (exactVariant.isNotEmpty) return null;
+  }
+  if (candidates.length != 1) return null;
+  return num.tryParse('${candidates.single['price'] ?? ''}');
+}
+
+num? allocationSaleUnitPrice(Map<String, dynamic> sale) {
+  for (final key in ['unitPrice', 'price', 'salePrice']) {
+    final value = num.tryParse('${sale[key] ?? ''}');
+    if (value != null) return value;
+  }
+  final quantity = int.tryParse('${sale['quantity'] ?? 0}') ?? 0;
+  if (quantity <= 0) return null;
+  for (final key in ['lineTotal', 'subtotal', 'total', 'amount']) {
+    final value = num.tryParse('${sale[key] ?? ''}');
+    if (value != null) return value / quantity;
+  }
+  return null;
+}
+
+bool allocationSaleInDateRange(
+  Map<String, dynamic> sale,
+  DateTime start,
+  DateTime end,
+) {
+  final raw = sale['soldAt'] ?? sale['timestamp'] ?? sale['createdAt'];
+  final soldAt = switch (raw) {
+    Timestamp value => value.toDate().toLocal(),
+    DateTime value => value.toLocal(),
+    String value => DateTime.tryParse(value)?.toLocal(),
+    _ => null,
+  };
+  if (soldAt == null) return false;
+  final day = DateUtils.dateOnly(soldAt);
+  return !day.isBefore(DateUtils.dateOnly(start)) &&
+      !day.isAfter(DateUtils.dateOnly(end));
 }
 
 List<Map<String, dynamic>> allocationInstanceBatches(
@@ -576,6 +773,12 @@ int allocationInstanceNumber(Map<String, dynamic> instance, int index) =>
 String allocationInstanceLabel(Map<String, dynamic> instance, int index) =>
     'BND-ITM-${allocationInstanceNumber(instance, index).toString().padLeft(3, '0')}';
 
+String allocationBundleId(
+  Map<String, dynamic> record,
+  Map<String, dynamic> instance,
+  int index,
+) => bundleInstanceDisplayId(record, instance, index);
+
 List<Map<String, dynamic>> aggregateUnbundlePreviewItems(dynamic value) {
   final totals = <String, Map<String, dynamic>>{};
   for (final item in bundleRows(value)) {
@@ -611,6 +814,19 @@ List<Map<String, dynamic>> allocationBatchItemsForRecord(
   String? itemId,
 }) {
   final requestedId = itemId?.trim() ?? '';
+  if (record['isAddon'] == true) {
+    if (requestedId.isEmpty) return [Map<String, dynamic>.from(record)];
+    final identifiers = [
+      record['id'],
+      record['itemId'],
+      record['variantId'],
+      record['publicId'],
+      record['addonId'],
+    ].map((value) => '${value ?? ''}'.trim());
+    return identifiers.contains(requestedId)
+        ? [Map<String, dynamic>.from(record)]
+        : const [];
+  }
   final items = bundleRows(record['items']);
   final batchItems = items.isEmpty ? bundleRows(record['sizes']) : items;
   return batchItems.where((item) {
@@ -676,7 +892,9 @@ class _BatchDialog extends StatefulWidget {
 
 class _BatchDialogState extends State<_BatchDialog> {
   String search = '';
-  DateTimeRange? range;
+  DateTimeRange? currentRange;
+  DateTimeRange? historyRange;
+  bool historyView = false;
   final salesByAllocation = <String, List<Map<String, dynamic>>>{};
   List<Map<String, dynamic>>? records;
   String? error;
@@ -689,6 +907,16 @@ class _BatchDialogState extends State<_BatchDialog> {
       .doc()
       .id;
 
+  DateTimeRange? get range => historyView ? historyRange : currentRange;
+
+  set range(DateTimeRange? value) {
+    if (historyView) {
+      historyRange = value;
+    } else {
+      currentRange = value;
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -697,58 +925,205 @@ class _BatchDialogState extends State<_BatchDialog> {
 
   Future<void> load() async {
     try {
-      final original =
-          (await widget.db
-                  .collection('staff_inventory')
-                  .doc(widget.allocationId)
-                  .get())
-              .data();
+      final online = !(await Connectivity().checkConnectivity()).contains(
+        ConnectivityResult.none,
+      );
+      final readOptions = online
+          ? const GetOptions(source: Source.server)
+          : const GetOptions(source: Source.cache);
+      Map<String, dynamic>? original;
+      try {
+        original =
+            (await widget.db
+                    .collection('staff_inventory')
+                    .doc(widget.allocationId)
+                    .get(readOptions))
+                .data();
+      } catch (_) {
+        final cached = await LocalDatabaseSyncService().getCachedCollection(
+          'staff_inventory',
+        );
+        original = cached
+            .where((row) => row['_localDocId'] == widget.allocationId)
+            .firstOrNull;
+      }
       if (original == null || !widget.scopeIds.contains(original['staffId'])) {
         throw StateError('This allocation is no longer available.');
       }
-      final snapshots = await Future.wait([
-        widget.db
-            .collection('staff_inventory')
-            .where('staffId', isEqualTo: original['staffId'])
-            .get(),
-        widget.db
-            .collection('completed_sales')
-            .where('branchId', isEqualTo: original['staffId'])
-            .get(),
-      ]);
-      final docs = snapshots[0];
-      final rows = docs.docs
+      List<Map<String, dynamic>> inventoryRows;
+      List<Map<String, dynamic>> salesRows;
+      try {
+        final snapshots = await Future.wait([
+          widget.db
+              .collection('staff_inventory')
+              .where('staffId', isEqualTo: original['staffId'])
+              .get(readOptions),
+          widget.db
+              .collection('completed_sales')
+              .where('branchId', isEqualTo: original['staffId'])
+              .get(readOptions),
+        ]);
+        inventoryRows = snapshots[0].docs
+            .map((doc) => {...doc.data(), '_localDocId': doc.id})
+            .toList();
+        salesRows = snapshots[1].docs.map((doc) => doc.data()).toList();
+      } catch (_) {
+        final local = LocalDatabaseSyncService();
+        inventoryRows = await local.getCachedCollection('staff_inventory');
+        salesRows = await local.getCachedCollection('completed_sales');
+      }
+      var rows = inventoryRows
           .where(
-            (d) =>
-                d.data()['isDeleted'] != true &&
-                (d.data()['isBundle'] == true) ==
-                    (original['isBundle'] == true) &&
+            (row) =>
+                row['staffId'] == original!['staffId'] &&
+                row['isDeleted'] != true &&
+                (row['isBundle'] == true) == (original['isBundle'] == true) &&
                 (original['isBundle'] == true
-                    ? bundleInventoryGroupKey(d.data()) ==
+                    ? bundleInventoryGroupKey(row) ==
                           bundleInventoryGroupKey(original)
-                    : d.data()['sourceInventoryId'] ==
+                    : row['sourceInventoryId'] ==
                           original['sourceInventoryId']),
           )
-          .map((d) => <String, dynamic>{...d.data(), '_id': d.id})
+          .map(
+            (row) => <String, dynamic>{
+              ...row,
+              '_id': row['_localDocId'] ?? row['id'],
+            },
+          )
           .toList();
-      final sales = snapshots[1];
-      for (final saleDoc in sales.docs) {
-        final sale = saleDoc.data();
+      final currentCatalogBySource = <String, List<Map<String, dynamic>>>{};
+      for (final row in rows) {
+        final sourceId = '${row['sourceInventoryId'] ?? ''}'.trim();
+        if (sourceId.isEmpty) continue;
+        final collection =
+            '${row['sourceCollection'] ?? (row['isCoffee'] == true
+                        ? 'coffee_products'
+                        : row['isAddon'] == true
+                        ? 'coffee_addons'
+                        : 'sales_inventory')}'
+                .trim();
+        final key = '$collection/$sourceId';
+        if (currentCatalogBySource.containsKey(key)) continue;
+        try {
+          final source = await widget.db
+              .collection(collection)
+              .doc(sourceId)
+              .get(readOptions);
+          final sourceData = source.data();
+          final sourceItems =
+              (sourceData?['items'] as List?) ??
+              (sourceData?['sizes'] as List?) ??
+              const [];
+          currentCatalogBySource[key] = sourceItems.whereType<Map>().map((
+            item,
+          ) {
+            final size = Map<String, dynamic>.from(item);
+            if (collection == 'coffee_products') {
+              final basePrice =
+                  num.tryParse(
+                    '${sourceData?['basePrice'] ?? sourceData?['price'] ?? ''}',
+                  ) ??
+                  0;
+              final sizePrice =
+                  num.tryParse(
+                    '${size['sellingPrice'] ?? size['finalPrice'] ?? ''}',
+                  ) ??
+                  (basePrice +
+                      (num.tryParse(
+                            '${size['priceDelta'] ?? size['price'] ?? 0}',
+                          ) ??
+                          0));
+              return {
+                ...size,
+                'variant': size['name'],
+                'coffeeSize': size['name'],
+                'price': sizePrice,
+              };
+            }
+            return size;
+          }).toList();
+        } catch (error) {
+          debugPrint('Unable to load current inventory prices: $error');
+          currentCatalogBySource[key] = const [];
+        }
+      }
+      rows = rows.map((row) {
+        final sourceId = '${row['sourceInventoryId'] ?? ''}'.trim();
+        final collection =
+            '${row['sourceCollection'] ?? (row['isCoffee'] == true
+                        ? 'coffee_products'
+                        : row['isAddon'] == true
+                        ? 'coffee_addons'
+                        : 'sales_inventory')}'
+                .trim();
+        return {
+          ...row,
+          '_currentCatalogItems':
+              currentCatalogBySource['$collection/$sourceId'] ??
+              const <Map<String, dynamic>>[],
+        };
+      }).toList();
+      for (final sale in salesRows) {
+        if (sale['branchId'] != original['staffId'] &&
+            sale['staffId'] != original['staffId']) {
+          continue;
+        }
         if (sale['isVoided'] == true || sale['isDeleted'] == true) continue;
         for (final line in expandSaleStockLines(bundleRows(sale['items']))) {
           final allocationId = '${line['staffInventoryDocId'] ?? ''}';
+          final lineIds = [
+            line['id'],
+            line['itemId'],
+            line['variantId'],
+            line['publicId'],
+            line['addonId'],
+          ].map((value) => '${value ?? ''}').toSet();
+          final addonName = '${line['addonName'] ?? ''}'.trim().toLowerCase();
+          final matchesRequestedAddon = rows.any((row) {
+            if (row['isAddon'] != true ||
+                addonName != '${row['name'] ?? ''}'.trim().toLowerCase()) {
+              return false;
+            }
+            if (widget.itemId == null) return true;
+            return [
+              row['id'],
+              row['itemId'],
+              row['variantId'],
+              row['publicId'],
+              row['addonId'],
+            ].any((value) => '${value ?? ''}' == widget.itemId);
+          });
           if (widget.itemId != null &&
-              ![
-                line['id'],
-                line['itemId'],
-                line['variantId'],
-                line['publicId'],
-              ].contains(widget.itemId))
+              !lineIds.contains(widget.itemId) &&
+              !matchesRequestedAddon) {
             continue;
-          salesByAllocation.putIfAbsent(allocationId, () => []).add({
+          }
+          final saleLine = {
             ...line,
             'soldAt': sale['timestamp'] ?? sale['createdAt'],
-          });
+          };
+          if (rows.any((row) => '${row['_id']}' == allocationId)) {
+            salesByAllocation.putIfAbsent(allocationId, () => []).add(saleLine);
+          }
+          if (addonName.isNotEmpty) {
+            for (final addon in rows.where((row) {
+              if (addonName != '${row['name'] ?? ''}'.trim().toLowerCase()) {
+                return false;
+              }
+              if (widget.itemId == null) return true;
+              return [
+                row['id'],
+                row['itemId'],
+                row['variantId'],
+                row['publicId'],
+                row['addonId'],
+              ].any((value) => '${value ?? ''}' == widget.itemId);
+            })) {
+              salesByAllocation
+                  .putIfAbsent('${addon['_id']}', () => [])
+                  .add(saleLine);
+            }
+          }
         }
       }
       rows.sort(
@@ -789,6 +1164,14 @@ class _BatchDialogState extends State<_BatchDialog> {
   String dateLabel(dynamic value) => value == null || '$value'.isEmpty
       ? '--'
       : date(value).toIso8601String().split('T').first;
+  String timeLabel(dynamic value) {
+    if (value == null) return '--';
+    final valueDate = date(value).toLocal();
+    final hour = valueDate.hour % 12 == 0 ? 12 : valueDate.hour % 12;
+    final minute = valueDate.minute.toString().padLeft(2, '0');
+    return '$hour:$minute ${valueDate.hour < 12 ? 'AM' : 'PM'}';
+  }
+
   Future<void> submit() async {
     if (selectedAllocation == null || selected.isEmpty) return;
     setState(() {
@@ -796,6 +1179,10 @@ class _BatchDialogState extends State<_BatchDialog> {
       error = null;
     });
     try {
+      final connectivity = await Connectivity().checkConnectivity();
+      if (connectivity.contains(ConnectivityResult.none)) {
+        throw StateError('Connect to the internet before submitting a return.');
+      }
       final actor = await resolveBranchInventoryActor(widget.db);
       final record = records!.firstWhere((r) => r['_id'] == selectedAllocation);
       if (action == 'return') {
@@ -870,20 +1257,143 @@ class _BatchDialogState extends State<_BatchDialog> {
     };
     final batchesByAllocation = {
       for (final record in records ?? const [])
-        '${record['_id']}': allocationInstanceBatches(
-          record,
-          '${record['_id']}',
-        ),
+        '${record['_id']}':
+            allocationInstanceBatches(
+              record,
+              '${record['_id']}',
+              availableOnly: false,
+            ).where((batch) {
+              final instances = bundleRows(batch['instances']);
+              final statuses = instances
+                  .map((instance) => instance['status'] ?? 'available')
+                  .toSet();
+              return historyView
+                  ? statuses.any(
+                      (status) => ![
+                        'available',
+                        'reconciliation_pending',
+                        'return_pending',
+                      ].contains(status),
+                    )
+                  : statuses.any(
+                      (status) => [
+                        'available',
+                        'reconciliation_pending',
+                        'return_pending',
+                      ].contains(status),
+                    );
+            }).toList(),
     };
+    bool inSelectedDates(DateTime? value) {
+      if (value == null) return false;
+      if (range == null) {
+        final today = DateUtils.dateOnly(DateTime.now());
+        return !DateUtils.dateOnly(value).isBefore(today) &&
+            !DateUtils.dateOnly(value).isAfter(today);
+      }
+      final start = DateUtils.dateOnly(range!.start);
+      final end = DateUtils.dateOnly(range!.end);
+      final day = DateUtils.dateOnly(value);
+      return !day.isBefore(start) && !day.isAfter(end);
+    }
+
+    bool hasCurrentStock(Map<String, dynamic> record) {
+      if (record['isCoffee'] == true || record['isAddon'] == true) {
+        return true;
+      }
+      if (record['isBundle'] == true) {
+        return (batchesByAllocation['${record['_id']}'] ?? []).any(
+          (batch) => bundleRows(batch['instances']).any(
+            (instance) => [
+              'available',
+              'reconciliation_pending',
+              'return_pending',
+            ].contains(instance['status'] ?? 'available'),
+          ),
+        );
+      }
+      return (batchItemsByAllocation['${record['_id']}'] ?? []).any(
+        (item) =>
+            (int.tryParse(
+                  '${item['stock'] ?? item['remaining'] ?? item['startingStock'] ?? 0}',
+                ) ??
+                0) >
+            0,
+      );
+    }
+
+    bool hasHistory(
+      Map<String, dynamic> record,
+      List<Map<String, dynamic>> sales,
+      bool hasSoldBundle,
+    ) {
+      if (sales.isNotEmpty || hasSoldBundle) return true;
+      if (record['isCoffee'] == true || record['isAddon'] == true) {
+        return false;
+      }
+      return allocationBatchItemsForRecord(record, itemId: widget.itemId).any((
+        item,
+      ) {
+        final remaining =
+            int.tryParse('${item['stock'] ?? item['remaining'] ?? 0}') ?? 0;
+        final allocated =
+            int.tryParse(
+              '${item['assignedStartingStock'] ?? item['startingStock'] ?? remaining}',
+            ) ??
+            0;
+        return remaining == 0 && allocated > 0;
+      });
+    }
+
     final visibleRecords = (records ?? <Map<String, dynamic>>[])
         .where((record) {
-          if (search.isEmpty) return true;
           final sales = bundleRows(record['_sales']);
           final items = allocationBatchItemsForRecord(
             record,
             itemId: widget.itemId,
           );
           final hasSales = sales.isNotEmpty;
+          final batches = batchesByAllocation['${record['_id']}'] ?? [];
+          final hasSoldBundle = batches.any(
+            (batch) => bundleRows(
+              batch['instances'],
+            ).any((instance) => instance['status'] == 'sold'),
+          );
+          final currentlyAvailable = hasCurrentStock(record);
+          final hasHistoricalActivity = hasHistory(
+            record,
+            sales,
+            hasSoldBundle,
+          );
+          if (historyView && !hasHistoricalActivity) {
+            return false;
+          }
+          if (!historyView && !currentlyAvailable) return false;
+          final dateMatches = historyView
+              ? sales.any((sale) => inSelectedDates(date(sale['soldAt']))) ||
+                    hasSoldBundle &&
+                        batches.any(
+                          (batch) => inSelectedDates(
+                            date(
+                              batch['soldAt'] ??
+                                  bundleRows(batch['instances'])
+                                      .map(
+                                        (instance) =>
+                                            instance['soldAt'] ??
+                                            batch['assignedAt'],
+                                      )
+                                      .firstOrNull,
+                            ),
+                          ),
+                        ) ||
+                    inSelectedDates(date(record['assignedAt']))
+              : record['isBundle'] == true
+              ? batches.any(
+                  (batch) => inSelectedDates(date(batch['assignedAt'])),
+                )
+              : inSelectedDates(date(record['assignedAt']));
+          if (!dateMatches) return false;
+          if (search.isEmpty) return true;
           final corpus = [
             '$record',
             if (record['origin'] == 'unbundle') 'unbundle',
@@ -892,22 +1402,10 @@ class _BatchDialogState extends State<_BatchDialog> {
             for (final sale in sales) '$sale',
             for (final item in items) '$item',
           ].join(' ').toLowerCase();
-          if (search == 'sold') return hasSales;
+          if (search == 'sold') return hasSales || hasSoldBundle;
           if (search == 'allocated') return record['origin'] != 'unbundle';
           return corpus.contains(search);
         })
-        .where(
-          (record) =>
-              range == null ||
-              (!date(record['assignedAt']).isBefore(range!.start) &&
-                  date(record['assignedAt']).isBefore(
-                    DateTime(
-                      range!.end.year,
-                      range!.end.month,
-                      range!.end.day + 1,
-                    ),
-                  )),
-        )
         .where(
           (record) =>
               !bundle ||
@@ -919,6 +1417,65 @@ class _BatchDialogState extends State<_BatchDialog> {
               (batchItemsByAllocation['${record['_id']}'] ?? []).isNotEmpty,
         )
         .toList();
+    final dateChips = <DateTime>{};
+    for (final record in records ?? const <Map<String, dynamic>>[]) {
+      if (!historyView) {
+        if (hasCurrentStock(record)) {
+          if (record['isBundle'] == true) {
+            for (final batch in batchesByAllocation['${record['_id']}'] ?? []) {
+              final assigned = date(batch['assignedAt']);
+              if (assigned.year > 1970) {
+                dateChips.add(DateUtils.dateOnly(assigned));
+              }
+            }
+          } else {
+            final assigned = date(record['assignedAt']);
+            if (assigned.year > 1970) {
+              dateChips.add(DateUtils.dateOnly(assigned));
+            }
+          }
+        }
+        continue;
+      }
+      final sales = bundleRows(record['_sales']);
+      for (final sale in sales) {
+        final soldAt = date(sale['soldAt']);
+        if (soldAt.year > 1970) dateChips.add(DateUtils.dateOnly(soldAt));
+      }
+      final batches = batchesByAllocation['${record['_id']}'] ?? [];
+      for (final batch in batches) {
+        for (final instance in bundleRows(batch['instances'])) {
+          final status = instance['status'] ?? 'available';
+          if (![
+            'available',
+            'reconciliation_pending',
+            'return_pending',
+          ].contains(status)) {
+            final soldAt = date(instance['soldAt'] ?? batch['assignedAt']);
+            if (soldAt.year > 1970) dateChips.add(DateUtils.dateOnly(soldAt));
+          }
+        }
+      }
+      final exhausted =
+          allocationBatchItemsForRecord(record, itemId: widget.itemId).any((
+            item,
+          ) {
+            final remaining =
+                int.tryParse('${item['stock'] ?? item['remaining'] ?? 0}') ?? 0;
+            final allocated =
+                int.tryParse(
+                  '${item['assignedStartingStock'] ?? item['startingStock'] ?? remaining}',
+                ) ??
+                0;
+            return remaining == 0 && allocated > 0;
+          });
+      if (exhausted) {
+        final assigned = date(record['assignedAt']);
+        if (assigned.year > 1970) dateChips.add(DateUtils.dateOnly(assigned));
+      }
+    }
+    final sortedDateChips = dateChips.toList()
+      ..sort((left, right) => right.compareTo(left));
     final source = records
         ?.where((r) => r['_id'] == selectedAllocation)
         .firstOrNull;
@@ -987,11 +1544,13 @@ class _BatchDialogState extends State<_BatchDialog> {
                       tooltip: 'Filter allocation dates',
                       icon: const Icon(Icons.date_range),
                       onPressed: () async {
+                        final today = DateUtils.dateOnly(DateTime.now());
                         final result = await showDateRangePicker(
                           context: context,
                           firstDate: DateTime(2020),
                           lastDate: DateTime.now(),
-                          initialDateRange: range,
+                          initialDateRange:
+                              range ?? DateTimeRange(start: today, end: today),
                         );
                         if (result != null && mounted)
                           setState(() => range = result);
@@ -1001,6 +1560,47 @@ class _BatchDialogState extends State<_BatchDialog> {
                   onChanged: (value) =>
                       setState(() => search = value.trim().toLowerCase()),
                 ),
+                const SizedBox(height: 8),
+                SegmentedButton<bool>(
+                  segments: const [
+                    ButtonSegment(
+                      value: false,
+                      label: Text('Current batches'),
+                      icon: Icon(Icons.inventory_2_outlined),
+                    ),
+                    ButtonSegment(
+                      value: true,
+                      label: Text('History'),
+                      icon: Icon(Icons.history_rounded),
+                    ),
+                  ],
+                  selected: {historyView},
+                  onSelectionChanged: (selection) =>
+                      setState(() => historyView = selection.first),
+                ),
+                if (records != null && sortedDateChips.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      children: [
+                        for (final value in sortedDateChips) ...[
+                          ChoiceChip(
+                            label: Text(dateLabel(value)),
+                            selected:
+                                range != null &&
+                                DateUtils.dateOnly(range!.start) == value &&
+                                DateUtils.dateOnly(range!.end) == value,
+                            onSelected: (_) => setState(() {
+                              range = DateTimeRange(start: value, end: value);
+                            }),
+                          ),
+                          const SizedBox(width: 6),
+                        ],
+                      ],
+                    ),
+                  ),
+                ],
                 if (range != null)
                   Wrap(
                     children: [
@@ -1082,17 +1682,94 @@ class _BatchDialogState extends State<_BatchDialog> {
                     bundle &&
                     visibleRecords.isEmpty &&
                     error == null)
-                  const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 20),
-                    child: Text('No available bundles to request.'),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 20),
+                    child: Text(
+                      historyView
+                          ? 'No bundle history for the selected dates.'
+                          : 'No available bundles to request.',
+                    ),
+                  ),
+                if (records != null &&
+                    !bundle &&
+                    visibleRecords.isEmpty &&
+                    error == null)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 20),
+                    child: Text(
+                      historyView
+                          ? 'No sold batches for the selected dates.'
+                          : 'No allocated batches for today. Choose a date to view earlier allocations.',
+                    ),
                   ),
                 if (bundle)
                   for (final record in visibleRecords)
                     for (final batch
-                        in batchesByAllocation['${record['_id']}'] ?? [])
+                        in (batchesByAllocation['${record['_id']}'] ?? [])
+                            .where((batch) {
+                              if (!historyView) {
+                                return inSelectedDates(
+                                  date(batch['assignedAt']),
+                                );
+                              }
+                              final batchInstances = bundleRows(
+                                batch['instances'],
+                              );
+                              return inSelectedDates(
+                                    date(batch['assignedAt']),
+                                  ) ||
+                                  batchInstances.any(
+                                    (instance) =>
+                                        ![
+                                          'available',
+                                          'reconciliation_pending',
+                                          'return_pending',
+                                        ].contains(
+                                          instance['status'] ?? 'available',
+                                        ) &&
+                                        inSelectedDates(
+                                          date(
+                                            instance['soldAt'] ??
+                                                batch['assignedAt'],
+                                          ),
+                                        ),
+                                  ) ||
+                                  bundleRows(record['_sales']).any(
+                                    (sale) =>
+                                        inSelectedDates(date(sale['soldAt'])),
+                                  );
+                            }))
                       Builder(
                         builder: (context) {
-                          final instances = bundleRows(batch['instances']);
+                          final allBatchInstances = bundleRows(
+                            batch['instances'],
+                          );
+                          final batchSoldCount = allBatchInstances
+                              .where((instance) => instance['status'] == 'sold')
+                              .length;
+                          final batchRemainingCount = allBatchInstances
+                              .where(
+                                (instance) => [
+                                  'available',
+                                  'reconciliation_pending',
+                                  'return_pending',
+                                ].contains(instance['status'] ?? 'available'),
+                              )
+                              .length;
+                          final instances = allBatchInstances.where((instance) {
+                            final status = instance['status'] ?? 'available';
+                            return historyView
+                                ? ![
+                                    'available',
+                                    'reconciliation_pending',
+                                    'return_pending',
+                                  ].contains(status)
+                                : [
+                                    'available',
+                                    'reconciliation_pending',
+                                    'return_pending',
+                                  ].contains(status);
+                          }).toList();
                           final availableIds = availableReconciliationInstances(
                             record,
                             '${record['_id']}',
@@ -1195,6 +1872,19 @@ class _BatchDialogState extends State<_BatchDialog> {
                                           'Batch ${instanceBatchLabels['${batch['batchId']}']?.replaceFirst('Batch - ', '') ?? '001'}',
                                       icon: Icons.layers_outlined,
                                     ),
+                                    _BatchInfoChip(
+                                      label:
+                                          '${allBatchInstances.length} allocated',
+                                      icon: Icons.inventory_2_outlined,
+                                    ),
+                                    _BatchInfoChip(
+                                      label: '$batchSoldCount sold',
+                                      icon: Icons.point_of_sale_outlined,
+                                    ),
+                                    _BatchInfoChip(
+                                      label: '$batchRemainingCount remaining',
+                                      icon: Icons.inventory_2_outlined,
+                                    ),
                                     if (dateLabel(batch['assignedAt']) != '--')
                                       _BatchInfoChip(
                                         label: dateLabel(batch['assignedAt']),
@@ -1218,19 +1908,42 @@ class _BatchDialogState extends State<_BatchDialog> {
                                   Builder(
                                     builder: (context) {
                                       final instance = instances[index];
+                                      final originalIndex = allBatchInstances
+                                          .indexOf(instance);
+                                      final instanceId = allocationBundleId(
+                                        record,
+                                        instance,
+                                        originalIndex,
+                                      );
                                       final expiration = dateLabel(
                                         instance['expirationDate'],
                                       );
                                       final bundleItems = bundleRows(
                                         instance['items'],
                                       );
+                                      final instancePrice =
+                                          num.tryParse(
+                                            '${instance['price'] ?? ''}',
+                                          ) ??
+                                          0;
+                                      final recordPrice =
+                                          num.tryParse(
+                                            '${record['price'] ?? record['bundlePrice'] ?? ''}',
+                                          ) ??
+                                          0;
+                                      final bundlePrice = instancePrice > 0
+                                          ? instancePrice
+                                          : recordPrice;
+                                      final isAvailable =
+                                          instance['status'] == null ||
+                                          instance['status'] == 'available';
                                       return Container(
                                         margin: const EdgeInsets.only(top: 8),
-                                        padding: const EdgeInsets.all(12),
+                                        padding: const EdgeInsets.all(14),
                                         decoration: BoxDecoration(
-                                          color: Colors.white,
+                                          color: const Color(0xFFFFFBFC),
                                           borderRadius: BorderRadius.circular(
-                                            14,
+                                            16,
                                           ),
                                           border: Border.all(
                                             color: AppColors.border,
@@ -1247,20 +1960,59 @@ class _BatchDialogState extends State<_BatchDialog> {
                                                   WrapCrossAlignment.center,
                                               children: [
                                                 Text(
-                                                  'Bundle ${allocationInstanceNumber(instance, index)}',
+                                                  'Bundle ${allocationInstanceNumber(instance, originalIndex)} · ID $instanceId',
                                                   style: const TextStyle(
                                                     fontWeight: FontWeight.w800,
                                                     color:
                                                         AppColors.primaryDeep,
                                                   ),
                                                 ),
-                                                Text(
-                                                  formatMoney(
-                                                    num.tryParse(
-                                                          '${instance['price'] ?? record['price']}',
-                                                        ) ??
-                                                        0,
+                                                IconButton(
+                                                  tooltip: 'Copy bundle ID',
+                                                  visualDensity:
+                                                      VisualDensity.compact,
+                                                  onPressed: () async {
+                                                    await Clipboard.setData(
+                                                      ClipboardData(
+                                                        text: instanceId,
+                                                      ),
+                                                    );
+                                                    if (context.mounted) {
+                                                      ScaffoldMessenger.of(
+                                                        context,
+                                                      ).showSnackBar(
+                                                        const SnackBar(
+                                                          content: Text(
+                                                            'Bundle ID copied',
+                                                          ),
+                                                        ),
+                                                      );
+                                                    }
+                                                  },
+                                                  icon: const Icon(
+                                                    Icons.copy_rounded,
+                                                    size: 17,
                                                   ),
+                                                ),
+                                                _BatchInfoChip(
+                                                  label: '1 allocated',
+                                                  icon: Icons
+                                                      .inventory_2_outlined,
+                                                ),
+                                                _BatchInfoChip(
+                                                  label:
+                                                      '${instance['status'] == 'sold' ? 1 : 0} sold',
+                                                  icon: Icons
+                                                      .point_of_sale_outlined,
+                                                ),
+                                                _BatchInfoChip(
+                                                  label:
+                                                      '${isAvailable ? 1 : 0} remaining',
+                                                  icon: Icons
+                                                      .inventory_2_outlined,
+                                                ),
+                                                Text(
+                                                  formatMoney(bundlePrice),
                                                   style: const TextStyle(
                                                     fontWeight: FontWeight.w800,
                                                     color: Color(0xFF2E7D32),
@@ -1313,7 +2065,86 @@ class _BatchDialogState extends State<_BatchDialog> {
                         final items =
                             batchItemsByAllocation['${record['_id']}'] ??
                             const <Map<String, dynamic>>[];
-                        final itemNames = items
+                        final isCoffee = record['isCoffee'] == true;
+                        final isAddon = record['isAddon'] == true;
+                        int soldQuantityFor(Map<String, dynamic> item) {
+                          return allocationItemSoldQuantity(
+                            item,
+                            bundleRows(record['_sales']),
+                          );
+                        }
+
+                        final filteredItems = items.where((item) {
+                          final itemName = '${item['name'] ?? ''}'.trim();
+                          if (itemName.isEmpty ||
+                              itemName.toLowerCase() == 'null')
+                            return false;
+                          if (isCoffee || isAddon) return true;
+                          final remaining =
+                              int.tryParse(
+                                '${item['stock'] ?? item['remaining'] ?? item['startingStock'] ?? 0}',
+                              ) ??
+                              0;
+                          return historyView ? remaining == 0 : remaining > 0;
+                        }).toList();
+                        final displayItems = isCoffee
+                            ? uniqueBeverageAllocationItems(
+                                filteredItems,
+                                productName: '${record['name'] ?? ''}'.trim(),
+                              )
+                            : (filteredItems..sort((left, right) {
+                                final leftValue =
+                                    int.tryParse(
+                                      '${left['stock'] ?? left['remaining'] ?? 0}',
+                                    ) ??
+                                    0;
+                                final rightValue =
+                                    int.tryParse(
+                                      '${right['stock'] ?? right['remaining'] ?? 0}',
+                                    ) ??
+                                    0;
+                                return rightValue.compareTo(leftValue);
+                              }));
+                        num itemPrice(Map<String, dynamic> item) {
+                          if (!historyView || isCoffee) {
+                            final currentPrice = allocationCurrentCatalogPrice(
+                              item,
+                              bundleRows(record['_currentCatalogItems']),
+                            );
+                            if (currentPrice != null) return currentPrice;
+                          }
+                          final saved = num.tryParse('${item['price'] ?? ''}');
+                          if (isCoffee) {
+                            final basePrice =
+                                num.tryParse('${record['basePrice'] ?? ''}') ??
+                                0;
+                            final delta =
+                                num.tryParse(
+                                  '${item['priceDelta'] ?? item['sizePriceDelta'] ?? ''}',
+                                ) ??
+                                (saved != null && saved < basePrice
+                                    ? saved
+                                    : 0);
+                            if (basePrice > 0) return basePrice + delta;
+                          }
+                          if (saved != null) return saved;
+                          if (isCoffee) {
+                            return (num.tryParse(
+                                      '${record['basePrice'] ?? 0}',
+                                    ) ??
+                                    0) +
+                                (num.tryParse(
+                                      '${item['priceDelta'] ?? item['sizePriceDelta'] ?? 0}',
+                                    ) ??
+                                    0);
+                          }
+                          return num.tryParse(
+                                '${item['priceDelta'] ?? record['price'] ?? 0}',
+                              ) ??
+                              0;
+                        }
+
+                        final itemNames = displayItems
                             .map((item) => '${item['name'] ?? 'Item'}'.trim())
                             .where((name) => name.isNotEmpty)
                             .toSet()
@@ -1325,6 +2156,31 @@ class _BatchDialogState extends State<_BatchDialog> {
                           if (itemNames.isNotEmpty) itemNames,
                           dateLabel(record['assignedAt']),
                         ].join(' - ');
+                        final saleLines = bundleRows(record['_sales']).where((
+                          sale,
+                        ) {
+                          final quantity =
+                              int.tryParse('${sale['quantity'] ?? 0}') ?? 0;
+                          final today = DateUtils.dateOnly(DateTime.now());
+                          final matchesSaleDate = historyView
+                              ? inSelectedDates(date(sale['soldAt']))
+                              : allocationSaleInDateRange(sale, today, today);
+                          return quantity > 0 && matchesSaleDate;
+                        }).toList();
+                        final totalSold = saleLines.fold<int>(
+                          0,
+                          (total, sale) =>
+                              total +
+                              (int.tryParse('${sale['quantity'] ?? 0}') ?? 0),
+                        );
+                        final totalSaleValue = saleLines.fold<num>(
+                          0,
+                          (total, sale) =>
+                              total +
+                              (allocationSaleUnitPrice(sale) ?? 0) *
+                                  (int.tryParse('${sale['quantity'] ?? 0}') ??
+                                      0),
+                        );
                         return Card(
                           color: Colors.white,
                           elevation: 0,
@@ -1371,22 +2227,133 @@ class _BatchDialogState extends State<_BatchDialog> {
                               '${record['origin'] == 'unbundle' || items.any((item) => item['origin'] == 'unbundle') ? 'Unbundled' : 'Assigned'} · Batch ${batchLabels['${record['_id']}']?.replaceFirst('Batch - ', '') ?? '001'} · ${dateLabel(record['assignedAt'])}',
                             ),
                             children: [
-                              for (final sale in bundleRows(record['_sales']))
-                                ListTile(
-                                  title: Text('Sold: ${sale['quantity']}'),
-                                  subtitle: Text(
-                                    'Sold: ${date(sale['soldAt']).toLocal()}',
+                              for (final item in displayItems)
+                                Container(
+                                  margin: const EdgeInsets.only(top: 8),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 12,
+                                    vertical: 10,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFFFFFBFC),
+                                    borderRadius: BorderRadius.circular(14),
+                                    border: Border.all(color: AppColors.border),
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      const Icon(
+                                        Icons.inventory_2_outlined,
+                                        color: AppColors.primaryDark,
+                                        size: 19,
+                                      ),
+                                      const SizedBox(width: 10),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              isCoffee
+                                                  ? '${record['name'] ?? 'Beverage'} - ${beverageAllocationSize(item, productName: '${record['name'] ?? ''}')}'
+                                                  : '${item['name'] ?? 'Item'}',
+                                              style: const TextStyle(
+                                                fontWeight: FontWeight.w800,
+                                                color: AppColors.text,
+                                              ),
+                                            ),
+                                            const SizedBox(height: 3),
+                                            if (isCoffee)
+                                              Text(
+                                                'Price ${formatMoney(itemPrice(item))}',
+                                                style: const TextStyle(
+                                                  color: AppColors.textMuted,
+                                                  fontSize: 12,
+                                                ),
+                                              )
+                                            else if (isAddon)
+                                              Text(
+                                                'Price ${formatMoney(num.tryParse('${item['price'] ?? item['priceDelta'] ?? 0}') ?? 0)}',
+                                                style: const TextStyle(
+                                                  color: AppColors.textMuted,
+                                                  fontSize: 12,
+                                                ),
+                                              )
+                                            else
+                                              Text(
+                                                '${item['assignedStartingStock'] ?? item['startingStock'] ?? item['stock'] ?? 0} allocated · ${soldQuantityFor(item)} sold · ${item['stock'] ?? item['remaining'] ?? item['startingStock'] ?? 0} remaining',
+                                                style: const TextStyle(
+                                                  color: AppColors.textMuted,
+                                                  fontSize: 12,
+                                                ),
+                                              ),
+                                          ],
+                                        ),
+                                      ),
+                                      if (historyView &&
+                                          !isCoffee &&
+                                          !isAddon &&
+                                          (int.tryParse(
+                                                    '${item['stock'] ?? item['remaining'] ?? 0}',
+                                                  ) ??
+                                                  0) ==
+                                              0)
+                                        const Padding(
+                                          padding: EdgeInsets.only(right: 8),
+                                          child: Chip(
+                                            label: Text('Sold'),
+                                            visualDensity:
+                                                VisualDensity.compact,
+                                          ),
+                                        ),
+                                      Text(
+                                        formatMoney(itemPrice(item)),
+                                        style: const TextStyle(
+                                          color: Color(0xFF2E7D32),
+                                          fontWeight: FontWeight.w800,
+                                        ),
+                                      ),
+                                    ],
                                   ),
                                 ),
-                              for (final item in items)
-                                ListTile(
-                                  title: Text(
-                                    '${item['name']} - ${item['stock'] ?? item['startingStock']} remaining / ${item['assignedStartingStock'] ?? item['startingStock'] ?? item['stock']} allocated',
-                                  ),
-                                  subtitle: Text(
-                                    '${formatMoney(num.tryParse('${item['price']}') ?? 0)} | Expiry: ${dateLabel(item['expirationDate'])}${item['origin'] == 'unbundle' ? '\nUnbundle: +${item['unbundledQuantity']}' : ''}',
+                              if (saleLines.isNotEmpty)
+                                Padding(
+                                  padding: const EdgeInsets.only(top: 12),
+                                  child: Text(
+                                    'Sales total: $totalSold sold · ${formatMoney(totalSaleValue)}',
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w800,
+                                      color: AppColors.primaryDark,
+                                    ),
                                   ),
                                 ),
+                              for (final sale in saleLines)
+                                for (
+                                  var soldUnit = 0;
+                                  soldUnit <
+                                      (int.tryParse(
+                                            '${sale['quantity'] ?? 0}',
+                                          ) ??
+                                          0);
+                                  soldUnit++
+                                )
+                                  ListTile(
+                                    title: Text(
+                                      [
+                                        if (isCoffee)
+                                          '${record['name'] ?? 'Beverage'} - ${sale['coffeeSize'] ?? sale['variant'] ?? sale['size'] ?? 'Size'}'
+                                        else
+                                          '${sale['name'] ?? record['name'] ?? 'Item'}'
+                                              '${'${sale['variant'] ?? ''}'.trim().isEmpty ? '' : ' (${sale['variant']})'}',
+                                        'Sold-1',
+                                        if (allocationSaleUnitPrice(sale)
+                                            case final unitPrice?)
+                                          formatMoney(unitPrice),
+                                      ].join(' · '),
+                                    ),
+                                    subtitle: Text(
+                                      '${dateLabel(sale['soldAt'])} · ${timeLabel(sale['soldAt'])}',
+                                    ),
+                                  ),
                             ],
                           ),
                         );
@@ -1460,17 +2427,34 @@ class ReconciliationRequestsButton extends StatelessWidget {
       builder: (_) =>
           _RequestsDialog(db: database ?? FirebaseFirestore.instance),
     );
-    if (MediaQuery.sizeOf(context).width < 600) {
-      return IconButton.filledTonal(
-        tooltip: 'Reconciliation requests',
-        onPressed: open,
-        icon: const Icon(Icons.rule_folder_outlined),
-      );
-    }
-    return FilledButton.icon(
-      onPressed: open,
-      icon: const Icon(Icons.rule_folder_outlined),
-      label: const Text('Reconciliation'),
+    final db = database ?? FirebaseFirestore.instance;
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: db
+          .collection('inventory_reconciliations')
+          .where('status', isEqualTo: 'pending')
+          .snapshots(),
+      builder: (context, snapshot) {
+        final icon = Badge.count(
+          count: snapshot.data?.docs.length ?? 0,
+          isLabelVisible: (snapshot.data?.docs.isNotEmpty ?? false),
+          backgroundColor: Colors.red,
+          child: const Icon(Icons.rule_folder_outlined),
+        );
+        if (MediaQuery.sizeOf(context).width < 600) {
+          return IconButton.filledTonal(
+            tooltip: snapshot.hasError
+                ? 'Unable to load reconciliation requests'
+                : 'Reconciliation requests',
+            onPressed: open,
+            icon: icon,
+          );
+        }
+        return FilledButton.icon(
+          onPressed: open,
+          icon: icon,
+          label: const Text('Reconciliation'),
+        );
+      },
     );
   }
 }

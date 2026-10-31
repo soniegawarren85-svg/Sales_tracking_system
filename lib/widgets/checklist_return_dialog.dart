@@ -35,8 +35,7 @@ class _ChecklistReturnDialogState extends State<ChecklistReturnDialog> {
   bool loading = true, saving = false;
   String? batchId;
   List<Map<String, dynamic>>? pendingItems;
-  String actorName = '',
-      actorPublicId = '';
+  String actorName = '', actorPublicId = '';
   final profiles = <String, Map<String, dynamic>>{};
 
   @override
@@ -219,8 +218,9 @@ class _ChecklistReturnDialogState extends State<ChecklistReturnDialog> {
           'name': name,
           'sourceItem': item,
           'userId': data['userId'] ?? data['staffId'],
-          'itemDisplayId':
-              returnItemCode(item) == '--' || resolved['publicId'] != null
+          'itemDisplayId': '${item['itemDisplayId'] ?? ''}'.trim().isNotEmpty
+              ? item['itemDisplayId']
+              : returnItemCode(item) == '--' || resolved['publicId'] != null
               ? returnItemCode(resolved)
               : returnItemCode(item),
           'isBundle': item['isBundle'] == true || resolved['isBundle'] == true,
@@ -363,7 +363,7 @@ class _ChecklistReturnDialogState extends State<ChecklistReturnDialog> {
           ),
         ),
         content: Text(
-          'Return these ${items.length} refund/reduce records to the super admin with their quantities and reasons?',
+          'Return these ${items.fold<int>(0, (total, item) => total + AllocationChecklistService.quantity(item['quantity']))} items from ${items.length} refund/reduce records to the super admin with their quantities and reasons?',
         ),
         actions: [
           TextButton(
@@ -402,7 +402,11 @@ class _ChecklistReturnDialogState extends State<ChecklistReturnDialog> {
           .timeout(const Duration(seconds: 20));
       if (!mounted) return;
       final submittedKeys = pendingItems!.map((item) => item['key']).toSet();
-      final count = pendingItems!.length;
+      final count = pendingItems!.fold<int>(
+        0,
+        (total, item) =>
+            total + AllocationChecklistService.quantity(item['quantity']),
+      );
       setState(() {
         options.removeWhere((item) => submittedKeys.contains(item['key']));
         pendingItems = null;
@@ -462,6 +466,11 @@ class _ChecklistReturnDialogState extends State<ChecklistReturnDialog> {
                   .contains(widget.searchText.toLowerCase()),
         )
         .toList();
+    final visibleQuantity = visible.fold<int>(
+      0,
+      (total, item) =>
+          total + AllocationChecklistService.quantity(item['quantity']),
+    );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -491,13 +500,13 @@ class _ChecklistReturnDialogState extends State<ChecklistReturnDialog> {
                   loading || saving || (visible.isEmpty && pendingItems == null)
                   ? null
                   : () => submit(visible),
-              icon: const Icon(Icons.assignment_return_outlined),
+              icon: const Icon(Icons.keyboard_return_rounded),
               label: Text(
                 saving
                     ? 'Submitting...'
                     : pendingItems != null
                     ? 'Retry same batch'
-                    : 'Submit Return (${visible.length})',
+                    : 'Submit Return ($visibleQuantity)',
               ),
             ),
           ),

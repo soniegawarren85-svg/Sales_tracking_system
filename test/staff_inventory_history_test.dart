@@ -152,4 +152,36 @@ void main() {
     });
     expect(entries.map((entry) => entry['quantity']).toSet(), {1, 3});
   });
+
+  test('add-on history counts servings for each sold beverage', () {
+    final entries = staffInventoryHistoryEntries(
+      staffId: 'staff-a',
+      kind: 'addons',
+      categoryId: '',
+      categoryName: 'Beverages Add-ons',
+      itemIds: {'AD-007'},
+      itemNames: {'Extra Cream'},
+      adjustments: const [],
+      sales: [
+        {
+          'userId': 'staff-a',
+          'timestamp': today,
+          'items': [
+            {
+              'isCoffee': true,
+              'name': 'Dubai Chewy Smoothie',
+              'addonName': 'Extra Cream',
+              'addonId': 'AD-007',
+              'quantity': 3,
+            },
+          ],
+        },
+      ],
+    );
+
+    expect(entries, hasLength(1));
+    expect(entries.single['activity'], 'Sold');
+    expect(entries.single['name'], 'Extra Cream');
+    expect(entries.single['quantity'], 3);
+  });
 }

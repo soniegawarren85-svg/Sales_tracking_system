@@ -22,6 +22,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -29,12 +30,14 @@ import '../Login/Login/Login.dart';
 
 class ProfilePage extends StatefulWidget {
   final VoidCallback onMessage;
+  final bool showLogoutButton;
   final GlobalKey? tourTargetKey;
   final GlobalKey? editProfileTourKey;
 
   const ProfilePage({
     super.key,
     required this.onMessage,
+    this.showLogoutButton = true,
     this.tourTargetKey,
     this.editProfileTourKey,
   });
@@ -667,8 +670,10 @@ class _ProfilePageState extends State<ProfilePage>
                       _buildInfoCard(),
                       const SizedBox(height: 24),
                       _buildChangePassword(),
-                      const SizedBox(height: 12),
-                      _buildLogout(),
+                      if (widget.showLogoutButton) ...[
+                        const SizedBox(height: 12),
+                        _buildLogout(),
+                      ],
                       const SizedBox(height: 100),
                     ],
                   ),
@@ -1791,6 +1796,7 @@ class _EditProfileSheetState extends State<_EditProfileSheet>
   late Animation<double> _sheetFade;
   late Animation<Offset> _sheetSlide;
   bool _isSaving = false;
+  String? _emailValidationMessage;
   late final String _initialEmail;
 
   // ── Pink palette (local copy) ───────────────────────────────────
@@ -1805,6 +1811,7 @@ class _EditProfileSheetState extends State<_EditProfileSheet>
   void initState() {
     super.initState();
     _initialEmail = normalizedProfileEmail(widget.emailController.text);
+    widget.emailController.addListener(_clearEmailValidationMessage);
     _sheetAnimCtrl = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 500),
@@ -1820,6 +1827,7 @@ class _EditProfileSheetState extends State<_EditProfileSheet>
   @override
   void dispose() {
     _sheetAnimCtrl.dispose();
+    widget.emailController.removeListener(_clearEmailValidationMessage);
     widget.firstNameController.dispose();
     widget.lastNameController.dispose();
     widget.emailController.dispose();
@@ -1843,6 +1851,30 @@ class _EditProfileSheetState extends State<_EditProfileSheet>
     final changingAuthEmail = normalizedProfileEmail(email) != _initialEmail;
     if (!(_formKey.currentState?.validate() ?? false)) return;
 
+    if (changingAuthEmail) {
+      try {
+        if ((await Connectivity().checkConnectivity()).contains(
+          ConnectivityResult.none,
+        )) {
+          setState(
+            () => _emailValidationMessage =
+                'An internet connection is required to change your Gmail address.',
+          );
+          return;
+        }
+      } catch (error) {
+        setState(
+          () => _emailValidationMessage =
+              'Unable to verify your connection. Please retry changing Gmail when online.',
+        );
+        debugPrint('Unable to verify profile email connectivity: $error');
+        return;
+      }
+    }
+
+    if (_emailValidationMessage != null) {
+      setState(() => _emailValidationMessage = null);
+    }
     setState(() => _isSaving = true);
 
     try {
@@ -1912,7 +1944,7 @@ class _EditProfileSheetState extends State<_EditProfileSheet>
         await authUser.verifyBeforeUpdateEmail(email);
       }
 
-      await widget.docRef.set({
+      final profileUpdate = {
         'firstName': firstName,
         'lastName': lastName,
         if (emailEdited) 'email': authEmail,
@@ -1923,7 +1955,39 @@ class _EditProfileSheetState extends State<_EditProfileSheet>
         'phone': phone,
         'address': address,
         'age': age,
-      }, SetOptions(merge: true));
+      };
+      final isOffline = (await Connectivity().checkConnectivity()).contains(
+        ConnectivityResult.none,
+      );
+      if (isOffline) {
+        unawaited(
+          widget.docRef.set(profileUpdate, SetOptions(merge: true)).catchError((
+            Object error,
+            StackTrace stackTrace,
+          ) {
+            debugPrint('Offline profile update failed to sync: $error');
+          }),
+        );
+        if (!mounted) return;
+        widget.onSaved(
+          'Profile saved on this device. It will sync automatically when internet returns.',
+        );
+        Navigator.of(context).pop();
+        return;
+      }
+
+      try {
+        await widget.docRef
+            .set(profileUpdate, SetOptions(merge: true))
+            .timeout(const Duration(seconds: 8));
+      } on TimeoutException {
+        if (!mounted) return;
+        widget.onSaved(
+          'Profile saved on this device. It will sync automatically when internet returns.',
+        );
+        Navigator.of(context).pop();
+        return;
+      }
 
       if (!mounted) return;
       widget.onSaved(
@@ -1963,6 +2027,12 @@ class _EditProfileSheetState extends State<_EditProfileSheet>
     context: context,
     builder: (_) => const ConfirmPasswordDialog(),
   );
+
+  void _clearEmailValidationMessage() {
+    if (_emailValidationMessage == null || !mounted) return;
+    setState(() => _emailValidationMessage = null);
+  }
+
   void _showSheetSnackBar(String message, {bool isError = false}) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -2263,6 +2333,18 @@ class _EditProfileSheetState extends State<_EditProfileSheet>
           keyboardType: TextInputType.emailAddress,
           validator: ProfileFieldValidation.gmail,
         ),
+        if (_emailValidationMessage != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Text(
+              _emailValidationMessage!,
+              style: const TextStyle(
+                color: Color(0xFFB71C1C),
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
         const SizedBox(height: 14),
         _SheetTextField(
           controller: widget.phoneController,

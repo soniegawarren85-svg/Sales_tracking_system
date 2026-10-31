@@ -52,10 +52,14 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard>
     with TickerProviderStateMixin {
   int _selectedIndex = 0;
   bool _returnReportToMore = false;
+  String _inventoryBranchId = '';
   int _pageRefreshVersion = 0;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _allocationNotices;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _checklistUpdates;
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>?
+  _reconciliationRequests;
   int _pendingReturnCount = 0;
+  int _pendingReconciliationCount = 0;
 
   static const String kShopLogoAsset = 'Assets/Image/ob.jpg';
   final _navItems = const [
@@ -111,6 +115,22 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard>
           },
           onError: (Object error) {
             debugPrint('Checklist navigation badges: $error');
+          },
+        );
+    _reconciliationRequests = FirebaseFirestore.instance
+        .collection('inventory_reconciliations')
+        .where('status', isEqualTo: 'pending')
+        .snapshots()
+        .listen(
+          (snapshot) {
+            if (mounted) {
+              setState(
+                () => _pendingReconciliationCount = snapshot.docs.length,
+              );
+            }
+          },
+          onError: (Object error) {
+            debugPrint('Reconciliation navigation badge: $error');
           },
         );
     ShortIdService.refresh().catchError((Object error) {
@@ -183,6 +203,7 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard>
   void dispose() {
     _allocationNotices?.cancel();
     _checklistUpdates?.cancel();
+    _reconciliationRequests?.cancel();
     BranchSession.instance.removeListener(_onBranchChanged);
     _entranceController.dispose();
     super.dispose();
@@ -261,10 +282,20 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard>
     switch (_selectedIndex) {
       case 1:
         // Budget page displays without the admin collapsible header
-        return _refreshablePage(const BudgetPage());
+        return BudgetPage(
+          onOpenStaff: () => setState(() => _selectedIndex = 3),
+        );
       case 2:
         // Inventory is part of the main admin navigation.
-        return _refreshablePage(const InventoryPage(embedded: true));
+        return _refreshablePage(
+          InventoryPage(
+            embedded: true,
+            selectedBranchId: _inventoryBranchId,
+            onBranchSelected: (branchId) =>
+                setState(() => _inventoryBranchId = branchId),
+            onAssignBranchInventory: _showBranchInventoryAssignment,
+          ),
+        );
       case 3:
         return _refreshablePage(
           StaffPage(onBack: () => setState(() => _selectedIndex = 5)),
@@ -295,11 +326,23 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard>
     }
   }
 
+  Future<void> _showBranchInventoryAssignment(String branchId, String type) =>
+      showDialog<void>(
+        context: context,
+        barrierColor: Colors.transparent,
+        builder: (_) => BudgetPage(
+          assignmentOnly: true,
+          initialBranchId: branchId,
+          initialAllocationType: type,
+          onOpenStaff: () => setState(() => _selectedIndex = 3),
+        ),
+      );
+
   Widget _refreshablePage(Widget child) => TopEdgeRefresh(
     color: AppColors.primary,
     backgroundColor: Colors.white,
     notificationPredicate: (notification) =>
-        notification.depth == 0 && notification.metrics.axis == Axis.vertical,
+        notification.metrics.axis == Axis.vertical,
     onRefresh: _refreshCurrentPage,
     child: KeyedSubtree(key: ValueKey(_pageRefreshVersion), child: child),
   );
@@ -347,8 +390,9 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard>
     return TopEdgeRefresh(
       color: AppColors.primary,
       backgroundColor: Colors.white,
+      startAreaHeight: 420,
       notificationPredicate: (notification) =>
-          notification.depth == 0 && notification.metrics.axis == Axis.vertical,
+          notification.metrics.axis == Axis.vertical,
       onRefresh: () async {
         try {
           await Future.wait(
@@ -1114,7 +1158,7 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard>
   );
 
   int _navigationBadgeCount(int index) => switch (index) {
-    2 => _pendingReturnCount,
+    2 => _pendingReturnCount + _pendingReconciliationCount,
     _ => 0,
   };
 }

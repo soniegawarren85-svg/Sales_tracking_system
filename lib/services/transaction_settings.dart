@@ -16,7 +16,6 @@ const staffPermissions = {
   'allowDiscounts': 'Apply discounts',
 };
 const adminPermissions = {
-  'adminAllowInventoryEdits': 'Edit inventory',
   'adminAllowStaffManagement': 'Create and manage staff',
   'adminAllowChecklist': 'Receive allocations from Super Admin',
   'adminAllowReturns': 'Submit returns to Super Admin',
@@ -62,10 +61,10 @@ Map<String, dynamic> settingsForBranch(
   for (final key in _branchScopedKeys) {
     if (scoped.containsKey(key)) continue;
     if (key == 'discounts') {
-      result[key] = defaultDiscounts;
+      result[key] = <Map<String, dynamic>>[];
     } else if (key == 'payments') {
       result[key] = defaultPayments;
-    } else if (key == 'taxEnabled') {
+    } else if (key == 'taxEnabled' || key == 'discountsEnabled') {
       result[key] = false;
     } else if (key == 'taxClassification') {
       result[key] = 'nonVat';

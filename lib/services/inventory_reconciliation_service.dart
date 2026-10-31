@@ -157,6 +157,25 @@ class InventoryReconciliationService {
         'preview': output,
         'createdAt': FieldValue.serverTimestamp(),
       });
+      tx.set(
+        db.collection('admin_notifications').doc('bundle_action_$requestId'),
+        {
+          'title': action == 'unbundle'
+              ? 'Bundle unbundle request'
+              : 'Bundle update request',
+          'message':
+              '$actorName requested to ${action == 'unbundle' ? 'unbundle' : 'convert'} ${selected.length} bundle(s) from ${data['name'] ?? 'Bundle'} at ${data['branchName'] ?? data['staffId']}.',
+          'type': 'inventory_reconciliation',
+          'category': 'Inventory',
+          'requestId': requestId,
+          'allocationId': allocationId,
+          'branchId': data['staffId'],
+          'staffId': actorId,
+          'isRead': false,
+          'toastShown': false,
+          'createdAt': FieldValue.serverTimestamp(),
+        },
+      );
     });
   }
 
@@ -167,7 +186,10 @@ class InventoryReconciliationService {
     String reason = '',
   }) async {
     if (actorId.isEmpty) throw ArgumentError('Sign in as administrator.');
-    await BranchPermissions.require('adminAllowReconciliationApproval', database: db);
+    await BranchPermissions.require(
+      'adminAllowReconciliationApproval',
+      database: db,
+    );
     final request = db.collection('inventory_reconciliations').doc(id);
     await _validatedTransaction((tx) async {
       final pending = (await tx.get(request)).data();
@@ -310,9 +332,14 @@ class InventoryReconciliationService {
         'reviewedAt': FieldValue.serverTimestamp(),
       });
       tx.set(db.collection('activity_logs').doc('reconciliation_$id'), {
-        'action': approve ? 'reconciliation_approved' : 'reconciliation_rejected',
-        'description': '${approve ? 'Approved' : 'Rejected'} bundle reconciliation: ${pending['name']}',
-        'actorId': actorId, 'actorName': actorId, 'actorPublicId': actorId,
+        'action': approve
+            ? 'reconciliation_approved'
+            : 'reconciliation_rejected',
+        'description':
+            '${approve ? 'Approved' : 'Rejected'} bundle reconciliation: ${pending['name']}',
+        'actorId': actorId,
+        'actorName': actorId,
+        'actorPublicId': actorId,
         'actorRole': actorId == 'Spr-001' ? 'super_admin' : 'admin',
         'branchIds': [pending['staffId']],
         'createdAt': FieldValue.serverTimestamp(),

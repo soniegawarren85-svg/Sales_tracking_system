@@ -69,6 +69,24 @@ void main() {
     });
     await db.doc('staff_inventory/stock').set({'staffId': 'b', 'stock': 20});
   });
+
+  test('beverage return names include the product and size', () {
+    expect(
+      returnItemName({
+        'isCoffee': true,
+        'name': 'Dubai Chewy Smoothie',
+        'flavor': 'Dubai Chewy Smoothie',
+        'coffeeSize': 'Small',
+        'variant': 'Small',
+      }),
+      'Dubai Chewy Smoothie (Small)',
+    );
+    expect(
+      returnItemCode({'itemDisplayId': 'BND-003-25', 'bundleId': 'BND-003'}),
+      'BND-003-25',
+    );
+  });
+
   test(
     'one batch preserves details and claims every source exactly once',
     () async {
