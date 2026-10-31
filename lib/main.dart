@@ -6,6 +6,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:shorebird_code_push/shorebird_code_push.dart';
 
 import 'theme/design.dart';
 import 'Login/Login/Login.dart';
@@ -21,6 +22,7 @@ import 'services/session_actor.dart';
 import 'services/login_validation.dart';
 import 'services/password_reset_service.dart';
 import 'services/account_session_control.dart';
+import 'services/shorebird_update_service.dart';
 import 'widgets/network_status_banner.dart';
 import 'widgets/raspberry_cupcake_loader.dart';
 
@@ -53,10 +55,19 @@ class _MyAppState extends State<MyApp> {
   String? _watchedAccount;
   bool _checkingSession = false;
   bool _forcingLogout = false;
+  bool _checkingForShorebirdUpdate = false;
+  bool _showingShorebirdDialog = false;
+  bool _shorebirdNotificationPending = false;
+  bool _shorebirdUpdatePending = false;
+  bool _shorebirdRestartPending = false;
+  static const _shorebirdLastPromptKey = 'shorebird.lastPromptAt';
 
   @override
   void initState() {
     super.initState();
+    ShorebirdUpdateService.salesProcessActive.addListener(
+      _onSalesProcessStateChanged,
+    );
     _appLinks = AppLinks();
     _linkSubscription = _appLinks.uriLinkStream.listen(
       _handleAppLink,
@@ -67,10 +78,189 @@ class _MyAppState extends State<MyApp> {
       const Duration(seconds: 2),
       (_) => _watchAccountSession(),
     );
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      Future<void>.delayed(
+        const Duration(seconds: 2),
+        _checkForShorebirdUpdate,
+      );
+    });
+  }
+
+  void _onSalesProcessStateChanged() {
+    if (!ShorebirdUpdateService.salesProcessActive.value) {
+      unawaited(_showPendingShorebirdDialog());
+    }
+  }
+
+  Future<void> _checkForShorebirdUpdate() async {
+    if (!mounted ||
+        _checkingForShorebirdUpdate ||
+        !ShorebirdUpdateService.updater.isAvailable) {
+      return;
+    }
+    _checkingForShorebirdUpdate = true;
+    try {
+      final status = await ShorebirdUpdateService.check();
+      if (!mounted) return;
+      if (status == UpdateStatus.restartRequired) {
+        await ShorebirdUpdateService.clearNotification();
+        _shorebirdRestartPending = true;
+        await _showPendingShorebirdDialog();
+        return;
+      }
+      if (status != UpdateStatus.outdated || _showingShorebirdDialog) return;
+
+      _shorebirdNotificationPending = true;
+      final prefs = await SharedPreferences.getInstance();
+      final lastPrompt = prefs.getInt(_shorebirdLastPromptKey) ?? 0;
+      final now = DateTime.now().millisecondsSinceEpoch;
+      if (now - lastPrompt >= const Duration(hours: 24).inMilliseconds) {
+        _shorebirdUpdatePending = true;
+      }
+      await _showPendingShorebirdDialog();
+    } catch (error) {
+      // Offline devices and Shorebird service errors should never block app use.
+      debugPrint('Shorebird update check failed: $error');
+    } finally {
+      _checkingForShorebirdUpdate = false;
+    }
+  }
+
+  Future<void> _showPendingShorebirdDialog() async {
+    if (!mounted ||
+        _showingShorebirdDialog ||
+        ShorebirdUpdateService.salesProcessActive.value ||
+        (!_shorebirdNotificationPending &&
+            !_shorebirdUpdatePending &&
+            !_shorebirdRestartPending)) {
+      return;
+    }
+    _showingShorebirdDialog = true;
+    try {
+      if (_shorebirdNotificationPending) {
+        await ShorebirdUpdateService.notifyAvailable();
+        _shorebirdNotificationPending = false;
+      }
+      if (!_shorebirdUpdatePending && !_shorebirdRestartPending) return;
+      await WidgetsBinding.instance.endOfFrame;
+      if (!mounted ||
+          ShorebirdUpdateService.salesProcessActive.value ||
+          _navigatorKey.currentState == null) {
+        return;
+      }
+
+      final restartPending = _shorebirdRestartPending;
+      final action = await showDialog<bool>(
+        context: _navigatorKey.currentState!.context,
+        barrierDismissible: false,
+        builder: (context) => AlertDialog(
+          title: Text(restartPending ? 'Update ready' : 'Update Available'),
+          content: Text(
+            restartPending
+                ? 'The update is ready. Restart the app when convenient to apply it.'
+                : 'A new app update is ready to download. You can install it now or do it later.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Later'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: Text(restartPending ? 'OK' : 'Update Now'),
+            ),
+          ],
+        ),
+      );
+
+      if (restartPending) {
+        _shorebirdRestartPending = false;
+      } else {
+        _shorebirdUpdatePending = false;
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setInt(
+          _shorebirdLastPromptKey,
+          DateTime.now().millisecondsSinceEpoch,
+        );
+        if (action == true && mounted) await _downloadShorebirdUpdate();
+      }
+    } finally {
+      _showingShorebirdDialog = false;
+    }
+  }
+
+  Future<void> _downloadShorebirdUpdate() async {
+    final navigator = _navigatorKey.currentState;
+    if (navigator == null || !mounted) return;
+    showDialog<void>(
+      context: navigator.context,
+      barrierDismissible: false,
+      builder: (context) => const PopScope(
+        canPop: false,
+        child: AlertDialog(
+          title: Text('Downloading update'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              LinearProgressIndicator(),
+              SizedBox(height: 16),
+              Text('Downloading the update. Please keep this screen open.'),
+            ],
+          ),
+        ),
+      ),
+    );
+    try {
+      await ShorebirdUpdateService.download();
+      if (!mounted || !navigator.mounted) return;
+      navigator.pop();
+      await ShorebirdUpdateService.clearNotification();
+      if (!mounted || !navigator.mounted) return;
+      await showDialog<void>(
+        context: navigator.context,
+        builder: (context) => AlertDialog(
+          title: const Text('Update ready'),
+          content: const Text(
+            'The update is downloaded and will be applied the next time you restart the app.',
+          ),
+          actions: [
+            FilledButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
+    } catch (error) {
+      if (!mounted || !navigator.mounted) return;
+      navigator.pop();
+      debugPrint('Shorebird update download failed: $error');
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_shorebirdLastPromptKey);
+      if (!mounted || !navigator.mounted) return;
+      await showDialog<void>(
+        context: navigator.context,
+        builder: (context) => AlertDialog(
+          title: const Text('Update unavailable'),
+          content: const Text(
+            'The update could not be downloaded. Check your internet connection and try again later.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
+    }
   }
 
   @override
   void dispose() {
+    ShorebirdUpdateService.salesProcessActive.removeListener(
+      _onSalesProcessStateChanged,
+    );
     _sessionTimer?.cancel();
     unawaited(_sessionWatch?.cancel());
     unawaited(_linkSubscription?.cancel());

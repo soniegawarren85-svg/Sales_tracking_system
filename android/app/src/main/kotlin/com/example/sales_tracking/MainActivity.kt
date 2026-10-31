@@ -2,6 +2,13 @@ package com.example.sales_tracking
 
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothSocket
+import android.Manifest
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
@@ -19,12 +26,74 @@ class MainActivity : FlutterActivity() {
     private val serviceUuid = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
     private val ioExecutor = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val updatePermissionRequest = 7412
+    private var pendingNotificationResult: MethodChannel.Result? = null
+    private val updateChannelId = "shorebird_updates"
     @Volatile private var printerSocket: BluetoothSocket? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, channelName)
             .setMethodCallHandler(::handlePrinterCall)
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger,
+            "com.example.sales_tracking/updates").setMethodCallHandler { call, result ->
+            when (call.method) {
+                "showUpdateAvailable" -> showUpdateNotification(result)
+                "clearUpdateNotification" -> {
+                    (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
+                        .cancel(7413)
+                    result.success(null)
+                }
+                else -> result.notImplemented()
+            }
+        }
+    }
+
+    private fun showUpdateNotification(result: MethodChannel.Result) {
+        if (Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED) {
+            pendingNotificationResult = result
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+                updatePermissionRequest)
+            return
+        }
+        postUpdateNotification()
+        result.success(true)
+    }
+
+    private fun postUpdateNotification() {
+        val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            manager.createNotificationChannel(NotificationChannel(
+                updateChannelId, "App updates", NotificationManager.IMPORTANCE_DEFAULT
+            ).apply { description = "Shorebird app update alerts" })
+        }
+        val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
+        val pendingIntent = launchIntent?.let {
+            PendingIntent.getActivity(this, 7413, it,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        }
+        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+            Notification.Builder(this, updateChannelId) else Notification.Builder(this)
+        builder.setSmallIcon(android.R.drawable.stat_sys_download_done)
+            .setContentTitle("Update Available")
+            .setContentText("A new Sales Tracking update is ready to download.")
+            .setAutoCancel(true)
+            .setContentIntent(pendingIntent)
+        manager.notify(7413, builder.build())
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int, permissions: Array<out String>, grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != updatePermissionRequest) return
+        val result = pendingNotificationResult ?: return
+        pendingNotificationResult = null
+        val granted = grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED
+        if (granted) postUpdateNotification()
+        result.success(granted)
     }
 
     private fun handlePrinterCall(call: MethodCall, result: MethodChannel.Result) {

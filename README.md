@@ -40,3 +40,34 @@ install an APK signed with this new key over an app signed with the previous
 key. Uninstall the existing app before installing this release; uninstalling
 deletes local app data. Back up the new keystore and `key.properties` securely
 for future updates, and never commit either file.
+
+## Shorebird Android OTA updates
+
+The app checks for Shorebird patches at startup. Staff can defer an available
+patch or download it from the prompt; the download is staged and takes effect
+after an app restart. Android update notifications require notification
+permission on Android 13 and later.
+
+The Shorebird integration adds Android native code, so publish a new Shorebird
+release and distribute that release through Google Play before publishing OTA
+patches. Use a version/build number higher than the one currently in the store,
+and sign it with the same upload keystore:
+
+```powershell
+shorebird doctor
+shorebird release android
+```
+
+Upload the generated release bundle from
+`build/app/outputs/bundle/release/app-release.aab` to Google Play. Once staff
+have installed that Shorebird-enabled release, publish Dart-only updates with:
+
+```powershell
+shorebird patch android
+```
+
+The patch command must finish successfully before the patch is available to
+devices. Shorebird patches cannot include Android/Kotlin or other native-code
+changes, Flutter engine changes, or asset changes; publish another store
+release for those changes. See the [Shorebird Code Push guide](https://docs.shorebird.dev/code-push/)
+for release, patch, and track details.

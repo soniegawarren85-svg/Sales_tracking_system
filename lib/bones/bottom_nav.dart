@@ -14,6 +14,7 @@ import '../services/staff_onboarding_service.dart';
 import '../services/held_order_store.dart';
 import '../services/staff_login_session.dart';
 import '../services/session_actor.dart';
+import '../services/shorebird_update_service.dart';
 import '../widgets/logout_progress.dart';
 import '../Login/Login/Login.dart';
 import '../Staff_pages/dashboard_page.dart';
@@ -170,6 +171,7 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
 
   @override
   void dispose() {
+    ShorebirdUpdateService.salesProcessActive.value = false;
     _loginSubscription?.cancel();
     _profileSubscription?.cancel();
     _tutorialCoachMark?.finish();
@@ -177,6 +179,11 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
     InventoryService().removeListener(_onInventoryChanged);
     _scrollController.dispose();
     super.dispose();
+  }
+
+  void _selectPage(int index) {
+    _selectedIndex = index;
+    ShorebirdUpdateService.salesProcessActive.value = index == 3;
   }
 
   Future<void> _logoutAfterBranchUnassigned() async {
@@ -287,7 +294,7 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
               _salesInitialGroup = groupName;
               _openPendingOnSalesLaunch = false;
               _salesLaunchToken++;
-              _selectedIndex = 3;
+              _selectPage(3);
             });
           },
       onOpenAllItems: () => setState(() {
@@ -295,7 +302,7 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
         _salesInitialGroup = null;
         _openPendingOnSalesLaunch = false;
         _salesLaunchToken++;
-        _selectedIndex = 3;
+        _selectPage(3);
       }),
     );
   }
@@ -654,7 +661,7 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
     }
     if (_selectedIndex != step.pageIndex) {
       setState(() {
-        _selectedIndex = step.pageIndex;
+        _selectPage(step.pageIndex);
         if (step.pageIndex != 3) _openPendingOnSalesLaunch = false;
       });
     }
@@ -754,7 +761,7 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
     // make sure selected index is within bounds (especially after hot reload)
     const int lastIndex = 3; // dashboard, analytics, profile, stock
     if (_selectedIndex < 0 || _selectedIndex > lastIndex) {
-      _selectedIndex = 0;
+      _selectPage(0);
     }
 
     final size = MediaQuery.sizeOf(context);
@@ -843,7 +850,7 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
                       onTap: (int idx) {
                         setState(() {
                           if (idx != 3) _openPendingOnSalesLaunch = false;
-                          _selectedIndex = idx;
+                          _selectPage(idx);
                         });
                       },
                     ),
@@ -1091,7 +1098,7 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
             _tabletSidebarExpanded = false;
             _tabletSidebarLabelsVisible = false;
           }
-          _selectedIndex = index;
+          _selectPage(index);
         }),
         child: Padding(
           padding: EdgeInsets.symmetric(
@@ -1170,7 +1177,7 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
               _salesInitialGroup = null;
               _openPendingOnSalesLaunch = true;
               _salesLaunchToken++;
-              _selectedIndex = 3;
+              _selectPage(3);
             }),
           ),
         );
@@ -1211,7 +1218,7 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
                   _salesLaunchToken++;
                   _tabletSidebarExpanded = false;
                   _tabletSidebarLabelsVisible = false;
-                  _selectedIndex = 3;
+                  _selectPage(3);
                 }),
                 child: expanded
                     ? Row(
