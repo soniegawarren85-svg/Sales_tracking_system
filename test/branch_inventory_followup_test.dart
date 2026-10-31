@@ -36,12 +36,13 @@ void main() {
       'expired',
       expiry: today.subtract(const Duration(days: 1)),
     );
+    final expiredToday = item('expired-today', expiry: today);
     final removed = item('removed');
     final data = BranchReportData({
       'sales_inventory': [
         {
           '_id': 'cat',
-          'items': [active, deleted, expired],
+          'items': [active, deleted, expired, expiredToday],
           'removedItems': [removed],
         },
       ],
@@ -55,6 +56,7 @@ void main() {
             active,
             {...deleted, 'isDeleted': false},
             expired,
+            expiredToday,
             removed,
           ],
         },

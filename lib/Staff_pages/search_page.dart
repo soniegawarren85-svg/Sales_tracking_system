@@ -286,7 +286,9 @@ class _AnalyticsPageState extends State<AnalyticsPage>
           final expirationDate = item['expirationDate']?.toString() ?? '';
           if (_isExpiredInventoryItem(expirationDate)) return false;
           if (rootItems.isNotEmpty &&
-              !rootItems.any((root) => inventoryVariantsMatch(root, item))) {
+              !rootItems.any(
+                (root) => inventoryCatalogVariantMatches(root, item, rootItems),
+              )) {
             return false;
           }
           final stock =

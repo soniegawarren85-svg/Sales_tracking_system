@@ -516,7 +516,7 @@ class BranchReportData {
       return value['isDeleted'] != true &&
           value['isVoided'] != true &&
           value['removedAt'] == null &&
-          (expiry == null || !DateUtils.dateOnly(expiry).isBefore(start));
+          (expiry == null || DateUtils.dateOnly(expiry).isAfter(start));
     }
 
     for (final allocation in rows('staff_inventory').where(

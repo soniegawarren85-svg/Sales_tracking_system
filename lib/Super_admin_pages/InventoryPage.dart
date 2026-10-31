@@ -282,7 +282,7 @@ class _InventoryPageState extends State<InventoryPage>
     try {
       final expiryDate = DateTime.parse(expirationDate);
       final today = DateTime.now();
-      return expiryDate.isBefore(DateTime(today.year, today.month, today.day));
+      return !DateUtils.dateOnly(expiryDate).isAfter(DateUtils.dateOnly(today));
     } catch (e) {
       return false;
     }

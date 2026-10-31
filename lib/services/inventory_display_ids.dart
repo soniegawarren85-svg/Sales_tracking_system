@@ -64,6 +64,61 @@ bool inventoryVariantsMatch(Map first, Map second) {
   return firstName.isNotEmpty && firstName == secondName;
 }
 
+bool inventoryCatalogVariantMatches(
+  Map catalogItem,
+  Map allocatedItem,
+  Iterable<Map> catalogItems,
+) {
+  if (inventoryVariantsMatch(catalogItem, allocatedItem)) return true;
+
+  final allocatedIds = [
+    for (final key in [
+      'publicId',
+      'itemPublicId',
+      'id',
+      'itemId',
+      'variantId',
+      'sourceItemId',
+    ])
+      '${allocatedItem[key] ?? ''}'.trim().toLowerCase(),
+  ].where((id) => id.isNotEmpty).toSet();
+  final catalogIds = [
+    for (final key in [
+      'publicId',
+      'itemPublicId',
+      'id',
+      'itemId',
+      'variantId',
+      'sourceItemId',
+    ])
+      '${catalogItem[key] ?? ''}'.trim().toLowerCase(),
+  ].where((id) => id.isNotEmpty).toSet();
+  final sharedIds = allocatedIds.intersection(catalogIds);
+  if (sharedIds.isEmpty) return false;
+
+  final matchingIds = catalogItems.map((item) {
+    final ids = [
+      for (final key in [
+        'publicId',
+        'itemPublicId',
+        'id',
+        'itemId',
+        'variantId',
+        'sourceItemId',
+      ])
+        '${item[key] ?? ''}'.trim().toLowerCase(),
+    ].where((id) => id.isNotEmpty).toSet();
+    return ids.intersection(sharedIds);
+  });
+  final idCounts = <String, int>{};
+  for (final ids in matchingIds) {
+    for (final id in ids) {
+      idCounts.update(id, (count) => count + 1, ifAbsent: () => 1);
+    }
+  }
+  return idCounts.values.any((count) => count == 1);
+}
+
 /// Keep allocation stock and references while refreshing catalog display data.
 Map<String, dynamic> alignInventoryDisplayIds(
   Map<String, dynamic> allocation,
@@ -74,48 +129,8 @@ Map<String, dynamic> alignInventoryDisplayIds(
     raw,
   ) {
     final item = Map<String, dynamic>.from(raw);
-    String normalized(dynamic value) => '${value ?? ''}'.trim().toLowerCase();
-    final itemIds = [
-      item['publicId'],
-      item['itemPublicId'],
-      item['id'],
-      item['itemId'],
-      item['variantId'],
-      item['sourceItemId'],
-    ].map(normalized).where((id) => id.isNotEmpty).toSet();
-    final itemName = normalized(item['name']);
-    final itemVariant = normalized(
-      item['variant'] ??
-          item['variantName'] ??
-          item['size'] ??
-          item['coffeeSize'],
-    );
     final matches = sourceItems.where((candidate) {
-      final candidateIds = [
-        candidate['publicId'],
-        candidate['itemPublicId'],
-        candidate['id'],
-        candidate['itemId'],
-        candidate['variantId'],
-        candidate['sourceItemId'],
-      ].map(normalized).where((id) => id.isNotEmpty).toSet();
-      final candidateName = normalized(candidate['name']);
-      final candidateVariant = normalized(
-        candidate['variant'] ??
-            candidate['variantName'] ??
-            candidate['size'] ??
-            candidate['coffeeSize'],
-      );
-      final idsMatch = itemIds.intersection(candidateIds).isNotEmpty;
-      final namesMatch =
-          itemName.isNotEmpty &&
-          candidateName.isNotEmpty &&
-          itemName == candidateName;
-      final variantMatches =
-          itemVariant.isEmpty ||
-          candidateVariant.isEmpty ||
-          itemVariant == candidateVariant;
-      return variantMatches && (idsMatch || namesMatch);
+      return inventoryCatalogVariantMatches(candidate, item, sourceItems);
     }).toList();
     if (matches.length == 1) {
       final sourceItem = matches.single;

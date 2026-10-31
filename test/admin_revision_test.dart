@@ -23,7 +23,7 @@ void main() {
           'id': 'active',
           'name': 'Cookies',
           'items': [
-            {'name': 'Pistachio', 'expirationDate': '2026-09-25'},
+            {'name': 'Pistachio', 'expirationDate': '2026-09-26'},
           ],
         },
         {
@@ -57,6 +57,37 @@ void main() {
       expect(products, hasLength(6));
     },
   );
+
+  test('items expiring today are inactive and belong in expired inventory', () {
+    final today = DateTime(2026, 9, 25);
+    final products = <Map<String, dynamic>>[
+      {
+        'id': 'cookies',
+        'name': 'Cookies',
+        'items': [
+          {
+            'id': 'expires-today',
+            'name': 'Expires today',
+            'stock': 5,
+            'expirationDate': '2026-09-25',
+          },
+          {
+            'id': 'expires-tomorrow',
+            'name': 'Expires tomorrow',
+            'stock': 4,
+            'expirationDate': '2026-09-26',
+          },
+        ],
+      },
+    ];
+
+    expect(
+      adminCatalogEntries(products, [], now: today).map((entry) => entry.id),
+      ['expires-tomorrow'],
+    );
+    final expiredToday = (products.single['items'] as List).first as Map;
+    expect(catalogItemActive(expiredToday, today), isFalse);
+  });
 
   test('Bundle expiry uses component snapshots or an unambiguous source', () {
     final bundle = {
@@ -243,6 +274,12 @@ void main() {
     expect(item['name'], 'Choco Cookie');
     expect(item['publicId'], 'CO-001');
     expect(item['stock'], 12);
+    expect(
+      DateUtils.dateOnly(DateTime.parse('${item['expirationDate']}')).isAfter(
+        DateUtils.dateOnly(DateTime.now()),
+      ),
+      isTrue,
+    );
     expect(
       (await db.collection('system_counters').doc('public_CO').get())
           .data()!['count'],

@@ -119,7 +119,10 @@ List<Map<String, dynamic>> bundleBeverageSizes(
 bool bundleExpired(Map data, DateTime now) {
   final raw = data['expirationDate'];
   final date = raw is Timestamp ? raw.toDate() : DateTime.tryParse('$raw');
-  return date != null && date.isBefore(DateTime(now.year, now.month, now.day));
+  if (date == null) return false;
+  final expirationDay = DateTime(date.year, date.month, date.day);
+  final today = DateTime(now.year, now.month, now.day);
+  return !expirationDay.isAfter(today);
 }
 
 bool bundleInstanceAvailable(Map instance, Map bundle, {DateTime? now}) {
@@ -207,7 +210,8 @@ bool staffBundleAllocationExpired(Map bundle, {DateTime? now}) {
 }
 
 bool staffBundleAllocationVisible(Map bundle, {DateTime? now}) =>
-    bundle['isDeleted'] != true && !staffBundleAllocationExpired(bundle, now: now);
+    bundle['isDeleted'] != true &&
+    !staffBundleAllocationExpired(bundle, now: now);
 
 int availableStaffBundleCount(
   Iterable<Map<String, dynamic>> allocations, {

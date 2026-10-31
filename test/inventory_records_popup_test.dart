@@ -209,4 +209,42 @@ void main() {
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox());
   });
+
+  testWidgets('expired inventory includes items expiring today', (tester) async {
+    final db = FakeFirebaseFirestore();
+    final today = DateUtils.dateOnly(DateTime.now());
+    final expiry = [
+      today.year.toString().padLeft(4, '0'),
+      today.month.toString().padLeft(2, '0'),
+      today.day.toString().padLeft(2, '0'),
+    ].join('-');
+    await db.collection('sales_inventory').doc('cookies').set({
+      'name': 'Cookies',
+      'items': [
+        {
+          'id': 'today-cookie',
+          'name': 'Today Cookie',
+          'expirationDate': expiry,
+          'stock': 4,
+        },
+      ],
+    });
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: AdminVoidInventory(
+          type: 'Categories',
+          expired: true,
+          popup: true,
+          firestore: db,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Today Cookie'), findsOneWidget);
+    expect(find.text('Expired'), findsOneWidget);
+    expect(find.text('No expired records found.'), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+  });
 }

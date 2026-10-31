@@ -8845,22 +8845,45 @@ class _DailyStockPageState extends State<DailyStockPage>
                   .where((item) {
                     final expirationDate =
                         item['expirationDate']?.toString() ?? '';
-                    return !_isExpiredItem(expirationDate) &&
-                        (rootItems.isEmpty ||
-                            rootItems.any(
-                              (root) => inventoryVariantsMatch(root, item),
-                            ));
+                    // An accepted staff allocation is the source of truth for
+                    // what this staff member can sell. Catalog IDs can change
+                    // after allocation, so a catalog mismatch must not hide
+                    // allocated stock from the sales screen.
+                    return !_isExpiredItem(expirationDate);
                   })
                   .map((item) {
                     final rootItem = rootItems
-                        .where((root) => inventoryVariantsMatch(root, item))
+                        .where(
+                          (root) => inventoryCatalogVariantMatches(
+                            root,
+                            item,
+                            rootItems,
+                          ),
+                        )
                         .firstOrNull;
-                    if (rootItem == null) return item;
+                    final allocatedImage = item['imageUrl']?.toString().trim();
+                    final currentItemImage = rootItem?['imageUrl']
+                        ?.toString()
+                        .trim();
+                    final categoryImage = rootData['imageUrl']
+                        ?.toString()
+                        .trim();
                     return {
                       ...item,
-                      if (rootItem['price'] != null) 'price': rootItem['price'],
-                      if (rootItem['costPrice'] != null)
-                        'costPrice': rootItem['costPrice'],
+                      if (rootItem?['price'] != null)
+                        'price': rootItem?['price'],
+                      if (rootItem?['costPrice'] != null)
+                        'costPrice': rootItem?['costPrice'],
+                      if ((allocatedImage == null || allocatedImage.isEmpty) &&
+                          currentItemImage != null &&
+                          currentItemImage.isNotEmpty)
+                        'imageUrl': currentItemImage,
+                      if ((allocatedImage == null || allocatedImage.isEmpty) &&
+                          (currentItemImage == null ||
+                              currentItemImage.isEmpty) &&
+                          categoryImage != null &&
+                          categoryImage.isNotEmpty)
+                        'imageUrl': categoryImage,
                     };
                   })
                   .toList();
@@ -8888,9 +8911,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                         : (bundleNameRoot?['isBundle'] == true)
                         ? bundleNameRoot
                         : null)
-                  : (rootCandidate ??
-                        activeRootByName[name] ??
-                        (isCoffee ? data : null));
+                  : (rootCandidate ?? activeRootByName[name] ?? data);
               if (rootData == null) continue;
               final effectiveSourceId =
                   rootData['_rootDocId']?.toString() ??

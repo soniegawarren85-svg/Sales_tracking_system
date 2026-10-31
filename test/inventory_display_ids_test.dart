@@ -127,4 +127,47 @@ void main() {
       isFalse,
     );
   });
+
+  test('stale variant metadata matches a unique catalog identifier', () {
+    final catalog = [
+      {'id': 'testt-id', 'name': 'Testt', 'variant': 'Current'},
+    ];
+    final allocated = {
+      'id': 'testt-id',
+      'name': 'Testt',
+      'variant': 'Legacy',
+      'stock': 5,
+    };
+
+    expect(
+      inventoryCatalogVariantMatches(catalog.single, allocated, catalog),
+      isTrue,
+    );
+    final aligned = alignInventoryDisplayIds(
+      {
+        'items': [allocated],
+      },
+      {'items': catalog},
+    );
+    final item = (aligned['items'] as List).single as Map;
+    expect(item['variant'], 'Legacy');
+    expect(item['name'], 'Testt');
+    expect(item['stock'], 5);
+  });
+
+  test('shared catalog identifiers still require a matching variant', () {
+    final catalog = [
+      {'id': 'shared-category-id', 'name': 'Cookie', 'variant': 'Chocolate'},
+      {'id': 'shared-category-id', 'name': 'Cookie', 'variant': 'Pistachio'},
+    ];
+
+    expect(
+      inventoryCatalogVariantMatches(catalog.first, {
+        'id': 'shared-category-id',
+        'name': 'Cookie',
+        'variant': 'Pistachio',
+      }, catalog),
+      isFalse,
+    );
+  });
 }

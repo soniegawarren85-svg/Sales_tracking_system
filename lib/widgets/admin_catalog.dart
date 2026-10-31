@@ -19,6 +19,7 @@ String catalogCategoryKey(Map data) =>
 bool catalogItemActive(Map item, DateTime now) {
   final raw = item['expirationDate'] ?? item['expiryDate'];
   final expiry = raw is Timestamp ? raw.toDate() : DateTime.tryParse('$raw');
+  final today = DateUtils.dateOnly(now);
   final status = '${item['status'] ?? ''}'.trim().toLowerCase();
   return item['isDeleted'] != true &&
       item['isVoided'] != true &&
@@ -27,7 +28,7 @@ bool catalogItemActive(Map item, DateTime now) {
       item['voidedAt'] == null &&
       item['removedAt'] == null &&
       !{'deleted', 'voided', 'removed', 'deactivated'}.contains(status) &&
-      (expiry == null || !expiry.isBefore(DateUtils.dateOnly(now)));
+      (expiry == null || DateUtils.dateOnly(expiry).isAfter(today));
 }
 
 List<Map<String, dynamic>> currentCatalogCategories(

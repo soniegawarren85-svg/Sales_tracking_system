@@ -112,6 +112,7 @@ class _AssignCoffeeTile extends StatelessWidget {
   final String subtitle;
   final IconData icon;
   final bool selected;
+  final String? warning;
   final ValueChanged<bool?> onChanged;
 
   const _AssignCoffeeTile({
@@ -119,6 +120,7 @@ class _AssignCoffeeTile extends StatelessWidget {
     required this.subtitle,
     this.icon = Icons.coffee_rounded,
     required this.selected,
+    this.warning,
     required this.onChanged,
   });
 
@@ -150,13 +152,30 @@ class _AssignCoffeeTile extends StatelessWidget {
             fontWeight: FontWeight.w800,
           ),
         ),
-        subtitle: Text(
-          subtitle,
-          style: TextStyle(
-            color: Colors.grey.shade600,
-            fontSize: 11,
-            fontWeight: FontWeight.w600,
-          ),
+        subtitle: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              subtitle,
+              style: TextStyle(
+                color: Colors.grey.shade600,
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            if (warning != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(
+                  warning!,
+                  style: const TextStyle(
+                    color: Colors.deepOrange,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+          ],
         ),
       ),
     );
@@ -755,7 +774,7 @@ class _BudgetPageState extends State<BudgetPage>
     try {
       final expiryDate = DateTime.parse(expirationDate);
       final today = DateTime.now();
-      return expiryDate.isBefore(DateTime(today.year, today.month, today.day));
+      return !DateUtils.dateOnly(expiryDate).isAfter(DateUtils.dateOnly(today));
     } catch (_) {
       return false;
     }
@@ -814,39 +833,8 @@ class _BudgetPageState extends State<BudgetPage>
         : _parseInt(item['startingStock']);
   }
 
-  int _displayAssignableStock(
-    Map<String, dynamic> item,
-    String sourceDocId,
-    List<QueryDocumentSnapshot<Map<String, dynamic>>> assignedDocs,
-  ) {
-    final currentStock = _stockForAssignableItem(item);
-    final startingStock = _parseInt(item['startingStock']);
-    if (currentStock > 0 || startingStock <= 0) return currentStock;
-
-    final itemId = item['id']?.toString() ?? '';
-    final itemName = item['name']?.toString() ?? '';
-    var assignedStock = 0;
-    for (final assignedDoc in assignedDocs) {
-      final assignedData = assignedDoc.data();
-      if (assignedData['sourceInventoryId']?.toString() != sourceDocId) {
-        continue;
-      }
-      final assignedItems = (assignedData['items'] as List<dynamic>? ?? [])
-          .whereType<Map>();
-      for (final rawAssignedItem in assignedItems) {
-        final assignedItem = Map<String, dynamic>.from(rawAssignedItem);
-        final sameId =
-            itemId.isNotEmpty && assignedItem['id']?.toString() == itemId;
-        final sameName =
-            itemName.isNotEmpty && assignedItem['name']?.toString() == itemName;
-        if (sameId || sameName) {
-          assignedStock += _parseInt(
-            assignedItem['stock'] ?? assignedItem['startingStock'],
-          );
-        }
-      }
-    }
-    return (startingStock - assignedStock).clamp(0, startingStock).toInt();
+  int _displayAssignableStock(Map<String, dynamic> item) {
+    return _stockForAssignableItem(item);
   }
 
   bool _isRemovedVariant(
@@ -877,7 +865,8 @@ class _BudgetPageState extends State<BudgetPage>
           if (item is! Map) return false;
           final normalizedItem = Map<String, dynamic>.from(item);
           final expirationDate = item['expirationDate']?.toString() ?? '';
-          return !_isExpiredInventoryItem(expirationDate) &&
+          return _stockForAssignableItem(normalizedItem) > 0 &&
+              !_isExpiredInventoryItem(expirationDate) &&
               !_isRemovedVariant(normalizedItem, removedItems);
         })
         .map((entry) {
@@ -1582,7 +1571,11 @@ class _BudgetPageState extends State<BudgetPage>
     }
     final selectedCoffeeIds = <String>{};
     final selectedAddonIds = <String>{};
-    var assignmentSelectionInitialized = false;
+    final assignmentWarnings = <String, String>{};
+    final assignmentQuantityLimits = <String, int>{};
+    final assignedCoffeeIds = <String>{};
+    final assignedAddonIds = <String>{};
+    String? assignmentValidationMessage;
     var isAssigning = false;
     var assignmentSucceeded = false;
     var showCategories =
@@ -1692,8 +1685,9 @@ class _BudgetPageState extends State<BudgetPage>
                                     assignment['isVoided'] != true &&
                                     assignment['removedAt'] == null;
                               }).toList();
-                              if (!assignmentSelectionInitialized) {
-                                selectedCoffeeIds.addAll(
+                              assignedCoffeeIds
+                                ..clear()
+                                ..addAll(
                                   currentAssignments
                                       .where(
                                         (doc) => doc.data()['isCoffee'] == true,
@@ -1704,7 +1698,9 @@ class _BudgetPageState extends State<BudgetPage>
                                       )
                                       .where((id) => id.isNotEmpty),
                                 );
-                                selectedAddonIds.addAll(
+                              assignedAddonIds
+                                ..clear()
+                                ..addAll(
                                   currentAssignments
                                       .where(
                                         (doc) => doc.data()['isAddon'] == true,
@@ -1715,8 +1711,6 @@ class _BudgetPageState extends State<BudgetPage>
                                       )
                                       .where((id) => id.isNotEmpty),
                                 );
-                                assignmentSelectionInitialized = true;
-                              }
                               final activeDocs = (inventorySnapshot?.docs ?? [])
                                   .where((doc) {
                                     final data = doc.data();
@@ -1746,6 +1740,13 @@ class _BudgetPageState extends State<BudgetPage>
                                         onlySourceId == null ||
                                         doc.id == onlySourceId,
                                   )
+                                  .where((doc) {
+                                    final data = doc.data();
+                                    return data['isDeleted'] != true &&
+                                        !_isExpiredInventoryItem(
+                                          '${data['expirationDate'] ?? ''}',
+                                        );
+                                  })
                                   .toList();
                               final addonDocs = (addonSnapshot?.docs ?? [])
                                   .where(
@@ -1753,6 +1754,10 @@ class _BudgetPageState extends State<BudgetPage>
                                         (onlySourceId == null ||
                                             doc.id == onlySourceId) &&
                                         doc.data()['isDeleted'] != true &&
+                                        doc.data()['isAvailable'] != false &&
+                                        !_isExpiredInventoryItem(
+                                          '${doc.data()['expirationDate'] ?? ''}',
+                                        ) &&
                                         !bundleExpired(
                                           doc.data(),
                                           DateTime.now(),
@@ -1894,12 +1899,24 @@ class _BudgetPageState extends State<BudgetPage>
                                                       '+ P${formatNumber(_parsePrice(data['priceDelta']), decimals: 2)}',
                                                   selected: selectedAddonIds
                                                       .contains(addonId),
+                                                  warning:
+                                                      assignmentWarnings[addonId],
                                                   onChanged: (checked) {
                                                     setDialogState(() {
                                                       if (checked == true) {
+                                                        if (assignedAddonIds
+                                                            .contains(
+                                                              addonId,
+                                                            )) {
+                                                          assignmentWarnings[addonId] =
+                                                              'Already assigned to this branch.';
+                                                          return;
+                                                        }
                                                         selectedAddonIds.add(
                                                           addonId,
                                                         );
+                                                        assignmentWarnings
+                                                            .remove(addonId);
                                                       } else {
                                                         selectedAddonIds.remove(
                                                           addonId,
@@ -1952,12 +1969,24 @@ class _BudgetPageState extends State<BudgetPage>
                                                       '${data['category'] ?? 'Beverages'} • $priceSummary',
                                                   selected: selectedCoffeeIds
                                                       .contains(productId),
+                                                  warning:
+                                                      assignmentWarnings[productId],
                                                   onChanged: (checked) {
                                                     setDialogState(() {
                                                       if (checked == true) {
+                                                        if (assignedCoffeeIds
+                                                            .contains(
+                                                              productId,
+                                                            )) {
+                                                          assignmentWarnings[productId] =
+                                                              'Already assigned to this branch.';
+                                                          return;
+                                                        }
                                                         selectedCoffeeIds.add(
                                                           productId,
                                                         );
+                                                        assignmentWarnings
+                                                            .remove(productId);
                                                       } else {
                                                         selectedCoffeeIds
                                                             .remove(productId);
@@ -2037,8 +2066,6 @@ class _BudgetPageState extends State<BudgetPage>
                                                       final stock =
                                                           _displayAssignableStock(
                                                             item,
-                                                            doc.id,
-                                                            assignedDocs,
                                                           );
                                                       final itemName =
                                                           item['name']
@@ -2053,6 +2080,8 @@ class _BudgetPageState extends State<BudgetPage>
                                                                 () =>
                                                                     TextEditingController(),
                                                               );
+                                                      assignmentQuantityLimits[key] =
+                                                          stock;
                                                       return Padding(
                                                         padding:
                                                             const EdgeInsets.only(
@@ -2067,6 +2096,13 @@ class _BudgetPageState extends State<BudgetPage>
                                                           controller:
                                                               controller,
                                                           enabled: stock > 0,
+                                                          maxQuantity: stock,
+                                                          onChanged: (_) {
+                                                            setDialogState(() {
+                                                              assignmentValidationMessage =
+                                                                  null;
+                                                            });
+                                                          },
                                                         ),
                                                       );
                                                     }),
@@ -2083,10 +2119,53 @@ class _BudgetPageState extends State<BudgetPage>
                         ),
                       ),
                       const SizedBox(height: 14),
+                      if (assignmentValidationMessage != null)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 8),
+                          child: Text(
+                            assignmentValidationMessage!,
+                            style: const TextStyle(
+                              color: Colors.deepOrange,
+                              fontWeight: FontWeight.w700,
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
+                        ),
                       ElevatedButton.icon(
                         onPressed: isAssigning
                             ? null
                             : () async {
+                                final exceeded = _assignmentQtyControllers
+                                    .entries
+                                    .where((entry) {
+                                      final requested = _parseInt(
+                                        entry.value.text,
+                                      );
+                                      final maximum =
+                                          assignmentQuantityLimits[entry.key];
+                                      return maximum != null &&
+                                          requested > maximum;
+                                    })
+                                    .isNotEmpty;
+                                if (exceeded) {
+                                  setDialogState(() {
+                                    assignmentValidationMessage =
+                                        'Some quantities exceed the available stock. Please correct the highlighted fields.';
+                                  });
+                                  return;
+                                }
+                                if (selectedCoffeeIds.any(
+                                      assignedCoffeeIds.contains,
+                                    ) ||
+                                    selectedAddonIds.any(
+                                      assignedAddonIds.contains,
+                                    )) {
+                                  setDialogState(() {
+                                    assignmentValidationMessage =
+                                        'This beverage or add-on is already assigned to this branch.';
+                                  });
+                                  return;
+                                }
                                 setDialogState(() => isAssigning = true);
                                 try {
                                   FocusManager.instance.primaryFocus?.unfocus();

@@ -59,6 +59,33 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+  testWidgets('assignment quantity warns when it exceeds available stock', (
+    tester,
+  ) async {
+    final controller = TextEditingController();
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: StatefulBuilder(
+            builder: (context, setState) => AssignInventoryTile(
+              title: 'Testt to',
+              subtitle: 'Stock: 5',
+              icon: Icons.category,
+              controller: controller,
+              enabled: true,
+              maxQuantity: 5,
+              onChanged: (_) => setState(() {}),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.enterText(find.byType(TextField), '10');
+    await tester.pump();
+    expect(find.text('Only 5 available'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
   for (final width in [360.0, 430.0]) {
     testWidgets('mobile records retain readable labels and actions at $width', (
       tester,

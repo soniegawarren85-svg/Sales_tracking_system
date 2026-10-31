@@ -9,6 +9,63 @@ import 'package:sales_tracking/widgets/branch_allocation_table.dart';
 import 'package:sales_tracking/widgets/branch_inventory_edit_dialog.dart';
 
 void main() {
+  testWidgets('branch inventory hides zero-stock and items expiring today', (
+    tester,
+  ) async {
+    final firestore = FakeFirebaseFirestore();
+    final now = DateUtils.dateOnly(DateTime.now());
+    final expiry = [
+      now.year.toString().padLeft(4, '0'),
+      now.month.toString().padLeft(2, '0'),
+      now.day.toString().padLeft(2, '0'),
+    ].join('-');
+    await firestore.collection('sales_inventory').doc('cookies').set({
+      'name': 'Cookies',
+      'items': [
+        {'id': 'active', 'name': 'Active Cookie'},
+        {'id': 'empty', 'name': 'Zero Cookie'},
+        {
+          'id': 'expired',
+          'name': 'Expired Today Cookie',
+          'expirationDate': expiry,
+        },
+      ],
+    });
+    await firestore.collection('staff_inventory').doc('branch-cookies').set({
+      'staffId': 'branch-one',
+      'sourceInventoryId': 'cookies',
+      'items': [
+        {'id': 'active', 'name': 'Active Cookie', 'stock': 5},
+        {'id': 'empty', 'name': 'Zero Cookie', 'stock': 0},
+        {
+          'id': 'expired',
+          'name': 'Expired Today Cookie',
+          'stock': 4,
+          'expirationDate': expiry,
+        },
+      ],
+    });
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: BranchInventoryMonitor(
+            branchId: 'branch-one',
+            firestore: firestore,
+            allowEdits: false,
+            showActions: false,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Active Cookie'), findsOneWidget);
+    expect(find.text('Zero Cookie'), findsNothing);
+    expect(find.text('Expired Today Cookie'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('branch inventory edit action follows admin permission', (
     tester,
   ) async {

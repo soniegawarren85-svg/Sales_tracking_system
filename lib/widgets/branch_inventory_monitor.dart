@@ -3,6 +3,7 @@ import 'branch_inventory_edit_dialog.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../services/bundle_stock_service.dart';
+import '../services/branch_inventory_void_service.dart';
 import '../services/branch_inventory_editor.dart';
 import '../services/branch_permissions.dart';
 import '../services/branch_report_data.dart';
@@ -14,7 +15,7 @@ bool inventoryNearExpiry(dynamic value, [DateTime? now]) {
   final expiry = cashRecordDate(value);
   final today = DateUtils.dateOnly(now ?? DateTime.now());
   return expiry != null &&
-      !DateUtils.dateOnly(expiry).isBefore(today) &&
+      DateUtils.dateOnly(expiry).isAfter(today) &&
       !DateUtils.dateOnly(expiry).isAfter(today.add(const Duration(days: 5)));
 }
 
@@ -92,6 +93,9 @@ class _BranchInventoryMonitorState extends State<BranchInventoryMonitor> {
       final rows = all
           .where(
             (row) =>
+                (row['type'] == 'Beverages' ||
+                    row['type'] == 'Add-ons' ||
+                    (num.tryParse('${row['remaining']}') ?? 0) > 0) &&
                 (widget.addons
                     ? row['type'] == 'Add-ons'
                     : widget.type == 'All' || row['type'] == widget.type) &&
@@ -315,62 +319,22 @@ class _BranchInventoryMonitorState extends State<BranchInventoryMonitor> {
         ),
       );
       loadingShown = true;
-      await db.runTransaction((transaction) async {
-        final ref = db.collection('staff_inventory').doc(allocationId);
-        final snapshot = await transaction.get(ref);
-        final data = snapshot.data();
-        if (data == null || data['isDeleted'] == true) {
-          throw StateError('This allocation is no longer active.');
-        }
-        if (itemId.isEmpty) {
-          if (availableBundleStock(data) > 0) {
-            throw StateError('This bundle is not sold out yet.');
-          }
-          transaction.update(ref, {
-            'isDeleted': true,
-            'voidedAt': FieldValue.serverTimestamp(),
-            'updatedAt': FieldValue.serverTimestamp(),
-          });
-          return;
-        }
-
-        final variants = (data['items'] as List? ?? [])
-            .whereType<Map>()
-            .map((variant) => Map<String, dynamic>.from(variant))
-            .toList();
-        final index = variants.indexWhere(
-          (variant) => '${variant['id'] ?? variant['itemId'] ?? ''}' == itemId,
-        );
-        if (index < 0) {
-          throw StateError('This item is no longer in the branch allocation.');
-        }
-        final stock =
-            num.tryParse(
-              '${variants[index]['stock'] ?? variants[index]['startingStock'] ?? 0}',
-            )?.toInt() ??
-            0;
-        if (stock > 0) {
-          throw StateError('This item is not sold out yet.');
-        }
-        final removed = variants.removeAt(index);
-        transaction.update(ref, {
-          'items': variants,
-          'removedItems': FieldValue.arrayUnion([
-            {
-              ...removed,
-              'removedAt': Timestamp.now(),
-              'voidReason': 'Voided from branch inventory',
-            },
-          ]),
-          'isDeleted': variants.isEmpty,
-          'updatedAt': FieldValue.serverTimestamp(),
-        });
-      });
+      final removed = await voidBranchInventoryAllocation(
+        firestore: db,
+        allocationId: allocationId,
+        allocationItemId: itemId,
+        branchId: widget.branchId,
+        item: item,
+      );
       if (context.mounted) {
         if (loadingShown) Navigator.of(context, rootNavigator: true).pop();
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Allocation voided from branch successfully.'),
+          SnackBar(
+            content: Text(
+              removed
+                  ? 'Sold-out item removed from branch inventory.'
+                  : 'This item was already removed from branch inventory.',
+            ),
             backgroundColor: Colors.green,
           ),
         );

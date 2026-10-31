@@ -787,16 +787,39 @@ class _ItemEditorState extends State<_ItemEditor> {
                     ),
                     validator: (value) => DateTime.tryParse(value ?? '') == null
                         ? 'Choose an expiration date'
-                        : null,
+                        : () {
+                            final selectedDate = DateTime.parse(value!);
+                            final isUnchangedExistingDate =
+                                widget.entry != null &&
+                                _inventoryDateText(
+                                      _data['expirationDate'] ?? '',
+                                    ) ==
+                                    value;
+                            if (!isUnchangedExistingDate &&
+                                !DateUtils.dateOnly(
+                                  selectedDate,
+                                ).isAfter(DateUtils.dateOnly(DateTime.now()))) {
+                              return 'Choose a future date. Items expiring today are expired.';
+                            }
+                            return null;
+                          }(),
                     onTap: _saving
                         ? null
                         : () async {
+                            final firstAllowedDate = DateUtils.dateOnly(
+                              DateTime.now(),
+                            ).add(const Duration(days: 1));
+                            final currentDate = DateTime.tryParse(_expiry.text);
                             final date = await showDatePicker(
                               context: context,
                               initialDate:
-                                  DateTime.tryParse(_expiry.text) ??
-                                  DateTime.now(),
-                              firstDate: DateTime(2000),
+                                  currentDate != null &&
+                                      DateUtils.dateOnly(
+                                        currentDate,
+                                      ).isAfter(firstAllowedDate)
+                                  ? currentDate
+                                  : firstAllowedDate,
+                              firstDate: firstAllowedDate,
                               lastDate: DateTime(2100),
                             );
                             if (date != null) {

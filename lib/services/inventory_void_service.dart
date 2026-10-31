@@ -8,7 +8,7 @@ List<Map<String, dynamic>> removeAllocatedCatalogVariant(
     final item = Map<String, dynamic>.from(raw);
     return targetName.isNotEmpty &&
         '${item['name'] ?? ''}'.trim() == targetName &&
-        _variantIds(item).isEmpty;
+        (targetIds.isEmpty || _variantIds(item).isEmpty);
   }).length;
   var removedLegacyMatch = false;
 
@@ -33,6 +33,7 @@ List<Map<String, dynamic>> removeAllocatedCatalogVariant(
 
         if (targetName.isEmpty ||
             '${item['name'] ?? ''}'.trim() != targetName ||
+            matchingNames != 1 ||
             removedLegacyMatch) {
           return true;
         }

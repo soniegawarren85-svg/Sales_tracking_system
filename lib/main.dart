@@ -1,7 +1,9 @@
 import 'dart:async';
 
 import 'package:app_links/app_links.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -195,33 +197,29 @@ class _MyAppState extends State<MyApp> {
         return;
       }
 
-      final restartPending = _shorebirdRestartPending;
-      final action = await showDialog<bool>(
-        context: _navigatorKey.currentState!.context,
-        barrierDismissible: false,
-        builder: (context) => AlertDialog(
-          title: Text(restartPending ? 'Update ready' : 'Ready to update'),
-          content: Text(
-            restartPending
-                ? 'The update is ready. Restart the app when convenient to apply it.'
-                : 'A new Angel’z Bites Cupcakes app update is ready. Update now or do it later.',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('Later'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: Text(restartPending ? 'Got it' : 'Update Now'),
-            ),
-          ],
-        ),
-      );
-
-      if (restartPending) {
-        _shorebirdRestartPending = false;
+      if (_shorebirdRestartPending) {
+        await _showShorebirdRestartDialog();
       } else {
+        final action = await showDialog<bool>(
+          context: _navigatorKey.currentState!.context,
+          barrierDismissible: false,
+          builder: (context) => AlertDialog(
+            title: const Text('Ready to update'),
+            content: const Text(
+              'A new Angel’z Bites Cupcakes app update is ready. Update now or do it later.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Later'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('Update Now'),
+              ),
+            ],
+          ),
+        );
         _shorebirdUpdatePending = false;
         final prefs = await SharedPreferences.getInstance();
         await prefs.setInt(
@@ -235,74 +233,141 @@ class _MyAppState extends State<MyApp> {
     }
   }
 
+  Future<void> _showShorebirdRestartDialog() async {
+    final navigator = _navigatorKey.currentState;
+    if (navigator == null || !mounted) return;
+    _shorebirdRestartPending = true;
+    try {
+      final closeApp = await showDialog<bool>(
+        context: navigator.context,
+        barrierDismissible: false,
+        builder: (context) => AlertDialog(
+          title: const Text('Update ready'),
+          content: Text(
+            defaultTargetPlatform == TargetPlatform.android
+                ? 'The update is ready. Tap OK to close the app, then reopen it to apply the update.'
+                : 'The update is ready. Restart the app when convenient to apply it.',
+          ),
+          actions: [
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
+      if (closeApp == true && defaultTargetPlatform == TargetPlatform.android) {
+        await SystemNavigator.pop();
+      }
+    } finally {
+      _shorebirdRestartPending = false;
+    }
+  }
+
   Future<void> _downloadShorebirdUpdate() async {
     final navigator = _navigatorKey.currentState;
     if (navigator == null || !mounted) return;
-    showDialog<void>(
-      context: navigator.context,
-      barrierDismissible: false,
-      builder: (context) => const PopScope(
-        canPop: false,
-        child: AlertDialog(
-          title: Text('Downloading update'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              LinearProgressIndicator(),
-              SizedBox(height: 16),
-              Text('Downloading the update. Please keep this screen open.'),
+    var progressShown = false;
+    try {
+      if (!ShorebirdUpdateService.updater.isAvailable) {
+        throw StateError(
+          'This app build does not include Shorebird. Install the app created with "shorebird release android" before using OTA updates.',
+        );
+      }
+      final status = await ShorebirdUpdateService.check();
+      if (!mounted || !navigator.mounted) return;
+      if (status == UpdateStatus.restartRequired) {
+        await _showShorebirdRestartDialog();
+        return;
+      }
+      if (status != UpdateStatus.outdated) {
+        await showDialog<void>(
+          context: navigator.context,
+          builder: (context) => AlertDialog(
+            title: const Text('No update available'),
+            content: Text(
+              status == UpdateStatus.unavailable
+                  ? 'Shorebird updates are unavailable in this app build. Install the app from a Shorebird release and try again.'
+                  : 'There is no downloadable patch for this installed app version. Confirm that a compatible patch was published for this release.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('OK'),
+              ),
             ],
           ),
+        );
+        return;
+      }
+      unawaited(
+        showDialog<void>(
+          context: navigator.context,
+          barrierDismissible: false,
+          builder: (context) => const PopScope(
+            canPop: false,
+            child: AlertDialog(
+              title: Text('Downloading update'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  LinearProgressIndicator(),
+                  SizedBox(height: 16),
+                  Text('Downloading the update. Please keep this screen open.'),
+                ],
+              ),
+            ),
+          ),
         ),
-      ),
-    );
-    try {
+      );
+      progressShown = true;
       await ShorebirdUpdateService.download();
       if (!mounted || !navigator.mounted) return;
       navigator.pop();
+      progressShown = false;
       final prefs = await SharedPreferences.getInstance();
       await prefs.setBool(_shorebirdPatchDownloadedKey, true);
       ShorebirdUpdateService.promptState.value =
           ShorebirdUpdatePromptState.restartRequired;
       await ShorebirdUpdateService.clearNotification();
       if (!mounted || !navigator.mounted) return;
-      await showDialog<void>(
-        context: navigator.context,
-        builder: (context) => AlertDialog(
-          title: const Text('Update ready'),
-          content: const Text(
-            'The update is ready. Restart the app when convenient to apply it.',
-          ),
-          actions: [
-            FilledButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('OK'),
-            ),
-          ],
-        ),
-      );
+      await _showShorebirdRestartDialog();
     } catch (error) {
       if (!mounted || !navigator.mounted) return;
-      navigator.pop();
+      if (progressShown) navigator.pop();
       debugPrint('Shorebird update download failed: $error');
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.remove(_shorebirdLastPromptKey);
-      if (!mounted || !navigator.mounted) return;
-      await showDialog<void>(
+      final message = error is UpdateException
+          ? switch (error.reason) {
+              UpdateFailureReason.noUpdate =>
+                'No patch is currently available for this installed app version. Confirm that a compatible patch was published.',
+              UpdateFailureReason.downloadFailed =>
+                'Shorebird could not download the patch: ${error.message}\n\nThis does not necessarily mean your internet connection is weak. Retry, and if it keeps failing, confirm that a compatible patch was published for this exact release.',
+              UpdateFailureReason.installFailed =>
+                'The downloaded patch could not be installed. The patch may not be compatible with this release.',
+              UpdateFailureReason.unknown =>
+                'Shorebird reported an unexpected update error: ${error.message}',
+            }
+          : 'Could not check or download the update: $error';
+      final retry = await showDialog<bool>(
         context: navigator.context,
         builder: (context) => AlertDialog(
           title: const Text('Update unavailable'),
-          content: const Text(
-            'The update could not be downloaded. Check your internet connection and try again later.',
-          ),
+          content: Text(message),
           actions: [
             TextButton(
-              onPressed: () => Navigator.pop(context),
+              onPressed: () => Navigator.pop(context, false),
               child: const Text('OK'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Try again'),
             ),
           ],
         ),
       );
+      if (retry == true && mounted) {
+        await _downloadShorebirdUpdate();
+      }
     }
   }
 

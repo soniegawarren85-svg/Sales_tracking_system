@@ -8,13 +8,18 @@ class AssignInventoryTile extends StatelessWidget {
   final IconData icon;
   final TextEditingController controller;
   final bool enabled;
+  final int? maxQuantity;
+  final ValueChanged<String>? onChanged;
 
-  const AssignInventoryTile({super.key, 
+  const AssignInventoryTile({
+    super.key,
     required this.title,
     required this.subtitle,
     required this.icon,
     required this.controller,
     required this.enabled,
+    this.maxQuantity,
+    this.onChanged,
   });
 
   @override
@@ -74,6 +79,7 @@ class AssignInventoryTile extends StatelessWidget {
             child: TextField(
               controller: controller,
               enabled: enabled,
+              onChanged: onChanged,
               textAlign: TextAlign.center,
               keyboardType: TextInputType.number,
               textInputAction: TextInputAction.done,
@@ -85,6 +91,11 @@ class AssignInventoryTile extends StatelessWidget {
               ),
               decoration: InputDecoration(
                 hintText: 'Qty',
+                errorText:
+                    maxQuantity != null &&
+                        (int.tryParse(controller.text) ?? 0) > maxQuantity!
+                    ? 'Only $maxQuantity available'
+                    : null,
                 filled: true,
                 fillColor: Colors.white,
                 prefixIcon: IconButton(
@@ -97,6 +108,7 @@ class AssignInventoryTile extends StatelessWidget {
                           controller.text = value <= 1
                               ? ''
                               : (value - 1).toString();
+                          onChanged?.call(controller.text);
                         },
                 ),
                 prefixIconConstraints: const BoxConstraints(
@@ -111,6 +123,7 @@ class AssignInventoryTile extends StatelessWidget {
                       : () {
                           final value = int.tryParse(controller.text) ?? 0;
                           controller.text = (value + 1).toString();
+                          onChanged?.call(controller.text);
                         },
                 ),
                 suffixIconConstraints: const BoxConstraints(

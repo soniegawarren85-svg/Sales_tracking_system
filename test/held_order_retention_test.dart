@@ -57,63 +57,60 @@ void main() {
       onVoid: () {},
       onRestore: () {},
     );
-    expect(pendingCard.syncLabel, 'Saved offline');
+    expect(pendingCard.syncLabel, 'Offline · saved');
   });
 
-  test(
-    'online sync and authoritative reconcile retain 12 held orders',
-    () async {
-      final database = FakeFirebaseFirestore();
-      final local = LocalDatabaseSyncService.forDatabase(
-        database,
-        storage: _MemoryCollectionStorage(),
-      );
-      final store = HeldOrderStore.forDatabase(database, local);
+  test('online sync and partial reconcile retain 12 held orders', () async {
+    final database = FakeFirebaseFirestore();
+    final local = LocalDatabaseSyncService.forDatabase(
+      database,
+      storage: _MemoryCollectionStorage(),
+    );
+    final store = HeldOrderStore.forDatabase(database, local);
 
-      await local.cacheCollectionDocs('pending_orders', [
-        for (var index = 0; index < 12; index++)
-          {
-            '_localDocId': 'order-$index',
-            'userId': 'staff-1',
-            'status': 'held',
-            'createdAt': Timestamp.now(),
-            '_pendingSync': true,
-            '_revision': 1,
-            'items': [
-              {'name': 'Item $index', 'quantity': 1},
-            ],
-            'events': [
-              {'action': 'held', 'createdAt': Timestamp.now(), 'revision': 1},
-            ],
-          },
-      ]);
+    await local.cacheCollectionDocs('pending_orders', [
+      for (var index = 0; index < 12; index++)
+        {
+          '_localDocId': 'order-$index',
+          'userId': 'staff-1',
+          'status': 'held',
+          'createdAt': Timestamp.now(),
+          '_pendingSync': true,
+          '_revision': 1,
+          'items': [
+            {'name': 'Item $index', 'quantity': 1},
+          ],
+          'events': [
+            {'action': 'held', 'createdAt': Timestamp.now(), 'revision': 1},
+          ],
+        },
+    ]);
 
-      await store.sync('staff-1');
-      final synced = await store.list('staff-1');
-      expect(synced, hasLength(12));
-      expect(
-        synced.every((order) => order.data()['_pendingSync'] == false),
-        isTrue,
-      );
-      expect(
-        (await database.collection('pending_orders').get()).docs,
-        hasLength(12),
-      );
+    await store.sync('staff-1');
+    final synced = await store.list('staff-1');
+    expect(synced, hasLength(12));
+    expect(
+      synced.every((order) => order.data()['_pendingSync'] == false),
+      isTrue,
+    );
+    expect(
+      (await database.collection('pending_orders').get()).docs,
+      hasLength(12),
+    );
 
-      await store.merge('staff-1', [HeldOrder('order-0', synced.first.data())]);
+    await store.merge('staff-1', [HeldOrder('order-0', synced.first.data())]);
 
-      expect(await store.list('staff-1'), hasLength(12));
-      expect(
-        HeldOrderCard(
-          data: synced.first.data(),
-          hasNetwork: true,
-          onVoid: () {},
-          onRestore: () {},
-        ).syncLabel,
-        'Synced',
-      );
-    },
-  );
+    expect(await store.list('staff-1'), hasLength(12));
+    expect(
+      HeldOrderCard(
+        data: synced.first.data(),
+        hasNetwork: true,
+        onVoid: () {},
+        onRestore: () {},
+      ).syncLabel,
+      'Online · synced',
+    );
+  });
 
   test('pending online status remains distinct from offline and synced', () {
     HeldOrderCard card(bool pending, bool online) => HeldOrderCard(
@@ -123,8 +120,18 @@ void main() {
       onRestore: () {},
     );
 
-    expect(card(true, true).syncLabel, 'Sync pending');
-    expect(card(true, false).syncLabel, 'Saved offline');
-    expect(card(false, true).syncLabel, 'Synced');
+    expect(card(true, true).syncLabel, 'Online · sync pending');
+    expect(card(true, false).syncLabel, 'Offline · saved');
+    expect(card(false, true).syncLabel, 'Online · synced');
+    expect(card(false, false).syncLabel, 'Offline · synced');
+    expect(
+      HeldOrderCard(
+        data: {'_pendingSync': true},
+        hasNetwork: null,
+        onVoid: () {},
+        onRestore: () {},
+      ).syncLabel,
+      'Sync status unknown',
+    );
   });
 }

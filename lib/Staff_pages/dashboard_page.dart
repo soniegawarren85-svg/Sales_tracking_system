@@ -2,6 +2,7 @@ import 'package:sales_tracking/widgets/top_edge_refresh.dart';
 import 'package:sales_tracking/theme/app_colors.dart';
 import '../services/inventory_display_ids.dart';
 import '../services/staff_allocation_scope.dart';
+import '../services/staff_dashboard_inventory.dart';
 import '../services/staff_sales_history_scope.dart';
 import '../services/account_presence.dart';
 import '../services/message_account_status.dart';
@@ -119,35 +120,6 @@ int _availableStockForInventoryItem(Map<String, dynamic> item) {
 
 // Brand Colours (shared)
 // ═══════════════════════════════════════════════════════════════════════════
-
-List<String> _inventoryImageUrls(Map<String, dynamic> data) {
-  final urls = <String>[];
-  final seen = <String>{};
-
-  void addImage(dynamic value) {
-    if (value is String) {
-      final url = value.trim();
-      if (url.isNotEmpty && seen.add(url)) urls.add(url);
-    } else if (value is Iterable) {
-      for (final image in value) {
-        addImage(image);
-      }
-    }
-  }
-
-  void addImagesFrom(Map<dynamic, dynamic> record) {
-    for (final key in const ['imageUrl', 'imageUrls', 'images', 'photos']) {
-      addImage(record[key]);
-    }
-  }
-
-  final items = data['items'] as List? ?? [];
-  for (final item in items.whereType<Map>()) {
-    addImagesFrom(item);
-  }
-  addImagesFrom(data);
-  return urls;
-}
 
 String _buildCategoryDisplayId(Map<String, dynamic> data) =>
     inventoryDisplayId(data);
@@ -612,7 +584,9 @@ class _DashboardPageState extends State<DashboardPage>
           final expirationDate = item['expirationDate']?.toString() ?? '';
           if (_isExpiredInventoryItem(expirationDate)) return false;
           if (rootItems.isEmpty) return true;
-          return rootItems.any((root) => inventoryVariantsMatch(root, item));
+          return rootItems.any(
+            (root) => inventoryCatalogVariantMatches(root, item, rootItems),
+          );
         })
         .toList();
   }
@@ -1620,7 +1594,8 @@ class _DashboardPageState extends State<DashboardPage>
                   .whereType<Map>()
                   .map((item) => Map<String, dynamic>.from(item))
                   .toList();
-              return ((staffData['items'] as List<dynamic>?) ?? [])
+              final alignedData = alignInventoryDisplayIds(staffData, rootData);
+              return ((alignedData['items'] as List<dynamic>?) ?? [])
                   .whereType<Map>()
                   .map((item) => Map<String, dynamic>.from(item))
                   .where((item) {
@@ -1629,7 +1604,11 @@ class _DashboardPageState extends State<DashboardPage>
                     return !_isExpiredInventoryItem(expirationDate) &&
                         (rootItems.isEmpty ||
                             rootItems.any(
-                              (root) => inventoryVariantsMatch(root, item),
+                              (root) => inventoryCatalogVariantMatches(
+                                root,
+                                item,
+                                rootItems,
+                              ),
                             ));
                   })
                   .toList();
@@ -1806,7 +1785,7 @@ class _DashboardPageState extends State<DashboardPage>
                         (data['items'] as List?)
                             ?.cast<Map<String, dynamic>>() ??
                         [];
-                    final imageUrls = _inventoryImageUrls(data);
+                    final imageUrls = staffDashboardImageUrls(data);
                     final availableStock = isBundle
                         ? (data['bundleCount'] is num
                               ? (data['bundleCount'] as num).toInt()

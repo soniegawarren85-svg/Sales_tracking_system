@@ -18,10 +18,14 @@ class HeldOrderCard extends StatelessWidget {
   final VoidCallback onRestore;
 
   String get syncLabel {
-    if (data['_pendingSync'] != true) return 'Synced';
-    if (hasNetwork == false) return 'Saved offline';
-    if (hasNetwork == true) return 'Sync pending';
-    return 'Sync status unknown';
+    final pending = data['_pendingSync'] == true;
+    if (hasNetwork == false) {
+      return pending ? 'Offline · saved' : 'Offline · synced';
+    }
+    if (hasNetwork == true) {
+      return pending ? 'Online · sync pending' : 'Online · synced';
+    }
+    return pending ? 'Sync status unknown' : 'Synced';
   }
 
   @override

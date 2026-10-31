@@ -48,9 +48,9 @@ class _AdminVoidInventoryState extends State<AdminVoidInventory> {
   FirebaseFirestore get _db => widget.firestore ?? FirebaseFirestore.instance;
   final Set<String> _restoring = {};
   bool _expired(Map data) {
-    final raw = data['expirationDate'];
-    final date = raw is Timestamp ? raw.toDate() : DateTime.tryParse('$raw');
-    return date != null && date.isBefore(DateUtils.dateOnly(DateTime.now()));
+    final date = _date(data['expirationDate']);
+    return date != null &&
+        !DateUtils.dateOnly(date).isAfter(DateUtils.dateOnly(DateTime.now()));
   }
 
   Future<void> _restore(

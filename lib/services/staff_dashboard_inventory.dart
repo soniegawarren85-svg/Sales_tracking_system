@@ -28,17 +28,17 @@ List<String> staffDashboardImageUrls(Map<String, dynamic> data) {
   final items = data['items'];
   if (items is List) {
     for (final item in items.whereType<Map>()) {
-      final id = [
-        item['variantId'],
-        item['publicId'],
-        item['itemPublicId'],
-        item['id'],
-        item['itemId'],
-        item['sourceItemId'],
-      ].map((value) => '${value ?? ''}'.trim()).firstWhere(
-        (value) => value.isNotEmpty,
-        orElse: () => '',
-      );
+      final id =
+          [
+                item['variantId'],
+                item['publicId'],
+                item['itemPublicId'],
+                item['id'],
+                item['itemId'],
+                item['sourceItemId'],
+              ]
+              .map((value) => '${value ?? ''}'.trim())
+              .firstWhere((value) => value.isNotEmpty, orElse: () => '');
       final name = '${item['name'] ?? ''}'.trim().toLowerCase();
       final variant = '${item['variant'] ?? ''}'.trim().toLowerCase();
       final itemKey = id.isNotEmpty ? '$id|$variant' : '$name|$variant';

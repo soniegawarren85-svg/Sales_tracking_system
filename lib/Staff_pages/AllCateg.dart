@@ -434,30 +434,7 @@ class _AllCategPageState extends State<AllCategPage>
   }
 
   bool _hasExpiredBundleInventory(Map<String, dynamic> bundle) {
-    if (_isExpiredDate(bundle['expirationDate'])) return true;
-    final instances = bundleRows(bundle['bundleInstances']);
-    if (instances.isEmpty) {
-      return bundleRows(
-        bundle['items'],
-      ).any((item) => _isExpiredDate(item['expirationDate']));
-    }
-    final availableInstances = instances.where((instance) {
-      final status = '${instance['status'] ?? 'available'}'.toLowerCase();
-      return instance['isDeleted'] != true &&
-          instance['isVoided'] != true &&
-          (status.isEmpty || status == 'available');
-    }).toList();
-    return availableInstances.isNotEmpty &&
-        availableInstances.every((instance) {
-          if (_isExpiredDate(instance['expirationDate'])) return true;
-          final items = bundleRows(instance['items']);
-          final expiryItems = items.isEmpty
-              ? bundleRows(bundle['items'])
-              : items;
-          return expiryItems.any(
-            (item) => _isExpiredDate(item['expirationDate']),
-          );
-        });
+    return staffBundleAllocationExpired(bundle);
   }
 
   String _availabilityLabel({
@@ -751,9 +728,6 @@ class _AllCategPageState extends State<AllCategPage>
     return bundleExpirationDateLabel(bundleData);
   }
 
-  bool _hasExpiredBundleItem(Map<String, dynamic> data) =>
-      availableBundleStock(data) == 0;
-
   String _bundleStatusLabel(String status) {
     if (status == 'inCategory') return 'In category';
     if (status == 'sold') return 'Sold';
@@ -764,8 +738,9 @@ class _AllCategPageState extends State<AllCategPage>
   bool _isExpiredItem(String expirationDate) {
     try {
       final expiryDate = DateTime.parse(expirationDate);
-      final today = DateTime.now();
-      return expiryDate.isBefore(DateTime(today.year, today.month, today.day));
+      return !DateUtils.dateOnly(
+        expiryDate,
+      ).isAfter(DateUtils.dateOnly(DateTime.now()));
     } catch (e) {
       return false;
     }
@@ -5066,10 +5041,7 @@ class _AllCategPageState extends State<AllCategPage>
       );
     }
 
-    final availableBundleCount = bundleDocs.fold<int>(
-      0,
-      (total, bundle) => total + _bundleStockForData(bundle),
-    );
+    final availableBundleCount = availableStaffBundleCount(bundleDocs);
 
     return ListView(
       padding: const EdgeInsets.only(bottom: 30),
@@ -7194,11 +7166,7 @@ class _AllCategPageState extends State<AllCategPage>
                     if (data['isBundle'] == true) {
                       if (rootData['isBundle'] != true) continue;
 
-                      if (_hasExpiredBundleItem(data)) continue;
-                      if (_bundleStockForData(data) <= 0 &&
-                          _pendingBundleCount(data) == 0) {
-                        continue;
-                      }
+                      if (!staffBundleAllocationVisible(data)) continue;
                       visibleDocs.add({
                         ...data,
                         'name': rootData['name'] ?? data['name'],
@@ -7234,7 +7202,11 @@ class _AllCategPageState extends State<AllCategPage>
                                   (rootItems.isEmpty ||
                                       rootItems.any(
                                         (root) =>
-                                            inventoryVariantsMatch(root, item),
+                                            inventoryCatalogVariantMatches(
+                                              root,
+                                              item,
+                                              rootItems,
+                                            ),
                                       ));
                             })
                             .toList();
