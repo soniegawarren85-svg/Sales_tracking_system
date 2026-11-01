@@ -481,7 +481,6 @@ class _SuperAdminSettingsPageState extends State<SuperAdminSettingsPage>
                       builder: (_) => const BackupRestoreDialog(),
                     ),
                   ),
-                  const ShorebirdUpdateButton(),
                   _settingItem(
                     icon: Icons.info_rounded,
                     title: "About App",
@@ -494,6 +493,7 @@ class _SuperAdminSettingsPageState extends State<SuperAdminSettingsPage>
                       'Track sales and inventory across branches, allocate cash and products, manage staff and beverage bundles, monitor expiry, and review branch reports.',
                     ),
                   ),
+                  const ShorebirdUpdateButton(),
                   const SizedBox(height: 28),
 
                   /// ===== LOGOUT BUTTON =====

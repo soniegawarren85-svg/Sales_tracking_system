@@ -855,6 +855,26 @@ bool hasAvailableAllocationBatchAfter(
   return batchDate.isAfter(date);
 });
 
+bool allocationBatchRecordIsAvailable(Map<String, dynamic> record) =>
+    record['isDeleted'] != true &&
+    record['isVoided'] != true &&
+    record['isAvailable'] != false &&
+    record['available'] != false;
+
+String allocationBatchGroupKey(Map<String, dynamic> record) {
+  final kind = record['isBundle'] == true
+      ? 'bundle'
+      : record['isCoffee'] == true
+      ? 'beverage'
+      : record['isAddon'] == true
+      ? 'addon'
+      : 'category';
+  final source = record['isBundle'] == true
+      ? bundleInventoryGroupKey(record)
+      : '${record['sourceInventoryId'] ?? ''}';
+  return '$kind|$source';
+}
+
 Future<void> showInventoryBatches(
   BuildContext context, {
   required String allocationId,
@@ -947,7 +967,9 @@ class _BatchDialogState extends State<_BatchDialog> {
             .where((row) => row['_localDocId'] == widget.allocationId)
             .firstOrNull;
       }
-      if (original == null || !widget.scopeIds.contains(original['staffId'])) {
+      if (original == null ||
+          !allocationBatchRecordIsAvailable(original) ||
+          !widget.scopeIds.contains(original['staffId'])) {
         throw StateError('This allocation is no longer available.');
       }
       List<Map<String, dynamic>> inventoryRows;
@@ -976,8 +998,10 @@ class _BatchDialogState extends State<_BatchDialog> {
           .where(
             (row) =>
                 row['staffId'] == original!['staffId'] &&
-                row['isDeleted'] != true &&
+                allocationBatchRecordIsAvailable(row) &&
                 (row['isBundle'] == true) == (original['isBundle'] == true) &&
+                (row['isCoffee'] == true) == (original['isCoffee'] == true) &&
+                (row['isAddon'] == true) == (original['isAddon'] == true) &&
                 (original['isBundle'] == true
                     ? bundleInventoryGroupKey(row) ==
                           bundleInventoryGroupKey(original)
@@ -1119,9 +1143,21 @@ class _BatchDialogState extends State<_BatchDialog> {
                 row['addonId'],
               ].any((value) => '${value ?? ''}' == widget.itemId);
             })) {
+              final addonPrice =
+                  line['addonPriceDelta'] ??
+                  line['addonPrice'] ??
+                  line['priceDelta'] ??
+                  0;
+              final addonSaleLine = {
+                ...saleLine,
+                'name': addon['name'] ?? line['addonName'],
+                'price': addonPrice,
+                'unitPrice': addonPrice,
+                'salePrice': addonPrice,
+              };
               salesByAllocation
                   .putIfAbsent('${addon['_id']}', () => [])
-                  .add(saleLine);
+                  .add(addonSaleLine);
             }
           }
         }
@@ -3107,9 +3143,8 @@ Future<void> showBranchBatchHistory(
               <String, QueryDocumentSnapshot<Map<String, dynamic>>>{};
           for (final doc in snapshot.data!.docs) {
             final data = doc.data();
-            final key = data['isBundle'] == true
-                ? bundleInventoryGroupKey(data)
-                : '${data['sourceInventoryId']}';
+            if (!allocationBatchRecordIsAvailable(data)) continue;
+            final key = allocationBatchGroupKey(data);
             groups.putIfAbsent(key, () => doc);
           }
           if (groups.isEmpty)

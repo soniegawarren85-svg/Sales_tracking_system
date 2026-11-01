@@ -920,6 +920,7 @@ class _LoginScreenState extends State<LoginScreen>
       await FirebaseAuth.instance.signOut();
       _showMessage('Unable to sign in. Please contact support.', isError: true);
     } on FirebaseAuthException catch (e) {
+      debugPrint('Sign-in rejected by Firebase Auth (${e.code}).');
       if (e.code == 'network-request-failed') {
         await _offlineSignInOrMessage(username, password);
       } else {
@@ -938,9 +939,14 @@ class _LoginScreenState extends State<LoginScreen>
       if (e.code == 'unavailable' || e.code == 'deadline-exceeded') {
         await _offlineSignInOrMessage(username, password);
       } else {
-        _showMessage('Unable to sign in. Please try again.', isError: true);
+        debugPrint('Sign-in backend error (${e.code}).');
+        _showMessage(
+          'Sign-in service error (${e.code}). Please try again or contact support.',
+          isError: true,
+        );
       }
     } catch (e) {
+      debugPrint('Unexpected sign-in error (${e.runtimeType}).');
       _showMessage('Unable to sign in. Please try again.', isError: true);
     } finally {
       if (mounted) setState(() => _isLoading = false);

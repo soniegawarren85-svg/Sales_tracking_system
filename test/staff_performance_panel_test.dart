@@ -256,7 +256,12 @@ void main() {
         'branchIds': ['branch-1'],
         'description': 'Updated inventory $index',
         'createdAt': Timestamp.fromDate(
-          DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day, index == 0 ? 23 : index),
+          DateTime(
+            DateTime.now().year,
+            DateTime.now().month,
+            DateTime.now().day,
+            index == 0 ? 23 : index,
+          ),
         ),
       });
     }
@@ -300,12 +305,10 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Search performance details'), findsOneWidget);
-    expect(find.text('Select role'), findsOneWidget);
-    expect(find.text('Select admin'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('admin branch performance does not list ADM accounts', (
+  testWidgets('admin branch performance search shows the requested cashier', (
     tester,
   ) async {
     final db = FakeFirebaseFirestore();
@@ -321,6 +324,26 @@ void main() {
       'firstName': 'Dagupan',
       'lastName': 'Cashier',
       'branchIds': ['branch-1'],
+    });
+    await db.doc('activity_logs/cashier').set({
+      'action': 'cashier_made_order',
+      'actorId': 'cashier',
+      'actorName': 'Dagupan Cashier',
+      'actorPublicId': 'STF-010',
+      'actorRole': 'Cashier',
+      'branchIds': ['branch-1'],
+      'description': 'Cashier performance activity',
+      'createdAt': Timestamp.now(),
+    });
+    await db.doc('activity_logs/admin').set({
+      'action': 'inventory_updated',
+      'actorId': 'admin',
+      'actorName': 'Branch Admin',
+      'actorPublicId': 'ADM-001',
+      'actorRole': 'Admin',
+      'branchIds': ['branch-1'],
+      'description': 'Admin-only performance activity',
+      'createdAt': Timestamp.now(),
     });
     await db.doc('staff_requests/admin').set({
       'uid': 'admin',
@@ -341,8 +364,88 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Dagupan Cashier • STF-010'), findsOneWidget);
-    expect(find.text('Branch Admin • ADM-001'), findsNothing);
+    await tester.enterText(find.byType(TextField).first, 'Cashier');
+    await tester.pumpAndSettle();
+    expect(find.text('Cashier performance activity'), findsOneWidget);
+    expect(find.text('Admin-only performance activity'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('performance search filters Cashier, Admin, and account names', (
+    tester,
+  ) async {
+    final db = FakeFirebaseFirestore();
+    await db.doc('branches/branch-1').set({
+      'name': 'SM Dagupan',
+      'staffIds': ['cashier-auth', 'ADM-001'],
+    });
+    await db.doc('staff_requests/cashier-auth').set({
+      'uid': 'cashier-auth',
+      'staffId': 'STF-010',
+      'role': 'staff',
+      'status': 'accepted',
+      'firstName': 'Dagupan',
+      'lastName': 'Cashier',
+      'branchIds': ['branch-1'],
+    });
+    await db.doc('staff_requests/admin-auth').set({
+      'uid': 'admin-auth',
+      'adminId': 'ADM-001',
+      'role': 'admin',
+      'status': 'accepted',
+      'firstName': 'Branch',
+      'lastName': 'Admin',
+      'branchIds': ['branch-1'],
+    });
+    await db.doc('activity_logs/cashier').set({
+      'action': 'cashier_made_order',
+      'actorId': 'cashier-auth',
+      'actorName': 'Dagupan Cashier',
+      'actorPublicId': 'STF-010',
+      'actorRole': 'Cashier',
+      'branchIds': ['branch-1'],
+      'description': 'Cashier sale activity',
+      'createdAt': Timestamp.now(),
+    });
+    await db.doc('activity_logs/admin').set({
+      'action': 'inventory_updated',
+      'actorId': 'admin-auth',
+      'actorName': 'Branch Admin',
+      'actorPublicId': 'ADM-001',
+      'actorRole': 'Admin',
+      'branchIds': ['branch-1'],
+      'description': 'Admin inventory activity',
+      'createdAt': Timestamp.now(),
+    });
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: StaffPerformancePanel(
+            branchId: 'branch-1',
+            roleSelection: true,
+            firestore: db,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final search = find.byType(TextField).first;
+
+    await tester.enterText(search, 'Cashier');
+    await tester.pumpAndSettle();
+    expect(find.text('Cashier sale activity'), findsOneWidget);
+    expect(find.text('Admin inventory activity'), findsNothing);
+
+    await tester.enterText(search, 'Admin');
+    await tester.pumpAndSettle();
+    expect(find.text('Admin inventory activity'), findsOneWidget);
+    expect(find.text('Cashier sale activity'), findsNothing);
+
+    await tester.enterText(search, 'Dagupan Cashier');
+    await tester.pumpAndSettle();
+    expect(find.text('Cashier sale activity'), findsOneWidget);
+    expect(find.text('Admin inventory activity'), findsNothing);
     expect(tester.takeException(), isNull);
   });
 }

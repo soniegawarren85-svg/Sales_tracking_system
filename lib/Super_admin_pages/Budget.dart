@@ -1136,6 +1136,7 @@ class _BudgetPageState extends State<BudgetPage>
   Widget _buildAssignedInventoryPreview(
     String staffId, {
     required bool isBranch,
+    required String type,
   }) {
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
       stream: _firestore
@@ -1145,6 +1146,18 @@ class _BudgetPageState extends State<BudgetPage>
       builder: (context, snapshot) {
         final docs = (snapshot.data?.docs ?? [])
             .where((doc) => _isActiveAllocationDocument(doc.data()))
+            .where((doc) {
+              final data = doc.data();
+              return switch (type) {
+                'beverages' => data['isCoffee'] == true,
+                'add-ons' => data['isAddon'] == true,
+                'bundles' => data['isBundle'] == true,
+                _ =>
+                  data['isCoffee'] != true &&
+                      data['isAddon'] != true &&
+                      data['isBundle'] != true,
+              };
+            })
             .toList();
 
         return Container(
@@ -1564,8 +1577,16 @@ class _BudgetPageState extends State<BudgetPage>
           .collection('coffee_addons')
           .where('isDeleted', isEqualTo: false)
           .get(),
-      _firestore.collection('staff_inventory').get(),
+      _firestore
+          .collection('staff_inventory')
+          .where('staffId', isEqualTo: staffId)
+          .get(),
+      _firestore
+          .collection('staff_inventory')
+          .where('branchId', isEqualTo: staffId)
+          .get(),
     ]);
+    final assignmentSearchController = TextEditingController();
     for (final controller in _assignmentQtyControllers.values) {
       controller.clear();
     }
@@ -1642,6 +1663,13 @@ class _BudgetPageState extends State<BudgetPage>
                       _buildAssignedInventoryPreview(
                         staffId,
                         isBranch: isBranch,
+                        type: showCategories
+                            ? 'categories'
+                            : showCoffee
+                            ? 'beverages'
+                            : showAddons
+                            ? 'add-ons'
+                            : 'bundles',
                       ),
                       const SizedBox(height: 14),
                       Flexible(
@@ -1655,9 +1683,25 @@ class _BudgetPageState extends State<BudgetPage>
                             builder: (context, snapshot) {
                               if (snapshot.connectionState ==
                                   ConnectionState.waiting) {
-                                // Keep the dialog usable while inventory loads;
-                                // do not show the large blocking loader.
-                                return const SizedBox.shrink();
+                                return const Center(
+                                  child: Padding(
+                                    padding: EdgeInsets.all(24),
+                                    child: Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        SizedBox(
+                                          width: 24,
+                                          height: 24,
+                                          child: CircularProgressIndicator(
+                                            strokeWidth: 2.5,
+                                          ),
+                                        ),
+                                        SizedBox(height: 10),
+                                        Text('Loading inventory...'),
+                                      ],
+                                    ),
+                                  ),
+                                );
                               }
                               if (snapshot.hasError) {
                                 return const Center(
@@ -1668,13 +1712,11 @@ class _BudgetPageState extends State<BudgetPage>
                               final inventorySnapshot = snapshot.data?[0];
                               final coffeeSnapshot = snapshot.data?[1];
                               final addonSnapshot = snapshot.data?[2];
-                              final assignedInventorySnapshot =
-                                  snapshot.data?[3];
                               final assignedDocs =
-                                  assignedInventorySnapshot?.docs ??
-                                  <
-                                    QueryDocumentSnapshot<Map<String, dynamic>>
-                                  >[];
+                                  <QueryDocumentSnapshot<Map<String, dynamic>>>{
+                                    ...?snapshot.data?[3].docs,
+                                    ...?snapshot.data?[4].docs,
+                                  }.toList();
                               final currentAssignments = assignedDocs.where((
                                 doc,
                               ) {
@@ -1690,7 +1732,9 @@ class _BudgetPageState extends State<BudgetPage>
                                 ..addAll(
                                   currentAssignments
                                       .where(
-                                        (doc) => doc.data()['isCoffee'] == true,
+                                        (doc) =>
+                                            doc.data()['isCoffee'] == true &&
+                                            doc.data()['isLowStock'] != true,
                                       )
                                       .map(
                                         (doc) =>
@@ -1703,7 +1747,9 @@ class _BudgetPageState extends State<BudgetPage>
                                 ..addAll(
                                   currentAssignments
                                       .where(
-                                        (doc) => doc.data()['isAddon'] == true,
+                                        (doc) =>
+                                            doc.data()['isAddon'] == true &&
+                                            doc.data()['isLowStock'] != true,
                                       )
                                       .map(
                                         (doc) =>
@@ -1764,13 +1810,40 @@ class _BudgetPageState extends State<BudgetPage>
                                         ),
                                   )
                                   .toList();
-                              final docs = showAddons
+                              final availableDocs = showAddons
                                   ? addonDocs
                                   : showCoffee
                                   ? coffeeDocs
                                   : showCategories
                                   ? categoryDocs
                                   : bundleDocs;
+                              final searchQuery = assignmentSearchController
+                                  .text
+                                  .trim()
+                                  .toLowerCase();
+                              final docs = availableDocs.where((doc) {
+                                if (searchQuery.isEmpty) return true;
+                                final data = doc.data();
+                                final searchableValues = <String>[
+                                  '${data['name'] ?? ''}',
+                                  '${data['category'] ?? ''}',
+                                  if (showCategories)
+                                    ..._assignableCategoryItems(data).map(
+                                      (entry) => '${entry.value['name'] ?? ''}',
+                                    ),
+                                ];
+                                return searchableValues.any(
+                                  (value) =>
+                                      value.toLowerCase().contains(searchQuery),
+                                );
+                              }).toList();
+                              final searchHint = showCategories
+                                  ? 'Search categories or items...'
+                                  : showAddons
+                                  ? 'Search add-ons...'
+                                  : showCoffee
+                                  ? 'Search beverages...'
+                                  : 'Search bundles...';
 
                               if (onlyType == null &&
                                   categoryDocs.isEmpty &&
@@ -1865,6 +1938,28 @@ class _BudgetPageState extends State<BudgetPage>
                                         ),
                                       ],
                                     ),
+                                  const SizedBox(height: 10),
+                                  SizedBox(
+                                    width: double.infinity,
+                                    child: TextField(
+                                      controller: assignmentSearchController,
+                                      onChanged: (_) => setDialogState(() {}),
+                                      decoration: InputDecoration(
+                                        hintText: searchHint,
+                                        prefixIcon: const Icon(
+                                          Icons.search_rounded,
+                                        ),
+                                        isDense: true,
+                                        filled: true,
+                                        fillColor: Colors.white,
+                                        border: OutlineInputBorder(
+                                          borderRadius: BorderRadius.circular(
+                                            14,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
                                   const SizedBox(height: 12),
                                   Expanded(
                                     child: docs.isEmpty
@@ -2024,17 +2119,34 @@ class _BudgetPageState extends State<BudgetPage>
                                                 );
                                               }
 
-                                              final items =
-                                                  _assignableCategoryItems(data)
-                                                      .where(
-                                                        (entry) =>
-                                                            onlyItemId ==
-                                                                null ||
+                                              final categoryMatches =
+                                                  searchQuery.isNotEmpty &&
+                                                  ('${data['name'] ?? ''}'
+                                                          .toLowerCase()
+                                                          .contains(
+                                                            searchQuery,
+                                                          ) ||
+                                                      '${data['category'] ?? ''}'
+                                                          .toLowerCase()
+                                                          .contains(
+                                                            searchQuery,
+                                                          ));
+                                              final items = _assignableCategoryItems(data)
+                                                  .where(
+                                                    (entry) =>
+                                                        (searchQuery.isEmpty ||
+                                                            categoryMatches ||
+                                                            '${entry.value['name'] ?? ''}'
+                                                                .toLowerCase()
+                                                                .contains(
+                                                                  searchQuery,
+                                                                )) &&
+                                                        (onlyItemId == null ||
                                                             entry.value['id']
                                                                     ?.toString() ==
-                                                                onlyItemId,
-                                                      )
-                                                      .toList();
+                                                                onlyItemId),
+                                                  )
+                                                  .toList();
                                               return Container(
                                                 padding: const EdgeInsets.all(
                                                   12,
@@ -2240,6 +2352,7 @@ class _BudgetPageState extends State<BudgetPage>
       },
     );
 
+    assignmentSearchController.dispose();
     FocusManager.instance.primaryFocus?.unfocus();
     if (assignmentSucceeded && mounted) {
       _showSnack(

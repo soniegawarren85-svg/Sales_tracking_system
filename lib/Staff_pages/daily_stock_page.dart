@@ -150,6 +150,8 @@ class _DailyStockPageState extends State<DailyStockPage>
   final Map<String, int> _cart = {};
   final Map<String, Map<String, dynamic>> _cartItemLookup = {};
   final Map<String, TextEditingController> _qtyControllers = {};
+  bool _largeOrderWarningSeen = false;
+  bool _largeOrderWarningConfirmed = false;
   List<String> _staffInventoryIds = const [];
   List<_CachedDoc> _cachedStaffInventoryDocs = const [];
   List<Map<String, dynamic>> _pendingOfflineReductions = const [];
@@ -809,6 +811,87 @@ class _DailyStockPageState extends State<DailyStockPage>
 
   int get _cartItemCount => _cart.values.fold(0, (sum, qty) => sum + qty);
 
+  Map<String, int> _largeOrderCounts(
+    List<Map<String, dynamic>> orderItems, {
+    Map<String, dynamic>? additionalItem,
+    int additionalQuantity = 0,
+  }) {
+    final knownItems = _knownOrderItems(orderItems);
+    var totalItems = 0;
+    var beverageServings = 0;
+    for (final entry in _validCartEntries(orderItems)) {
+      final item = knownItems.firstWhere(
+        (item) => _cartKey(item) == entry.key,
+        orElse: () => <String, dynamic>{},
+      );
+      final servings = item['isCoffee'] == true
+          ? 1
+          : bundleDrinkServings(item).length;
+      totalItems += entry.value;
+      beverageServings += entry.value * servings;
+    }
+    if (additionalItem != null && additionalQuantity > 0) {
+      final servings = additionalItem['isCoffee'] == true
+          ? 1
+          : bundleDrinkServings(additionalItem).length;
+      totalItems += additionalQuantity;
+      beverageServings += additionalQuantity * servings;
+    }
+    return {'items': totalItems, 'beverages': beverageServings};
+  }
+
+  bool _isLargeOrder(Map<String, int> counts) =>
+      counts['items']! >= 20 || counts['beverages']! >= 20;
+
+  Future<bool?> _showLargeOrderWarning(Map<String, int> counts) {
+    return showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Review large order'),
+        content: Text(
+          'This order contains ${counts['items']} item(s) and ${counts['beverages']} beverage serving(s). Please verify the quantity with the customer before proceeding.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Review quantities'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Continue'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _checkLargeOrderWarning({
+    Map<String, dynamic>? additionalItem,
+    int additionalQuantity = 0,
+  }) {
+    final counts = _largeOrderCounts(
+      _latestOrderItems,
+      additionalItem: additionalItem,
+      additionalQuantity: additionalQuantity,
+    );
+    if (!_isLargeOrder(counts)) {
+      _largeOrderWarningSeen = false;
+      _largeOrderWarningConfirmed = false;
+      return;
+    }
+    if (_largeOrderWarningSeen || !mounted) return;
+
+    _largeOrderWarningSeen = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      unawaited(
+        _showLargeOrderWarning(counts).then((confirmed) {
+          if (mounted) _largeOrderWarningConfirmed = confirmed == true;
+        }),
+      );
+    });
+  }
+
   int get _validCartItemCount {
     final validKeys = _knownOrderItems(_latestOrderItems).map(_cartKey).toSet();
     if (validKeys.isEmpty) return 0;
@@ -1392,6 +1475,7 @@ class _DailyStockPageState extends State<DailyStockPage>
     if (maxStock <= 0) {
       setState(() => _cart.remove(key));
       _syncQtyController(key, 0);
+      _checkLargeOrderWarning();
       _showStyledSnackBar('No stock available', isError: true);
       return;
     }
@@ -1403,15 +1487,19 @@ class _DailyStockPageState extends State<DailyStockPage>
     setState(() {
       _cart[key] = clamped;
     });
+    _checkLargeOrderWarning();
     if (clamped != parsed) {
       _syncQtyController(key, clamped);
     }
   }
 
-  void _addItem(String key) => setState(() {
-    _cart[key] = (_cart[key] ?? 0) + 1;
-    _syncQtyController(key, _cart[key]!);
-  });
+  void _addItem(String key) {
+    setState(() {
+      _cart[key] = (_cart[key] ?? 0) + 1;
+      _syncQtyController(key, _cart[key]!);
+    });
+    _checkLargeOrderWarning();
+  }
 
   Future<void> _selectBundleOrItem(Map<String, dynamic> item, int stock) async {
     if (item['isBundle'] != true || bundleDrinkServings(item).isEmpty) {
@@ -1469,6 +1557,7 @@ class _DailyStockPageState extends State<DailyStockPage>
       _cart[key] = current + 1;
       _syncQtyController(key, _cart[key]!);
     });
+    _checkLargeOrderWarning();
   }
 
   void _removeItem(String key) {
@@ -1482,6 +1571,7 @@ class _DailyStockPageState extends State<DailyStockPage>
     }
     _syncQtyController(key, _cart[key]!);
     setState(() {});
+    _checkLargeOrderWarning();
   }
 
   void _deleteCartItem(String key) {
@@ -1491,6 +1581,7 @@ class _DailyStockPageState extends State<DailyStockPage>
       _cartStockBeforeSelectionByKey.remove(key);
       _syncQtyController(key, 0);
     });
+    _checkLargeOrderWarning();
   }
 
   void _clearCartReview() {
@@ -1504,6 +1595,7 @@ class _DailyStockPageState extends State<DailyStockPage>
       }
       _qtyControllers.clear();
     });
+    _checkLargeOrderWarning();
   }
 
   void _addCoffeeSelection(Map<String, dynamic> item, int quantity) {
@@ -1521,6 +1613,7 @@ class _DailyStockPageState extends State<DailyStockPage>
       _cart[key] = (_cart[key] ?? 0) + quantity;
       _syncQtyController(key, _cart[key]!);
     });
+    _checkLargeOrderWarning();
   }
 
   Future<List<Map<String, dynamic>>> _refreshCoffeeAddonVariants(
@@ -1663,31 +1756,14 @@ class _DailyStockPageState extends State<DailyStockPage>
                 )
                 .toList();
 
+            void checkPendingCoffeeOrder() {
+              _checkLargeOrderWarning(
+                additionalItem: selectedItem(),
+                additionalQuantity: quantity,
+              );
+            }
+
             Future<void> addSelectedOrder() async {
-              if (quantity > 20) {
-                final confirmed = await showDialog<bool>(
-                  context: dialogContext,
-                  builder: (confirmationContext) => AlertDialog(
-                    title: const Text('Confirm large beverage order'),
-                    content: Text(
-                      'You are adding $quantity beverages. Continue with this quantity?',
-                    ),
-                    actions: [
-                      TextButton(
-                        onPressed: () =>
-                            Navigator.of(confirmationContext).pop(false),
-                        child: const Text('Review quantity'),
-                      ),
-                      FilledButton(
-                        onPressed: () =>
-                            Navigator.of(confirmationContext).pop(true),
-                        child: const Text('Continue'),
-                      ),
-                    ],
-                  ),
-                );
-                if (confirmed != true) return;
-              }
               final chosenItem = selectedItem();
               _addCoffeeSelection(chosenItem, quantity);
               if (dialogContext.mounted) {
@@ -2049,6 +2125,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                                                 setDialogState(
                                                   () => quantity = parsed,
                                                 );
+                                                checkPendingCoffeeOrder();
                                               }
                                             },
                                             style: const TextStyle(
@@ -2062,11 +2139,14 @@ class _DailyStockPageState extends State<DailyStockPage>
                                           tooltip: 'Decrease quantity',
                                           visualDensity: VisualDensity.compact,
                                           onPressed: quantity > 1
-                                              ? () => setDialogState(() {
-                                                  quantity--;
-                                                  quantityController.text =
-                                                      '$quantity';
-                                                })
+                                              ? () {
+                                                  setDialogState(() {
+                                                    quantity--;
+                                                    quantityController.text =
+                                                        '$quantity';
+                                                  });
+                                                  checkPendingCoffeeOrder();
+                                                }
                                               : null,
                                           icon: const Icon(
                                             Icons.remove_circle_outline,
@@ -2076,11 +2156,14 @@ class _DailyStockPageState extends State<DailyStockPage>
                                         IconButton(
                                           tooltip: 'Increase quantity',
                                           visualDensity: VisualDensity.compact,
-                                          onPressed: () => setDialogState(() {
-                                            quantity++;
-                                            quantityController.text =
-                                                '$quantity';
-                                          }),
+                                          onPressed: () {
+                                            setDialogState(() {
+                                              quantity++;
+                                              quantityController.text =
+                                                  '$quantity';
+                                            });
+                                            checkPendingCoffeeOrder();
+                                          },
                                           icon: const Icon(
                                             Icons.add_circle_outline,
                                             size: 20,
@@ -3333,6 +3416,7 @@ class _DailyStockPageState extends State<DailyStockPage>
           _qtyControllers.remove(oldBundleCartKey)?.dispose();
           entries = InventoryService().currentUserEntries;
         });
+        _checkLargeOrderWarning();
       }
       return true;
     } catch (e) {
@@ -4111,6 +4195,7 @@ class _DailyStockPageState extends State<DailyStockPage>
         controller.clear();
       }
     });
+    _checkLargeOrderWarning();
   }
 
   void _openCartReview() {
@@ -4135,6 +4220,7 @@ class _DailyStockPageState extends State<DailyStockPage>
       }
       _selectedGroupName = null;
     });
+    _checkLargeOrderWarning();
   }
 
   Widget _buildClosingInventoryPreview() {
@@ -4817,6 +4903,7 @@ class _DailyStockPageState extends State<DailyStockPage>
             controller.clear();
           }
         });
+        _checkLargeOrderWarning();
       }
 
       // Receipt and stock movements share a durable, idempotent sync operation.
@@ -5137,6 +5224,7 @@ class _DailyStockPageState extends State<DailyStockPage>
         _showCartReview = false;
         _isSavingPendingOrder = false;
       });
+      _checkLargeOrderWarning();
       showTopNotification(
         context,
         'Order successfully held',
@@ -5479,6 +5567,7 @@ class _DailyStockPageState extends State<DailyStockPage>
     for (final entry in _cart.entries) {
       _syncQtyController(entry.key, entry.value);
     }
+    _checkLargeOrderWarning();
     _showStyledSnackBar('Pending order restored');
   }
 
@@ -7541,39 +7630,15 @@ class _DailyStockPageState extends State<DailyStockPage>
       _showStyledSnackBar('Add items to the cart first', isError: true);
       return;
     }
-    final beverageCount = _validCartEntries(orderItems).fold<int>(0, (
-      sum,
-      entry,
-    ) {
-      final item = _knownOrderItems(
-        orderItems,
-      ).firstWhere((item) => _cartKey(item) == entry.key, orElse: () => {});
-      final servings = item['isCoffee'] == true
-          ? 1
-          : bundleDrinkServings(item).length;
-      return sum + entry.value * servings;
-    });
-    if (beverageCount > 20) {
-      final confirmed = await showDialog<bool>(
-        context: context,
-        builder: (dialogContext) => AlertDialog(
-          title: const Text('Review large beverage order'),
-          content: Text(
-            'This order contains $beverageCount beverages. Please verify the quantity with the customer before proceeding.',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext, false),
-              child: const Text('Review quantities'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(dialogContext, true),
-              child: const Text('Confirm quantity'),
-            ),
-          ],
-        ),
-      );
+    final orderCounts = _largeOrderCounts(orderItems);
+    if (!_isLargeOrder(orderCounts)) {
+      _largeOrderWarningSeen = false;
+      _largeOrderWarningConfirmed = false;
+    } else if (!_largeOrderWarningConfirmed) {
+      _largeOrderWarningSeen = true;
+      final confirmed = await _showLargeOrderWarning(orderCounts);
       if (confirmed != true || !mounted) return;
+      _largeOrderWarningConfirmed = true;
     }
 
     final validCartEntries = _validCartEntries(orderItems);

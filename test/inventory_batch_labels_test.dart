@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:fake_cloud_firestore/fake_cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sales_tracking/widgets/inventory_batches.dart';
 
@@ -247,6 +248,124 @@ void main() {
 
     expect(allocationBatchItemsForRecord(addon, itemId: 'AD-007'), [addon]);
     expect(allocationBatchItemsForRecord(addon, itemId: 'AD-008'), isEmpty);
+  });
+
+  test(
+    'batch groups distinguish add-ons from beverages sharing a source id',
+    () {
+      final addon = {'isAddon': true, 'sourceInventoryId': 'shared-source'};
+      final beverage = {'isCoffee': true, 'sourceInventoryId': 'shared-source'};
+
+      expect(allocationBatchGroupKey(addon), 'addon|shared-source');
+      expect(allocationBatchGroupKey(beverage), 'beverage|shared-source');
+      expect(allocationBatchRecordIsAvailable(addon), isTrue);
+      expect(
+        allocationBatchRecordIsAvailable({...addon, 'isAvailable': false}),
+        isFalse,
+      );
+      expect(
+        allocationBatchRecordIsAvailable({...addon, 'isVoided': true}),
+        isFalse,
+      );
+    },
+  );
+
+  testWidgets('add-on batches exclude stale allocations and beverage sales', (
+    tester,
+  ) async {
+    const connectivityChannel = MethodChannel(
+      'dev.fluttercommunity.plus/connectivity',
+    );
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      connectivityChannel,
+      (call) async => ['none'],
+    );
+    addTearDown(
+      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        connectivityChannel,
+        null,
+      ),
+    );
+    final db = FakeFirebaseFirestore();
+    final now = DateTime.now();
+    await db.collection('coffee_addons').doc('shared-source').set({
+      'name': 'Extra Cream',
+      'priceDelta': 40,
+    });
+    await db.collection('staff_inventory').doc('addon-allocation').set({
+      'staffId': 'branch',
+      'sourceInventoryId': 'shared-source',
+      'isAddon': true,
+      'id': 'ADD-040',
+      'publicId': 'ADD-040',
+      'name': 'Extra Cream',
+      'priceDelta': 40,
+      'assignedAt': Timestamp.fromDate(now),
+    });
+    await db.collection('staff_inventory').doc('stale-addon').set({
+      'staffId': 'branch',
+      'sourceInventoryId': 'shared-source',
+      'isAddon': true,
+      'name': 'Stale Cream',
+      'isAvailable': false,
+      'assignedAt': Timestamp.fromDate(now),
+    });
+    await db.collection('staff_inventory').doc('beverage-allocation').set({
+      'staffId': 'branch',
+      'sourceInventoryId': 'shared-source',
+      'isCoffee': true,
+      'name': 'Latte',
+      'assignedAt': Timestamp.fromDate(now),
+    });
+    await db.collection('completed_sales').doc('sale').set({
+      'branchId': 'branch',
+      'timestamp': Timestamp.fromDate(now),
+      'items': [
+        {
+          'name': 'Latte',
+          'isCoffee': true,
+          'quantity': 1,
+          'price': 130,
+          'unitPrice': 130,
+          'salePrice': 130,
+          'addonName': 'Extra Cream',
+          'addonId': 'ADD-040',
+          'addonPriceDelta': 40,
+        },
+      ],
+    });
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: TextButton(
+              onPressed: () => showInventoryBatches(
+                context,
+                allocationId: 'addon-allocation',
+                scopeIds: const ['branch'],
+                itemId: 'ADD-040',
+                database: db,
+              ),
+              child: const Text('View batches'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('View batches'));
+    for (var frame = 0; frame < 20; frame++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+
+    expect(find.textContaining('Extra Cream'), findsOneWidget);
+    expect(find.textContaining('Stale Cream'), findsNothing);
+    expect(find.textContaining('Latte'), findsNothing);
+    await tester.tap(find.textContaining('Extra Cream'));
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.textContaining('Sales total: 1 sold · ₱40.00'), findsOneWidget);
+    expect(find.textContaining('Latte'), findsNothing);
+    expect(tester.takeException(), isNull);
   });
 
   test(

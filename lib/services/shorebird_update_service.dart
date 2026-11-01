@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:shorebird_code_push/shorebird_code_push.dart';
 
 enum ShorebirdUpdatePromptState { hidden, available, restartRequired }
@@ -17,11 +18,29 @@ class ShorebirdUpdateService {
   static const _notifications = MethodChannel(
     'com.example.sales_tracking/updates',
   );
+  static const _restartPromptAcknowledgedKey =
+      'shorebird.restartPromptAcknowledged';
   static Future<void> Function()? _onUpdatePromptRequested;
 
   static Future<UpdateStatus> check() => updater.checkForUpdate();
 
   static Future<void> download() => updater.update();
+
+  static Future<bool> isRestartPromptAcknowledged() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_restartPromptAcknowledgedKey) == true;
+  }
+
+  static Future<void> acknowledgeRestartPrompt() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_restartPromptAcknowledgedKey, true);
+    promptState.value = ShorebirdUpdatePromptState.hidden;
+  }
+
+  static Future<void> clearRestartPromptAcknowledgement() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_restartPromptAcknowledgedKey);
+  }
 
   static void registerUpdatePromptHandler(Future<void> Function() handler) {
     _onUpdatePromptRequested = handler;

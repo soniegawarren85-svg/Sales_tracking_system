@@ -9,6 +9,8 @@ import '../services/beverage_sales_summary.dart';
 import '../services/local_database_sync_service.dart';
 import '../services/offline_stock_reduction_service.dart';
 import '../services/sale_stock.dart';
+import '../services/low_stock_reports.dart';
+import '../services/session_actor.dart';
 import 'dart:async';
 import 'dart:convert';
 
@@ -23,6 +25,7 @@ import '../services/inventory_service.dart';
 import '../services/number_format.dart';
 import '../widgets/top_notification.dart';
 import '../widgets/top_edge_refresh.dart';
+import '../widgets/low_stock_selection_dialog.dart';
 
 class AllCategPage extends StatefulWidget {
   final String? selectedCategoryName;
@@ -575,39 +578,58 @@ class _AllCategPageState extends State<AllCategPage>
     return items;
   }
 
-  Future<void> _markCoffeeLowStock(Map<String, dynamic> coffee) async {
-    final staffDocId = coffee['sourceDocId']?.toString() ?? '';
-    final flavor =
-        coffee['categoryName']?.toString() ??
-        coffee['name']?.toString() ??
-        'Beverages flavor';
-    if (staffDocId.isEmpty) return;
+  Future<void> _showStaffLowStockSelector({
+    required String type,
+    required List<Map<String, dynamic>> items,
+  }) async {
+    final selectable = items
+        .where(
+          (item) =>
+              '${item['staffInventoryDocId'] ?? ''}'.trim().isNotEmpty &&
+              '${item['name'] ?? ''}'.trim().isNotEmpty,
+        )
+        .toList();
+    if (selectable.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        _buildSnackBar(
+          'No assigned $type items can be reported right now.',
+          isError: true,
+        ),
+      );
+      return;
+    }
 
     try {
-      await FirebaseFirestore.instance
-          .collection('staff_inventory')
-          .doc(staffDocId)
-          .set({
-            'isLowStock': true,
-            'lowStockMarkedAt': FieldValue.serverTimestamp(),
-          }, SetOptions(merge: true));
-      await FirebaseFirestore.instance.collection('admin_notifications').add({
-        'type': 'coffee_low_stock',
-        'title': 'Beverages flavor is running low',
-        'message': '$flavor is marked as running low.',
-        'itemName': flavor,
-        'staffInventoryDocId': staffDocId,
-        'isRead': false,
-        'createdAt': FieldValue.serverTimestamp(),
-      });
+      final actor = await resolveSessionActor(
+        FirebaseFirestore.instance,
+        admin: false,
+      );
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(_buildSnackBar('$flavor marked as running low'));
-    } catch (e) {
+      final saved = await showLowStockSelectionDialog(
+        context: context,
+        title: 'Mark low-stock $type',
+        description:
+            'Choose the assigned $type items that are running low. The branch admin will see the update in inventory.',
+        items: selectable,
+        submitLabel: 'Mark selected',
+        searchHint: 'Search $type',
+        onSubmit: (selected) => markStaffInventoryLowStock(
+          firestore: FirebaseFirestore.instance,
+          items: selected,
+          branchIds: _staffInventoryIds,
+          staffId: actor.id,
+          staffName: actor.name,
+        ),
+      );
+      if (saved == true && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          _buildSnackBar('Low-stock items reported to the branch admin.'),
+        );
+      }
+    } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        _buildSnackBar('Failed to mark beverage low: $e', isError: true),
+        _buildSnackBar('Unable to mark low-stock items: $error', isError: true),
       );
     }
   }
@@ -4829,6 +4851,7 @@ class _AllCategPageState extends State<AllCategPage>
     VoidCallback? onView,
     VoidCallback? onAddons,
     VoidCallback? onHistory,
+    VoidCallback? onLowStock,
     bool compact = false,
   }) {
     return Container(
@@ -4909,6 +4932,21 @@ class _AllCategPageState extends State<AllCategPage>
                     onPressed: onHistory,
                     icon: const Icon(Icons.history_rounded),
                     color: AppColors.primaryDark,
+                  ),
+                if (onLowStock != null)
+                  OutlinedButton.icon(
+                    onPressed: onLowStock,
+                    icon: const Icon(Icons.warning_amber_rounded, size: 15),
+                    label: const Text('Low stock'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: AppColors.primaryDark,
+                      side: const BorderSide(color: AppColors.blush),
+                      padding: const EdgeInsets.symmetric(horizontal: 9),
+                      textStyle: const TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
                   ),
               ],
             ),
@@ -5145,6 +5183,9 @@ class _AllCategPageState extends State<AllCategPage>
     for (final rawAddon in (category['addonOptions'] as List?) ?? const []) {
       if (rawAddon is! Map) continue;
       final addon = Map<String, dynamic>.from(rawAddon);
+      addon['isLowStock'] =
+          addon['isLowStock'] == true ||
+          addon['staffLowStockPendingAdmin'] == true;
       if (addon['isDeleted'] == true || bundleExpired(addon, DateTime.now())) {
         continue;
       }
@@ -5246,6 +5287,18 @@ class _AllCategPageState extends State<AllCategPage>
           title: 'Beverages',
           subtitle: 'Available Beverages: ${items.isEmpty ? 0 : 1}',
           onHistory: showBeverageHistory,
+          onLowStock: () => _showStaffLowStockSelector(
+            type: 'beverages',
+            items: [
+              {
+                'name': coffeeName,
+                'type': 'Beverages',
+                'id': coffeeId,
+                'staffInventoryDocId': category['sourceDocId'],
+                'isLowStock': category['isLowStock'] == true,
+              },
+            ],
+          ),
           compact: true,
           columns: [
             _tableColumn('ID'),
@@ -5342,6 +5395,19 @@ class _AllCategPageState extends State<AllCategPage>
           title: 'Beverages Add-ons',
           subtitle: 'Available Add-ons: ${searchedAddons.length}',
           onHistory: showAddonHistory,
+          onLowStock: () => _showStaffLowStockSelector(
+            type: 'add-ons',
+            items: [
+              for (final addon in addonDocs)
+                {
+                  'name': addon['name']?.toString() ?? 'Add-on',
+                  'type': 'Add-ons',
+                  'id': _displayItemId(addon),
+                  'staffInventoryDocId': addon['staffInventoryDocId'],
+                  'isLowStock': addon['isLowStock'] == true,
+                },
+            ],
+          ),
           compact: true,
           columns: [
             _tableColumn('ID'),
@@ -7222,6 +7288,12 @@ class _AllCategPageState extends State<AllCategPage>
                   }
 
                   final groupedCategories = <String, Map<String, dynamic>>{};
+                  final allocatedAddonsByName = <String, Map<String, dynamic>>{
+                    for (final data in visibleDocs)
+                      if (data['isAddon'] == true &&
+                          '${data['name'] ?? ''}'.trim().isNotEmpty)
+                        '${data['name']}'.trim().toLowerCase(): data,
+                  };
                   for (final data in visibleDocs) {
                     if (data['isBundle'] == true || data['isAddon'] == true) {
                       continue;
@@ -7243,6 +7315,28 @@ class _AllCategPageState extends State<AllCategPage>
                           data['allocatedAt'];
                       return itemData;
                     }).toList();
+                    final addonOptions = [
+                      for (final rawAddon
+                          in (data['addonOptions'] as List? ?? const [])
+                              .whereType<Map>())
+                        (() {
+                          final addon = Map<String, dynamic>.from(rawAddon);
+                          final allocated =
+                              allocatedAddonsByName['${addon['name'] ?? ''}'
+                                  .trim()
+                                  .toLowerCase()];
+                          return {
+                            ...addon,
+                            if (allocated != null) ...{
+                              'staffInventoryDocId': allocated['sourceDocId'],
+                              'id':
+                                  addon['id'] ??
+                                  allocated['publicId'] ??
+                                  allocated['sourceInventoryId'],
+                            },
+                          };
+                        })(),
+                    ];
                     if (itemRecords.isEmpty) continue;
                     final categoryKey =
                         data['sourceInventoryId']
@@ -7277,7 +7371,7 @@ class _AllCategPageState extends State<AllCategPage>
                           ...itemRecords,
                         ]),
                       ],
-                      'addonOptions': data['addonOptions'] ?? const [],
+                      'addonOptions': addonOptions,
                       'isCoffee': data['isCoffee'] == true,
                       'sourceDocId': data['sourceDocId'],
                       'publicId': data['publicId'],
@@ -7286,7 +7380,9 @@ class _AllCategPageState extends State<AllCategPage>
                           currentAllocationDate.isAfter(previousAllocationDate)
                           ? allocationDate
                           : previousCategory?['allocatedAt'] ?? allocationDate,
-                      'isLowStock': data['isLowStock'] == true,
+                      'isLowStock':
+                          data['isLowStock'] == true ||
+                          data['staffLowStockPendingAdmin'] == true,
                     };
                   }
 

@@ -3392,6 +3392,7 @@ class _InventoryPageState extends State<InventoryPage>
                   },
                   allowBranchEdits: false,
                   showBranchActions: true,
+                  allowLowStockVoids: true,
                   pinnedControls: true,
                   compactHeader: _headerCollapsed,
                   scrollController: _inventoryScrollController,

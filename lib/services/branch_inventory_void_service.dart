@@ -9,6 +9,7 @@ Future<bool> voidBranchInventoryAllocation({
   required String allocationItemId,
   String? branchId,
   Map<String, dynamic>? item,
+  bool allowLowStock = false,
 }) {
   if (branchId != null && branchId.isNotEmpty && item != null) {
     return _voidSoldOutBranchCopies(
@@ -16,6 +17,7 @@ Future<bool> voidBranchInventoryAllocation({
       branchId: branchId,
       sourceAllocationId: allocationId,
       item: item,
+      allowLowStock: allowLowStock,
     );
   }
   return firestore.runTransaction<bool>((transaction) async {
@@ -75,6 +77,7 @@ Future<bool> _voidSoldOutBranchCopies({
   required String branchId,
   required String sourceAllocationId,
   required Map<String, dynamic> item,
+  required bool allowLowStock,
 }) async {
   final inventory = firestore.collection('staff_inventory');
   final snapshots = await Future.wait([
@@ -118,7 +121,9 @@ Future<bool> _voidSoldOutBranchCopies({
 
   return firestore.runTransaction<bool>((transaction) async {
     final latestSnapshots = await Future.wait(
-      matchingDocs.values.map((document) => transaction.get(document.reference)),
+      matchingDocs.values.map(
+        (document) => transaction.get(document.reference),
+      ),
     );
     var removedAny = false;
 
@@ -141,7 +146,11 @@ Future<bool> _voidSoldOutBranchCopies({
         final stock = allocation['isBundle'] == true
             ? availableBundleStock(allocation)
             : num.tryParse('${allocation['stock'] ?? 0}')?.toInt() ?? 0;
-        if (stock > 0) {
+        final mayVoidMarkedLowStock =
+            allowLowStock &&
+            allocation['isLowStock'] == true &&
+            (allocation['isCoffee'] == true || allocation['isAddon'] == true);
+        if (stock > 0 && !mayVoidMarkedLowStock) {
           if (snapshot.id == sourceAllocationId) {
             throw StateError('This item is not sold out yet.');
           }
@@ -163,7 +172,8 @@ Future<bool> _voidSoldOutBranchCopies({
       final removed = <Map<String, dynamic>>[];
       variants.removeWhere((variant) {
         if (!inventoryVariantsMatch(item, variant)) return false;
-        final stock = num.tryParse(
+        final stock =
+            num.tryParse(
               '${variant['stock'] ?? variant['startingStock'] ?? 0}',
             )?.toInt() ??
             0;

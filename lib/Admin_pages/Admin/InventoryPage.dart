@@ -3336,6 +3336,7 @@ class _InventoryPageState extends State<InventoryPage>
                   lockedBranchName: widget.branchName,
                   showBatchHistory: false,
                   showBranchActions: false,
+                  allowLowStockReport: true,
                   onBeverageTabChanged: (value) =>
                       setState(() => _addonsTab = value),
                   onOpen: _openCatalogEntry,

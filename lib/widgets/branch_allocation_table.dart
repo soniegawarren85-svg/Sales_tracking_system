@@ -91,7 +91,6 @@ class BranchAllocationTable extends StatelessWidget {
     }
     final columns = <(String, String)>[
       ('id', 'ID'),
-      if (addons) ('image', 'Image'),
       ('allocationDate', 'Allocation date'),
       ('name', 'Item'),
       if (inventory && addons) ...[
@@ -140,12 +139,13 @@ class BranchAllocationTable extends StatelessWidget {
       'stockCost',
     };
     bool low(Map row) =>
-        !beverages &&
-        reportValue(row['remaining']) > 0 &&
-        inventoryLowStock(
-          row['remaining'],
-          type: '${row['type'] ?? 'Categories'}',
-        );
+        row['isLowStock'] == true ||
+        (!beverages &&
+            reportValue(row['remaining']) > 0 &&
+            inventoryLowStock(
+              row['remaining'],
+              type: '${row['type'] ?? 'Categories'}',
+            ));
     bool near(Map row) {
       final date = cashRecordDate(row['expirationDate']);
       final today = DateUtils.dateOnly(DateTime.now());
@@ -209,7 +209,10 @@ class BranchAllocationTable extends StatelessWidget {
       }
       if (key == 'status') {
         final stockTracked = !beverages || addons;
-        final soldOut = stockTracked && reportValue(row['remaining']) <= 0;
+        final soldOut =
+            stockTracked &&
+            reportValue(row['remaining']) <= 0 &&
+            row['isLowStock'] != true;
         final status = soldOut
             ? 'Sold Out'
             : low(row)

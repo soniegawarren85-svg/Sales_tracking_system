@@ -480,7 +480,11 @@ class BranchReportData {
         'publicId':
             source['publicId'] ?? source['coffeeId'] ?? source['bundleId'],
         'name': source['name'],
-        'price': item['price'] ?? source['price'],
+        'price':
+            item['price'] ??
+            item['priceDelta'] ??
+            source['price'] ??
+            source['priceDelta'],
         'costPrice': item['costPrice'] ?? source['costPrice'],
         'expirationDate': item['expirationDate'] ?? source['expirationDate'],
         'sizes': source['sizes'],
@@ -582,7 +586,11 @@ class BranchReportData {
           'sourceInventoryId': sourceId,
           if (catalogItem != null) ...{
             'costPrice': costPrice,
-            'price': variant['price'] ?? catalogItem['price'],
+            'price':
+                variant['price'] ??
+                variant['priceDelta'] ??
+                catalogItem['price'] ??
+                catalogItem['priceDelta'],
             if (catalogItem['imageUrl'] != null)
               'imageUrl': catalogItem['imageUrl'],
           },
@@ -613,6 +621,20 @@ class BranchReportData {
                   allocation['isAddon'] == true
               ? null
               : variant['id'] ?? variant['itemId'],
+          'isLowStock':
+              allocation['isLowStock'] == true ||
+              previous?['isLowStock'] == true,
+          'staffLowStockPendingAdmin':
+              allocation['staffLowStockPendingAdmin'] == true ||
+              previous?['staffLowStockPendingAdmin'] == true,
+          if (allocation['lowStockMarkedAt'] != null ||
+              previous?['lowStockMarkedAt'] != null)
+            'lowStockMarkedAt':
+                allocation['lowStockMarkedAt'] ?? previous?['lowStockMarkedAt'],
+          if (allocation['lowStockMarkedBy'] != null ||
+              previous?['lowStockMarkedBy'] != null)
+            'lowStockMarkedBy':
+                allocation['lowStockMarkedBy'] ?? previous?['lowStockMarkedBy'],
           'categoryName':
               source?['name'] ??
               allocation['categoryName'] ??
@@ -1101,6 +1123,7 @@ class BranchReportData {
         item['relevant'] = true;
       }
       if (hasStockEvidence &&
+          !['Beverages', 'Add-ons'].contains(item['type']) &&
           inventoryLowStock(
             item['remaining'],
             type: '${item['type'] ?? 'Categories'}',

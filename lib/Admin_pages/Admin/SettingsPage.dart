@@ -478,7 +478,6 @@ class _SettingsPageState extends State<SettingsPage>
                       builder: (_) => const BackupRestoreDialog(),
                     ),
                   ),
-                  const ShorebirdUpdateButton(),
                   _settingItem(
                     icon: Icons.info_rounded,
                     title: "About App",
@@ -491,6 +490,7 @@ class _SettingsPageState extends State<SettingsPage>
                       'Track sales and inventory across branches, allocate cash and products, manage staff and beverage bundles, monitor expiry, and review branch reports.',
                     ),
                   ),
+                  const ShorebirdUpdateButton(),
 
                   const SizedBox(height: 28),
 

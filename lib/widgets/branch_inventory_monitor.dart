@@ -2,6 +2,7 @@ import 'dart:async';
 import 'branch_inventory_edit_dialog.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import '../theme/app_colors.dart';
 import '../services/bundle_stock_service.dart';
 import '../services/branch_inventory_void_service.dart';
 import '../services/branch_inventory_editor.dart';
@@ -10,6 +11,8 @@ import '../services/branch_report_data.dart';
 import 'historical_cash_drawer.dart';
 import 'branch_allocation_table.dart';
 import 'inventory_batches.dart';
+import '../services/low_stock_reports.dart';
+import 'low_stock_selection_dialog.dart';
 
 bool inventoryNearExpiry(dynamic value, [DateTime? now]) {
   final expiry = cashRecordDate(value);
@@ -43,6 +46,8 @@ class BranchInventoryMonitor extends StatefulWidget {
     this.onCategoriesChanged,
     this.allowEdits = true,
     this.showActions = true,
+    this.allowLowStockReport = false,
+    this.allowLowStockVoids = false,
   });
   final FirebaseFirestore? firestore;
   final bool showBatchHistory;
@@ -51,6 +56,8 @@ class BranchInventoryMonitor extends StatefulWidget {
   final ValueChanged<Set<String>>? onCategoriesChanged;
   final bool allowEdits;
   final bool showActions;
+  final bool allowLowStockReport;
+  final bool allowLowStockVoids;
   final String branchId, type, query;
   @override
   State<BranchInventoryMonitor> createState() => _BranchInventoryMonitorState();
@@ -85,11 +92,14 @@ class _BranchInventoryMonitorState extends State<BranchInventoryMonitor> {
         });
       }
       bool low(Map row) =>
-          inventoryLowStock(
-            row['remaining'],
-            type: '${row['type'] ?? 'Categories'}',
-          ) &&
-          row['type'] != 'Beverages';
+          row['isLowStock'] == true ||
+          (widget.allowLowStockReport &&
+              row['staffLowStockPendingAdmin'] == true) ||
+          ((row['type'] != 'Beverages' && row['type'] != 'Add-ons') &&
+              inventoryLowStock(
+                row['remaining'],
+                type: '${row['type'] ?? 'Categories'}',
+              ));
       final rows = all
           .where(
             (row) =>
@@ -139,14 +149,74 @@ class _BranchInventoryMonitorState extends State<BranchInventoryMonitor> {
     required bool canEdit,
   }) {
     bool low(Map row) =>
-        inventoryLowStock(
-          row['remaining'],
-          type: '${row['type'] ?? 'Categories'}',
-        ) &&
-        row['type'] != 'Beverages';
+        row['isLowStock'] == true ||
+        (widget.allowLowStockReport &&
+            row['staffLowStockPendingAdmin'] == true) ||
+        ((row['type'] != 'Beverages' && row['type'] != 'Add-ons') &&
+            inventoryLowStock(
+              row['remaining'],
+              type: '${row['type'] ?? 'Categories'}',
+            ));
+    final markedLowStockRows = rows
+        .where(
+          (row) =>
+              row['isLowStock'] == true ||
+              (widget.allowLowStockReport &&
+                  row['staffLowStockPendingAdmin'] == true),
+        )
+        .toList();
+    final visibleRows = widget.allowLowStockReport
+        ? rows
+              .map(
+                (row) => row['staffLowStockPendingAdmin'] == true
+                    ? {...row, 'isLowStock': true}
+                    : row,
+              )
+              .toList()
+        : rows;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        if (widget.allowLowStockReport && markedLowStockRows.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFF7E8),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: const Color(0xFFFFD591)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(
+                    Icons.warning_amber_rounded,
+                    color: Colors.deepOrange,
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      '${markedLowStockRows.length} staff-marked low-stock item(s)',
+                      style: const TextStyle(
+                        color: Color(0xFF8A4B08),
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  FilledButton.icon(
+                    onPressed: () =>
+                        _reportLowStock(context, data, markedLowStockRows),
+                    icon: const Icon(Icons.send_rounded, size: 17),
+                    label: const Text('Report'),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: AppColors.primaryDark,
+                      foregroundColor: Colors.white,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
         if (inventoryAlertSearch(widget.query))
           Wrap(
             spacing: 12,
@@ -164,7 +234,7 @@ class _BranchInventoryMonitorState extends State<BranchInventoryMonitor> {
             ],
           ),
         BranchAllocationTable(
-          rows: rows,
+          rows: visibleRows,
           beverages: widget.type == 'Beverages',
           inventory: true,
           addons: widget.addons,
@@ -214,6 +284,65 @@ class _BranchInventoryMonitorState extends State<BranchInventoryMonitor> {
     );
   }
 
+  Future<void> _reportLowStock(
+    BuildContext context,
+    BranchReportData data,
+    List<Map<String, dynamic>> rows,
+  ) async {
+    try {
+      final admin = await currentBranchAdmin(
+        firestore: widget.firestore ?? FirebaseFirestore.instance,
+      );
+      if (!context.mounted) return;
+      final branch = data
+          .rows('branches')
+          .where((row) => '${row['_id']}' == widget.branchId)
+          .firstOrNull;
+      final branchName =
+          '${branch?['name'] ?? branch?['branchName'] ?? widget.branchId}';
+      final sent = await showLowStockSelectionDialog(
+        context: context,
+        title: 'Report low-stock items',
+        description:
+            'Select the staff-marked beverages or add-ons to send to Super Admin.',
+        items: [
+          for (final row in rows)
+            {
+              ...row,
+              'alreadyReported':
+                  row['staffLowStockPendingAdmin'] != true &&
+                  row['isLowStock'] == true,
+              'selectionKey':
+                  '${row['type']}|${row['allocationId']}|${row['allocationItemId'] ?? row['id']}',
+            },
+        ],
+        submitLabel: 'Send report',
+        searchHint: 'Search low-stock beverages or add-ons',
+        onSubmit: (selected) => submitLowStockReportToSuperAdmin(
+          firestore: widget.firestore ?? FirebaseFirestore.instance,
+          adminId: admin.id,
+          adminName: admin.name,
+          branchId: widget.branchId,
+          branchName: branchName,
+          items: selected,
+        ),
+      );
+      if (sent == true && context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Low-stock report sent to Super Admin.'),
+          ),
+        );
+      }
+    } catch (error) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Unable to prepare low-stock report: $error')),
+        );
+      }
+    }
+  }
+
   Future<void> _voidAllocation(
     BuildContext context,
     Map<String, dynamic> item,
@@ -221,7 +350,12 @@ class _BranchInventoryMonitorState extends State<BranchInventoryMonitor> {
     final type = '${item['type'] ?? ''}';
     final isPhysicalInventory = type == 'Categories' || type == 'Bundle';
     final remaining = num.tryParse('${item['remaining']}')?.toInt();
-    if (!isPhysicalInventory || remaining == null || remaining > 0) {
+    final canVoidMarkedLowStock =
+        widget.allowLowStockVoids &&
+        item['isLowStock'] == true &&
+        (type == 'Beverages' || type == 'Add-ons');
+    if ((!isPhysicalInventory && !canVoidMarkedLowStock) ||
+        (isPhysicalInventory && (remaining == null || remaining > 0))) {
       await showDialog<void>(
         context: context,
         builder: (dialogContext) => TweenAnimationBuilder<double>(
@@ -238,8 +372,8 @@ class _BranchInventoryMonitorState extends State<BranchInventoryMonitor> {
             ),
             title: const Text('Not sold out yet'),
             content: Text(
-              remaining == null
-                  ? 'Only physical branch inventory can be voided here.'
+              !isPhysicalInventory && !canVoidMarkedLowStock
+                  ? 'Only physical branch inventory or Super Admin-approved low-stock beverages/add-ons can be voided here.'
                   : 'This item still has $remaining unit${remaining == 1 ? '' : 's'} in stock. Sell out the remaining stock before voiding it.',
               textAlign: TextAlign.center,
             ),
@@ -325,6 +459,7 @@ class _BranchInventoryMonitorState extends State<BranchInventoryMonitor> {
         allocationItemId: itemId,
         branchId: widget.branchId,
         item: item,
+        allowLowStock: canVoidMarkedLowStock,
       );
       if (context.mounted) {
         if (loadingShown) Navigator.of(context, rootNavigator: true).pop();

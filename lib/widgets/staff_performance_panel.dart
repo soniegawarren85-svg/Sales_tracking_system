@@ -250,43 +250,77 @@ class _StaffPerformancePanelState extends State<StaffPerformancePanel> {
                 .map((id) => '$id')
                 .toSet();
             final members = staff.data!.docs.where((doc) {
-              return performanceAccountAvailable(
-                branchId: widget.branchId,
-                branchAccountIds: ids,
-                documentId: doc.id,
-                account: doc.data(),
-                roleSelection: false,
-                selectedRole: null,
-              );
+              final account = doc.data();
+              return (widget.roleSelection ||
+                      performanceAccountRole(account) == 'staff') &&
+                  performanceAccountAvailable(
+                    branchId: widget.branchId,
+                    branchAccountIds: ids,
+                    documentId: doc.id,
+                    account: account,
+                    roleSelection: false,
+                    selectedRole: null,
+                  );
             }).toList();
+            final roleQuery = switch (_search.trim()) {
+              'cashier' || 'staff' => 'staff',
+              'admin' => 'admin',
+              _ => null,
+            };
             final metricSearch =
                 _search.contains('order') ||
                 _search.contains('item sold') ||
                 _search.contains('items sold');
-            final searchedMembers = members.where((doc) {
-              final account = doc.data();
-              return '${_name(account)} ${account['staffId']} ${account['adminId']} ${performanceAccountRole(account)}'
-                  .toLowerCase()
-                  .contains(_search);
-            }).toList();
+            final searchedMembers = roleQuery == null
+                ? members.where((doc) {
+                    final account = doc.data();
+                    return '${_name(account)} ${account['staffId']} ${account['adminId']} ${performanceAccountRole(account)}'
+                        .toLowerCase()
+                        .contains(_search);
+                  }).toList()
+                : members
+                      .where(
+                        (doc) =>
+                            performanceAccountRole(doc.data()) == roleQuery,
+                      )
+                      .toList();
+            final displayedRole = roleQuery ?? _role;
+            final roleMembers = displayedRole == null
+                ? members
+                : members
+                      .where(
+                        (doc) =>
+                            performanceAccountRole(doc.data()) == displayedRole,
+                      )
+                      .toList();
             final selected = _selected == null
-                ? (metricSearch
+                ? (widget.roleSelection && _role != null && _search.isEmpty
+                      ? null
+                      : metricSearch
                       ? members
                             .where(
-                              (d) =>
-                                  performanceAccountRole(d.data()) == 'staff',
+                              (doc) =>
+                                  performanceAccountRole(doc.data()) == 'staff',
                             )
                             .firstOrNull
                       : (_search.isEmpty ? null : searchedMembers.firstOrNull))
                 : members.where((d) => d.id == _selected).firstOrNull;
             final person = selected?.data() ?? {};
-            final identity = [
-              selected?.id,
-              person['uid'],
-              person['userId'],
-              person['staffId'],
-              person['adminId'],
-            ].where((v) => v != null && '$v'.isNotEmpty).toSet();
+            final performanceTargets = roleQuery == null
+                ? (selected == null
+                      ? <QueryDocumentSnapshot<Map<String, dynamic>>>[]
+                      : [selected])
+                : searchedMembers;
+            final identity = performanceTargets.expand((target) {
+              final account = target.data();
+              return <Object?>[
+                target.id,
+                account['uid'],
+                account['userId'],
+                account['staffId'],
+                account['adminId'],
+              ].where((value) => value != null && '$value'.isNotEmpty);
+            }).toSet();
             final branchIdentities = members.expand((doc) {
               final account = doc.data();
               return <String?>[
@@ -326,7 +360,15 @@ class _StaffPerformancePanelState extends State<StaffPerformancePanel> {
                                       ),
                                     ),
                                     subtitle: Text(
-                                      '${data['name'] ?? 'Branch'} • ${members.length} ${_role == 'admin' ? 'admins' : 'accounts'}',
+                                      '${data['name'] ?? 'Branch'} • ${displayedRole == 'admin'
+                                          ? roleMembers.length == 1
+                                                ? '1 admin'
+                                                : '${roleMembers.length} admins'
+                                          : displayedRole == 'staff'
+                                          ? roleMembers.length == 1
+                                                ? '1 cashier'
+                                                : '${roleMembers.length} cashiers'
+                                          : '${members.length} accounts'}',
                                     ),
                                     trailing: IconButton(
                                       onPressed: () => Navigator.pop(context),
@@ -336,7 +378,7 @@ class _StaffPerformancePanelState extends State<StaffPerformancePanel> {
                                 ),
                               ),
                               const Divider(height: 1),
-                              if (false && widget.roleSelection)
+                              if (widget.roleSelection && roleQuery == null)
                                 Padding(
                                   padding: const EdgeInsets.all(18),
                                   child: DropdownButtonFormField<String>(
@@ -352,7 +394,7 @@ class _StaffPerformancePanelState extends State<StaffPerformancePanel> {
                                       ),
                                       DropdownMenuItem(
                                         value: 'staff',
-                                        child: Text('Staff'),
+                                        child: Text('Cashier'),
                                       ),
                                     ],
                                     onChanged: (value) => setState(() {
@@ -361,7 +403,7 @@ class _StaffPerformancePanelState extends State<StaffPerformancePanel> {
                                     }),
                                   ),
                                 ),
-                              if (false &&
+                              if (roleQuery == null &&
                                   (!widget.roleSelection || _role != null))
                                 Padding(
                                   padding: const EdgeInsets.fromLTRB(
@@ -377,12 +419,12 @@ class _StaffPerformancePanelState extends State<StaffPerformancePanel> {
                                       labelText: widget.roleSelection
                                           ? (_role == 'admin'
                                                 ? 'Select admin'
-                                                : 'Select staff')
-                                          : 'Select staff',
+                                                : 'Select cashier')
+                                          : 'Select cashier',
                                       hintText: 'Select account',
                                       border: const OutlineInputBorder(),
                                     ),
-                                    items: members
+                                    items: roleMembers
                                         .map(
                                           (d) => DropdownMenuItem(
                                             value: d.id,
@@ -392,16 +434,16 @@ class _StaffPerformancePanelState extends State<StaffPerformancePanel> {
                                           ),
                                         )
                                         .toList(),
-                                    onChanged: members.isEmpty
+                                    onChanged: roleMembers.isEmpty
                                         ? null
                                         : (value) =>
                                               setState(() => _selected = value),
                                   ),
                                 ),
-                              if (false &&
-                                  widget.roleSelection &&
+                              if (widget.roleSelection &&
+                                  roleQuery == null &&
                                   _role != null &&
-                                  members.isEmpty)
+                                  roleMembers.isEmpty)
                                 Padding(
                                   padding: const EdgeInsets.fromLTRB(
                                     18,
@@ -418,12 +460,12 @@ class _StaffPerformancePanelState extends State<StaffPerformancePanel> {
                                     ),
                                   ),
                                 ),
-                              if (false && selected != null)
+                              if (widget.roleSelection && selected != null)
                                 ListTile(
                                   leading: ProfileAvatar(data: person),
                                   title: Text(_name(person)),
                                   subtitle: Text(
-                                    '${person['adminId'] ?? person['staffId'] ?? selected.id} • ${performanceAccountRole(person) == 'admin' ? 'Admin' : 'Staff'}',
+                                    '${person['adminId'] ?? person['staffId'] ?? selected.id} • ${performanceAccountRole(person) == 'admin' ? 'Admin' : 'Cashier'}',
                                   ),
                                   trailing: const Icon(
                                     Icons.check_circle_outline,
@@ -500,7 +542,7 @@ class _StaffPerformancePanelState extends State<StaffPerformancePanel> {
                               branchId: widget.branchId,
                               includeReceipts: true,
                               hideSessionEvents: true,
-                              search: _search == 'admin' ? '' : _search,
+                              search: roleQuery == null ? _search : '',
                               range: _range,
                               database: _db,
                               cardRows: true,
@@ -532,13 +574,13 @@ class _StaffPerformancePanelState extends State<StaffPerformancePanel> {
                           _performanceBody(
                             child: ActivityFeed(
                               actorIds: {
-                                selected!.id,
+                                selected.id,
                                 ...identity.map((id) => '$id'),
                               },
                               branchId: widget.branchId,
                               includeReceipts: true,
                               hideSessionEvents: true,
-                              search: _search == 'admin' ? '' : _search,
+                              search: roleQuery == null ? _search : '',
                               range: _range,
                               database: _db,
                               cardRows: true,
@@ -628,8 +670,8 @@ class _StaffPerformancePanelState extends State<StaffPerformancePanel> {
                                               (sale['staffPublicId'] ??
                                                       sale['staffId'] ??
                                                       person['staffId'] ??
-                                                      selected?.id ??
-                                                      sale['cashierId'])
+                                                      sale['cashierId'] ??
+                                                      selected.id)
                                                   ?.toString()
                                                   .trim();
                                           return Card(

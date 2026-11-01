@@ -279,6 +279,8 @@ class AdminCatalog extends StatefulWidget {
     this.lockedBranchId,
     this.lockedBranchName,
     this.showBatchHistory = true,
+    this.allowLowStockReport = false,
+    this.allowLowStockVoids = false,
   });
   final FirebaseFirestore? firestore;
   final ValueChanged<String>? onBranchChanged;
@@ -289,6 +291,8 @@ class AdminCatalog extends StatefulWidget {
   final String? lockedBranchId;
   final String? lockedBranchName;
   final bool showBatchHistory;
+  final bool allowLowStockReport;
+  final bool allowLowStockVoids;
   final ValueChanged<Map<String, dynamic>?>? onCategorySelected;
   final Widget? actions;
   final ValueChanged<bool>? onBeverageTabChanged;
@@ -761,6 +765,8 @@ class _AdminCatalogState extends State<AdminCatalog> {
                 setState(() => _branchCategoryKeys = categories);
               },
               allowEdits: widget.allowBranchEdits,
+              allowLowStockReport: widget.allowLowStockReport,
+              allowLowStockVoids: widget.allowLowStockVoids,
             )
           else if (!widget.gallery && widget.type == 'Beverages' && _showAddons)
             AdminAddonsTable(query: _query, firestore: widget.firestore)

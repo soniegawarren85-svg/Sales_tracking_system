@@ -119,6 +119,13 @@ class _MyAppState extends State<MyApp> {
       _shorebirdRestartPending =
           ShorebirdUpdateService.promptState.value ==
           ShorebirdUpdatePromptState.restartRequired;
+      if (_shorebirdRestartPending &&
+          await ShorebirdUpdateService.isRestartPromptAcknowledged()) {
+        _shorebirdRestartPending = false;
+        ShorebirdUpdateService.promptState.value =
+            ShorebirdUpdatePromptState.hidden;
+        return;
+      }
       _shorebirdUpdatePending = !_shorebirdRestartPending;
       await _showPendingShorebirdDialog();
     } catch (error) {
@@ -139,6 +146,7 @@ class _MyAppState extends State<MyApp> {
       if (status == UpdateStatus.upToDate) {
         ShorebirdUpdateService.promptState.value =
             ShorebirdUpdatePromptState.hidden;
+        await ShorebirdUpdateService.clearRestartPromptAcknowledgement();
         final prefs = await SharedPreferences.getInstance();
         if (prefs.getBool(_shorebirdPatchDownloadedKey) == true) {
           await prefs.remove(_shorebirdPatchDownloadedKey);
@@ -148,6 +156,12 @@ class _MyAppState extends State<MyApp> {
       }
       if (status == UpdateStatus.restartRequired) {
         await ShorebirdUpdateService.clearNotification();
+        if (await ShorebirdUpdateService.isRestartPromptAcknowledged()) {
+          _shorebirdRestartPending = false;
+          ShorebirdUpdateService.promptState.value =
+              ShorebirdUpdatePromptState.hidden;
+          return;
+        }
         ShorebirdUpdateService.promptState.value =
             ShorebirdUpdatePromptState.restartRequired;
         _shorebirdRestartPending = true;
@@ -156,10 +170,10 @@ class _MyAppState extends State<MyApp> {
       }
       if (status != UpdateStatus.outdated || _showingShorebirdDialog) return;
 
+      final prefs = await SharedPreferences.getInstance();
       ShorebirdUpdateService.promptState.value =
           ShorebirdUpdatePromptState.available;
       _shorebirdNotificationPending = true;
-      final prefs = await SharedPreferences.getInstance();
       final lastPrompt = prefs.getInt(_shorebirdLastPromptKey) ?? 0;
       final now = DateTime.now().millisecondsSinceEpoch;
       if (now - lastPrompt >= const Duration(hours: 24).inMilliseconds) {
@@ -257,6 +271,7 @@ class _MyAppState extends State<MyApp> {
         ),
       );
       if (closeApp == true && defaultTargetPlatform == TargetPlatform.android) {
+        await ShorebirdUpdateService.acknowledgeRestartPrompt();
         await SystemNavigator.pop();
       }
     } finally {
@@ -277,6 +292,12 @@ class _MyAppState extends State<MyApp> {
       final status = await ShorebirdUpdateService.check();
       if (!mounted || !navigator.mounted) return;
       if (status == UpdateStatus.restartRequired) {
+        if (await ShorebirdUpdateService.isRestartPromptAcknowledged()) {
+          _shorebirdRestartPending = false;
+          ShorebirdUpdateService.promptState.value =
+              ShorebirdUpdatePromptState.hidden;
+          return;
+        }
         await _showShorebirdRestartDialog();
         return;
       }
@@ -327,6 +348,7 @@ class _MyAppState extends State<MyApp> {
       progressShown = false;
       final prefs = await SharedPreferences.getInstance();
       await prefs.setBool(_shorebirdPatchDownloadedKey, true);
+      await ShorebirdUpdateService.clearRestartPromptAcknowledgement();
       ShorebirdUpdateService.promptState.value =
           ShorebirdUpdatePromptState.restartRequired;
       await ShorebirdUpdateService.clearNotification();
