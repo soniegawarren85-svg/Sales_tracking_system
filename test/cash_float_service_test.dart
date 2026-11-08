@@ -1,8 +1,133 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:fake_cloud_firestore/fake_cloud_firestore.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:sales_tracking/services/cash_drawer_service.dart';
 import 'package:sales_tracking/services/cash_float_service.dart';
 
 void main() {
+  test('starting cash changes are limited to before opening and sales', () {
+    final beforeOpening = DateTime(2026, 11, 7, 8, 59);
+    expect(
+      CashFloatService.canChangeStartingCash(
+        now: beforeOpening,
+        openingMinutes: 9 * 60,
+        hasSalesToday: false,
+      ),
+      isTrue,
+    );
+    expect(
+      CashFloatService.canChangeStartingCash(
+        now: DateTime(2026, 11, 7, 9, 1),
+        openingMinutes: 9 * 60,
+        hasSalesToday: false,
+      ),
+      isFalse,
+    );
+    expect(
+      CashFloatService.canChangeStartingCash(
+        now: beforeOpening,
+        openingMinutes: 9 * 60,
+        hasSalesToday: true,
+      ),
+      isFalse,
+    );
+  });
+
+  test(
+    'starting cash changes apply immediately when sales have not started',
+    () async {
+      final firestore = FakeFirebaseFirestore();
+      final now = DateTime(2026, 11, 7, 8, 30);
+      await firestore.collection('branches').doc('branch-one').set({
+        'openingMinutes': 9 * 60,
+      });
+      await firestore.collection('staff_cash_drawer').doc('branch-one').set({
+        'drawerDate': CashDrawerService.dayKey(now),
+        'balance': 1500,
+        'openingCash': 1500,
+        'dailyOpeningCash': 1500,
+      });
+      await firestore.collection('staff_requests').doc('staff-one').set({
+        'role': 'staff',
+        'status': 'accepted',
+        'branchIds': ['branch-one'],
+      });
+
+      await CashFloatService.applyImmediateStartingCashChange(
+        firestore: firestore,
+        branchId: 'branch-one',
+        branchName: 'Dagupan',
+        amount: 1700,
+        actorId: 'super-admin',
+        actorName: 'Super Admin',
+        actorRole: 'admin',
+        now: now,
+      );
+
+      final drawer =
+          (await firestore
+                  .collection('staff_cash_drawer')
+                  .doc('branch-one')
+                  .get())
+              .data()!;
+      expect(drawer['balance'], 1700);
+      expect(drawer['openingCash'], 1700);
+      expect(drawer['dailyOpeningCash'], 1700);
+      final budget =
+          (await firestore.collection('staff_budget').doc('branch-one').get())
+              .data()!;
+      expect(budget['allocatedBudget'], 1700);
+    },
+  );
+
+  test(
+    'starting cash change cannot be received after branch sales begin',
+    () async {
+      final firestore = FakeFirebaseFirestore();
+      await firestore.collection('staff_requests').doc('staff-one').set({
+        'role': 'staff',
+        'status': 'accepted',
+        'branchIds': ['branch-one'],
+      });
+      await firestore.collection('branches').doc('branch-one').set({
+        'openingMinutes': 1440,
+      });
+      final requestId = await CashFloatService.createRequest(
+        firestore: firestore,
+        branchId: 'branch-one',
+        branchName: 'Dagupan',
+        senderId: 'super-admin',
+        senderName: 'Super Admin',
+        amount: 2000,
+        startingCash: true,
+        startingCashChange: true,
+      );
+      await firestore.collection('completed_sales').add({
+        'branchId': 'branch-one',
+        'timestamp': Timestamp.fromDate(DateTime.now()),
+      });
+
+      await expectLater(
+        CashFloatService.receive(
+          firestore: firestore,
+          requestId: requestId,
+          actorId: 'staff-one',
+          actorName: 'Branch Staff',
+          actorRole: 'staff',
+        ),
+        throwsA(isA<StateError>()),
+      );
+      expect(
+        (await firestore
+                .collection('staff_cash_drawer')
+                .doc('branch-one')
+                .get())
+            .exists,
+        isFalse,
+      );
+    },
+  );
+
   test('cash float credits once after staff receipt confirmation', () async {
     final firestore = FakeFirebaseFirestore();
     await firestore.collection('staff_requests').doc('staff-one').set({

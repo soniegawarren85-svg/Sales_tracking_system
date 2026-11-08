@@ -4846,7 +4846,9 @@ class _DailyStockPageState extends State<DailyStockPage>
             'basePrice': item['basePrice'] ?? 0,
             'sizePriceDelta': item['sizePriceDelta'] ?? 0,
             'addonName': item['addonName'] ?? '',
+            'addonId': item['addonId'] ?? '',
             'addonPriceDelta': item['addonPriceDelta'] ?? 0,
+            'addonCostPrice': item['addonCostPrice'] ?? 0,
             'sourceInventoryId': item['sourceInventoryId'] ?? '',
             'staffInventoryDocId': item['staffInventoryDocId'] ?? '',
           };
@@ -9082,6 +9084,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                       'addonName': addonName,
                       'addonId': addon['id']?.toString() ?? '',
                       'addonPriceDelta': addonDelta,
+                      'addonCostPrice': _parsePrice(addon['costPrice']),
                       'addonImageUrl': addon['imageUrl']?.toString() ?? '',
                       'stock': 999,
                       'startingStock': 999,
@@ -9392,7 +9395,8 @@ class _DailyStockPageState extends State<DailyStockPage>
                       children: _orderReviewOnRight
                           ? [
                               Expanded(
-                                child: Center(
+                                child: Align(
+                                  alignment: Alignment.topCenter,
                                   child: ConstrainedBox(
                                     constraints: const BoxConstraints(
                                       maxWidth: 900,
@@ -9428,7 +9432,8 @@ class _DailyStockPageState extends State<DailyStockPage>
                                 child: _buildTabletOrderReviewPane(),
                               ),
                               Expanded(
-                                child: Center(
+                                child: Align(
+                                  alignment: Alignment.topCenter,
                                   child: ConstrainedBox(
                                     constraints: const BoxConstraints(
                                       maxWidth: 900,
@@ -10658,6 +10663,23 @@ class _DailyStockPageState extends State<DailyStockPage>
         else if (_showCoffeeView)
           StaffSalesItemGrid(
             itemCount: entries.length,
+            itemHeight:
+                196 +
+                entries
+                        .map((entry) {
+                          final coffeeSizes = entry.value
+                              .map(
+                                (variant) =>
+                                    variant.value['coffeeSize']?.toString() ??
+                                    variant.value['variant']?.toString() ??
+                                    'Regular',
+                              )
+                              .toSet()
+                              .length;
+                          return coffeeSizes;
+                        })
+                        .fold<int>(0, (largest, count) => max(largest, count)) *
+                    36,
             itemBuilder: (context, index, compact) {
               final entry = entries[index];
               final variants = entry.value;
@@ -11882,7 +11904,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                 Row(
                   children: [
                     const Icon(
-                      Icons.shopping_bag_rounded,
+                      Icons.receipt_long_rounded,
                       color: Colors.white,
                       size: 20,
                     ),
@@ -12281,7 +12303,7 @@ class _DailyStockPageState extends State<DailyStockPage>
             child: Row(
               children: [
                 const Icon(
-                  Icons.shopping_cart_rounded,
+                  Icons.receipt_long_rounded,
                   color: Colors.white,
                   size: 20,
                 ),

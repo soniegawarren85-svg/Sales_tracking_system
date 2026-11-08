@@ -8,6 +8,134 @@ class CashFloatService {
 
   static const collectionName = 'cash_float_requests';
 
+  static bool canChangeStartingCash({
+    required DateTime now,
+    required int openingMinutes,
+    required bool hasSalesToday,
+  }) {
+    final minutesSinceMidnight = now.hour * 60 + now.minute;
+    return !hasSalesToday &&
+        minutesSinceMidnight <= openingMinutes.clamp(0, 1440);
+  }
+
+  static bool hasSalesToday(
+    Iterable<Map<String, dynamic>> sales,
+    DateTime now,
+  ) {
+    final today = CashDrawerService.dayKey(now);
+    return sales.any((sale) {
+      final date = CashDrawerService.toDate(sale['timestamp']);
+      return date != null && CashDrawerService.dayKey(date) == today;
+    });
+  }
+
+  static Future<void> applyImmediateStartingCashChange({
+    required FirebaseFirestore firestore,
+    required String branchId,
+    required String branchName,
+    required double amount,
+    required String actorId,
+    required String actorName,
+    required String actorRole,
+    DateTime? now,
+  }) async {
+    if (amount <= 0 || !amount.isFinite) {
+      throw ArgumentError.value(
+        amount,
+        'amount',
+        'Must be positive and finite.',
+      );
+    }
+    if (!CashDrawerService.meetsMinimumDailyOpeningCash(amount)) {
+      throw StateError(
+        'Starting cash float must be at least ${formatMoney(CashDrawerService.minimumDailyOpeningCash)}.',
+      );
+    }
+    final effectiveNow = now ?? DateTime.now();
+    final today = CashDrawerService.dayKey(effectiveNow);
+    final branch = (await firestore.collection('branches').doc(branchId).get())
+        .data();
+    final sales = await firestore
+        .collection('completed_sales')
+        .where('branchId', isEqualTo: branchId)
+        .get();
+    final openingMinutes = (branch?['openingMinutes'] as num?)?.toInt() ?? 600;
+    if (!canChangeStartingCash(
+      now: effectiveNow,
+      openingMinutes: openingMinutes,
+      hasSalesToday: hasSalesToday(
+        sales.docs.map((doc) => doc.data()),
+        effectiveNow,
+      ),
+    )) {
+      throw StateError(
+        'Starting cash can only be changed before branch sales begin and before opening time.',
+      );
+    }
+
+    await firestore.runTransaction((transaction) async {
+      final drawerRef = firestore.collection('staff_cash_drawer').doc(branchId);
+      final budgetRef = firestore.collection('staff_budget').doc(branchId);
+      final drawerSnapshot = await transaction.get(drawerRef);
+      final budgetSnapshot = await transaction.get(budgetRef);
+      final drawer = drawerSnapshot.data() ?? <String, dynamic>{};
+      final budget = budgetSnapshot.data() ?? <String, dynamic>{};
+      final currentToday = drawer['drawerDate'] == today;
+      final previousOpening =
+          (drawer['dailyOpeningCash'] as num?)?.toDouble() ??
+          (drawer['openingCash'] as num?)?.toDouble() ??
+          0;
+      final previousBalance =
+          (drawer['balance'] as num?)?.toDouble() ?? previousOpening;
+      final previousAllocation = budget['budgetDate'] == today
+          ? (budget['allocatedBudget'] as num?)?.toDouble() ?? 0
+          : 0;
+      final nextBalance = amount;
+      final nextAllocation = amount;
+      transaction.set(drawerRef, {
+        'balance': nextBalance,
+        'currency': 'PHP',
+        'openingCash': amount,
+        'dailyOpeningCash': amount,
+        'drawerDate': today,
+        'staffId': branchId,
+        'branchId': branchId,
+        'branchName': branchName,
+        'targetType': 'branch',
+        'updatedAt': Timestamp.fromDate(effectiveNow),
+        if (!currentToday) 'lastResetAt': Timestamp.fromDate(effectiveNow),
+      }, SetOptions(merge: true));
+      transaction.set(budgetRef, {
+        'staffId': branchId,
+        'staffName': branchName,
+        'branchId': branchId,
+        'branchName': branchName,
+        'targetType': 'branch',
+        'allocatedBudget': nextAllocation,
+        'budgetDate': today,
+        'updatedAt': Timestamp.fromDate(effectiveNow),
+      }, SetOptions(merge: true));
+      final historyRef = firestore.collection('budget_history').doc();
+      transaction.set(historyRef, {
+        'staffId': branchId,
+        'staffName': branchName,
+        'branchId': branchId,
+        'branchName': branchName,
+        'targetType': 'branch',
+        'amount': amount,
+        'type': 'starting_cash_change',
+        'changedById': actorId,
+        'changedByName': actorName,
+        'changedByRole': actorRole,
+        'previousOpeningCash': previousOpening,
+        'previousBalance': previousBalance,
+        'previousAllocation': previousAllocation,
+        'createdAt': Timestamp.fromDate(effectiveNow),
+        'updatedAt': Timestamp.fromDate(effectiveNow),
+      });
+    });
+  }
+
   static Future<String> createRequest({
     required FirebaseFirestore firestore,
     required String branchId,
@@ -16,12 +144,20 @@ class CashFloatService {
     required String senderName,
     required double amount,
     required bool startingCash,
+    bool startingCashChange = false,
   }) async {
     if (amount <= 0 || !amount.isFinite) {
       throw ArgumentError.value(
         amount,
         'amount',
         'Must be positive and finite.',
+      );
+    }
+    if (startingCashChange && !startingCash) {
+      throw ArgumentError.value(
+        startingCash,
+        'startingCash',
+        'A starting-cash change must be a starting-cash request.',
       );
     }
     final profiles = await Future.wait([
@@ -94,6 +230,7 @@ class CashFloatService {
       'branchName': branchName,
       'amount': amount,
       'requestType': startingCash ? 'starting' : 'additional',
+      if (startingCashChange) 'startingCashChange': true,
       'status': 'pending',
       'recipientRole': recipientRole,
       'recipientIds': recipients.map((recipient) => recipient.$1).toList(),
@@ -147,6 +284,34 @@ class CashFloatService {
         ? null
         : firestore.collection('messages').doc(chatId);
     final messageRef = message?.collection('items').doc();
+    final initialRequest = (await requestRef.get()).data();
+    if (initialRequest?['startingCashChange'] == true) {
+      final branchId = '${initialRequest?['branchId'] ?? ''}';
+      final now = DateTime.now();
+      final branch = branchId.isEmpty
+          ? null
+          : (await firestore.collection('branches').doc(branchId).get()).data();
+      final sales = branchId.isEmpty
+          ? null
+          : await firestore
+                .collection('completed_sales')
+                .where('branchId', isEqualTo: branchId)
+                .get();
+      final openingMinutes =
+          (branch?['openingMinutes'] as num?)?.toInt() ?? 600;
+      if (!canChangeStartingCash(
+        now: now,
+        openingMinutes: openingMinutes,
+        hasSalesToday: hasSalesToday(
+          (sales?.docs ?? const []).map((doc) => doc.data()),
+          now,
+        ),
+      )) {
+        throw StateError(
+          'Starting cash can only be changed before branch sales begin and before opening time.',
+        );
+      }
+    }
     await firestore.runTransaction((transaction) async {
       final requestSnapshot = await transaction.get(requestRef);
       final request = requestSnapshot.data();

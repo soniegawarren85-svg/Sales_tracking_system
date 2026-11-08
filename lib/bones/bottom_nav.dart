@@ -68,8 +68,6 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
   bool _onboardingCheckStarted = false;
   bool _tutorialIsReplay = false;
   bool _tutorialStarting = false;
-  bool _tabletSidebarExpanded = false;
-  bool _tabletSidebarLabelsVisible = false;
 
   Future<void> _watchLogins() async {
     final prefs = await SharedPreferences.getInstance();
@@ -881,22 +879,6 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
     );
   }
 
-  void _toggleTabletSidebar() {
-    if (_tabletSidebarExpanded) {
-      setState(() => _tabletSidebarLabelsVisible = false);
-      Future<void>.delayed(const Duration(milliseconds: 170), () {
-        if (mounted) setState(() => _tabletSidebarExpanded = false);
-      });
-      return;
-    }
-    setState(() => _tabletSidebarExpanded = true);
-    Future<void>.delayed(const Duration(milliseconds: 130), () {
-      if (mounted && _tabletSidebarExpanded && _selectedIndex != 3) {
-        setState(() => _tabletSidebarLabelsVisible = true);
-      }
-    });
-  }
-
   Widget _buildTabletSidebar() {
     const destinations = [
       (Icons.home_rounded, 'Dashboard'),
@@ -904,14 +886,11 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
       (Icons.person_outline_rounded, 'Profile'),
       (Icons.point_of_sale_rounded, 'Sales Process'),
     ];
-    final salesProcessSelected = _selectedIndex == 3;
-    final expanded = _tabletSidebarExpanded && !salesProcessSelected;
-    final showLabels = expanded && _tabletSidebarLabelsVisible;
     return SafeArea(
+      top: false,
       child: AnimatedContainer(
-        duration: const Duration(milliseconds: 420),
-        curve: Curves.easeInOutQuart,
-        width: expanded ? 176 : 64,
+        duration: const Duration(milliseconds: 180),
+        width: 64,
         decoration: BoxDecoration(
           color: AppColors.primaryDark,
           boxShadow: [
@@ -924,36 +903,10 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
         ),
         child: Column(
           children: [
-            const SizedBox(height: 8),
-            if (!salesProcessSelected)
-              Align(
-                alignment: Alignment.centerRight,
-                child: Padding(
-                  padding: const EdgeInsets.only(right: 6),
-                  child: IconButton.filledTonal(
-                    tooltip: expanded
-                        ? 'Collapse navigation'
-                        : 'Expand navigation',
-                    onPressed: _toggleTabletSidebar,
-                    style: IconButton.styleFrom(
-                      backgroundColor: Colors.white.withOpacity(0.14),
-                      foregroundColor: Colors.white,
-                      fixedSize: const Size(30, 30),
-                      padding: EdgeInsets.zero,
-                    ),
-                    icon: Icon(
-                      expanded
-                          ? Icons.chevron_left_rounded
-                          : Icons.chevron_right_rounded,
-                      size: 20,
-                    ),
-                  ),
-                ),
-              ),
-            SizedBox(height: salesProcessSelected ? 8 : 2),
+            const SizedBox(height: 4),
             Container(
-              width: expanded ? 44 : 36,
-              height: expanded ? 44 : 36,
+              width: 30,
+              height: 30,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 border: Border.all(color: Colors.white, width: 2),
@@ -979,45 +932,7 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
                 ),
               ),
             ),
-            AnimatedSwitcher(
-              duration: const Duration(milliseconds: 220),
-              switchInCurve: Curves.easeOutCubic,
-              switchOutCurve: Curves.easeInCubic,
-              child: showLabels
-                  ? Padding(
-                      key: const ValueKey('staff-sidebar-brand'),
-                      padding: const EdgeInsets.only(top: 7),
-                      child: Column(
-                        children: [
-                          const Text(
-                            "Angel'Z Bites Cupcakes",
-                            textAlign: TextAlign.center,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 10,
-                              fontWeight: FontWeight.w900,
-                            ),
-                          ),
-                          const SizedBox(height: 3),
-                          Text(
-                            'STAFF',
-                            style: TextStyle(
-                              color: Colors.white.withOpacity(0.68),
-                              fontSize: 8,
-                              fontWeight: FontWeight.w800,
-                              letterSpacing: 2,
-                            ),
-                          ),
-                        ],
-                      ),
-                    )
-                  : const SizedBox.shrink(
-                      key: ValueKey('staff-sidebar-brand-hidden'),
-                    ),
-            ),
-            SizedBox(height: showLabels ? 14 : 10),
+            const SizedBox(height: 22),
             for (var index = 0; index < destinations.length; index++)
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
@@ -1031,46 +946,25 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
                     2 => _profileNavTourKey,
                     _ => _salesTourKey,
                   },
-                  expanded: showLabels,
+                  expanded: false,
                 ),
               ),
             const Spacer(),
-            _buildTabletHeldOrdersButton(expanded: showLabels),
+            _buildTabletHeldOrdersButton(expanded: false),
             const SizedBox(height: 8),
-            if (showLabels)
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 10),
-                child: SizedBox(
-                  width: double.infinity,
-                  height: 44,
-                  child: FilledButton.icon(
-                    onPressed: _logoutFromSidebar,
-                    icon: const Icon(Icons.logout_rounded, size: 18),
-                    label: const Text('Log out'),
-                    style: FilledButton.styleFrom(
-                      backgroundColor: AppColors.primary,
-                      foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(13),
-                      ),
-                    ),
-                  ),
-                ),
-              )
-            else
-              IconButton(
-                tooltip: 'Log out',
-                onPressed: _logoutFromSidebar,
-                icon: const Icon(Icons.logout_rounded),
-                color: Colors.white,
-                style: IconButton.styleFrom(
-                  backgroundColor: AppColors.primary,
-                  fixedSize: const Size(44, 44),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(13),
-                  ),
+            IconButton(
+              tooltip: 'Log out',
+              onPressed: _logoutFromSidebar,
+              icon: const Icon(Icons.logout_rounded),
+              color: Colors.white,
+              style: IconButton.styleFrom(
+                backgroundColor: AppColors.primary,
+                fixedSize: const Size(44, 44),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(13),
                 ),
               ),
+            ),
             const SizedBox(height: 10),
           ],
         ),
@@ -1094,10 +988,6 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
         borderRadius: BorderRadius.circular(14),
         onTap: () => setState(() {
           if (index != 3) _openPendingOnSalesLaunch = false;
-          if (index == 3) {
-            _tabletSidebarExpanded = false;
-            _tabletSidebarLabelsVisible = false;
-          }
           _selectPage(index);
         }),
         child: Padding(
@@ -1216,8 +1106,6 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
                   _salesInitialGroup = null;
                   _openPendingOnSalesLaunch = true;
                   _salesLaunchToken++;
-                  _tabletSidebarExpanded = false;
-                  _tabletSidebarLabelsVisible = false;
                   _selectPage(3);
                 }),
                 child: expanded

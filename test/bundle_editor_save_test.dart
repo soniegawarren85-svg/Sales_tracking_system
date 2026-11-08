@@ -7,8 +7,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sales_tracking/widgets/admin_catalog.dart';
 import 'package:sales_tracking/widgets/admin_item_editor.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+  SharedPreferences.setMockInitialValues({});
+
   test('save errors identify permissions and size failures', () {
     expect(
       inventorySaveError(
@@ -91,7 +95,7 @@ void main() {
         (widget) => widget is TextFormField && widget.controller?.text == '0',
       );
       await tester.enterText(quantity, '10');
-      await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+      await tester.tap(find.widgetWithText(FilledButton, 'Save changes'));
       await tester.pumpAndSettle();
       expect(find.text('Edit'), findsOneWidget);
       expect(
@@ -178,6 +182,19 @@ void main() {
       );
       await tester.tap(find.text('Edit'));
       await tester.pumpAndSettle();
+      final ingredientSearch = find.byKey(
+        const ValueKey('bundle-ingredient-search'),
+      );
+      await tester.ensureVisible(ingredientSearch);
+      await tester.pumpAndSettle();
+      await tester.tap(ingredientSearch);
+      await tester.enterText(ingredientSearch, 'Cookie');
+      await tester.pump();
+      expect(tester.binding.focusManager.primaryFocus?.hasFocus, isTrue);
+      expect(
+        tester.widget<TextField>(ingredientSearch).controller!.text,
+        'Cookie',
+      );
       expect(
         find.byWidgetPredicate(
           (widget) => widget is TextFormField && widget.initialValue == '2',
@@ -191,7 +208,7 @@ void main() {
         ),
         findsOneWidget,
       );
-      await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+      await tester.tap(find.widgetWithText(FilledButton, 'Save changes'));
       await tester.pumpAndSettle();
       final saved = (await db.doc('sales_inventory/bundle').get()).data()!;
       expect((saved['items'] as List).single['quantity'], 2);
@@ -262,7 +279,7 @@ void main() {
         ),
         '30',
       );
-      await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+      await tester.tap(find.widgetWithText(FilledButton, 'Save changes'));
       await tester.pumpAndSettle();
       final saved =
           ((await db.doc('sales_inventory/cat').get()).data()!['items'] as List)

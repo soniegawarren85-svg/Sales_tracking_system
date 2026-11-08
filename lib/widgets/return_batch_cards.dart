@@ -324,6 +324,8 @@ class ReturnBatchList extends StatefulWidget {
     required this.itemBuilder,
     this.search = '',
     this.admin = false,
+    this.superAdmin = false,
+    this.forwardToSuperAdmin = false,
     this.onDecision,
   });
   final List<QueryDocumentSnapshot<Map<String, dynamic>>> docs;
@@ -331,6 +333,8 @@ class ReturnBatchList extends StatefulWidget {
   itemBuilder;
   final String search;
   final bool admin;
+  final bool superAdmin;
+  final bool forwardToSuperAdmin;
   final Future<void> Function(
     List<QueryDocumentSnapshot<Map<String, dynamic>>>,
     bool,
@@ -411,15 +415,28 @@ class _ReturnBatchListState extends State<ReturnBatchList> {
                   ChecklistStatus.returnDeclined,
             )
             .toList();
-        final pending = batch
-            .where((doc) => ChecklistStatus.returnOpen(doc.data()))
-            .toList();
+        final pending = batch.where((doc) {
+          final data = doc.data();
+          return widget.forwardToSuperAdmin
+              ? ChecklistStatus.returnPendingForAdmin(data)
+              : widget.superAdmin
+              ? ChecklistStatus.returnPendingForSuperAdmin(data)
+              : ChecklistStatus.returnOpen(data);
+        }).toList();
         final status = completed == batch.length
             ? 'Done · Return accepted'
             : pending.isEmpty && declined.isNotEmpty
             ? (declined.length == batch.length
                   ? 'Return declined'
                   : 'Return reviewed')
+            : batch.any(
+                (doc) =>
+                    ChecklistStatus.label(doc.data()) ==
+                    ChecklistStatus.awaitingSuperAdmin,
+              )
+            ? widget.admin
+                  ? 'Submitted to Super Admin'
+                  : 'Waiting Super Admin Confirmation'
             : widget.admin
             ? 'Review returned items'
             : completed > 0
@@ -430,6 +447,8 @@ class _ReturnBatchListState extends State<ReturnBatchList> {
               ? Colors.green.shade700
               : declined.isNotEmpty
               ? Colors.red.shade800
+              : pending.isEmpty
+              ? Colors.blueGrey.shade700
               : AppColors.primaryDeep,
           padding: const EdgeInsets.all(14),
           child: Row(
@@ -439,6 +458,8 @@ class _ReturnBatchListState extends State<ReturnBatchList> {
                     ? Icons.check_circle_outline
                     : declined.isNotEmpty
                     ? Icons.cancel_outlined
+                    : pending.isEmpty
+                    ? Icons.outbox_outlined
                     : widget.admin
                     ? Icons.assignment_return_outlined
                     : Icons.hourglass_top_rounded,
@@ -543,6 +564,7 @@ class _ReturnBatchListState extends State<ReturnBatchList> {
                   padding: const EdgeInsets.only(bottom: 8),
                   child: ReturnDecisionButtons(
                     key: ValueKey(batch.first.id),
+                    forwardToSuperAdmin: widget.forwardToSuperAdmin,
                     onDecision: (accept) => widget.onDecision!(pending, accept),
                   ),
                 ),
@@ -637,8 +659,13 @@ class _ReturnBatchListState extends State<ReturnBatchList> {
 }
 
 class ReturnDecisionButtons extends StatefulWidget {
-  const ReturnDecisionButtons({super.key, required this.onDecision});
+  const ReturnDecisionButtons({
+    super.key,
+    required this.onDecision,
+    this.forwardToSuperAdmin = false,
+  });
   final Future<void> Function(bool accept) onDecision;
+  final bool forwardToSuperAdmin;
   @override
   State<ReturnDecisionButtons> createState() => _ReturnDecisionButtonsState();
 }
@@ -656,9 +683,12 @@ class _ReturnDecisionButtonsState extends State<ReturnDecisionButtons> {
       if (accept) {
         final confirmed = await confirmChecklistReceipt(
           context,
-          title: 'Accept returned items?',
-          message:
-              'Confirm that you have received all returned items in this batch. Proceed to mark this return as done for you and the staff.',
+          title: widget.forwardToSuperAdmin
+              ? 'Submit return to Super Admin?'
+              : 'Accept returned items?',
+          message: widget.forwardToSuperAdmin
+              ? 'Submit all returned items in this batch for Super Admin review.'
+              : 'Confirm that you have received all returned items in this batch. Proceed to mark this return as done for you and the staff.',
         );
         if (!confirmed || !mounted) return;
       }
@@ -677,8 +707,13 @@ class _ReturnDecisionButtonsState extends State<ReturnDecisionButtons> {
     children: [
       FilledButton.icon(
         onPressed: saving ? null : () => decide(true),
-        icon: const Icon(Icons.check, size: 18),
-        label: const Text('Accept'),
+        icon: Icon(
+          widget.forwardToSuperAdmin ? Icons.outbox_outlined : Icons.check,
+          size: 18,
+        ),
+        label: Text(
+          widget.forwardToSuperAdmin ? 'Submit to Super Admin' : 'Accept',
+        ),
       ),
       OutlinedButton.icon(
         onPressed: saving ? null : () => decide(false),

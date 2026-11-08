@@ -12,9 +12,13 @@ import '../theme/app_colors.dart';
 Future<void> showAdminAddonEditor(
   BuildContext context, {
   DocumentSnapshot<Map<String, dynamic>>? record,
-}) => showDialog<void>(
+}) => showModalBottomSheet<void>(
   context: context,
-  barrierDismissible: false,
+  isScrollControlled: true,
+  useSafeArea: true,
+  backgroundColor: Colors.transparent,
+  isDismissible: false,
+  enableDrag: false,
   builder: (_) => _AddonEditor(record: record),
 );
 
@@ -341,133 +345,201 @@ class _AddonEditorState extends State<_AddonEditor> {
   }
 
   @override
-  Widget build(BuildContext context) => AlertDialog(
-    title: Text(widget.record == null ? 'Add add-on' : 'Edit add-on'),
-    content: SizedBox(
-      width: 440,
-      child: SingleChildScrollView(
-        child: Form(
-          key: form,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextFormField(
-                controller: name,
-                enabled: !saving,
-                decoration: const InputDecoration(labelText: 'Name'),
-                validator: (v) =>
-                    v == null || v.trim().isEmpty ? 'Enter a name' : null,
-              ),
-              const SizedBox(height: 14),
-              TextFormField(
-                controller: price,
-                enabled: !saving,
-                keyboardType: const TextInputType.numberWithOptions(
-                  decimal: true,
+  Widget build(BuildContext context) => PopScope(
+    canPop: !saving,
+    child: Container(
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.sizeOf(context).height * .9,
+      ),
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+      ),
+      child: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(22, 18, 12, 14),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    widget.record == null ? 'Add add-on' : 'Edit add-on',
+                    style: const TextStyle(
+                      color: AppColors.primaryDark,
+                      fontSize: 20,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
                 ),
-                decoration: const InputDecoration(labelText: 'Price (₱)'),
-                validator: (v) {
-                  final n = num.tryParse(v ?? '');
-                  return n == null || !n.isFinite || n < 0
-                      ? 'Enter a valid price'
-                      : null;
-                },
-              ),
-              const SizedBox(height: 14),
-              TextFormField(
-                controller: cost,
-                decoration: const InputDecoration(labelText: 'Cost price (₱)'),
-                keyboardType: const TextInputType.numberWithOptions(
-                  decimal: true,
+                IconButton(
+                  tooltip: 'Close',
+                  onPressed: saving ? null : () => Navigator.pop(context),
+                  icon: const Icon(Icons.close),
                 ),
-                validator: (v) {
-                  final n = num.tryParse(v ?? '');
-                  return n == null || !n.isFinite || n < 0
-                      ? 'Enter a valid cost'
-                      : null;
-                },
-              ),
-              TextFormField(
-                controller: expiry,
-                readOnly: true,
-                decoration: const InputDecoration(
-                  labelText: 'Expiration date',
-                  suffixIcon: Icon(Icons.calendar_today),
-                ),
-                validator: (v) =>
-                    DateTime.tryParse(v ?? '') == null ? 'Choose a date' : null,
-                onTap: saving
-                    ? null
-                    : () async {
-                        final date = await showDatePicker(
-                          context: context,
-                          initialDate:
-                              DateTime.tryParse(expiry.text) ?? DateTime.now(),
-                          firstDate: DateTime(2000),
-                          lastDate: DateTime(2100),
-                        );
-                        if (date != null) {
-                          expiry.text = date.toIso8601String().split('T').first;
-                        }
-                      },
-              ),
-              ListTile(
-                contentPadding: EdgeInsets.zero,
-                title: const Text('Picture'),
-                leading: SizedBox(
-                  width: 48,
-                  height: 48,
-                  child: photo == null
-                      ? _photo('${data['imageUrl'] ?? ''}')
-                      : Image.memory(photo!, fit: BoxFit.cover),
-                ),
-                trailing: IconButton(
-                  icon: const Icon(Icons.photo_library_outlined),
-                  onPressed: saving
-                      ? null
-                      : () async {
-                          try {
-                            final file = await ImagePicker().pickImage(
-                              source: ImageSource.gallery,
-                              maxWidth: 800,
-                              maxHeight: 800,
-                              imageQuality: 70,
-                            );
-                            if (file == null) return;
-                            final bytes = await file.readAsBytes();
-                            if (!mounted) return;
-                            setState(() {
-                              photo = bytes;
-                              upload = uploadCatalogImage(
-                                bytes,
-                              ).catchError((_) => null);
-                            });
-                          } catch (_) {
-                            if (mounted) {
-                              setState(
-                                () => error = 'Unable to select picture.',
-                              );
-                            }
-                          }
-                        },
-                ),
-              ),
-              if (error != null)
-                Text(error!, style: const TextStyle(color: Colors.red)),
-            ],
+              ],
+            ),
           ),
-        ),
+          if (saving)
+            const LinearProgressIndicator(
+              minHeight: 3,
+              color: AppColors.primary,
+            ),
+          Expanded(
+            child: SingleChildScrollView(
+              padding: EdgeInsets.fromLTRB(
+                22,
+                4,
+                22,
+                MediaQuery.viewInsetsOf(context).bottom + 18,
+              ),
+              child: Form(
+                key: form,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextFormField(
+                      controller: name,
+                      enabled: !saving,
+                      decoration: const InputDecoration(labelText: 'Name'),
+                      validator: (v) =>
+                          v == null || v.trim().isEmpty ? 'Enter a name' : null,
+                    ),
+                    const SizedBox(height: 14),
+                    TextFormField(
+                      controller: price,
+                      enabled: !saving,
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      decoration: const InputDecoration(labelText: 'Price (₱)'),
+                      validator: (v) {
+                        final n = num.tryParse(v ?? '');
+                        return n == null || !n.isFinite || n < 0
+                            ? 'Enter a valid price'
+                            : null;
+                      },
+                    ),
+                    const SizedBox(height: 14),
+                    TextFormField(
+                      controller: cost,
+                      enabled: !saving,
+                      decoration: const InputDecoration(
+                        labelText: 'Cost price (₱)',
+                      ),
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      validator: (v) {
+                        final n = num.tryParse(v ?? '');
+                        return n == null || !n.isFinite || n < 0
+                            ? 'Enter a valid cost'
+                            : null;
+                      },
+                    ),
+                    TextFormField(
+                      controller: expiry,
+                      readOnly: true,
+                      decoration: const InputDecoration(
+                        labelText: 'Expiration date',
+                        suffixIcon: Icon(Icons.calendar_today),
+                      ),
+                      validator: (v) => DateTime.tryParse(v ?? '') == null
+                          ? 'Choose a date'
+                          : null,
+                      onTap: saving
+                          ? null
+                          : () async {
+                              final date = await showDatePicker(
+                                context: context,
+                                initialDate:
+                                    DateTime.tryParse(expiry.text) ??
+                                    DateTime.now(),
+                                firstDate: DateTime(2000),
+                                lastDate: DateTime(2100),
+                              );
+                              if (date != null) {
+                                expiry.text = date
+                                    .toIso8601String()
+                                    .split('T')
+                                    .first;
+                              }
+                            },
+                    ),
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Picture'),
+                      leading: SizedBox(
+                        width: 48,
+                        height: 48,
+                        child: photo == null
+                            ? _photo('${data['imageUrl'] ?? ''}')
+                            : Image.memory(photo!, fit: BoxFit.cover),
+                      ),
+                      trailing: IconButton(
+                        icon: const Icon(Icons.photo_library_outlined),
+                        onPressed: saving
+                            ? null
+                            : () async {
+                                try {
+                                  final file = await ImagePicker().pickImage(
+                                    source: ImageSource.gallery,
+                                    maxWidth: 800,
+                                    maxHeight: 800,
+                                    imageQuality: 70,
+                                  );
+                                  if (file == null) return;
+                                  final bytes = await file.readAsBytes();
+                                  if (!mounted) return;
+                                  setState(() {
+                                    photo = bytes;
+                                    upload = uploadCatalogImage(
+                                      bytes,
+                                    ).catchError((_) => null);
+                                  });
+                                } catch (_) {
+                                  if (mounted) {
+                                    setState(
+                                      () => error = 'Unable to select picture.',
+                                    );
+                                  }
+                                }
+                              },
+                      ),
+                    ),
+                    if (error != null)
+                      Text(error!, style: const TextStyle(color: Colors.red)),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          Padding(
+            padding: EdgeInsets.fromLTRB(
+              22,
+              12,
+              22,
+              MediaQuery.viewInsetsOf(context).bottom + 16,
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: saving ? null : () => Navigator.pop(context),
+                    child: const Text('Cancel'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: FilledButton(
+                    onPressed: saving ? null : save,
+                    child: Text(saving ? 'Saving…' : 'Save add-on'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     ),
-    actions: [
-      TextButton(
-        onPressed: saving ? null : () => Navigator.pop(context),
-        child: const Text('Cancel'),
-      ),
-      FilledButton(
-        onPressed: saving ? null : save,
-        child: Text(saving ? 'Saving…' : 'Save'),
-      ),
-    ],
   );
 }

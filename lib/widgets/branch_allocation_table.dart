@@ -77,40 +77,117 @@ class BranchAllocationTable extends StatelessWidget {
   String qty(dynamic v) => v == null ? '—' : reportValue(v).toStringAsFixed(0);
   @override
   Widget build(BuildContext context) {
-    final beverageSizes = rows
-        .expand(
-          (row) => (row['sizes'] as List? ?? [])
-              .whereType<Map>()
-              .map((size) => '${size['name'] ?? ''}'.trim())
-              .where((name) => name.isNotEmpty),
-        )
-        .toSet()
-        .toList();
-    if (beverages && beverageSizes.isEmpty) {
-      beverageSizes.addAll(['Small', 'Medium', 'Large']);
+    String sizeKey(String value) => switch (value.trim().toLowerCase()) {
+      's' || 'small' => 'small',
+      'm' || 'medium' => 'medium',
+      'l' || 'large' => 'large',
+      final name => name,
+    };
+    List<Map<String, dynamic>> expandBeverageSizes(Map<String, dynamic> row) {
+      final options = (row['sizes'] as List? ?? const [])
+          .whereType<Map>()
+          .map((size) => Map<String, dynamic>.from(size))
+          .toList();
+      final salesBySize = (row['sizeSales'] as Map? ?? const {}).entries
+          .where((entry) => entry.value is Map)
+          .toList();
+      final names = <String>[];
+      for (final option in options) {
+        final name = '${option['name'] ?? ''}'.trim();
+        if (name.isNotEmpty &&
+            !names.any((existing) => sizeKey(existing) == sizeKey(name))) {
+          names.add(name);
+        }
+      }
+      for (final entry in salesBySize) {
+        final name = '${entry.key}'.split('|').first.trim();
+        if (name.isNotEmpty &&
+            !names.any((existing) => sizeKey(existing) == sizeKey(name))) {
+          names.add(name);
+        }
+      }
+      if (names.isEmpty) names.addAll(['Small', 'Medium', 'Large']);
+      return names.asMap().entries.map((sizeEntry) {
+        final index = sizeEntry.key;
+        final name = sizeEntry.value;
+        final matches = salesBySize.where(
+          (entry) => sizeKey('${entry.key}'.split('|').first) == sizeKey(name),
+        );
+        final sold = matches.fold<double>(
+          0,
+          (total, entry) => total + reportValue((entry.value as Map)['sold']),
+        );
+        final sales = matches.fold<double>(
+          0,
+          (total, entry) => total + reportValue((entry.value as Map)['sales']),
+        );
+        final recordedCost = matches.fold<double>(
+          0,
+          (total, entry) =>
+              total + reportValue((entry.value as Map)['totalCost']),
+        );
+        final recordedCostSold = matches.fold<double>(
+          0,
+          (total, entry) =>
+              total + reportValue((entry.value as Map)['costRecordedSold']),
+        );
+        final option = options
+            .where(
+              (candidate) => sizeKey('${candidate['name']}') == sizeKey(name),
+            )
+            .firstOrNull;
+        final price =
+            branchSizePrice(row, name) ??
+            reportValue(row['basePrice']) +
+                reportValue(option?['priceDelta'] ?? option?['price']);
+        final optionCost = option != null && option['costPrice'] != null
+            ? reportValue(option['costPrice'])
+            : reportValue(row['costPrice']);
+        final fallbackCost = sold > recordedCostSold
+            ? (sold - recordedCostSold) * optionCost
+            : 0.0;
+        final totalCost = recordedCost + fallbackCost;
+        final costPrice = sold > 0 ? totalCost / sold : optionCost;
+        final sizeLabel = switch (sizeKey(name)) {
+          'small' => 'S',
+          'medium' => 'M',
+          'large' => 'L',
+          _ => name,
+        };
+        return {
+          ...row,
+          '_groupContinuation': index > 0,
+          '_sizeLabel': sizeLabel,
+          'price': price,
+          'sold': sold,
+          'sales': sales,
+          'costPrice': costPrice,
+          'totalCost': totalCost,
+          'unitProfit': price - costPrice,
+          'profit': sales - totalCost,
+          'netProfit': sales - totalCost,
+        };
+      }).toList();
     }
+
     final columns = <(String, String)>[
       ('id', 'ID'),
       ('allocationDate', 'Allocation date'),
       ('name', 'Item'),
+      if (beverages && !addons) ('_sizeLabel', 'Size'),
       if (inventory && addons) ...[
         ('costPrice', 'Cost price'),
         ('price', 'Price'),
-        ('status', 'Availability'),
+        ('status', 'Status'),
       ] else if (inventory) ...[
         ('costPrice', 'Cost price'),
-        if (!beverages) ('price', 'Price'),
-        if (beverages)
-          for (final size in beverageSizes) (size, size),
+        ('price', 'Price'),
         if (!beverages) ('expirationDate', 'Expiry'),
         if (!beverages) ('remaining', 'Stock'),
-        ('status', 'Availability'),
+        ('status', 'Status'),
       ] else ...[
-        if (beverages)
-          for (final size in beverageSizes) (size, size)
-        else
-          ('price', 'Unit price'),
-        if (!beverages) ...[
+        ('price', beverages ? 'Selling price' : 'Unit price'),
+        if (!beverages && !addons) ...[
           ('starting', 'Starting allocated'),
           ('added', 'Allocated in period'),
           ('remaining', 'Remaining allocated'),
@@ -156,6 +233,11 @@ class BranchAllocationTable extends StatelessWidget {
 
     Widget value(Map<String, dynamic> row, String key) {
       if (key == 'actions') return actions(row);
+      if (row['_groupContinuation'] == true &&
+          ['id', 'allocationDate', 'name', 'status'].contains(key)) {
+        return const SizedBox.shrink();
+      }
+      if (key == '_sizeLabel') return Text('${row[key] ?? '—'}');
       if (key == 'image')
         return ClipRRect(
           borderRadius: BorderRadius.circular(8),
@@ -197,18 +279,14 @@ class BranchAllocationTable extends StatelessWidget {
           ],
         );
       }
-      if (beverages &&
-          (row['sizes'] as List? ?? []).whereType<Map>().any(
-            (size) => '${size['name']}'.trim() == key,
-          )) {
-        final price = branchSizePrice(row, key);
-        return Text(price == null ? '—' : money(price));
-      }
       if (key == 'status' && !inventory) {
-        return Text('${row['status'] ?? 'Not recorded'}');
+        final status = row['isLowStock'] == true
+            ? 'Low stock'
+            : '${row['status'] ?? 'Not recorded'}';
+        return Text(status);
       }
       if (key == 'status') {
-        final stockTracked = !beverages || addons;
+        final stockTracked = !beverages && !addons;
         final soldOut =
             stockTracked &&
             reportValue(row['remaining']) <= 0 &&
@@ -298,13 +376,24 @@ class BranchAllocationTable extends StatelessWidget {
                   .map((c) => DataColumn(label: Text(c.$2)))
                   .toList(),
               rows: [
-                for (final entry in rows.asMap().entries)
+                for (final expanded
+                    in rows
+                        .expand(
+                          beverages && !addons
+                              ? expandBeverageSizes
+                              : (row) => [row],
+                        )
+                        .toList()
+                        .asMap()
+                        .entries)
                   DataRow(
                     color: WidgetStatePropertyAll(
-                      entry.key.isOdd ? const Color(0xfffaf2f5) : Colors.white,
+                      expanded.key.isOdd
+                          ? const Color(0xfffaf2f5)
+                          : Colors.white,
                     ),
                     cells: columns
-                        .map((c) => DataCell(value(entry.value, c.$1)))
+                        .map((c) => DataCell(value(expanded.value, c.$1)))
                         .toList(),
                   ),
                 if (!inventory)

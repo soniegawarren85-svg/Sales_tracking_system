@@ -31,7 +31,8 @@ class _MessagePageState extends State<MessagePage> {
   Set<String> _pinnedIds = {};
   String _search = '';
   String? _selectedId;
-  Timer? _searchDebounce;
+  final TextEditingController _searchController = TextEditingController();
+  final FocusNode _searchFocusNode = FocusNode();
   final Set<String> _deliveryUpdates = {};
 
   @override
@@ -63,11 +64,7 @@ class _MessagePageState extends State<MessagePage> {
   }
 
   void _handleSearchChanged(String value) {
-    _searchDebounce?.cancel();
-    _searchDebounce = Timer(const Duration(milliseconds: 180), () {
-      if (!mounted) return;
-      setState(() => _search = value);
-    });
+    setState(() => _search = value);
   }
 
   Future<void> _togglePinned(String id) async {
@@ -150,7 +147,8 @@ class _MessagePageState extends State<MessagePage> {
 
   @override
   void dispose() {
-    _searchDebounce?.cancel();
+    _searchController.dispose();
+    _searchFocusNode.dispose();
     super.dispose();
   }
 
@@ -361,9 +359,6 @@ class _MessagePageState extends State<MessagePage> {
                             if (unreadCompare != 0) return unreadCompare;
                             return a.name.compareTo(b.name);
                           });
-                      if (items.isEmpty) {
-                        return const _EmptyInboxState();
-                      }
                       final selected = _selectedId == null
                           ? null
                           : rows[_selectedId];
@@ -374,6 +369,8 @@ class _MessagePageState extends State<MessagePage> {
                             items: items,
                             selectedId: _selectedId,
                             search: _search,
+                            searchController: _searchController,
+                            searchFocusNode: _searchFocusNode,
                             onSearchChanged: _handleSearchChanged,
                             onSelect: (row) =>
                                 setState(() => _selectedId = row.id),
@@ -485,6 +482,8 @@ class _ContactsPanel extends StatelessWidget {
   final List<_InboxRow> items;
   final String? selectedId;
   final String search;
+  final TextEditingController searchController;
+  final FocusNode searchFocusNode;
   final ValueChanged<String> onSearchChanged;
   final ValueChanged<_InboxRow> onSelect;
   final ValueChanged<String> onPin;
@@ -493,6 +492,8 @@ class _ContactsPanel extends StatelessWidget {
     required this.items,
     required this.selectedId,
     required this.search,
+    required this.searchController,
+    required this.searchFocusNode,
     required this.onSearchChanged,
     required this.onSelect,
     required this.onPin,
@@ -510,6 +511,8 @@ class _ContactsPanel extends StatelessWidget {
         Padding(
           padding: const EdgeInsets.all(12),
           child: TextField(
+            controller: searchController,
+            focusNode: searchFocusNode,
             onChanged: onSearchChanged,
             decoration: InputDecoration(
               hintText: 'Find or start a conversation',
@@ -525,21 +528,23 @@ class _ContactsPanel extends StatelessWidget {
           ),
         ),
         Expanded(
-          child: ListView.separated(
-            padding: const EdgeInsets.fromLTRB(10, 2, 10, 10),
-            itemCount: items.length,
-            separatorBuilder: (_, _) => const SizedBox(height: 6),
-            itemBuilder: (context, index) {
-              final row = items[index];
-              return _InboxTile(
-                row: row,
-                selected: row.id == selectedId,
-                compact: true,
-                onPin: () => onPin(row.id),
-                onTap: () => onSelect(row),
-              );
-            },
-          ),
+          child: items.isEmpty
+              ? const Center(child: Text('No matching conversations.'))
+              : ListView.separated(
+                  padding: const EdgeInsets.fromLTRB(10, 2, 10, 10),
+                  itemCount: items.length,
+                  separatorBuilder: (_, _) => const SizedBox(height: 6),
+                  itemBuilder: (context, index) {
+                    final row = items[index];
+                    return _InboxTile(
+                      row: row,
+                      selected: row.id == selectedId,
+                      compact: true,
+                      onPin: () => onPin(row.id),
+                      onTap: () => onSelect(row),
+                    );
+                  },
+                ),
         ),
       ],
     ),

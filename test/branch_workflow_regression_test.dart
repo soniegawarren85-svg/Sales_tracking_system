@@ -125,13 +125,13 @@ void main() {
   testWidgets('completed reconciliations use review day not submission day', (tester) async {
     final db = FakeFirebaseFirestore(); final now = DateTime.now();
     for (final entry in [('today', now), ('old', now.subtract(const Duration(days: 2)))]) {
-      await db.doc('inventory_reconciliations/${entry.$1}').set({'branchName': entry.$1,
+      await db.doc('inventory_reconciliations/${entry.$1}').set({'staffId': 'b', 'branchName': entry.$1,
         'status': 'approved', 'createdAt': Timestamp.fromDate(now.subtract(const Duration(days: 3))),
         'reviewedAt': Timestamp.fromDate(entry.$2)});
     }
-    await tester.pumpWidget(MaterialApp(home: Scaffold(body: ReconciliationRequestsButton(database: db))));
+    await tester.pumpWidget(MaterialApp(home: Scaffold(body: ReconciliationRequestsButton(database: db, scopeIds: const ['b']))));
     await tester.tap(find.text('Reconciliation')); await tester.pumpAndSettle();
-    await tester.tap(find.text('Completed Requests')); await tester.pumpAndSettle();
+    await tester.tap(find.text('Completed')); await tester.pumpAndSettle();
     expect(find.text('today'), findsOneWidget); expect(find.text('old'), findsNothing);
   });
 }

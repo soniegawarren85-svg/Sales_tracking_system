@@ -9,7 +9,6 @@ import '../../services/refund_value.dart';
 import '../../services/session_actor.dart';
 import '../../widgets/assign_inventory_tile.dart';
 import '../../widgets/horizontal_controls.dart';
-import '../../widgets/branch_allocation_history.dart';
 import '../../services/branch_report_data.dart'
     show BranchReportData, reportRefund, validReportSale;
 import '../../services/branch_session.dart';
@@ -873,132 +872,6 @@ class _BudgetPageState extends State<BudgetPage>
     }).toList();
   }
 
-  Widget _buildAssignedInventoryPreview(
-    String staffId, {
-    required bool isBranch,
-    required String type,
-  }) {
-    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-      stream: _firestore
-          .collection('staff_inventory')
-          .where('staffId', isEqualTo: staffId)
-          .snapshots(),
-      builder: (context, snapshot) {
-        final docs = (snapshot.data?.docs ?? [])
-            .where((doc) => _isActiveAllocationDocument(doc.data()))
-            .where((doc) {
-              final data = doc.data();
-              return switch (type) {
-                'beverages' => data['isCoffee'] == true,
-                'add-ons' => data['isAddon'] == true,
-                'bundles' => data['isBundle'] == true,
-                _ =>
-                  data['isCoffee'] != true &&
-                      data['isAddon'] != true &&
-                      data['isBundle'] != true,
-              };
-            })
-            .toList();
-
-        return Container(
-          width: double.infinity,
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: kAccent.withOpacity(0.75)),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  const Icon(
-                    Icons.assignment_turned_in_rounded,
-                    color: kDeep,
-                    size: 17,
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    'Assigned to this ${isBranch ? 'branch' : 'staff'} (${docs.length})',
-                    style: const TextStyle(
-                      color: kBannerTop,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w900,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              if (snapshot.connectionState == ConnectionState.waiting)
-                const SizedBox(
-                  height: 28,
-                  child: Center(
-                    child: SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: ScreenLoadingIndicator(
-                        color: kPrimary,
-                        strokeWidth: 2,
-                      ),
-                    ),
-                  ),
-                )
-              else if (docs.isEmpty)
-                Text(
-                  'No assigned inventory yet.',
-                  style: TextStyle(
-                    color: Colors.grey.shade600,
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
-                  ),
-                )
-              else
-                ConstrainedBox(
-                  constraints: const BoxConstraints(maxHeight: 108),
-                  child: ListView.separated(
-                    shrinkWrap: true,
-                    itemCount: docs.length,
-                    separatorBuilder: (_, _) => const SizedBox(height: 6),
-                    itemBuilder: (context, index) {
-                      final data = docs[index].data();
-                      return Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Container(
-                            width: 6,
-                            height: 6,
-                            margin: const EdgeInsets.only(top: 6, right: 8),
-                            decoration: const BoxDecoration(
-                              color: kPrimary,
-                              shape: BoxShape.circle,
-                            ),
-                          ),
-                          Expanded(
-                            child: Text(
-                              _assignedInventoryLabel(data),
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                color: kBannerTop,
-                                fontSize: 11,
-                                fontWeight: FontWeight.w700,
-                                height: 1.25,
-                              ),
-                            ),
-                          ),
-                        ],
-                      );
-                    },
-                  ),
-                ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
   Future<void> _removeAssignedInventoryFromStaff(
     QueryDocumentSnapshot<Map<String, dynamic>> staffDoc,
   ) async {
@@ -1332,6 +1205,9 @@ class _BudgetPageState extends State<BudgetPage>
     }
     final selectedCoffeeIds = <String>{};
     final selectedAddonIds = <String>{};
+    final assignmentQuantityLimits = <String, int>{};
+    final assignmentQuantityKinds = <String, String>{};
+    String? assignmentValidationMessage;
     var assignmentSelectionInitialized = false;
     var isAssigning = false;
     var assignmentSucceeded = false;
@@ -1396,18 +1272,6 @@ class _BudgetPageState extends State<BudgetPage>
                         ),
                       ),
                       const SizedBox(height: 10),
-                      _buildAssignedInventoryPreview(
-                        staffId,
-                        isBranch: isBranch,
-                        type: showCategories
-                            ? 'categories'
-                            : showCoffee
-                            ? 'beverages'
-                            : showAddons
-                            ? 'add-ons'
-                            : 'bundles',
-                      ),
-                      const SizedBox(height: 14),
                       Flexible(
                         child: ConstrainedBox(
                           constraints: BoxConstraints(
@@ -1612,6 +1476,8 @@ class _BudgetPageState extends State<BudgetPage>
                                             label:
                                                 'Categories (${categoryDocs.length})',
                                             onTap: () => setDialogState(() {
+                                              assignmentValidationMessage =
+                                                  null;
                                               showCategories = true;
                                               showCoffee = false;
                                               showAddons = false;
@@ -1629,6 +1495,8 @@ class _BudgetPageState extends State<BudgetPage>
                                             label:
                                                 'Bundle (${bundleDocs.length})',
                                             onTap: () => setDialogState(() {
+                                              assignmentValidationMessage =
+                                                  null;
                                               showCategories = false;
                                               showCoffee = false;
                                               showAddons = false;
@@ -1643,6 +1511,8 @@ class _BudgetPageState extends State<BudgetPage>
                                             label:
                                                 'Beverages (${coffeeDocs.length})',
                                             onTap: () => setDialogState(() {
+                                              assignmentValidationMessage =
+                                                  null;
                                               showCategories = false;
                                               showCoffee = true;
                                               showAddons = false;
@@ -1658,6 +1528,8 @@ class _BudgetPageState extends State<BudgetPage>
                                             label:
                                                 'Add-ons (${addonDocs.length})',
                                             onTap: () => setDialogState(() {
+                                              assignmentValidationMessage =
+                                                  null;
                                               showCategories = false;
                                               showCoffee = false;
                                               showAddons = true;
@@ -1805,6 +1677,10 @@ class _BudgetPageState extends State<BudgetPage>
                                                   data['bundleCount'],
                                                 );
                                                 final key = '${doc.id}::bundle';
+                                                assignmentQuantityKinds[key] =
+                                                    'bundle';
+                                                assignmentQuantityLimits[key] =
+                                                    stock;
                                                 final controller =
                                                     _assignmentQtyControllers
                                                         .putIfAbsent(
@@ -1820,6 +1696,16 @@ class _BudgetPageState extends State<BudgetPage>
                                                       Icons.inventory_2_rounded,
                                                   controller: controller,
                                                   enabled: stock > 0,
+                                                  onChanged: (_) {
+                                                    if (assignmentValidationMessage !=
+                                                        null) {
+                                                      setDialogState(
+                                                        () =>
+                                                            assignmentValidationMessage =
+                                                                null,
+                                                      );
+                                                    }
+                                                  },
                                                 );
                                               }
 
@@ -1891,6 +1777,10 @@ class _BudgetPageState extends State<BudgetPage>
                                                           'Item';
                                                       final key =
                                                           '${doc.id}::${entry.key}';
+                                                      assignmentQuantityKinds[key] =
+                                                          'category';
+                                                      assignmentQuantityLimits[key] =
+                                                          stock;
                                                       final controller =
                                                           _assignmentQtyControllers
                                                               .putIfAbsent(
@@ -1928,10 +1818,36 @@ class _BudgetPageState extends State<BudgetPage>
                         ),
                       ),
                       const SizedBox(height: 14),
+                      if (assignmentValidationMessage != null)
+                        AssignmentValidationNotice(
+                          message: assignmentValidationMessage!,
+                        ),
                       ElevatedButton.icon(
                         onPressed: isAssigning
                             ? null
                             : () async {
+                                final activeQuantityKinds = showCategories
+                                    ? <String>{'category'}
+                                    : !showCoffee && !showAddons
+                                    ? <String>{'bundle'}
+                                    : <String>{};
+                                final validationMessage =
+                                    assignmentQuantityValidationMessage(
+                                      controllers: _assignmentQtyControllers,
+                                      kinds: assignmentQuantityKinds,
+                                      limits: assignmentQuantityLimits,
+                                      activeKinds: activeQuantityKinds,
+                                    );
+                                if (validationMessage != null) {
+                                  setDialogState(() {
+                                    assignmentValidationMessage =
+                                        validationMessage;
+                                  });
+                                  return;
+                                }
+                                setDialogState(
+                                  () => assignmentValidationMessage = null,
+                                );
                                 setDialogState(() => isAssigning = true);
                                 try {
                                   FocusManager.instance.primaryFocus?.unfocus();
@@ -6638,7 +6554,7 @@ class _BudgetPageState extends State<BudgetPage>
     alignment: Alignment.centerLeft,
     child: HorizontalControls(
       spacing: 8,
-      children: ['Categories', 'Bundle', 'Beverages']
+      children: ['Categories', 'Bundle', 'Beverages', 'Add-ons']
           .map(
             (filter) => ChoiceChip(
               label: Text(filter),
@@ -6792,6 +6708,8 @@ class _BudgetPageState extends State<BudgetPage>
           final matchesFilter =
               (_allocationFilter == 'Bundle' && row.type == 'Bundle') ||
               (_allocationFilter == 'Beverages' && row.type == 'Beverages') ||
+              (_allocationFilter == 'Add-ons' &&
+                  (row.type == 'Add-on' || row.type == 'Add-ons')) ||
               (_allocationFilter == 'Categories' && row.type == 'Category');
           final details =
               '${row.id} ${row.name} ${row.allocated} '
@@ -6861,7 +6779,11 @@ class _BudgetPageState extends State<BudgetPage>
                     if (row.type == 'Bundle') 'starting': current['remaining'],
                     'id': row.id,
                     'name': current['name'] ?? row.name,
-                    'type': row.type == 'Category' ? 'Categories' : row.type,
+                    'type': row.type == 'Category'
+                        ? 'Categories'
+                        : row.type == 'Add-on'
+                        ? 'Add-ons'
+                        : row.type,
                     'price': current['price'] ?? row.price,
                   };
                 })
@@ -6869,6 +6791,8 @@ class _BudgetPageState extends State<BudgetPage>
             return BranchAllocationTable(
               rows: tableRows,
               beverages: _allocationFilter == 'Beverages',
+              addons: _allocationFilter == 'Add-ons',
+              showActions: false,
               actions: (item) {
                 final row = rows.firstWhere((row) => row.id == item['id']);
                 return Row(

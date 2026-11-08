@@ -666,6 +666,7 @@ class _BudgetPageState extends State<BudgetPage>
     String branchId,
     String branchName,
     double amount, {
+    bool changeStartingCash = false,
     required ValueChanged<bool> onSavingChanged,
     required VoidCallback onSuccess,
   }) async {
@@ -681,26 +682,6 @@ class _BudgetPageState extends State<BudgetPage>
         branchId: branchId,
       );
       if (!mounted) return;
-      final confirmed = await showDialog<bool>(
-        context: context,
-        builder: (dialogContext) => AlertDialog(
-          title: const Text('Confirm cash float allocation'),
-          content: Text(
-            'Send ${formatMoney(amount)} to $branchName? The branch must confirm receipt before the cash drawer is updated.',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext, false),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(dialogContext, true),
-              child: const Text('Confirm allocation'),
-            ),
-          ],
-        ),
-      );
-      if (confirmed != true) return;
       final actorFuture = resolveSessionActor(_firestore, admin: true);
       final drawerFuture = _firestore
           .collection('staff_cash_drawer')
@@ -713,15 +694,112 @@ class _BudgetPageState extends State<BudgetPage>
           (drawer?['dailyOpeningCash'] as num?)?.toDouble() ??
           (drawer?['openingCash'] as num?)?.toDouble() ??
           0;
-      final startingCash =
-          drawer == null ||
-          drawer['drawerDate'] != today ||
-          currentOpening <= 0;
+      final hasStartingCash =
+          drawer != null && drawer['drawerDate'] == today && currentOpening > 0;
+      final startingCash = changeStartingCash || !hasStartingCash;
+      if (changeStartingCash) {
+        if (!hasStartingCash) {
+          _showSnack(
+            'There is no starting cash to change for today.',
+            Colors.orange.shade700,
+          );
+          return;
+        }
+        final branchFuture = _firestore
+            .collection('branches')
+            .doc(branchId)
+            .get();
+        final salesFuture = _firestore
+            .collection('completed_sales')
+            .where('branchId', isEqualTo: branchId)
+            .get();
+        final branch = (await branchFuture).data();
+        final sales = await salesFuture;
+        final now = DateTime.now();
+        final openingMinutes =
+            (branch?['openingMinutes'] as num?)?.toInt() ?? 600;
+        if (!CashFloatService.canChangeStartingCash(
+          now: now,
+          openingMinutes: openingMinutes,
+          hasSalesToday: CashFloatService.hasSalesToday(
+            sales.docs.map((doc) => doc.data()),
+            now,
+          ),
+        )) {
+          _showSnack(
+            'Starting cash can only be changed before branch sales begin and before opening time.',
+            Colors.orange.shade700,
+          );
+          return;
+        }
+        if (!CashDrawerService.meetsMinimumDailyOpeningCash(amount)) {
+          _showSnack(
+            'Starting cash float must be at least ${formatMoney(CashDrawerService.minimumDailyOpeningCash)}.',
+            Colors.orange.shade700,
+          );
+          return;
+        }
+      }
       if (startingCash &&
           !CashDrawerService.meetsMinimumDailyOpeningCash(amount)) {
         _showSnack(
           'Starting cash float must be at least ${formatMoney(CashDrawerService.minimumDailyOpeningCash)}.',
           Colors.orange.shade700,
+        );
+        return;
+      }
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: Text(
+            changeStartingCash
+                ? 'Confirm starting cash change'
+                : startingCash
+                ? 'Confirm starting cash'
+                : 'Confirm cash addition',
+          ),
+          content: Text(
+            changeStartingCash
+                ? 'Change $branchName starting cash to ${formatMoney(amount)}? This updates the drawer immediately for today before sales begin.'
+                : startingCash
+                ? 'Set $branchName starting cash to ${formatMoney(amount)}? It will be added to the drawer after branch staff receives and accepts the cash.'
+                : 'Add ${formatMoney(amount)} to $branchName cash? The funds will be added to the drawer after branch staff receives and accepts the cash.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: Text(
+                changeStartingCash
+                    ? 'Confirm change'
+                    : startingCash
+                    ? 'Set starting cash'
+                    : 'Add cash',
+              ),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true) return;
+      if (changeStartingCash) {
+        await CashFloatService.applyImmediateStartingCashChange(
+          firestore: _firestore,
+          branchId: branchId,
+          branchName: branchName,
+          amount: amount,
+          actorId: actor.id,
+          actorName: actor.name,
+          actorRole: actor.role,
+        );
+        if (!mounted) return;
+        setState(() => _budgetControllers[branchId]?.clear());
+        onSuccess();
+        _showSnack(
+          'Starting cash for $branchName updated successfully.',
+          Colors.green.shade600,
         );
         return;
       }
@@ -733,12 +811,13 @@ class _BudgetPageState extends State<BudgetPage>
         senderName: actor.name,
         amount: amount,
         startingCash: startingCash,
+        startingCashChange: changeStartingCash,
       );
       if (!mounted) return;
       setState(() => _budgetControllers[branchId]?.clear());
       onSuccess();
       _showSnack(
-        'Cash float successfully sent to $branchName for receipt confirmation.',
+        'Cash sent to $branchName for staff acceptance.',
         Colors.green.shade600,
       );
     } catch (error) {
@@ -1133,132 +1212,6 @@ class _BudgetPageState extends State<BudgetPage>
     }).toList();
   }
 
-  Widget _buildAssignedInventoryPreview(
-    String staffId, {
-    required bool isBranch,
-    required String type,
-  }) {
-    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-      stream: _firestore
-          .collection('staff_inventory')
-          .where('staffId', isEqualTo: staffId)
-          .snapshots(),
-      builder: (context, snapshot) {
-        final docs = (snapshot.data?.docs ?? [])
-            .where((doc) => _isActiveAllocationDocument(doc.data()))
-            .where((doc) {
-              final data = doc.data();
-              return switch (type) {
-                'beverages' => data['isCoffee'] == true,
-                'add-ons' => data['isAddon'] == true,
-                'bundles' => data['isBundle'] == true,
-                _ =>
-                  data['isCoffee'] != true &&
-                      data['isAddon'] != true &&
-                      data['isBundle'] != true,
-              };
-            })
-            .toList();
-
-        return Container(
-          width: double.infinity,
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: kAccent.withOpacity(0.75)),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  const Icon(
-                    Icons.assignment_turned_in_rounded,
-                    color: kDeep,
-                    size: 17,
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    'Assigned to this ${isBranch ? 'branch' : 'staff'} (${docs.length})',
-                    style: const TextStyle(
-                      color: kBannerTop,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w900,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              if (snapshot.connectionState == ConnectionState.waiting)
-                const SizedBox(
-                  height: 28,
-                  child: Center(
-                    child: SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: ScreenLoadingIndicator(
-                        color: kPrimary,
-                        strokeWidth: 2,
-                      ),
-                    ),
-                  ),
-                )
-              else if (docs.isEmpty)
-                Text(
-                  'No assigned inventory yet.',
-                  style: TextStyle(
-                    color: Colors.grey.shade600,
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
-                  ),
-                )
-              else
-                ConstrainedBox(
-                  constraints: const BoxConstraints(maxHeight: 108),
-                  child: ListView.separated(
-                    shrinkWrap: true,
-                    itemCount: docs.length,
-                    separatorBuilder: (_, _) => const SizedBox(height: 6),
-                    itemBuilder: (context, index) {
-                      final data = docs[index].data();
-                      return Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Container(
-                            width: 6,
-                            height: 6,
-                            margin: const EdgeInsets.only(top: 6, right: 8),
-                            decoration: const BoxDecoration(
-                              color: kPrimary,
-                              shape: BoxShape.circle,
-                            ),
-                          ),
-                          Expanded(
-                            child: Text(
-                              _assignedInventoryLabel(data),
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                color: kBannerTop,
-                                fontSize: 11,
-                                fontWeight: FontWeight.w700,
-                                height: 1.25,
-                              ),
-                            ),
-                          ),
-                        ],
-                      );
-                    },
-                  ),
-                ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
   Future<void> _removeAssignedInventoryFromStaff(
     QueryDocumentSnapshot<Map<String, dynamic>> staffDoc,
   ) async {
@@ -1594,6 +1547,7 @@ class _BudgetPageState extends State<BudgetPage>
     final selectedAddonIds = <String>{};
     final assignmentWarnings = <String, String>{};
     final assignmentQuantityLimits = <String, int>{};
+    final assignmentQuantityKinds = <String, String>{};
     final assignedCoffeeIds = <String>{};
     final assignedAddonIds = <String>{};
     String? assignmentValidationMessage;
@@ -1660,18 +1614,6 @@ class _BudgetPageState extends State<BudgetPage>
                         ),
                       ),
                       const SizedBox(height: 10),
-                      _buildAssignedInventoryPreview(
-                        staffId,
-                        isBranch: isBranch,
-                        type: showCategories
-                            ? 'categories'
-                            : showCoffee
-                            ? 'beverages'
-                            : showAddons
-                            ? 'add-ons'
-                            : 'bundles',
-                      ),
-                      const SizedBox(height: 14),
                       Flexible(
                         child: ConstrainedBox(
                           constraints: BoxConstraints(
@@ -1884,6 +1826,8 @@ class _BudgetPageState extends State<BudgetPage>
                                             label:
                                                 'Categories (${categoryDocs.length})',
                                             onTap: () => setDialogState(() {
+                                              assignmentValidationMessage =
+                                                  null;
                                               showCategories = true;
                                               showCoffee = false;
                                               showAddons = false;
@@ -1901,6 +1845,8 @@ class _BudgetPageState extends State<BudgetPage>
                                             label:
                                                 'Bundle (${bundleDocs.length})',
                                             onTap: () => setDialogState(() {
+                                              assignmentValidationMessage =
+                                                  null;
                                               showCategories = false;
                                               showCoffee = false;
                                               showAddons = false;
@@ -1915,6 +1861,8 @@ class _BudgetPageState extends State<BudgetPage>
                                             label:
                                                 'Beverages (${coffeeDocs.length})',
                                             onTap: () => setDialogState(() {
+                                              assignmentValidationMessage =
+                                                  null;
                                               showCategories = false;
                                               showCoffee = true;
                                               showAddons = false;
@@ -1930,6 +1878,8 @@ class _BudgetPageState extends State<BudgetPage>
                                             label:
                                                 'Add-ons (${addonDocs.length})',
                                             onTap: () => setDialogState(() {
+                                              assignmentValidationMessage =
+                                                  null;
                                               showCategories = false;
                                               showCoffee = false;
                                               showAddons = true;
@@ -2101,6 +2051,10 @@ class _BudgetPageState extends State<BudgetPage>
                                                   data['bundleCount'],
                                                 );
                                                 final key = '${doc.id}::bundle';
+                                                assignmentQuantityKinds[key] =
+                                                    'bundle';
+                                                assignmentQuantityLimits[key] =
+                                                    stock;
                                                 final controller =
                                                     _assignmentQtyControllers
                                                         .putIfAbsent(
@@ -2116,6 +2070,16 @@ class _BudgetPageState extends State<BudgetPage>
                                                       Icons.inventory_2_rounded,
                                                   controller: controller,
                                                   enabled: stock > 0,
+                                                  onChanged: (_) {
+                                                    if (assignmentValidationMessage !=
+                                                        null) {
+                                                      setDialogState(
+                                                        () =>
+                                                            assignmentValidationMessage =
+                                                                null,
+                                                      );
+                                                    }
+                                                  },
                                                 );
                                               }
 
@@ -2194,6 +2158,8 @@ class _BudgetPageState extends State<BudgetPage>
                                                               );
                                                       assignmentQuantityLimits[key] =
                                                           stock;
+                                                      assignmentQuantityKinds[key] =
+                                                          'category';
                                                       return Padding(
                                                         padding:
                                                             const EdgeInsets.only(
@@ -2232,37 +2198,29 @@ class _BudgetPageState extends State<BudgetPage>
                       ),
                       const SizedBox(height: 14),
                       if (assignmentValidationMessage != null)
-                        Padding(
-                          padding: const EdgeInsets.only(bottom: 8),
-                          child: Text(
-                            assignmentValidationMessage!,
-                            style: const TextStyle(
-                              color: Colors.deepOrange,
-                              fontWeight: FontWeight.w700,
-                            ),
-                            textAlign: TextAlign.center,
-                          ),
+                        AssignmentValidationNotice(
+                          message: assignmentValidationMessage!,
                         ),
                       ElevatedButton.icon(
                         onPressed: isAssigning
                             ? null
                             : () async {
-                                final exceeded = _assignmentQtyControllers
-                                    .entries
-                                    .where((entry) {
-                                      final requested = _parseInt(
-                                        entry.value.text,
-                                      );
-                                      final maximum =
-                                          assignmentQuantityLimits[entry.key];
-                                      return maximum != null &&
-                                          requested > maximum;
-                                    })
-                                    .isNotEmpty;
-                                if (exceeded) {
+                                final activeQuantityKinds = showCategories
+                                    ? <String>{'category'}
+                                    : !showCoffee && !showAddons
+                                    ? <String>{'bundle'}
+                                    : <String>{};
+                                final validationMessage =
+                                    assignmentQuantityValidationMessage(
+                                      controllers: _assignmentQtyControllers,
+                                      kinds: assignmentQuantityKinds,
+                                      limits: assignmentQuantityLimits,
+                                      activeKinds: activeQuantityKinds,
+                                    );
+                                if (validationMessage != null) {
                                   setDialogState(() {
                                     assignmentValidationMessage =
-                                        'Some quantities exceed the available stock. Please correct the highlighted fields.';
+                                        validationMessage;
                                   });
                                   return;
                                 }
@@ -7121,7 +7079,7 @@ class _BudgetPageState extends State<BudgetPage>
   Widget _buildAllocationCategories() => HorizontalControls(
     spacing: 8,
 
-    children: ['Categories', 'Bundle', 'Beverages']
+    children: ['Categories', 'Bundle', 'Beverages', 'Add-ons']
         .map(
           (filter) => ChoiceChip(
             label: Text(filter),
@@ -7195,27 +7153,54 @@ class _BudgetPageState extends State<BudgetPage>
                       borderRadius: BorderRadius.circular(20),
                       child: Padding(
                         padding: const EdgeInsets.all(16),
-                        child: _buildBranchAllocationPanel(
-                          branchId: branchId,
-                          branchName: branchName,
-                          controller: controller,
-                          staffIds: staffIds,
-                          enabled: staffIds.isNotEmpty,
-                          isSending: isSending,
-                          onSavingChanged: (sending) {
-                            if (!isClosing && context.mounted) {
-                              setSheetState(() => isSending = sending);
-                            }
-                          },
-                          onSuccess: () {
-                            if (context.mounted && !isClosing) {
-                              isClosing = true;
-                              controller.clear();
-                              Navigator.of(context).pop();
-                            }
-                          },
-                          onAmountChanged: () => setSheetState(() {}),
-                        ),
+                        child:
+                            StreamBuilder<
+                              DocumentSnapshot<Map<String, dynamic>>
+                            >(
+                              stream: _firestore
+                                  .collection('staff_cash_drawer')
+                                  .doc(branchId)
+                                  .snapshots(),
+                              builder: (context, drawerSnapshot) {
+                                final drawer = drawerSnapshot.data?.data();
+                                final today = CashDrawerService.dayKey(
+                                  DateTime.now(),
+                                );
+                                final currentOpening =
+                                    (drawer?['dailyOpeningCash'] as num?)
+                                        ?.toDouble() ??
+                                    (drawer?['openingCash'] as num?)
+                                        ?.toDouble() ??
+                                    0;
+                                final hasStartingCash =
+                                    drawer != null &&
+                                    drawer['drawerDate'] == today &&
+                                    currentOpening > 0;
+                                return _buildBranchAllocationPanel(
+                                  branchId: branchId,
+                                  branchName: branchName,
+                                  controller: controller,
+                                  staffIds: staffIds,
+                                  enabled: staffIds.isNotEmpty,
+                                  isSending: isSending,
+                                  cashDrawerLoaded: drawerSnapshot.hasData,
+                                  hasStartingCash: hasStartingCash,
+                                  onSavingChanged: (sending) {
+                                    if (!isClosing && context.mounted) {
+                                      setSheetState(() => isSending = sending);
+                                    }
+                                  },
+                                  onSuccess: () {
+                                    if (context.mounted && !isClosing) {
+                                      isClosing = true;
+                                      controller.clear();
+                                      Navigator.of(context).pop();
+                                    }
+                                  },
+                                  onAmountChanged: () => setSheetState(() {}),
+                                );
+                              },
+                            ),
                       ),
                     ),
                   ),
@@ -7306,6 +7291,8 @@ class _BudgetPageState extends State<BudgetPage>
           final matchesFilter =
               (_allocationFilter == 'Bundle' && row.type == 'Bundle') ||
               (_allocationFilter == 'Beverages' && row.type == 'Beverages') ||
+              (_allocationFilter == 'Add-ons' &&
+                  (row.type == 'Add-on' || row.type == 'Add-ons')) ||
               (_allocationFilter == 'Categories' && row.type == 'Category');
           final details =
               '${row.id} ${row.name} ${row.allocated} '
@@ -7362,7 +7349,11 @@ class _BudgetPageState extends State<BudgetPage>
                         .firstOrNull,
                     'id': row.id,
                     'name': row.name,
-                    'type': row.type == 'Category' ? 'Categories' : row.type,
+                    'type': row.type == 'Category'
+                        ? 'Categories'
+                        : row.type == 'Add-on'
+                        ? 'Add-ons'
+                        : row.type,
                     'price': row.price,
                   },
                 )
@@ -7370,6 +7361,8 @@ class _BudgetPageState extends State<BudgetPage>
             return BranchAllocationTable(
               rows: tableRows,
               beverages: _allocationFilter == 'Beverages',
+              addons: _allocationFilter == 'Add-ons',
+              showActions: false,
               actions: (item) {
                 final row = rows.firstWhere((row) => row.id == item['id']);
                 return Row(
@@ -7653,10 +7646,40 @@ class _BudgetPageState extends State<BudgetPage>
     required List<String> staffIds,
     required bool enabled,
     required bool isSending,
+    required bool cashDrawerLoaded,
+    required bool hasStartingCash,
     required ValueChanged<bool> onSavingChanged,
     required VoidCallback onSuccess,
     required VoidCallback onAmountChanged,
   }) {
+    void submitCashFloat({bool changeStartingCash = false}) {
+      if (!enabled) {
+        _showSnack(
+          'Assign staff to this branch first.',
+          Colors.orange.shade700,
+        );
+        return;
+      }
+      final amountText = controller.text.trim();
+      if (amountText.isEmpty) {
+        _showSnack('Please enter an amount', Colors.orange.shade700);
+        return;
+      }
+      final amount = double.tryParse(amountText);
+      if (amount == null || !amount.isFinite || amount <= 0) {
+        _showSnack('Invalid cash amount', Colors.red.shade600);
+        return;
+      }
+      _requestBranchCashFloat(
+        branchId,
+        branchName,
+        amount,
+        changeStartingCash: changeStartingCash,
+        onSavingChanged: onSavingChanged,
+        onSuccess: onSuccess,
+      );
+    }
+
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(14),
@@ -7854,9 +7877,11 @@ class _BudgetPageState extends State<BudgetPage>
                 decimal: true,
               ),
               decoration: InputDecoration(
-                labelText: 'Cash float amount',
+                labelText: hasStartingCash
+                    ? 'Additional cash amount'
+                    : 'Starting cash amount',
                 hintText: '0.00',
-                helperText: controller.text.trim().isEmpty
+                helperText: !hasStartingCash
                     ? 'Set Starting Cash minimum: ${formatMoney(CashDrawerService.minimumDailyOpeningCash)}'
                     : 'Additional cash float for $branchName',
                 prefixIcon: const Icon(Icons.payments_rounded, color: kDeep),
@@ -7879,73 +7904,58 @@ class _BudgetPageState extends State<BudgetPage>
             ),
           ),
           const SizedBox(height: 10),
-          Row(
+          Column(
             children: [
-              Expanded(
-                child: FilledButton.icon(
-                  onPressed: isSending
-                      ? null
-                      : () {
-                          if (!enabled) {
-                            _showSnack(
-                              'Assign staff to this branch first.',
-                              Colors.orange.shade700,
-                            );
-                            return;
-                          }
-                          final budgetText = controller.text.trim();
-                          if (budgetText.isEmpty) {
-                            _showSnack(
-                              'Please enter an allocation amount',
-                              Colors.orange.shade700,
-                            );
-                            return;
-                          }
-                          final budget = double.tryParse(budgetText);
-                          if (budget == null ||
-                              !budget.isFinite ||
-                              budget <= 0) {
-                            _showSnack(
-                              'Invalid allocation amount',
-                              Colors.red.shade600,
-                            );
-                            return;
-                          }
-                          _requestBranchCashFloat(
-                            branchId,
-                            branchName,
-                            budget,
-                            onSavingChanged: onSavingChanged,
-                            onSuccess: onSuccess,
-                          );
-                        },
-                  icon: isSending
-                      ? const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Colors.white,
-                          ),
-                        )
-                      : const Icon(Icons.payments_rounded),
-                  label: Text(
-                    isSending
-                        ? 'Sending...'
-                        : controller.text.trim().isEmpty
-                        ? 'Set Starting Cash'
-                        : 'Allocate Cash',
+              FilledButton.icon(
+                onPressed: isSending || !cashDrawerLoaded
+                    ? null
+                    : () => submitCashFloat(),
+                icon: isSending
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                    : const Icon(Icons.payments_rounded),
+                label: Text(
+                  isSending
+                      ? 'Sending...'
+                      : !cashDrawerLoaded
+                      ? 'Checking drawer...'
+                      : hasStartingCash
+                      ? 'Add Cash'
+                      : 'Set Starting Cash',
+                ),
+                style: FilledButton.styleFrom(
+                  backgroundColor: kPrimary,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 13),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
                   ),
-                  style: FilledButton.styleFrom(
-                    backgroundColor: kPrimary,
-                    foregroundColor: Colors.white,
+                ),
+              ),
+              if (hasStartingCash) ...[
+                const SizedBox(height: 8),
+                OutlinedButton.icon(
+                  onPressed: isSending || !cashDrawerLoaded
+                      ? null
+                      : () => submitCashFloat(changeStartingCash: true),
+                  icon: const Icon(Icons.edit_rounded),
+                  label: const Text('Change Starting Cash'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: kBannerTop,
+                    side: const BorderSide(color: kBannerTop),
                     padding: const EdgeInsets.symmetric(vertical: 13),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(14),
                     ),
                   ),
                 ),
-              ),
+              ],
             ],
           ),
         ],

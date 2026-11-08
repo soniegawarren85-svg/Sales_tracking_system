@@ -6,6 +6,132 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:sales_tracking/widgets/inventory_batches.dart';
 
 void main() {
+  test('main inventory bundle batches group available instances', () {
+    final batches = mainInventoryBatchRows({
+      'isBundle': true,
+      'name': 'Box of Cookies',
+      'bundleCount': 3,
+      'bundleInstances': [
+        {
+          'id': 'batch-a-1',
+          'batchId': 'batch-a',
+          'status': 'available',
+          'createdAt': Timestamp.fromDate(DateTime(2026, 10, 20)),
+          'items': [
+            {'name': 'Cookies', 'quantity': 4, 'expirationDate': '2026-12-01'},
+          ],
+        },
+        {
+          'id': 'batch-a-2',
+          'batchId': 'batch-a',
+          'status': 'available',
+          'createdAt': Timestamp.fromDate(DateTime(2026, 10, 20)),
+          'items': [
+            {'name': 'Cookies', 'quantity': 4, 'expirationDate': '2026-12-01'},
+          ],
+        },
+        {
+          'id': 'batch-b-1',
+          'batchId': 'batch-b',
+          'status': 'available',
+          'createdAt': Timestamp.fromDate(DateTime(2026, 10, 21)),
+          'items': [
+            {'name': 'Cookies', 'quantity': 5, 'expirationDate': '2027-01-01'},
+          ],
+        },
+        {'id': 'returned', 'batchId': 'batch-a', 'status': 'returned'},
+      ],
+    });
+
+    expect(batches, hasLength(2));
+    expect(batches.map((batch) => batch['batchId']), [
+      'BATCH-001',
+      'BATCH-002',
+    ]);
+    expect(batches.map((batch) => batch['sourceBatchId']), [
+      'batch-a',
+      'batch-b',
+    ]);
+    expect(batches.map((batch) => batch['quantity']), [2, 1]);
+    expect(batches.first['expirationDate'], '2026-12-01');
+    expect(batches.first['items'].single['quantity'], 4);
+  });
+
+  test('updated branch bundle version recommends clearing older batches', () {
+    final oldVersion = {
+      '_id': 'old',
+      'isBundle': true,
+      'bundleId': 'BND-001',
+      'staffId': 'branch',
+      'items': [
+        {
+          'sourceInventoryId': 'cookies',
+          'variantId': 'cookie',
+          'name': 'Cookie',
+          'quantity': 4,
+        },
+      ],
+      'bundleInstances': [
+        {
+          'id': 'old-instance',
+          'batchId': 'old-batch',
+          'status': 'available',
+          'assignedAt': Timestamp.fromDate(DateTime(2026, 10, 20)),
+          'items': [
+            {'name': 'Cookie', 'quantity': 4},
+          ],
+        },
+      ],
+    };
+    final newVersion = {
+      '_id': 'new',
+      'isBundle': true,
+      'bundleId': 'BND-001',
+      'staffId': 'branch',
+      'items': [
+        {
+          'sourceInventoryId': 'cookies',
+          'variantId': 'cookie',
+          'name': 'Cookie',
+          'quantity': 5,
+        },
+        {
+          'sourceInventoryId': 'cakes',
+          'variantId': 'cake',
+          'name': 'Cake',
+          'quantity': 1,
+        },
+      ],
+      'bundleInstances': [
+        {
+          'id': 'new-instance',
+          'batchId': 'new-batch',
+          'status': 'available',
+          'assignedAt': Timestamp.fromDate(DateTime(2026, 10, 22)),
+        },
+      ],
+    };
+
+    expect(
+      hasNewerBundleVersionAllocation(
+        oldVersion,
+        [oldVersion, newVersion],
+        'old',
+        DateTime(2026, 10, 20),
+      ),
+      isTrue,
+    );
+    expect(
+      hasNewerBundleVersionAllocation(
+        oldVersion,
+        [oldVersion],
+        'old',
+        DateTime(2026, 10, 20),
+      ),
+      isFalse,
+    );
+  });
+
   testWidgets(
     'reconciliation requests have searchable pending and completed tabs',
     (tester) async {
@@ -15,6 +141,7 @@ void main() {
       addTearDown(tester.view.resetDevicePixelRatio);
       final db = FakeFirebaseFirestore();
       await db.doc('inventory_reconciliations/pending').set({
+        'staffId': 'branch',
         'status': 'pending',
         'action': 'unbundle',
         'branchName': 'SM Dagupan',
@@ -33,6 +160,7 @@ void main() {
         },
       });
       await db.doc('inventory_reconciliations/approved').set({
+        'staffId': 'branch',
         'status': 'approved',
         'action': 'unbundle',
         'branchName': 'SM Dagupan',
@@ -48,6 +176,7 @@ void main() {
         },
       });
       await db.doc('inventory_reconciliations/older-pending').set({
+        'staffId': 'other',
         'status': 'pending',
         'action': 'convert',
         'branchName': 'Other Branch',
@@ -60,8 +189,12 @@ void main() {
       await tester.pumpWidget(
         MaterialApp(
           home: Builder(
-            builder: (context) =>
-                Scaffold(body: ReconciliationRequestsButton(database: db)),
+            builder: (context) => Scaffold(
+              body: ReconciliationRequestsButton(
+                database: db,
+                scopeIds: const ['branch'],
+              ),
+            ),
           ),
         ),
       );
@@ -69,21 +202,22 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('Reconciliation requests'), findsOneWidget);
-      expect(find.text('Pending Requests'), findsOneWidget);
-      expect(find.text('Completed Requests'), findsOneWidget);
+      expect(find.text('Pending'), findsOneWidget);
+      expect(find.text('Completed'), findsOneWidget);
       expect(find.byTooltip('Filter by date range'), findsOneWidget);
-      expect(find.textContaining('SM Dagupan • Bundle Cakes'), findsOneWidget);
+      expect(find.text('SM Dagupan'), findsOneWidget);
       expect(find.textContaining('Older Bundle'), findsNothing);
 
       await tester.enterText(find.byType(TextField), 'Pistachio Dubai');
       await tester.pumpAndSettle();
-      expect(find.textContaining('Bundle Cakes'), findsOneWidget);
+      expect(find.text('SM Dagupan'), findsOneWidget);
       expect(find.textContaining('Older Bundle'), findsNothing);
       await tester.enterText(find.byType(TextField), '');
       await tester.pumpAndSettle();
       await tester.enterText(find.byType(TextField), 'Old Bundle');
       await tester.pumpAndSettle();
-      expect(find.textContaining('Other Branch'), findsOneWidget);
+      expect(find.textContaining('Other Branch'), findsNothing);
+      expect(find.text('No matching pending requests'), findsOneWidget);
       await tester.tap(find.byTooltip('Filter by date range'));
       await tester.pumpAndSettle();
       tester
@@ -101,8 +235,21 @@ void main() {
       await tester.pumpAndSettle();
       await tester.enterText(find.byType(TextField), '');
       await tester.pumpAndSettle();
-      expect(find.textContaining('Bundle Cakes'), findsOneWidget);
-      await tester.tap(find.text('Completed Requests'));
+      await tester.tap(find.text('Completed'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Filter by date range'));
+      await tester.pumpAndSettle();
+      tester
+          .state<NavigatorState>(find.byType(Navigator).last)
+          .pop(
+            DateTimeRange(
+              start: DateTime(2026, 10, 16),
+              end: DateTime(2026, 10, 16),
+            ),
+          );
+      await tester.pumpAndSettle();
+      expect(find.text('SM Dagupan'), findsOneWidget);
+      await tester.tap(find.text('SM Dagupan'));
       await tester.pumpAndSettle();
       expect(find.textContaining('Older Bundle'), findsOneWidget);
       expect(find.textContaining('Bundle Cakes'), findsNothing);

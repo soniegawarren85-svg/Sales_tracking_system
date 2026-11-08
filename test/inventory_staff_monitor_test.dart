@@ -118,7 +118,7 @@ void main() {
     expect(find.text('Low stock: 0'), findsOneWidget);
   });
 
-  testWidgets('staff dropdown stays fixed while only performance scrolls', (
+  testWidgets('staff search stays fixed and shows one empty-state message', (
     tester,
   ) async {
     final db = FakeFirebaseFirestore();
@@ -153,21 +153,17 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    final dropdown = find.byType(DropdownButtonFormField<String>);
-    final initialPosition = tester.getTopLeft(dropdown);
-    final summary = find.byKey(const ValueKey('staff-performance-summary'));
-    final summaryPosition = tester.getTopLeft(summary);
-    await tester.drag(find.byType(ListView), const Offset(0, -350));
+    final search = find.byType(TextField).first;
+    final initialPosition = tester.getTopLeft(search);
+    await tester.drag(find.byType(CustomScrollView), const Offset(0, -350));
     await tester.pumpAndSettle();
-    expect(tester.getTopLeft(dropdown), initialPosition);
-    expect(tester.getTopLeft(summary), summaryPosition);
-    await tester.tap(dropdown);
+    expect(tester.getTopLeft(search), initialPosition);
+    await tester.enterText(search, 'two Cashier');
     await tester.pumpAndSettle();
-    await tester.tap(find.text('two Cashier').last);
-    await tester.pumpAndSettle();
+    expect(find.text('No activities recorded yet.'), findsOneWidget);
     expect(
       find.text('No orders recorded for this staff in this date range.'),
-      findsOneWidget,
+      findsNothing,
     );
     expect(tester.takeException(), isNull);
   });

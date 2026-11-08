@@ -103,7 +103,8 @@ class _BranchInventoryMonitorState extends State<BranchInventoryMonitor> {
       final rows = all
           .where(
             (row) =>
-                (row['type'] == 'Beverages' ||
+                (widget.showActions ||
+                    row['type'] == 'Beverages' ||
                     row['type'] == 'Add-ons' ||
                     (num.tryParse('${row['remaining']}') ?? 0) > 0) &&
                 (widget.addons
@@ -309,9 +310,7 @@ class _BranchInventoryMonitorState extends State<BranchInventoryMonitor> {
           for (final row in rows)
             {
               ...row,
-              'alreadyReported':
-                  row['staffLowStockPendingAdmin'] != true &&
-                  row['isLowStock'] == true,
+              'alreadyReported': row['lowStockReportStatus'] == 'reported',
               'selectionKey':
                   '${row['type']}|${row['allocationId']}|${row['allocationItemId'] ?? row['id']}',
             },

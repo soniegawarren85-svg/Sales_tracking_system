@@ -44,7 +44,10 @@ List<Map<String, dynamic>> currentCatalogCategories(
     final activeItems = (product['items'] as List? ?? [])
         .whereType<Map>()
         .where((item) => catalogItemActive(item, now ?? DateTime.now()));
-    if (activeItems.isEmpty) {
+    // A saved empty category is still a category. Keep it visible so it can be
+    // selected after the user chooses not to add its first item immediately.
+    if (product['items'] is! List ||
+        (activeItems.isEmpty && (product['items'] as List).isNotEmpty)) {
       continue;
     }
     categories.putIfAbsent(catalogCategoryKey(product), () => product);
@@ -168,6 +171,8 @@ List<AdminCatalogEntry> adminCatalogEntries(
           .toList();
   final result = <AdminCatalogEntry>[];
   for (final data in products.where((data) => catalogItemActive(data, day))) {
+    final explicitlyEmptyCategory =
+        data['items'] is List && (data['items'] as List).isEmpty;
     final items = (data['items'] as List? ?? [])
         .whereType<Map>()
         .where((item) => catalogItemActive(item, day))
@@ -193,7 +198,7 @@ List<AdminCatalogEntry> adminCatalogEntries(
           available: stock > 0,
         ),
       );
-    } else if (gallery && items.isNotEmpty) {
+    } else if (gallery && (items.isNotEmpty || explicitlyEmptyCategory)) {
       final stock = items.fold<int>(
         0,
         (sum, item) => sum + number(item['stock'] ?? item['startingStock']),
@@ -1064,7 +1069,7 @@ class _AdminCatalogState extends State<AdminCatalog> {
                             const FittedBox(
                               fit: BoxFit.scaleDown,
                               alignment: Alignment.centerLeft,
-                              child: Text('Availability'),
+                              child: Text('Status'),
                             ),
                           ),
                           cell(const Text('Actions'), 2),

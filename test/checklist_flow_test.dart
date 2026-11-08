@@ -136,6 +136,65 @@ void main() {
       await sub.cancel();
     },
   );
+
+  test(
+    'branch admin forwards returned inventory for Super Admin review',
+    () async {
+      await db.doc('allocation_checklist/return').set({
+        'kind': 'return',
+        'status': ChecklistStatus.awaitingAdmin,
+        'staffId': 'branch',
+        'branchId': 'branch',
+        'branchName': 'Branch A',
+        'name': 'Cookie',
+        'quantity': 3,
+        'createdAt': Timestamp.now(),
+      });
+
+      expect(
+        await service.forwardReturns(
+          ['return'],
+          actorId: 'admin',
+          actorName: 'Branch Admin',
+          scopeIds: ['branch'],
+        ),
+        1,
+      );
+      final forwarded = (await db.doc('allocation_checklist/return').get())
+          .data()!;
+      expect(forwarded['status'], ChecklistStatus.awaitingSuperAdmin);
+      expect(forwarded['forwardedBy'], 'admin');
+      expect(forwarded['forwardedByName'], 'Branch Admin');
+      expect(ChecklistStatus.returnPendingForAdmin(forwarded), false);
+      expect(ChecklistStatus.returnPendingForSuperAdmin(forwarded), true);
+      expect(
+        (await db.doc('admin_notifications/return_forward_return').get())
+            .data()?['type'],
+        'allocation_return',
+      );
+      expect(
+        await service.forwardReturns(
+          ['return'],
+          actorId: 'admin',
+          actorName: 'Branch Admin',
+          scopeIds: ['branch'],
+        ),
+        0,
+      );
+      expect(
+        await service.confirmReturn(
+          'return',
+          actorId: 'Spr-001',
+          actorName: 'Super Admin',
+        ),
+        true,
+      );
+      expect(
+        (await db.doc('allocation_checklist/return').get()).data()?['status'],
+        ChecklistStatus.completed,
+      );
+    },
+  );
   test(
     'received timestamp records staff acceptance, not allocation date',
     () async {
@@ -163,6 +222,37 @@ void main() {
         isFalse,
       );
       expect(received['decidedAt'], isA<Timestamp>());
+    },
+  );
+
+  test(
+    'accepting a new beverage or add-on assignment clears old low stock',
+    () async {
+      await db.doc('staff_inventory/stock').set({
+        'staffId': 'branch',
+        'isAddon': true,
+        'isLowStock': true,
+        'staffLowStockPendingAdmin': false,
+        'lowStockReportStatus': 'reported',
+        'lowStockMarkedAt': Timestamp.now(),
+        'lowStockMarkedBy': 'staff',
+        'lowStockMarkedByName': 'Staff A',
+        'lowStockReportedAt': Timestamp.now(),
+      });
+      await db.doc('allocation_checklist/delivery').update({
+        'isAddon': true,
+        'isCoffee': false,
+      });
+
+      await receive();
+
+      final allocation = (await db.doc('staff_inventory/stock').get()).data()!;
+      expect(allocation['isLowStock'], isFalse);
+      expect(allocation['staffLowStockPendingAdmin'], isFalse);
+      expect(allocation.containsKey('lowStockReportStatus'), isFalse);
+      expect(allocation.containsKey('lowStockMarkedAt'), isFalse);
+      expect(allocation.containsKey('lowStockMarkedBy'), isFalse);
+      expect(allocation.containsKey('lowStockReportedAt'), isFalse);
     },
   );
 

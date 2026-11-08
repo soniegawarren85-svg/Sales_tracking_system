@@ -335,6 +335,75 @@ void main() {
       'return',
     );
   });
+  test('staff can unbundle immediately and records branch activity', () async {
+    final service = InventoryReconciliationService(db);
+    await service.execute(
+      actionId: 'direct-unbundle',
+      allocationId: 'old',
+      instanceIds: ['old-0'],
+      action: 'unbundle',
+      actorId: 'staff',
+      actorName: 'Staff',
+      actorPublicId: 'STF-001',
+      scopeIds: ['branch'],
+    );
+    await service.execute(
+      actionId: 'direct-unbundle',
+      allocationId: 'old',
+      instanceIds: ['old-0'],
+      action: 'unbundle',
+      actorId: 'staff',
+      actorName: 'Staff',
+      actorPublicId: 'STF-001',
+      scopeIds: ['branch'],
+    );
+
+    final old = (await db.doc('staff_inventory/old').get()).data()!;
+    final output =
+        (await db.doc('staff_inventory/bundle_action_direct-unbundle_0').get())
+            .data()!;
+    final activity =
+        (await db.doc('activity_logs/bundle_action_direct-unbundle').get())
+            .data()!;
+    expect(old['bundleCount'], 1);
+    expect(old['bundleInstances'][0]['status'], 'unbundled');
+    expect((output['items'] as List).single['stock'], 3);
+    expect(
+      (await db.collection('inventory_reconciliations').get()).docs,
+      isEmpty,
+    );
+    expect(activity['action'], 'bundle_unbundled');
+    expect(activity['actorRole'], 'staff');
+    expect(activity['branchIds'], ['branch']);
+  });
+  test(
+    'staff can return selected bundle instances without a request',
+    () async {
+      final service = InventoryReconciliationService(db);
+      await service.execute(
+        actionId: 'direct-return',
+        allocationId: 'old',
+        instanceIds: ['old-1'],
+        action: 'return',
+        actorId: 'staff',
+        actorName: 'Staff',
+        actorPublicId: 'STF-001',
+        scopeIds: ['branch'],
+      );
+
+      final old = (await db.doc('staff_inventory/old').get()).data()!;
+      final activity =
+          (await db.doc('activity_logs/bundle_action_direct-return').get())
+              .data()!;
+      expect(old['bundleCount'], 1);
+      expect(old['bundleInstances'][1]['status'], 'returned');
+      expect(activity['action'], 'bundle_returned');
+      expect(
+        (await db.collection('inventory_reconciliations').get()).docs,
+        isEmpty,
+      );
+    },
+  );
   test('catalog recipe edits leave delivered bundles unchanged', () async {
     await db.doc('sales_inventory/bundle').set({
       'isBundle': true,

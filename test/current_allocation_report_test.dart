@@ -432,7 +432,7 @@ void main() {
           )
           .map((chip) => (chip.label as Text).data)
           .toList();
-      expect(categoryChoices, ['Categories', 'Bundle', 'Beverages']);
+      expect(categoryChoices, ['Categories', 'Bundle', 'Beverages', 'Add-ons']);
       expect(
         tester
             .widget<ChoiceChip>(
@@ -458,7 +458,7 @@ void main() {
       expect(headings[headings.indexOf('Sales') + 1], 'Sold items');
       expect(headings[headings.indexOf('Total profit') + 1], 'Net profit');
       expect(headings[headings.indexOf('Net profit') + 1], 'Total cost');
-      expect(headings.last, 'Action');
+      expect(headings.last, 'Total cost');
       expect(find.text('Expired cookie'), findsNothing);
       expect(find.text('Removed cookie'), findsNothing);
       expect(find.text('₱2,100.00'), findsNothing);

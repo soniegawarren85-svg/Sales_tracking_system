@@ -17,6 +17,8 @@ class ActivityFeed extends StatefulWidget {
     this.includeBranchActivity = false,
     this.includeReceipts = false,
     this.hideSessionEvents = false,
+    this.hideAdminActivities = false,
+    this.showEmptyMessage = true,
   });
   final String? actorId, branchId;
   final Set<String>? actorIds;
@@ -28,6 +30,8 @@ class ActivityFeed extends StatefulWidget {
   final bool includeBranchActivity;
   final bool includeReceipts;
   final bool hideSessionEvents;
+  final bool hideAdminActivities;
+  final bool showEmptyMessage;
 
   @override
   State<ActivityFeed> createState() => _ActivityFeedState();
@@ -102,7 +106,9 @@ class _ActivityFeedState extends State<ActivityFeed> {
 
   IconData _iconFor(String action) {
     if (action == 'cashier_made_order') return Icons.point_of_sale_rounded;
-    if (action.startsWith('inventory') || action == 'allocation_received') {
+    if (action.startsWith('inventory') ||
+        action.startsWith('bundle_') ||
+        action == 'allocation_received') {
       return Icons.inventory_2_outlined;
     }
     if (action.contains('return')) return Icons.assignment_return_outlined;
@@ -143,6 +149,8 @@ class _ActivityFeedState extends State<ActivityFeed> {
       'inventory_allocated',
       'return_approved',
       'return_rejected',
+      'bundle_unbundled',
+      'bundle_returned',
     };
     Widget feed(
       List<QueryDocumentSnapshot<Map<String, dynamic>>> receipts,
@@ -236,6 +244,13 @@ class _ActivityFeedState extends State<ActivityFeed> {
                             'account_login',
                             'account_logout',
                           }.contains('${r['action']}')) &&
+                      (!widget.hideAdminActivities ||
+                          !const {'admin', 'branchadmin'}.contains(
+                            '${r['actorRole'] ?? ''}'.toLowerCase().replaceAll(
+                              RegExp(r'[^a-z]'),
+                              '',
+                            ),
+                          )) &&
                       (actors.isEmpty ||
                           actors.contains('${r['actorId']}') ||
                           (includeBranchActivity &&
@@ -265,10 +280,15 @@ class _ActivityFeedState extends State<ActivityFeed> {
                     ),
               );
         if (rows.isEmpty) {
-          return const Padding(
-            padding: EdgeInsets.all(24),
-            child: Text('No activities recorded yet.'),
-          );
+          return widget.showEmptyMessage
+              ? const Padding(
+                  padding: EdgeInsets.all(24),
+                  child: Text(
+                    'No activities recorded yet.',
+                    textAlign: TextAlign.center,
+                  ),
+                )
+              : const SizedBox.shrink();
         }
         final pageCount = (rows.length / _pageSize).ceil();
         final currentPage = _page.clamp(0, pageCount - 1);
@@ -510,6 +530,7 @@ class _RecentActivityPanelState extends State<RecentActivityPanel> {
         compact: true,
         cardRows: true,
         hideSessionEvents: true,
+        hideAdminActivities: true,
       ),
     ],
   );

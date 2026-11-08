@@ -177,6 +177,88 @@ void main() {
     expect(totals['Total cost'], 40);
     expect(totals['Total profit'], 150);
   });
+  test('beverage size sales preserve per-size cost snapshots', () {
+    final data = BranchReportData({
+      'completed_sales': [
+        {
+          'branchId': 'b',
+          'timestamp': '2026-10-04T10:00:00',
+          'items': [
+            {
+              'id': 'latte',
+              'name': 'Latte',
+              'coffeeSize': 'Small',
+              'quantity': 2,
+              'price': 50,
+              'costPrice': 10,
+              'isCoffee': true,
+            },
+            {
+              'id': 'latte',
+              'name': 'Latte',
+              'coffeeSize': 'Large',
+              'quantity': 1,
+              'price': 90,
+              'costPrice': 20,
+              'isCoffee': true,
+            },
+          ],
+        },
+      ],
+    });
+
+    final item = data
+        .items('b', DateTime(2026, 10, 4), DateTime(2026, 10, 5))
+        .single;
+    final sizeSales = item['sizeSales'] as Map<String, Map<String, dynamic>>;
+    expect(sizeSales['Small|50.0']?['totalCost'], 20);
+    expect(sizeSales['Small|50.0']?['costRecordedSold'], 2);
+    expect(sizeSales['Large|90.0']?['totalCost'], 20);
+    expect(sizeSales['Large|90.0']?['costRecordedSold'], 1);
+  });
+  test('add-on sales are separated from beverage totals and have no stock', () {
+    final data = BranchReportData({
+      'completed_sales': [
+        {
+          'branchId': 'b',
+          'timestamp': '2026-10-04T10:00:00',
+          'total': 180,
+          'items': [
+            {
+              'id': 'coffee-1',
+              'name': 'Latte',
+              'variant': 'Small',
+              'coffeeSize': 'Small',
+              'quantity': 2,
+              'price': 90,
+              'costPrice': 35,
+              'isCoffee': true,
+              'addonName': 'Chewy Cream',
+              'addonId': 'AD-001',
+              'addonPriceDelta': 40,
+              'addonCostPrice': 5,
+            },
+          ],
+        },
+      ],
+    });
+
+    final rows = data.items('b', DateTime(2026, 10, 4), DateTime(2026, 10, 5));
+    final beverage = rows.singleWhere((row) => row['type'] == 'Beverages');
+    final addon = rows.singleWhere((row) => row['type'] == 'Add-ons');
+
+    expect(beverage['sales'], 100);
+    expect(beverage['totalCost'], 60);
+    expect(addon['name'], 'Chewy Cream');
+    expect(addon['sold'], 2);
+    expect(addon['sales'], 80);
+    expect(addon['totalCost'], 10);
+    expect(addon['remaining'], isNull);
+    expect(addon['starting'], isNull);
+    expect((addon['history'] as List).map((event) => event['activity']), [
+      'Sold',
+    ]);
+  });
   test(
     'today uses configured 1200 instead of stale submitted 1000 and excludes GCash',
     () {

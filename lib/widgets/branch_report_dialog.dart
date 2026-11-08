@@ -1,6 +1,5 @@
 import 'horizontal_controls.dart';
 import '../services/branch_report_excel.dart';
-import 'report_item_history.dart';
 import 'item_sales_dialog.dart';
 import '../services/report_pdf_theme.dart';
 import '../services/report_print.dart';
@@ -21,6 +20,19 @@ import 'admin_sales_overview.dart';
 import 'branch_analytics_bars.dart';
 import 'branch_allocation_table.dart';
 import 'historical_cash_drawer.dart';
+
+String branchItemActivitySummary(Map<String, dynamic> row) {
+  final type = '${row['type'] ?? ''}'.trim().toLowerCase();
+  final madeToOrder =
+      type == 'beverages' || type == 'add-on' || type == 'add-ons';
+  return [
+    'Sold ${reportValue(row['sold']).toStringAsFixed(0)}',
+    'Allocated ${reportValue(row['added']).toStringAsFixed(0)}',
+    'Reduced ${reportValue(row['reduce']).toStringAsFixed(0)}',
+    if (!madeToOrder)
+      'Remaining ${reportValue(row['remaining']).toStringAsFixed(0)}',
+  ].join(' • ');
+}
 
 Future<void> showBranchReport(
   BuildContext context, {
@@ -67,6 +79,101 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
     DateTime.now(),
     closingMinutes: _closingMinutes,
   );
+
+  Iterable<Map<String, dynamic>> _tableRowsForDisplay(
+    Map<String, dynamic> row,
+  ) sync* {
+    if (row['type'] != 'Beverages' || _tableAddons) {
+      yield row;
+      return;
+    }
+
+    final sizeSales = (row['sizeSales'] as Map? ?? const {})
+        .cast<String, Map>();
+    final options = (row['sizes'] as List? ?? const []).whereType<Map>();
+    final sizes = <String>[];
+    for (final option in options) {
+      final name = '${option['name'] ?? ''}'.trim();
+      if (name.isNotEmpty && !sizes.contains(name)) sizes.add(name);
+    }
+    for (final entry in sizeSales.entries) {
+      final size = entry.key.split('|').first.trim();
+      if (size.isNotEmpty &&
+          !sizes.any((value) => value.toLowerCase() == size.toLowerCase())) {
+        sizes.add(size);
+      }
+    }
+    if (sizes.isEmpty) {
+      yield {...row, '_sizeLabel': '—'};
+      return;
+    }
+
+    for (final entry in sizes.asMap().entries) {
+      final index = entry.key;
+      final size = entry.value;
+      final matchingSales = sizeSales.entries
+          .where(
+            (entry) =>
+                entry.key.split('|').first.toLowerCase() == size.toLowerCase(),
+          )
+          .map((entry) => entry.value);
+      final sizeDetails = matchingSales.toList();
+      final sold = matchingSales.fold<double>(
+        0,
+        (sum, detail) => sum + reportValue(detail['sold']),
+      );
+      final sales = sizeDetails.fold<double>(
+        0,
+        (sum, detail) => sum + reportValue(detail['sales']),
+      );
+      final recordedCost = sizeDetails.fold<double>(
+        0,
+        (sum, detail) => sum + reportValue(detail['totalCost']),
+      );
+      final recordedCostSold = sizeDetails.fold<double>(
+        0,
+        (sum, detail) => sum + reportValue(detail['costRecordedSold']),
+      );
+      final option = options
+          .where(
+            (value) =>
+                '${value['name']}'.trim().toLowerCase() == size.toLowerCase(),
+          )
+          .firstOrNull;
+      final price = sold > 0
+          ? sales / sold
+          : branchSizePrice(row, size) ??
+                reportValue(row['basePrice']) +
+                    reportValue(option?['priceDelta']);
+      final optionCost = option != null && option['costPrice'] != null
+          ? reportValue(option['costPrice'])
+          : reportValue(row['costPrice']);
+      final totalCost =
+          recordedCost +
+          (sold - recordedCostSold).clamp(0, double.infinity) * optionCost;
+      final costPrice = sold > 0 ? totalCost / sold : optionCost;
+      final shortSize = switch (size.toLowerCase()) {
+        'small' => 'S',
+        'medium' => 'M',
+        'large' => 'L',
+        _ => size,
+      };
+      yield {
+        ...row,
+        '_groupContinuation': index > 0,
+        '_sizeLabel': shortSize,
+        'price': price,
+        'sold': sold,
+        'sales': sales,
+        'costPrice': costPrice,
+        'totalCost': totalCost,
+        'unitProfit': price - costPrice,
+        'profit': sales - totalCost,
+        'netProfit': sales - totalCost,
+      };
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -912,23 +1019,19 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
                         ? 'refund'
                         : _comparison == 'Reduce'
                         ? 'reduce'
-                        : 'sold'])).toStringAsFixed(0)} ${_comparison.toLowerCase()} / ${top.fold<double>(0, (sum, row) => sum + reportValue(row['allocated'])).toStringAsFixed(0)} allocated',
+                        : 'sold'])).toStringAsFixed(0)} ${_comparison.toLowerCase()} / ${top.fold<double>(0, (sum, row) => sum + reportValue(row['added'])).toStringAsFixed(0)} allocated',
               ),
               children: top
                   .where(
                     (row) =>
-                        reportValue(
-                          row[_comparison == 'Refund'
-                              ? 'refund'
-                              : _comparison == 'Reduce'
-                              ? 'reduce'
-                              : 'sold'],
-                        ) >
-                        0,
+                        reportValue(row['sold']) > 0 ||
+                        reportValue(row['added']) > 0 ||
+                        reportValue(row['reduce']) > 0,
                   )
-                  .map(
-                    (row) => ListTile(
+                  .map((row) {
+                    return ListTile(
                       title: Text('${row['name']}'),
+                      subtitle: Text(branchItemActivitySummary(row)),
                       trailing: Text(
                         '${reportValue(row[_comparison == 'Refund'
                             ? 'refund'
@@ -936,8 +1039,8 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
                             ? 'reduce'
                             : 'sold']).toStringAsFixed(0)} ${_comparison.toLowerCase()}',
                       ),
-                    ),
-                  )
+                    );
+                  })
                   .toList(),
             );
           }),
@@ -1050,8 +1153,7 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
     summaryTotals.add(
       MapEntry(
         'Total loss',
-        (totals['Reduce'] ?? 0) +
-            (_allowRefunds ? totals['Refunds'] ?? 0 : 0),
+        (totals['Reduce'] ?? 0) + (_allowRefunds ? totals['Refunds'] ?? 0 : 0),
       ),
     );
     final items = visibleItems(data);
@@ -1158,24 +1260,21 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
           children: [
             Wrap(
               spacing: 10,
-              children: ['Categories', 'Bundle', 'Beverages']
+              children: ['Categories', 'Bundle', 'Beverages', 'Add-ons']
                   .map(
                     (type) => ChoiceChip(
                       label: Text(type),
-                      selected: _tableType == type,
+                      selected: type == 'Add-ons'
+                          ? _tableAddons
+                          : _tableType == type && !_tableAddons,
                       onSelected: (_) => setState(() {
-                        _tableType = type;
-                        _tableAddons = false;
+                        _tableAddons = type == 'Add-ons';
+                        if (!_tableAddons) _tableType = type;
                       }),
                     ),
                   )
                   .toList(),
             ),
-            if (_tableType == 'Beverages')
-              TextButton(
-                onPressed: () => setState(() => _tableAddons = !_tableAddons),
-                child: Text(_tableAddons ? 'View beverages' : 'View add-ons'),
-              ),
             const SizedBox(height: 12),
             SingleChildScrollView(
               scrollDirection: Axis.horizontal,
@@ -1185,18 +1284,15 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
                   'ID',
                   'Allocation date',
                   'Item',
+                  if (_tableType == 'Beverages' && !_tableAddons) 'Size',
                   if (_allowRefunds) 'Refund',
                   'Reduce',
-                  if (_tableType != 'Beverages') 'Expiration date',
+                  if (_tableType != 'Beverages' && !_tableAddons)
+                    'Expiration date',
                   'Status',
                   'Cost price',
-                  if (_tableType == 'Beverages' && !_tableAddons) ...[
-                    'Small',
-                    'Medium',
-                    'Large',
-                  ] else
-                    'Price',
-                  if (_tableType != 'Beverages') ...[
+                  'Price',
+                  if (_tableType != 'Beverages' && !_tableAddons) ...[
                     'Starting allocated',
                     'Remaining allocated',
                     'Allocated in period',
@@ -1207,69 +1303,76 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
                   'Total profit',
                   'Net profit',
                   'Total cost',
-                  'Action',
                 ].map((label) => DataColumn(label: Text(label))).toList(),
                 rows: [
                   ...items
                       .where(matchesTableType)
+                      .expand(_tableRowsForDisplay)
                       .map(
                         (row) => DataRow(
                           cells: [
-                            DataCell(Text('${row['id']}')),
                             DataCell(
-                              Text(
-                                row['allocationDate'] == null
-                                    ? 'Not recorded'
-                                    : MaterialLocalizations.of(
-                                        context,
-                                      ).formatShortDate(
-                                        row['allocationDate'] as DateTime,
-                                      ),
-                              ),
+                              row['_groupContinuation'] == true
+                                  ? const SizedBox.shrink()
+                                  : Text('${row['id']}'),
                             ),
-                            DataCell(Text('${row['name']}')),
+                            DataCell(
+                              row['_groupContinuation'] == true
+                                  ? const SizedBox.shrink()
+                                  : Text(
+                                      row['allocationDate'] == null
+                                          ? 'Not recorded'
+                                          : MaterialLocalizations.of(
+                                              context,
+                                            ).formatShortDate(
+                                              row['allocationDate'] as DateTime,
+                                            ),
+                                    ),
+                            ),
+                            DataCell(
+                              row['_groupContinuation'] == true
+                                  ? const SizedBox.shrink()
+                                  : Text('${row['name']}'),
+                            ),
+                            if (_tableType == 'Beverages' && !_tableAddons)
+                              DataCell(Text('${row['_sizeLabel'] ?? '—'}')),
                             if (_allowRefunds)
-                              DataCell(Text(money(reportValue(row['refund'])))),
-                            DataCell(Text(money(reportValue(row['reduce'])))),
-                            if (_tableType != 'Beverages')
                               DataCell(
                                 Text(
-                                  '${row['expirationDate'] ?? '?'}'
-                                      .split('T')
-                                      .first,
+                                  row['_groupContinuation'] == true
+                                      ? ''
+                                      : money(reportValue(row['refund'])),
                                 ),
                               ),
-                            DataCell(Text('${row['status']}')),
+                            DataCell(
+                              Text(
+                                row['_groupContinuation'] == true
+                                    ? ''
+                                    : money(reportValue(row['reduce'])),
+                              ),
+                            ),
+                            if (_tableType != 'Beverages' && !_tableAddons)
+                              DataCell(
+                                row['_groupContinuation'] == true
+                                    ? const SizedBox.shrink()
+                                    : Text(
+                                        '${row['expirationDate'] ?? '?'}'
+                                            .split('T')
+                                            .first,
+                                      ),
+                              ),
+                            DataCell(
+                              row['_groupContinuation'] == true
+                                  ? const SizedBox.shrink()
+                                  : Text('${row['status']}'),
+                            ),
                             DataCell(
                               Text(money(reportValue(row['costPrice']))),
                             ),
-                            if (_tableType == 'Beverages' && !_tableAddons)
-                              ...['Small', 'Medium', 'Large'].map((size) {
-                                final option = (row['sizes'] as List? ?? [])
-                                    .whereType<Map>()
-                                    .where(
-                                      (s) =>
-                                          '${s['name']}'.toLowerCase() ==
-                                          size.toLowerCase(),
-                                    )
-                                    .firstOrNull;
-                                return DataCell(
-                                  Text(
-                                    option == null
-                                        ? '?'
-                                        : money(
-                                            reportValue(row['basePrice']) +
-                                                reportValue(
-                                                  option['priceDelta'],
-                                                ),
-                                          ),
-                                  ),
-                                );
-                              })
-                            else
-                              DataCell(Text(money(reportValue(row['price'])))),
+                            DataCell(Text(money(reportValue(row['price'])))),
                             ...[
-                              if (_tableType != 'Beverages') ...[
+                              if (_tableType != 'Beverages' &&
+                                  !_tableAddons) ...[
                                 'starting',
                                 'remaining',
                                 'added',
@@ -1293,18 +1396,14 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
                                         size: 18,
                                       ),
                                     Text(
-                                      key == 'unitProfit' &&
-                                              _tableType == 'Beverages' &&
-                                              reportValue(row['sold']) == 0
-                                          ? 'Varies by size'
-                                          : [
-                                              'sales',
-                                              'costPrice',
-                                              'unitProfit',
-                                              'totalCost',
-                                              'profit',
-                                              'netProfit',
-                                            ].contains(key)
+                                      [
+                                            'sales',
+                                            'costPrice',
+                                            'unitProfit',
+                                            'totalCost',
+                                            'profit',
+                                            'netProfit',
+                                          ].contains(key)
                                           ? money(reportValue(row[key]))
                                           : row[key] == null
                                           ? 'Not recorded'
@@ -1315,41 +1414,6 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
                               ),
                             ),
                             DataCell(Text(money(branchStockCost(row)))),
-                            DataCell(
-                              TextButton(
-                                onPressed: () => showDialog<void>(
-                                  context: context,
-                                  builder: (_) => ReportItemHistory(
-                                    item: row,
-                                    period: dates,
-                                    initialRange: DateTimeRange(
-                                      start: range.$1,
-                                      end: range.$2.subtract(
-                                        const Duration(days: 1),
-                                      ),
-                                    ),
-                                    loadRange: (selected) =>
-                                        data
-                                            .items(
-                                              widget.branchId!,
-                                              selected.start,
-                                              selected.end.add(
-                                                const Duration(days: 1),
-                                              ),
-                                            )
-                                            .where(
-                                              (item) => item['id'] == row['id'],
-                                            )
-                                            .firstOrNull ??
-                                        {
-                                          ...row,
-                                          'history': <Map<String, dynamic>>[],
-                                        },
-                                  ),
-                                ),
-                                child: const Text('View history'),
-                              ),
-                            ),
                           ],
                         ),
                       ),
@@ -1364,18 +1428,16 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
                       ),
                       const DataCell(Text('')),
                       const DataCell(Text('')),
+                      if (_tableType == 'Beverages' && !_tableAddons)
+                        const DataCell(Text('')),
                       if (_allowRefunds) const DataCell(Text('')),
                       const DataCell(Text('')),
-                      if (_tableType != 'Beverages') const DataCell(Text('')),
+                      if (_tableType != 'Beverages' && !_tableAddons)
+                        const DataCell(Text('')),
                       const DataCell(Text('')),
                       const DataCell(Text('')),
-                      if (_tableType == 'Beverages' && !_tableAddons) ...[
-                        const DataCell(Text('')),
-                        const DataCell(Text('')),
-                        const DataCell(Text('')),
-                      ] else
-                        const DataCell(Text('')),
-                      if (_tableType != 'Beverages') ...[
+                      const DataCell(Text('')),
+                      if (_tableType != 'Beverages' && !_tableAddons) ...[
                         for (final key in ['starting', 'remaining', 'added'])
                           DataCell(Text(formatNumber(tableSum(key)))),
                       ],
@@ -1385,7 +1447,6 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
                       DataCell(Text(money(tableSum('profit')))),
                       DataCell(Text(money(tableSum('netProfit')))),
                       DataCell(Text(money(tableSum('allocationCost')))),
-                      const DataCell(Text('')),
                     ],
                   ),
                 ],

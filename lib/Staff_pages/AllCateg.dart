@@ -11,6 +11,7 @@ import '../services/offline_stock_reduction_service.dart';
 import '../services/sale_stock.dart';
 import '../services/low_stock_reports.dart';
 import '../services/session_actor.dart';
+import '../services/staff_allocation_scope.dart';
 import 'dart:async';
 import 'dart:convert';
 
@@ -78,6 +79,7 @@ class _AllCategPageState extends State<AllCategPage>
   StreamSubscription<String>? _offlineSalesSubscription;
   StreamSubscription<String>? _offlineInventorySubscription;
   StreamSubscription<void>? _offlineReductionsSubscription;
+  StreamSubscription<StaffAllocationScope>? _allocationScopeSubscription;
   StreamSubscription<List<ConnectivityResult>>? _connectivitySubscription;
   List<Map<String, dynamic>> _pendingOfflineSales = const [];
   List<Map<String, dynamic>> _pendingOfflineReductions = const [];
@@ -89,6 +91,10 @@ class _AllCategPageState extends State<AllCategPage>
       (widget.selectedSourceInventoryId?.trim().isNotEmpty ?? false);
 
   bool get _isCoffeeView => widget.selectedIsCoffee;
+
+  bool _isStaffAddonRecord(Map<String, dynamic> data) =>
+      data['isAddon'] == true ||
+      data['sourceCollection']?.toString() == 'coffee_addons';
 
   @override
   void initState() {
@@ -145,38 +151,22 @@ class _AllCategPageState extends State<AllCategPage>
   }
 
   Future<void> _loadStaffInventoryIds(String uid) async {
-    final ids = <String>{};
-    try {
-      final doc = await FirebaseFirestore.instance
-          .collection('staff_requests')
-          .doc(uid)
-          .get();
-      final data = doc.data();
-      final publicStaffId = data?['staffId']?.toString().trim() ?? '';
-      final branchIds = (data?['branchIds'] as List<dynamic>? ?? [])
-          .map((id) => id.toString().trim())
-          .where((id) => id.isNotEmpty);
-      ids.addAll(branchIds);
-      final byUid = await FirebaseFirestore.instance
-          .collection('branches')
-          .where('staffIds', arrayContains: uid)
-          .get();
-      ids.addAll(byUid.docs.map((doc) => doc.id));
-      if (publicStaffId.isNotEmpty) {
-        final byPublicId = await FirebaseFirestore.instance
-            .collection('branches')
-            .where('staffIds', arrayContains: publicStaffId)
-            .get();
-        ids.addAll(byPublicId.docs.map((doc) => doc.id));
-      }
-    } catch (_) {}
-
-    if (mounted) {
+    await _allocationScopeSubscription?.cancel();
+    _allocationScopeSubscription = watchStaffAllocationScope(uid).listen((
+      scope,
+    ) {
+      if (!mounted) return;
+      final ids = scope.targets
+          .where((id) => id.trim().isNotEmpty)
+          .toSet()
+          .take(30)
+          .toList();
+      if (_staffInventoryIds.join('|') == ids.join('|')) return;
       setState(() {
-        _staffInventoryIds = ids.toList();
+        _staffInventoryIds = ids;
         _staffInventoryStreamCache = null;
       });
-    }
+    });
   }
 
   Future<void> _refreshInventory() async {
@@ -186,18 +176,10 @@ class _AllCategPageState extends State<AllCategPage>
         await OfflineStockReductionService().sync(FirebaseFirestore.instance);
         await _loadPendingOfflineReductions();
       }
-      final prefs = await SharedPreferences.getInstance();
-      final uid =
-          FirebaseAuth.instance.currentUser?.uid ??
-          prefs.getString('lastStaffDocId') ??
-          prefs.getString('lastUserId');
-      if (uid != null && uid.isNotEmpty) {
-        await _loadStaffInventoryIds(uid);
-      }
       final ids = _staffInventoryIds
           .where((id) => id.trim().isNotEmpty)
           .toSet()
-          .take(10)
+          .take(30)
           .toList();
       final inventory = FirebaseFirestore.instance.collection(
         'staff_inventory',
@@ -243,7 +225,7 @@ class _AllCategPageState extends State<AllCategPage>
     final ids = _staffInventoryIds
         .where((id) => id.trim().isNotEmpty)
         .toSet()
-        .take(10)
+        .take(30)
         .toList();
     final query = FirebaseFirestore.instance.collection('staff_inventory');
     if (ids.isEmpty) {
@@ -261,6 +243,7 @@ class _AllCategPageState extends State<AllCategPage>
     _offlineSalesSubscription?.cancel();
     _offlineInventorySubscription?.cancel();
     _offlineReductionsSubscription?.cancel();
+    _allocationScopeSubscription?.cancel();
     _connectivitySubscription?.cancel();
     _headerAnimController.dispose();
     super.dispose();
@@ -457,6 +440,13 @@ class _AllCategPageState extends State<AllCategPage>
     if (nearExpiry) return 'Near Expiry';
     return 'Available';
   }
+
+  String _madeToOrderStatus(Map<String, dynamic> item) =>
+      item['isLowStock'] == true ||
+          item['staffLowStockPendingAdmin'] == true ||
+          item['lowStockReportStatus'] == 'pending_admin'
+      ? 'Low Stock'
+      : 'Available';
 
   Color _availabilityColor(String status) {
     if (status == 'Expired' || status == 'Sold Out') return Colors.red.shade700;
@@ -5308,6 +5298,7 @@ class _AllCategPageState extends State<AllCategPage>
             _tableColumn('Medium'),
             _tableColumn('Large'),
             _tableColumn('Total Sold'),
+            _tableColumn('Status'),
             _tableColumn('Action'),
           ],
           rows: [
@@ -5364,6 +5355,7 @@ class _AllCategPageState extends State<AllCategPage>
                       width: 75,
                       color: const Color(0xFF2E7D32),
                     ),
+                    _availabilityCell(_madeToOrderStatus(category)),
                     DataCell(
                       Row(
                         mainAxisSize: MainAxisSize.min,
@@ -5403,8 +5395,12 @@ class _AllCategPageState extends State<AllCategPage>
                   'name': addon['name']?.toString() ?? 'Add-on',
                   'type': 'Add-ons',
                   'id': _displayItemId(addon),
-                  'staffInventoryDocId': addon['staffInventoryDocId'],
-                  'isLowStock': addon['isLowStock'] == true,
+                  'staffInventoryDocId':
+                      addon['staffInventoryDocId'] ?? addon['sourceDocId'],
+                  'isLowStock':
+                      addon['isLowStock'] == true ||
+                      addon['staffLowStockPendingAdmin'] == true ||
+                      addon['lowStockReportStatus'] == 'pending_admin',
                 },
             ],
           ),
@@ -5415,6 +5411,7 @@ class _AllCategPageState extends State<AllCategPage>
             _tableColumn('Add-on name'),
             _tableColumn('Price'),
             _tableColumn('Sold'),
+            _tableColumn('Status'),
             _tableColumn('Action'),
           ],
           rows: searchedAddons.map((addon) {
@@ -5441,6 +5438,7 @@ class _AllCategPageState extends State<AllCategPage>
                   width: 100,
                 ),
                 _tableCell('${addonSoldQuantity(addon)}', width: 70),
+                _availabilityCell(_madeToOrderStatus(addon)),
                 DataCell(_batchButton(addon, itemId: _displayItemId(addon))),
               ],
             );
@@ -7029,6 +7027,7 @@ class _AllCategPageState extends State<AllCategPage>
                                       key: widget.inventoryActionsTourKey,
                                       child: AllocationChecklistButton(
                                         scopeIds: _staffInventoryIds,
+                                        hideForBranchAdmin: true,
                                         checklistTourKey:
                                             widget.inventoryChecklistTourKey,
                                         returnsTourKey:
@@ -7166,9 +7165,13 @@ class _AllCategPageState extends State<AllCategPage>
                       documentId,
                     );
                     if (data['isDeleted'] == true) continue;
-                    if (data['isAddon'] == true) {
+                    if (_isStaffAddonRecord(data)) {
                       if (bundleExpired(data, DateTime.now())) continue;
-                      visibleDocs.add({...data, 'sourceDocId': documentId});
+                      visibleDocs.add({
+                        ...data,
+                        'isAddon': true,
+                        'sourceDocId': documentId,
+                      });
                       continue;
                     }
                     final sourceId =
@@ -7290,12 +7293,12 @@ class _AllCategPageState extends State<AllCategPage>
                   final groupedCategories = <String, Map<String, dynamic>>{};
                   final allocatedAddonsByName = <String, Map<String, dynamic>>{
                     for (final data in visibleDocs)
-                      if (data['isAddon'] == true &&
+                      if (_isStaffAddonRecord(data) &&
                           '${data['name'] ?? ''}'.trim().isNotEmpty)
                         '${data['name']}'.trim().toLowerCase(): data,
                   };
                   for (final data in visibleDocs) {
-                    if (data['isBundle'] == true || data['isAddon'] == true) {
+                    if (data['isBundle'] == true || _isStaffAddonRecord(data)) {
                       continue;
                     }
                     final categoryName =
@@ -7398,14 +7401,14 @@ class _AllCategPageState extends State<AllCategPage>
                   );
                   final addonByName = <String, Map<String, dynamic>>{};
                   for (final data in visibleDocs) {
-                    if (data['isAddon'] != true) continue;
+                    if (!_isStaffAddonRecord(data)) continue;
                     final name = data['name']?.toString().trim() ?? '';
                     if (name.isNotEmpty) {
                       addonByName.putIfAbsent(name, () => data);
                     }
                   }
                   for (final data in visibleDocs) {
-                    if (data['isAddon'] == true) {
+                    if (_isStaffAddonRecord(data)) {
                       continue;
                     }
                     for (final addon

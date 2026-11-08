@@ -91,7 +91,7 @@ void main() {
       tester.getTopRight(receivedBadge).dx,
       closeTo(tester.getTopRight(find.byType(Card).first).dx - 18, 4),
     );
-    expect(find.text('Pending'), findsNothing);
+    expect(find.text('Pending'), findsOneWidget);
     final dialogBody = find.descendant(
       of: find.byType(Dialog),
       matching: find.byWidgetPredicate(
@@ -99,6 +99,8 @@ void main() {
       ),
     );
     expect(tester.getSize(dialogBody).width, lessThanOrEqualTo(680));
+    await tester.ensureVisible(find.byTooltip('Expand items'));
+    await tester.pumpAndSettle();
     await tester.tap(find.byTooltip('Expand items'));
     await tester.pumpAndSettle();
     expect(find.text('Categories (2)'), findsOneWidget);
@@ -106,10 +108,14 @@ void main() {
     expect(find.text('Item ID: choc'), findsOneWidget);
     expect(find.text('Qty: 5'), findsOneWidget);
     expect(find.text('Oat cookie'), findsOneWidget);
+    await tester.ensureVisible(find.text('Bundle (1)'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Bundle (1)'));
     await tester.pumpAndSettle();
     expect(find.text('Cookie box'), findsOneWidget);
     expect(find.text('Qty: 2'), findsOneWidget);
+    await tester.ensureVisible(find.byTooltip('Collapse items'));
+    await tester.pumpAndSettle();
     await tester.tap(find.byTooltip('Collapse items'));
     await tester.pumpAndSettle();
     await db.doc('staff_inventory_history/new').set({
@@ -193,6 +199,8 @@ void main() {
       tester.getCenter(find.byTooltip('Expand items')).dx,
       greaterThan(tester.getCenter(find.text('View issue report')).dx),
     );
+    await tester.ensureVisible(find.text('View issue report'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('View issue report'));
     await tester.pumpAndSettle();
     expect(find.textContaining('Five units arrived damaged'), findsOneWidget);
@@ -250,6 +258,16 @@ void main() {
       expect(find.text('Cookie'), findsNothing);
       await tester.tap(find.byTooltip('Collapse items'));
       await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField).last, '');
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Pending').first);
+      await tester.pumpAndSettle();
+      expect(find.text('Branch: Other'), findsOneWidget);
+      expect(find.text('Branch: Main'), findsNothing);
+      await tester.tap(find.text('Complete'));
+      await tester.pumpAndSettle();
+      expect(find.text('Branch: Main'), findsOneWidget);
+      expect(find.text('Branch: Other'), findsNothing);
       await tester.pumpWidget(
         MaterialApp(
           home: AllocationHistoryDialog(

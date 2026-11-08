@@ -243,7 +243,11 @@ void main() {
       await firestore
           .collection('staff_inventory')
           .doc('coffee-allocation')
-          .set({'isLowStock': false, 'staffLowStockPendingAdmin': true});
+          .set({
+            'isLowStock': true,
+            'staffLowStockPendingAdmin': false,
+            'lowStockMarkedBy': 'staff-one',
+          });
 
       await submitLowStockReportToSuperAdmin(
         firestore: firestore,
@@ -284,6 +288,7 @@ void main() {
               .data()!;
       expect(allocation['isLowStock'], isTrue);
       expect(allocation['staffLowStockPendingAdmin'], isFalse);
+      expect(allocation['lowStockReportStatus'], 'reported');
     },
   );
 
@@ -292,6 +297,7 @@ void main() {
     await firestore.collection('staff_inventory').doc('coffee').set({
       'isLowStock': true,
       'staffLowStockPendingAdmin': false,
+      'lowStockReportStatus': 'reported',
     });
 
     await expectLater(
@@ -403,6 +409,7 @@ void main() {
     final rows = data.currentInventory('branch-one', DateTime.now());
     expect(rows, hasLength(1));
     expect(rows.single['isLowStock'], isTrue);
+    expect(rows.single['status'], 'Low stock');
   });
 
   test('unreported add-on stays available and keeps its catalog price', () {
@@ -427,7 +434,10 @@ void main() {
           'sourceInventoryId': 'addon-source',
           'isAddon': true,
           'staffLowStockPendingAdmin': true,
+          'isLowStock': true,
+          'lowStockMarkedBy': 'staff-one',
           'name': 'Chewy Cream',
+          'stock': 3,
           'assignedAt': DateTime.now(),
         },
       ],
@@ -436,8 +446,10 @@ void main() {
     final row = data.currentInventory('branch-one', DateTime.now()).single;
     expect(row['type'], 'Add-ons');
     expect(row['price'], 40);
+    expect(row['remaining'], isNull);
     expect(row['status'], 'Available');
     expect(row['isLowStock'], isFalse);
     expect(row['staffLowStockPendingAdmin'], isTrue);
+    expect(row['lowStockReportStatus'], 'pending_admin');
   });
 }

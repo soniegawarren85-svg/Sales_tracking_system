@@ -5,6 +5,31 @@ import 'package:sales_tracking/services/branch_report_data.dart';
 import 'package:sales_tracking/widgets/branch_report_dialog.dart';
 
 void main() {
+  test('made-to-order report rows omit remaining quantity', () {
+    for (final type in ['Beverages', 'Add-on', 'Add-ons']) {
+      expect(
+        branchItemActivitySummary({
+          'type': type,
+          'sold': 0,
+          'added': 1,
+          'reduce': 0,
+          'remaining': -27,
+        }),
+        'Sold 0 • Allocated 1 • Reduced 0',
+      );
+    }
+    expect(
+      branchItemActivitySummary({
+        'type': 'Categories',
+        'sold': 2,
+        'added': 3,
+        'reduce': 1,
+        'remaining': 4,
+      }),
+      'Sold 2 • Allocated 3 • Reduced 1 • Remaining 4',
+    );
+  });
+
   BranchReportData fixture() {
     final now = DateTime.now();
     return BranchReportData({
@@ -79,6 +104,80 @@ void main() {
         ) ??
         Uint8List(0);
     expect(String.fromCharCodes(bytes.take(4)), '%PDF');
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('daily beverage report groups item metadata and size costs', (
+    tester,
+  ) async {
+    final today = DateUtils.dateOnly(DateTime.now());
+    final sizes = [
+      {'name': 'Small', 'priceDelta': 0, 'costPrice': 10},
+      {'name': 'Medium', 'priceDelta': 20, 'costPrice': 20},
+      {'name': 'Large', 'priceDelta': 40, 'costPrice': 30},
+    ];
+    final data = BranchReportData({
+      'branches': [
+        {'_id': 'b', 'name': 'SM Dagupan'},
+      ],
+      'coffee_products': [
+        {
+          '_id': 'coffee-source',
+          'coffeeId': 'COF-001',
+          'publicId': 'COF-001',
+          'name': 'Latte',
+          'basePrice': 100,
+          'sizes': sizes,
+        },
+      ],
+      'staff_inventory': [
+        {
+          '_id': 'coffee-allocation',
+          'staffId': 'b',
+          'sourceInventoryId': 'coffee-source',
+          'publicId': 'COF-001',
+          'name': 'Latte',
+          'isCoffee': true,
+          'sizes': sizes,
+          'assignedAt': today,
+        },
+      ],
+    });
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: BranchReportDialog(
+            branchId: 'b',
+            branchName: 'SM Dagupan',
+            reportData: Future.value(data),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final scroll = find
+        .descendant(
+          of: find.byType(ListView).first,
+          matching: find.byType(Scrollable),
+        )
+        .first;
+    await tester.scrollUntilVisible(
+      find.text('Allocated items'),
+      300,
+      scrollable: scroll,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(ChoiceChip, 'Beverages'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Latte'), findsOneWidget);
+    expect(find.text('COF-001'), findsOneWidget);
+    expect(find.text('S'), findsOneWidget);
+    expect(find.text('M'), findsOneWidget);
+    expect(find.text('L'), findsOneWidget);
+    expect(find.text('₱10.00'), findsOneWidget);
+    expect(find.text('₱20.00'), findsOneWidget);
+    expect(find.text('₱30.00'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 

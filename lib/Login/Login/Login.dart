@@ -1048,7 +1048,7 @@ class _LoginScreenState extends State<LoginScreen>
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     SizedBox(height: isTablet ? 28 : 36),
-                                    _buildWelcomeText(),
+                                    _buildWelcomeText(isTablet: isTablet),
                                     const SizedBox(height: 5),
                                     _buildForm(),
                                   ],
@@ -1226,13 +1226,13 @@ class _LoginScreenState extends State<LoginScreen>
   }
 
   // ── Welcome Text ──────────────────────────────────────────────────────────
-  Widget _buildWelcomeText() {
+  Widget _buildWelcomeText({bool isTablet = false}) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         // ── "Welcome Back" — changed to Outfit (modern geometric sans) ──
         Text(
-          'Welcome\nBack',
+          isTablet ? 'Welcome Back' : 'Welcome\nBack',
           style: GoogleFonts.outfit(
             fontSize: 35,
             fontWeight: FontWeight.w800,

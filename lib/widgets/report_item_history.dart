@@ -30,14 +30,18 @@ class _ReportItemHistoryState extends State<ReportItemHistory> {
   @override
   Widget build(BuildContext context) {
     final beverage = item['type'] == 'Beverages';
+    final addon = item['type'] == 'Add-ons' || item['type'] == 'Add-on';
     final records = beverage
         ? (item['sizeSales'] as Map? ?? {}).values.whereType<Map>().toList()
         : (item['history'] as List? ?? []).whereType<Map>().where((record) {
             final date = record['time'] as DateTime?;
-            return _range == null ||
-                (date != null &&
-                    !date.isBefore(_range!.start) &&
-                    date.isBefore(_range!.end.add(const Duration(days: 1))));
+            return (_range == null ||
+                    (date != null &&
+                        !date.isBefore(_range!.start) &&
+                        date.isBefore(
+                          _range!.end.add(const Duration(days: 1)),
+                        ))) &&
+                (!addon || record['activity'] == 'Sold');
           }).toList();
     String money(dynamic v) => formatMoney(reportValue(v));
     String qty(dynamic v) => reportValue(v).toStringAsFixed(0);
@@ -116,6 +120,8 @@ class _ReportItemHistoryState extends State<ReportItemHistory> {
                                         'Unit price',
                                         'Sales',
                                       ]
+                                    : addon
+                                    ? ['Time', 'Add-on', 'Sold', 'Sales']
                                     : ['Time', 'Activity', 'Qty', 'Balance'])
                                 .map((label) => DataColumn(label: Text(label)))
                                 .toList(),
@@ -126,6 +132,15 @@ class _ReportItemHistoryState extends State<ReportItemHistory> {
                                   '${record['size']}',
                                   qty(record['sold']),
                                   money(record['price']),
+                                  money(record['sales']),
+                                ]
+                              : addon
+                              ? [
+                                  time == null
+                                      ? 'Not recorded'
+                                      : '${MaterialLocalizations.of(context).formatShortDate(time)} ${TimeOfDay.fromDateTime(time).format(context)}',
+                                  '${record['name'] ?? item['name']}',
+                                  qty(reportValue(record['qty']).abs()),
                                   money(record['sales']),
                                 ]
                               : [

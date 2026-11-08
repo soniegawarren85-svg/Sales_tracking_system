@@ -3195,21 +3195,38 @@ class _InventoryPageState extends State<InventoryPage>
     );
     if (createdCategory != null && mounted) {
       _selectedCategory = createdCategory;
-      final addFirst = await showDialog<bool>(
+      final addFirst = await showModalBottomSheet<bool>(
         context: context,
-        builder: (dialogContext) => AlertDialog(
-          title: const Text('Category saved'),
-          content: const Text('Would you like to add its first item now?'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext, false),
-              child: const Text('Not now'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(dialogContext, true),
-              child: const Text('Add first item'),
-            ),
-          ],
+        useSafeArea: true,
+        showDragHandle: true,
+        backgroundColor: Colors.transparent,
+        builder: (dialogContext) => Container(
+          padding: const EdgeInsets.fromLTRB(24, 12, 24, 24),
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Text(
+                'Category saved',
+                style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
+              ),
+              const SizedBox(height: 8),
+              const Text('Would you like to add its first item now?'),
+              const SizedBox(height: 20),
+              FilledButton(
+                onPressed: () => Navigator.pop(dialogContext, true),
+                child: const Text('Add first item'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext, false),
+                child: const Text('Not now'),
+              ),
+            ],
+          ),
         ),
       );
       if (addFirst != true || !mounted) return;
@@ -3235,7 +3252,7 @@ class _InventoryPageState extends State<InventoryPage>
       borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
     ),
     builder: (_) =>
-        SizedBox(height: MediaQuery.sizeOf(context).height * .62, child: form),
+        SizedBox(height: MediaQuery.sizeOf(context).height * .9, child: form),
   );
 
   Future<void> _addCatalogItem() async {
@@ -3333,11 +3350,10 @@ class _InventoryPageState extends State<InventoryPage>
                                 ),
                               ),
                             ),
-                            const ReconciliationRequestsButton(),
-                            const SizedBox(width: 8),
                             const AllocationChecklistButton(
                               scopeIds: [],
                               isAdmin: true,
+                              isSuperAdmin: true,
                             ),
                           ],
                         ),
@@ -3668,6 +3684,7 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
   final TextEditingController bundleQuantityController = TextEditingController(
     text: '1',
   );
+  final TextEditingController bundleSearchController = TextEditingController();
   Uint8List? bundleImageBytes;
   Future<String?>? _bundleUpload;
   final ImagePicker _bundlePicker = ImagePicker();
@@ -3695,7 +3712,6 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
   late List<Map<String, dynamic>> _inventory;
   String _ingredientTab = 'Categories';
   String? _ingredientCategory;
-  bool _includeAddonTab = false;
 
   // ── Animations
   late AnimationController _headerAnim;
@@ -3746,6 +3762,7 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
     bundleNameController.dispose();
     bundlePriceController.dispose();
     bundleQuantityController.dispose();
+    bundleSearchController.dispose();
     _headerAnim.dispose();
     _bodyAnim.dispose();
     super.dispose();
@@ -5294,13 +5311,6 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
 
                 // Bundle price
                 _styledFieldLabel('Bundle Price'),
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 8),
-                  child: Text(
-                    'Cost per bundle: ${formatMoney(_bundleCost)}',
-                    style: const TextStyle(fontWeight: FontWeight.w700),
-                  ),
-                ),
                 const SizedBox(height: 8),
                 _enhancedField(
                   controller: bundlePriceController,
@@ -5343,6 +5353,28 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
                         : const SizedBox.shrink();
                   },
                 ),
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 14),
+                  child: Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 12,
+                    ),
+                    decoration: BoxDecoration(
+                      color: PinkTheme.badgeBg,
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: PinkTheme.divider),
+                    ),
+                    child: Text(
+                      'Cost per bundle: ${formatMoney(_bundleCost)}',
+                      style: const TextStyle(
+                        color: PinkTheme.primary,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                ),
                 const SizedBox(height: 14),
 
                 // Divider with label
@@ -5379,52 +5411,98 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
                 ),
                 const SizedBox(height: 16),
 
-                Wrap(
-                  spacing: 8,
-                  children: [
-                    for (final type in ['Categories', 'Beverages'])
-                      ChoiceChip(
-                        label: Text(type),
-                        selected: _ingredientTab == type,
-                        onSelected: (_) => setState(() {
-                          _ingredientTab = type;
-                          _includeAddonTab = false;
-                        }),
-                      ),
-                  ],
-                ),
-                if (_ingredientTab == 'Beverages')
-                  TextButton(
-                    onPressed: () =>
-                        setState(() => _includeAddonTab = !_includeAddonTab),
-                    child: Text(
-                      _includeAddonTab ? 'View beverages' : 'Add add-ons',
-                    ),
-                  ),
-                if (_ingredientTab == 'Categories')
-                  Wrap(
+                SingleChildScrollView(
+                  key: const ValueKey('bundle-type-filters'),
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
                     spacing: 8,
                     children: [
-                      for (final category in _inventory.where(
-                        (item) => item['sourceCollection'] == null,
-                      ))
+                      for (final type in ['Categories', 'Beverages', 'Add-ons'])
                         ChoiceChip(
-                          label: Text('${category['name']}'),
-                          selected:
-                              (_ingredientCategory ??
-                                  _inventory
-                                      .where(
-                                        (item) =>
-                                            item['sourceCollection'] == null,
-                                      )
-                                      .firstOrNull?['id']) ==
-                              category['id'],
-                          onSelected: (_) => setState(
-                            () => _ingredientCategory = '${category['id']}',
+                          label: Text(type),
+                          selected: _ingredientTab == type,
+                          selectedColor: PinkTheme.primary,
+                          checkmarkColor: Colors.white,
+                          labelStyle: TextStyle(
+                            color: _ingredientTab == type
+                                ? Colors.white
+                                : PinkTheme.primary,
+                            fontWeight: FontWeight.w700,
                           ),
+                          onSelected: (_) =>
+                              setState(() => _ingredientTab = type),
                         ),
                     ],
                   ),
+                ),
+                if (_ingredientTab == 'Categories')
+                  SingleChildScrollView(
+                    key: const ValueKey('bundle-category-filters'),
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      spacing: 8,
+                      children: [
+                        for (final category in _inventory.where(
+                          (item) => item['sourceCollection'] == null,
+                        ))
+                          ChoiceChip(
+                            label: Text('${category['name']}'),
+                            selected:
+                                (_ingredientCategory ??
+                                    _inventory
+                                        .where(
+                                          (item) =>
+                                              item['sourceCollection'] == null,
+                                        )
+                                        .firstOrNull?['id']) ==
+                                category['id'],
+                            selectedColor: PinkTheme.primaryDark,
+                            checkmarkColor: Colors.white,
+                            labelStyle: TextStyle(
+                              color:
+                                  (_ingredientCategory ??
+                                          _inventory
+                                              .where(
+                                                (item) =>
+                                                    item['sourceCollection'] ==
+                                                    null,
+                                              )
+                                              .firstOrNull?['id']) ==
+                                      category['id']
+                                  ? Colors.white
+                                  : PinkTheme.primaryDark,
+                              fontWeight: FontWeight.w700,
+                            ),
+                            onSelected: (_) => setState(
+                              () => _ingredientCategory = '${category['id']}',
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                const SizedBox(height: 10),
+                TextField(
+                  key: const ValueKey('bundle-variant-search'),
+                  controller: bundleSearchController,
+                  onChanged: (_) => setState(() {}),
+                  decoration: InputDecoration(
+                    hintText: 'Search variants',
+                    prefixIcon: const Icon(Icons.search),
+                    suffixIcon: bundleSearchController.text.isEmpty
+                        ? null
+                        : IconButton(
+                            tooltip: 'Clear search',
+                            onPressed: () {
+                              bundleSearchController.clear();
+                              setState(() {});
+                            },
+                            icon: const Icon(Icons.close),
+                          ),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                  ),
+                ),
                 const SizedBox(height: 12),
                 if (_inventory.isEmpty)
                   Container(
@@ -5470,7 +5548,7 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
                                           )
                                           .firstOrNull?['id'])
                         : item['sourceCollection'] !=
-                              (_includeAddonTab
+                              (_ingredientTab == 'Add-ons'
                                   ? 'coffee_addons'
                                   : 'coffee_products')) {
                       return const SizedBox.shrink();
@@ -5479,6 +5557,24 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
                     final itemName = item['name']?.toString() ?? '';
                     final itemPrice = item['price']?.toString() ?? '0';
                     final variants = item['items'] as List<dynamic>? ?? [];
+                    final query = bundleSearchController.text
+                        .trim()
+                        .toLowerCase();
+                    final matchingVariants = variants
+                        .whereType<Map>()
+                        .where(
+                          (variant) =>
+                              query.isEmpty ||
+                              '$itemName ${variant['name'] ?? ''}'
+                                  .toLowerCase()
+                                  .contains(query),
+                        )
+                        .length;
+                    if (query.isNotEmpty &&
+                        !itemName.toLowerCase().contains(query) &&
+                        matchingVariants == 0) {
+                      return const SizedBox.shrink();
+                    }
                     final selectedQuantities =
                         selectedVariantQuantities[itemId] ?? <int, int>{};
                     final totalSel = selectedQuantities.values.fold(
@@ -5619,6 +5715,15 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
                                         {};
                                     final variantName =
                                         variant['name']?.toString() ?? '';
+                                    if (query.isNotEmpty &&
+                                        !itemName.toLowerCase().contains(
+                                          query,
+                                        ) &&
+                                        !variantName.toLowerCase().contains(
+                                          query,
+                                        )) {
+                                      return const SizedBox.shrink();
+                                    }
                                     final variantPrice =
                                         variant['price']?.toString() ?? '0';
                                     final quantity =
@@ -5808,7 +5913,7 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
                                                     width: 76,
                                                     child: TextFormField(
                                                       key: ValueKey(
-                                                        '$itemId-$variantIndex-$quantity',
+                                                        '$itemId-$variantIndex',
                                                       ),
                                                       initialValue: quantity
                                                           .toString(),

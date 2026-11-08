@@ -2,6 +2,74 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../theme/app_colors.dart';
 
+String? assignmentQuantityValidationMessage({
+  required Map<String, TextEditingController> controllers,
+  required Map<String, String> kinds,
+  required Map<String, int> limits,
+  required Set<String> activeKinds,
+}) {
+  for (final entry in controllers.entries) {
+    final kind = kinds[entry.key];
+    if (!activeKinds.contains(kind)) continue;
+    final requested = int.tryParse(entry.value.text) ?? 0;
+    if (requested <= 0) continue;
+
+    final isBundle = kind == 'bundle';
+    final minimum = isBundle ? 10 : 20;
+    final maximum = isBundle ? 50 : 150;
+    if (requested < minimum || requested > maximum) {
+      return isBundle
+          ? 'Bundle quantity must be at least 10 and no more than 50.'
+          : 'Category quantity must be at least 20 and no more than 150 units per item.';
+    }
+
+    final available = limits[entry.key];
+    if (available != null && requested > available) {
+      return 'Only $available ${isBundle ? 'bundles' : 'units'} are available for this item.';
+    }
+  }
+  return null;
+}
+
+class AssignmentValidationNotice extends StatelessWidget {
+  const AssignmentValidationNotice({super.key, required this.message});
+
+  final String message;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    margin: const EdgeInsets.only(bottom: 10),
+    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+    decoration: BoxDecoration(
+      color: const Color(0xFFFFF4E8),
+      borderRadius: BorderRadius.circular(14),
+      border: Border.all(color: const Color(0xFFFFC58A)),
+    ),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Icon(
+          Icons.info_outline_rounded,
+          color: Color(0xFFC65300),
+          size: 20,
+        ),
+        const SizedBox(width: 9),
+        Expanded(
+          child: Text(
+            message,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: Color(0xFF9A3D00),
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
 class AssignInventoryTile extends StatelessWidget {
   final String title;
   final String subtitle;

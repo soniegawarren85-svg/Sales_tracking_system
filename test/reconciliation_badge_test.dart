@@ -14,18 +14,26 @@ void main() {
 
     final firestore = FakeFirebaseFirestore();
     await firestore.doc('inventory_reconciliations/first').set({
+      'staffId': 'branch',
       'status': 'pending',
     });
     await firestore.doc('inventory_reconciliations/second').set({
+      'staffId': 'branch',
       'status': 'pending',
     });
     await firestore.doc('inventory_reconciliations/completed').set({
+      'staffId': 'branch',
       'status': 'approved',
     });
 
     await tester.pumpWidget(
       MaterialApp(
-        home: Scaffold(body: ReconciliationRequestsButton(database: firestore)),
+        home: Scaffold(
+          body: ReconciliationRequestsButton(
+            database: firestore,
+            scopeIds: const ['branch'],
+          ),
+        ),
       ),
     );
     await tester.pumpAndSettle();

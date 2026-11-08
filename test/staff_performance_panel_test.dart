@@ -225,7 +225,7 @@ void main() {
     );
   });
 
-  testWidgets('assigned admin is selectable and search remains pinned', (
+  testWidgets('performance starts with daily records and keeps search pinned', (
     tester,
   ) async {
     final db = FakeFirebaseFirestore();
@@ -279,32 +279,16 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    final dropdowns = find.byType(DropdownButtonFormField<String>);
-    expect(dropdowns, findsOneWidget);
-    await tester.tap(dropdowns.first);
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Admin').last);
-    await tester.pumpAndSettle();
-
-    expect(find.byType(DropdownButtonFormField<String>), findsNWidgets(2));
-    await tester.tap(find.byType(DropdownButtonFormField<String>).last);
-    await tester.pumpAndSettle();
-    expect(find.text('Legacy Admin • ADM-002'), findsOneWidget);
-    await tester.tap(find.text('Legacy Admin • ADM-002').last);
-    await tester.pumpAndSettle();
-    expect(find.text('Legacy Admin'), findsOneWidget);
-
-    await tester.tap(find.byType(DropdownButtonFormField<String>).last);
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Branch Admin • ADM-001').last);
-    await tester.pumpAndSettle();
-
-    expect(find.text('Branch Admin'), findsWidgets);
     expect(find.text('Updated inventory 0'), findsOneWidget);
+    expect(find.byType(DropdownButtonFormField<String>), findsNothing);
     await tester.drag(find.byType(CustomScrollView), const Offset(0, -500));
     await tester.pumpAndSettle();
 
     expect(find.text('Search performance details'), findsOneWidget);
+    await tester.enterText(find.byType(TextField).first, 'Admin');
+    await tester.pumpAndSettle();
+    expect(find.text('Updated inventory 0'), findsOneWidget);
+    expect(find.text('Updated inventory 7'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 

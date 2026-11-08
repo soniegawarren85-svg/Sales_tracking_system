@@ -286,17 +286,25 @@ class _DashboardPageState extends State<DashboardPage>
 
   Future<void> _initStaffIdentity() async {
     final prefs = await SharedPreferences.getInstance();
-    final uid =
-        FirebaseAuth.instance.currentUser?.uid ??
-        prefs.getString('lastStaffDocId') ??
-        prefs.getString('lastUserId');
+    final savedStaffDocId = prefs.getString('lastStaffDocId')?.trim() ?? '';
+    final savedUserId = prefs.getString('lastUserId')?.trim() ?? '';
+    final authUid = FirebaseAuth.instance.currentUser?.uid.trim() ?? '';
+    final savedRole = prefs.getString('lastRole')?.trim().toLowerCase();
+    final preferredStaffId = savedRole == 'staff'
+        ? (savedStaffDocId.isNotEmpty ? savedStaffDocId : savedUserId)
+        : (savedStaffDocId.isNotEmpty
+              ? savedStaffDocId
+              : savedUserId.isNotEmpty
+              ? savedUserId
+              : authUid);
+    final uid = preferredStaffId.isNotEmpty ? preferredStaffId : authUid;
     final identityAliases = <String>{
-      if ((uid ?? '').trim().isNotEmpty) uid!.trim(),
-      prefs.getString('lastStaffDocId')?.trim() ?? '',
-      prefs.getString('lastUserId')?.trim() ?? '',
+      if (uid.trim().isNotEmpty) uid.trim(),
+      savedStaffDocId,
+      savedUserId,
       prefs.getString('lastStaffPublicId')?.trim() ?? '',
     }..remove('');
-    if ((uid ?? '').isEmpty) {
+    if (uid.isEmpty) {
       if (mounted) setState(() => _isResolvingStaffIdentity = false);
       return;
     }
@@ -3152,7 +3160,7 @@ class _Header extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final user = FirebaseAuth.instance.currentUser;
-    final uid = user?.uid ?? staffDocId;
+    final uid = staffDocId ?? user?.uid;
 
     return StreamBuilder<DocumentSnapshot>(
       stream: uid == null || uid.isEmpty

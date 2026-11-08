@@ -3,6 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import '../services/session_actor.dart';
 import 'package:flutter/material.dart';
 import '../services/allocation_checklist_service.dart';
+import '../services/low_stock_reports.dart';
 import '../services/checklist_status.dart';
 import '../theme/app_colors.dart';
 import 'checklist_return_dialog.dart';
@@ -13,6 +14,8 @@ class AllocationChecklistButton extends StatelessWidget {
   final List<String> scopeIds;
   final FirebaseFirestore? database;
   final bool isAdmin;
+  final bool isSuperAdmin;
+  final bool hideForBranchAdmin;
   final GlobalKey? checklistTourKey;
   final GlobalKey? returnsTourKey;
   const AllocationChecklistButton({
@@ -20,6 +23,8 @@ class AllocationChecklistButton extends StatelessWidget {
     required this.scopeIds,
     this.database,
     this.isAdmin = false,
+    this.isSuperAdmin = false,
+    this.hideForBranchAdmin = false,
     this.checklistTourKey,
     this.returnsTourKey,
   });
@@ -29,13 +34,22 @@ class AllocationChecklistButton extends StatelessWidget {
     final db = database ?? FirebaseFirestore.instance;
     final ids = scopeIds.where((id) => id.isNotEmpty).toSet().toList();
     if (ids.isEmpty && !isAdmin) return const SizedBox.shrink();
+    if (!isAdmin && hideForBranchAdmin) {
+      return _BranchAdminAwareChecklistButton(database: db, scopeIds: ids);
+    }
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
       stream: checklistQuery(db, ids, isAdmin).snapshots(),
       builder: (context, snapshot) {
         final records =
             snapshot.data?.docs.map((doc) => doc.data()).toList() ?? [];
         final incoming = records.any(ChecklistStatus.incomingOpen);
-        final returned = records.any(ChecklistStatus.returnOpen);
+        final returned = records.any(
+          isSuperAdmin
+              ? ChecklistStatus.returnPendingForSuperAdmin
+              : isAdmin
+              ? ChecklistStatus.returnPendingForAdmin
+              : ChecklistStatus.returnOpen,
+        );
         final compact = MediaQuery.sizeOf(context).width < 600;
         Widget button({
           required bool returns,
@@ -59,6 +73,7 @@ class AllocationChecklistButton extends StatelessWidget {
               ids: ids,
               db: db,
               admin: isAdmin,
+              superAdmin: isSuperAdmin,
               returnsOnly: returns,
             ),
           );
@@ -146,6 +161,48 @@ class AllocationChecklistButton extends StatelessWidget {
   }
 }
 
+class _BranchAdminAwareChecklistButton extends StatefulWidget {
+  const _BranchAdminAwareChecklistButton({
+    required this.database,
+    required this.scopeIds,
+  });
+
+  final FirebaseFirestore database;
+  final List<String> scopeIds;
+
+  @override
+  State<_BranchAdminAwareChecklistButton> createState() =>
+      _BranchAdminAwareChecklistButtonState();
+}
+
+class _BranchAdminAwareChecklistButtonState
+    extends State<_BranchAdminAwareChecklistButton> {
+  late final Future<bool> _adminExists = branchHasActiveAdmin(
+    firestore: widget.database,
+    branchIds: widget.scopeIds,
+  );
+
+  @override
+  Widget build(BuildContext context) => FutureBuilder<bool>(
+    future: _adminExists,
+    builder: (context, snapshot) {
+      if (snapshot.hasError) {
+        return Tooltip(
+          message: 'Unable to verify branch admin: ${snapshot.error}',
+          child: const Icon(Icons.warning_amber_rounded, color: Colors.orange),
+        );
+      }
+      if (!snapshot.hasData || snapshot.data == true) {
+        return const SizedBox.shrink();
+      }
+      return AllocationChecklistButton(
+        database: widget.database,
+        scopeIds: widget.scopeIds,
+      );
+    },
+  );
+}
+
 Query<Map<String, dynamic>> checklistQuery(
   FirebaseFirestore db,
   List<String> ids,
@@ -177,12 +234,14 @@ class _ChecklistDialog extends StatefulWidget {
   final List<String> ids;
   final FirebaseFirestore db;
   final bool admin;
+  final bool superAdmin;
   final bool pendingOnly;
   final bool returnsOnly;
   const _ChecklistDialog({
     required this.ids,
     required this.db,
     required this.admin,
+    this.superAdmin = false,
     this.pendingOnly = false,
     this.returnsOnly = false,
   });
@@ -211,6 +270,10 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
   }
 
   dynamic _checklistDate(Map<String, dynamic> data) {
+    if (data['kind'] == 'return' &&
+        ChecklistStatus.label(data) == ChecklistStatus.awaitingSuperAdmin) {
+      return data['forwardedAt'] ?? data['createdAt'];
+    }
     if (data['kind'] == 'return' &&
         ChecklistStatus.label(data) == ChecklistStatus.completed) {
       return data['confirmedAt'] ?? data['decidedAt'] ?? data['createdAt'];
@@ -251,9 +314,12 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
     if (acceptingAll || docs.isEmpty) return;
     final confirmed = await confirmChecklistReceipt(
       context,
-      title: 'Accept all pending returns?',
-      message:
-          'Confirm receipt of all ${docs.length} pending return records across all dates.',
+      title: widget.superAdmin
+          ? 'Accept all pending returns?'
+          : 'Submit all returns to Super Admin?',
+      message: widget.superAdmin
+          ? 'Confirm receipt of all ${docs.length} pending return records across all dates.'
+          : 'Submit all ${docs.length} pending return records across all dates for Super Admin review.',
     );
     if (!confirmed || !mounted) return;
     setState(() => acceptingAll = true);
@@ -528,13 +594,24 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
       final service = AllocationChecklistService(widget.db);
       var changed = 0;
       if (accept) {
-        for (var start = 0; start < docs.length; start += 200) {
-          changed += await service.decideReturns(
-            docs.skip(start).take(200).map((doc) => doc.id).toList(),
-            accept: true,
-            actorId: actor.id,
-            actorName: actor.name,
-          );
+        if (widget.superAdmin) {
+          for (var start = 0; start < docs.length; start += 200) {
+            changed += await service.decideReturns(
+              docs.skip(start).take(200).map((doc) => doc.id).toList(),
+              accept: true,
+              actorId: actor.id,
+              actorName: actor.name,
+            );
+          }
+        } else {
+          for (var start = 0; start < docs.length; start += 200) {
+            changed += await service.forwardReturns(
+              docs.skip(start).take(200).map((doc) => doc.id).toList(),
+              actorId: actor.id,
+              actorName: actor.name,
+              scopeIds: widget.ids,
+            );
+          }
         }
       } else {
         for (final doc in docs) {
@@ -554,7 +631,9 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
       message = changed == 0
           ? 'These returns have already been processed.'
           : accept
-          ? '$changed returned item records accepted successfully.'
+          ? widget.superAdmin
+                ? '$changed returned item records accepted successfully.'
+                : '$changed return records submitted to Super Admin.'
           : 'Issue reported for $changed return records. They remain pending for acceptance.';
     } catch (error) {
       message =
@@ -572,7 +651,9 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
         title: Text(
           success
               ? accept
-                    ? 'Return accepted'
+                    ? widget.superAdmin
+                          ? 'Return accepted'
+                          : 'Return submitted'
                     : 'Issue reported'
               : 'Return status',
         ),
@@ -998,8 +1079,10 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
                         ),
                       ),
                       if (widget.admin && widget.returnsOnly)
-                        const Text(
-                          'Review and confirm returned inventory',
+                        Text(
+                          widget.superAdmin
+                              ? 'Confirm returns submitted by branch admins'
+                              : 'Submit branch returns for Super Admin review',
                           style: TextStyle(
                             color: Color(0xFFF9DCE5),
                             fontSize: 12,
@@ -1030,9 +1113,11 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
                 hintText: 'Search items or type (Bundle, Beverages, Add-ons)',
                 suffixIcon:
                     (widget.pendingOnly ||
-                        (!(widget.returnsOnly && widget.admin) &&
-                            tab !=
-                                (widget.returnsOnly && !widget.admin ? 2 : 1)))
+                        (widget.returnsOnly
+                            ? widget.admin
+                                  ? tab == 0
+                                  : tab != 2
+                            : tab != 1))
                     ? null
                     : IconButton(
                         tooltip: 'Filter by date range',
@@ -1074,7 +1159,15 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
                 final pending = all
                     .where(
                       (doc) => widget.returnsOnly
-                          ? ChecklistStatus.returnOpen(doc.data())
+                          ? widget.superAdmin
+                                ? ChecklistStatus.returnPendingForSuperAdmin(
+                                    doc.data(),
+                                  )
+                                : widget.admin
+                                ? ChecklistStatus.returnPendingForAdmin(
+                                    doc.data(),
+                                  )
+                                : ChecklistStatus.returnOpen(doc.data())
                           : ChecklistStatus.pending(
                               doc.data(),
                               admin: widget.admin,
@@ -1086,7 +1179,13 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
                       final d = doc.data();
                       if (widget.pendingOnly) {
                         final isPending = widget.returnsOnly
-                            ? ChecklistStatus.returnOpen(d)
+                            ? widget.superAdmin
+                                  ? ChecklistStatus.returnPendingForSuperAdmin(
+                                      d,
+                                    )
+                                  : widget.admin
+                                  ? ChecklistStatus.returnPendingForAdmin(d)
+                                  : ChecklistStatus.returnOpen(d)
                             : ChecklistStatus.pending(d, admin: widget.admin);
                         return isPending &&
                             (!widget.returnsOnly || d['kind'] == 'return') &&
@@ -1105,7 +1204,7 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
                                 ChecklistStatus.received;
                       final shouldFilterDate =
                           widget.returnsOnly && widget.admin
-                          ? selectedEnd != null
+                          ? tab > 0 && selectedEnd != null
                           : filterDate;
                       if (shouldFilterDate &&
                           (at == null ||
@@ -1120,11 +1219,33 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
                       final inTab = widget.returnsOnly
                           ? d['kind'] == 'return' &&
                                 (widget.admin
-                                    ? (tab == 1
-                                          ? ChecklistStatus.label(d) ==
-                                                ChecklistStatus.completed
-                                          : ChecklistStatus.label(d) !=
-                                                ChecklistStatus.completed)
+                                    ? widget.superAdmin
+                                          ? (tab == 0
+                                                ? ChecklistStatus.returnPendingForSuperAdmin(
+                                                    d,
+                                                  )
+                                                : [
+                                                    ChecklistStatus.completed,
+                                                    ChecklistStatus
+                                                        .returnDeclined,
+                                                  ].contains(
+                                                    ChecklistStatus.label(d),
+                                                  ))
+                                          : (tab == 0
+                                                ? ChecklistStatus.returnPendingForAdmin(
+                                                    d,
+                                                  )
+                                                : tab == 1
+                                                ? ChecklistStatus.label(d) ==
+                                                      ChecklistStatus
+                                                          .awaitingSuperAdmin
+                                                : [
+                                                    ChecklistStatus.completed,
+                                                    ChecklistStatus
+                                                        .returnDeclined,
+                                                  ].contains(
+                                                    ChecklistStatus.label(d),
+                                                  ))
                                     : (tab == 2
                                           ? ChecklistStatus.label(d) ==
                                                 ChecklistStatus.completed
@@ -1167,14 +1288,18 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
                           icon: const Icon(Icons.done_all),
                           label: Text(
                             acceptingAll
-                                ? 'Accepting...'
-                                : 'Accept all (${pending.length})',
+                                ? widget.superAdmin
+                                      ? 'Accepting...'
+                                      : 'Submitting...'
+                                : widget.superAdmin
+                                ? 'Accept all (${pending.length})'
+                                : 'Submit all to Super Admin (${pending.length})',
                           ),
                         ),
                       ),
                     if (!widget.pendingOnly &&
                         selectedEnd != null &&
-                        (widget.returnsOnly && widget.admin ||
+                        (widget.returnsOnly && widget.admin && tab > 0 ||
                             tab ==
                                 (widget.returnsOnly && !widget.admin ? 2 : 1)))
                       Padding(
@@ -1196,8 +1321,18 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
                           ),
                           child: Row(
                             children: [
-                              _returnTab('Pending Returned', 0),
-                              _returnTab('Completed Return', 1),
+                              _returnTab(
+                                widget.superAdmin
+                                    ? 'Pending Returns'
+                                    : 'Pending Returned',
+                                0,
+                              ),
+                              if (!widget.superAdmin)
+                                _returnTab('Sent to Super Admin', 1),
+                              _returnTab(
+                                'Completed',
+                                widget.superAdmin ? 1 : 2,
+                              ),
                             ],
                           ),
                         ),
@@ -1233,11 +1368,12 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
                           ],
                         ),
                       ),
-                    if (widget.returnsOnly && tab == (widget.admin ? 1 : 2))
+                    if (widget.returnsOnly &&
+                        tab == (widget.admin ? (widget.superAdmin ? 1 : 2) : 2))
                       Padding(
                         padding: const EdgeInsets.all(12),
                         child: Text(
-                          'Completed returns: ${docs.length} • ${docs.fold<num>(0, (sum, doc) => sum + (num.tryParse('${doc.data()['quantity']}') ?? 0))} items',
+                          '${widget.admin && !widget.superAdmin && tab == 1 ? 'Submitted returns' : 'Completed returns'}: ${docs.length} • ${docs.fold<num>(0, (sum, doc) => sum + (num.tryParse('${doc.data()['quantity']}') ?? 0))} items',
                         ),
                       ),
                     const SizedBox(height: 8),
@@ -1253,6 +1389,9 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
                           : widget.returnsOnly
                           ? ReturnBatchList(
                               admin: widget.admin,
+                              superAdmin: widget.superAdmin,
+                              forwardToSuperAdmin:
+                                  widget.admin && !widget.superAdmin,
                               onDecision: widget.admin ? actReturns : null,
                               docs: docs,
                               search: search,

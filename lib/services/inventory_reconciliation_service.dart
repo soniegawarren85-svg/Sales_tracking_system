@@ -37,6 +37,123 @@ class InventoryReconciliationService {
   InventoryReconciliationService(this.db);
   final FirebaseFirestore db;
 
+  Future<void> execute({
+    required String actionId,
+    required String allocationId,
+    required List<String> instanceIds,
+    required String action,
+    required String actorId,
+    required String actorName,
+    required String actorPublicId,
+    required List<String> scopeIds,
+  }) async {
+    if (actionId.isEmpty ||
+        actorId.isEmpty ||
+        actorName.trim().isEmpty ||
+        instanceIds.isEmpty ||
+        instanceIds.toSet().length != instanceIds.length ||
+        !['return', 'unbundle'].contains(action)) {
+      throw ArgumentError('Select bundles and a valid action.');
+    }
+    final source = db.collection('staff_inventory').doc(allocationId);
+    final activity = db
+        .collection('activity_logs')
+        .doc('bundle_action_$actionId');
+    await _validatedTransaction((tx) async {
+      if ((await tx.get(activity)).exists) return;
+      final data = (await tx.get(source)).data();
+      if (data == null ||
+          data['isBundle'] != true ||
+          data['isDeleted'] == true ||
+          !scopeIds.contains(data['staffId'])) {
+        throw StateError('This bundle is outside your active allocation.');
+      }
+      final instances = reconciliationInstances(data, allocationId);
+      final selected = instances
+          .where((instance) => instanceIds.contains('${instance['id']}'))
+          .toList();
+      if (selected.length != instanceIds.length ||
+          selected.any(
+            (instance) => !bundleInstanceAvailable(instance, data),
+          ) ||
+          bundleQuantity(data['bundleCount']) < selected.length) {
+        throw StateError('Selected stock changed. Reopen the batch and retry.');
+      }
+      final output = action == 'unbundle'
+          ? reconcileBundleContents(selected, null)
+          : const <String, dynamic>{'loose': <Map<String, dynamic>>[]};
+      _validateLooseSources(output);
+      for (final instance in selected) {
+        instance['status'] = action == 'unbundle' ? 'unbundled' : 'returned';
+        instance['actionId'] = actionId;
+        instance['actionAt'] = Timestamp.now();
+      }
+      tx.update(source, {
+        'bundleInstances': instances,
+        'bundleCount': bundleQuantity(data['bundleCount']) - selected.length,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+      final loose = bundleRows(output['loose']);
+      for (var index = 0; index < loose.length; index++) {
+        final item = loose[index];
+        final quantity = bundleQuantity(item['quantity']);
+        if (quantity <= 0) continue;
+        tx.set(
+          db
+              .collection('staff_inventory')
+              .doc('bundle_action_${actionId}_$index'),
+          {
+            'staffId': data['staffId'],
+            'staffName': data['staffName'] ?? '',
+            'branchName': data['branchName'] ?? data['staffName'] ?? '',
+            'sourceInventoryId': item['sourceInventoryId'],
+            'name': item['parentName'] ?? 'Unbundled items',
+            'isBundle': false,
+            'isDeleted': false,
+            'origin': 'unbundle',
+            'bundleActionId': actionId,
+            'assignedAt': FieldValue.serverTimestamp(),
+            'items': [
+              {
+                ...item,
+                'id': item['variantId'] ?? item['itemId'] ?? item['id'],
+                'stock': quantity,
+                'startingStock': quantity,
+                'assignedStartingStock': quantity,
+                'origin': 'unbundle',
+                'unbundledQuantity': quantity,
+              },
+            ],
+          },
+        );
+      }
+      final actionName = action == 'unbundle' ? 'Unbundled' : 'Returned';
+      final details = {
+        'bundleName': data['name'] ?? 'Bundle',
+        'quantity': selected.length,
+        'action': action,
+        'allocationId': allocationId,
+        'instanceIds': instanceIds,
+        'branchId': data['staffId'],
+        'branchName': data['branchName'] ?? data['staffName'] ?? '',
+        'items': loose,
+      };
+      tx.set(activity, {
+        'action': action == 'unbundle' ? 'bundle_unbundled' : 'bundle_returned',
+        'description':
+            '$actorName $actionName ${selected.length} ${data['name'] ?? 'bundle'} batch(es) at ${data['branchName'] ?? data['staffId']}.',
+        'actorId': actorId,
+        'actorName': actorName,
+        'actorPublicId': actorPublicId,
+        'actorRole': 'staff',
+        'branchIds': [data['staffId']],
+        'details': details,
+        'status': 'completed',
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+    });
+  }
+
   // Return domain validation errors across the web transaction bridge as data.
   // All validation must finish before scheduling any transaction writes.
   Future<void> _validatedTransaction(
@@ -183,6 +300,7 @@ class InventoryReconciliationService {
     String id, {
     required bool approve,
     required String actorId,
+    List<String> scopeIds = const [],
     String reason = '',
   }) async {
     if (actorId.isEmpty) throw ArgumentError('Sign in as administrator.');
@@ -194,6 +312,9 @@ class InventoryReconciliationService {
     await _validatedTransaction((tx) async {
       final pending = (await tx.get(request)).data();
       if (pending == null || pending['status'] != 'pending') return;
+      if (scopeIds.isNotEmpty && !scopeIds.contains('${pending['staffId']}')) {
+        throw StateError('This request is outside your assigned branch.');
+      }
       final source = db
           .collection('staff_inventory')
           .doc('${pending['allocationId']}');

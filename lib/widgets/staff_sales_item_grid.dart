@@ -7,10 +7,12 @@ class StaffSalesItemGrid extends StatelessWidget {
     required this.itemCount,
     required this.itemBuilder,
     this.bundles = false,
+    this.itemHeight,
   });
 
   final int itemCount;
   final bool bundles;
+  final double? itemHeight;
   final Widget Function(BuildContext context, int index, bool compact)
   itemBuilder;
 
@@ -32,8 +34,8 @@ class StaffSalesItemGrid extends StatelessWidget {
           : (availableWidth / 240).floor().clamp(3, 8);
       const spacing = 12.0;
       final itemWidth = (availableWidth - (columns - 1) * spacing) / columns;
-      final itemHeight =
-          (bundles ? 290.0 : 230.0) +
+      final tileHeight =
+          (itemHeight ?? (bundles ? 290.0 : 230.0)) +
           (MediaQuery.textScalerOf(context).scale(14) - 14) * 6;
       final compact = itemWidth < 140;
       return Wrap(
@@ -41,7 +43,7 @@ class StaffSalesItemGrid extends StatelessWidget {
         runSpacing: spacing,
         children: List<Widget>.generate(itemCount, (index) {
           final child = itemBuilder(context, index, compact);
-          return SizedBox(width: itemWidth, height: itemHeight, child: child);
+          return SizedBox(width: itemWidth, height: tileHeight, child: child);
         }),
       );
     },

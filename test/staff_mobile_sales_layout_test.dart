@@ -91,6 +91,72 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('mobile order review scrolls long tickets above bottom nav', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(390, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: StaffMobileSalesLayout(
+            reviewing: true,
+            onBack: () {},
+            onTools: () {},
+            body: Column(
+              children: [
+                for (var index = 0; index < 6; index++)
+                  SizedBox(
+                    key: ValueKey('review-item-$index'),
+                    height: 120,
+                    child: Text('Order item $index'),
+                  ),
+                const SizedBox(
+                  key: ValueKey('proceed-order'),
+                  height: 64,
+                  child: Center(child: Text('Proceed Order')),
+                ),
+              ],
+            ),
+          ),
+          bottomNavigationBar: const SizedBox(
+            key: ValueKey('fixed-bottom-navigation'),
+            height: 75,
+          ),
+        ),
+      ),
+    );
+
+    final navigationTop = tester.getTopLeft(
+      find.byKey(const ValueKey('fixed-bottom-navigation')),
+    ).dy;
+    expect(
+      tester.getBottomLeft(find.byKey(const ValueKey('proceed-order'))).dy,
+      greaterThan(navigationTop),
+    );
+
+    await tester.drag(
+      find.byType(CustomScrollView),
+      const Offset(0, -1000),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      tester.getBottomLeft(find.byKey(const ValueKey('proceed-order'))).dy,
+      lessThanOrEqualTo(navigationTop),
+    );
+    expect(
+      tester.getTopLeft(
+        find.byKey(const ValueKey('fixed-bottom-navigation')),
+      ).dy,
+      navigationTop,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('sales header shows only title and cashier tools', (
     tester,
   ) async {

@@ -605,6 +605,13 @@ class BranchReportData {
         };
         final id = inventoryDisplayId(resolved);
         final previous = active[id];
+        final legacyStaffLowStock =
+            allocation['lowStockReportStatus'] == null &&
+            allocation['isLowStock'] == true &&
+            allocation['lowStockMarkedBy'] != null;
+        final staffLowStockPendingAdmin =
+            allocation['staffLowStockPendingAdmin'] == true ||
+            legacyStaffLowStock;
         active[id] = {
           ...resolved,
           'id': id,
@@ -621,32 +628,35 @@ class BranchReportData {
                   allocation['isAddon'] == true
               ? null
               : variant['id'] ?? variant['itemId'],
-          'isLowStock':
-              allocation['isLowStock'] == true ||
-              previous?['isLowStock'] == true,
-          'staffLowStockPendingAdmin':
-              allocation['staffLowStockPendingAdmin'] == true ||
-              previous?['staffLowStockPendingAdmin'] == true,
-          if (allocation['lowStockMarkedAt'] != null ||
-              previous?['lowStockMarkedAt'] != null)
-            'lowStockMarkedAt':
-                allocation['lowStockMarkedAt'] ?? previous?['lowStockMarkedAt'],
-          if (allocation['lowStockMarkedBy'] != null ||
-              previous?['lowStockMarkedBy'] != null)
-            'lowStockMarkedBy':
-                allocation['lowStockMarkedBy'] ?? previous?['lowStockMarkedBy'],
+          'isLowStock': staffLowStockPendingAdmin
+              ? false
+              : allocation['isLowStock'] == true,
+          'staffLowStockPendingAdmin': staffLowStockPendingAdmin,
+          'lowStockReportStatus':
+              allocation['lowStockReportStatus'] ??
+              (legacyStaffLowStock ? 'pending_admin' : null),
+          if (allocation['lowStockMarkedAt'] != null)
+            'lowStockMarkedAt': allocation['lowStockMarkedAt'],
+          if (allocation['lowStockMarkedBy'] != null)
+            'lowStockMarkedBy': allocation['lowStockMarkedBy'],
           'categoryName':
               source?['name'] ??
               allocation['categoryName'] ??
               allocation['parentName'] ??
               '',
           'remaining':
-              reportValue(previous?['remaining']) +
-              (allocation['isBundle'] == true
-                  ? availableBundleStock(allocation, now: start)
-                  : reportValue(variant['stock'] ?? variant['startingStock'])),
-          if (allocation['isCoffee'] == true) 'remaining': null,
-          'status': 'Available',
+              allocation['isCoffee'] == true || allocation['isAddon'] == true
+              ? null
+              : reportValue(previous?['remaining']) +
+                    (allocation['isBundle'] == true
+                        ? availableBundleStock(allocation, now: start)
+                        : reportValue(
+                            variant['stock'] ?? variant['startingStock'],
+                          )),
+          'status':
+              allocation['isLowStock'] == true && !staffLowStockPendingAdmin
+              ? 'Low stock'
+              : 'Available',
         };
       }
     }
@@ -720,7 +730,10 @@ class BranchReportData {
     final result = <String, Map<String, dynamic>>{};
     Map<String, dynamic> ensure(Map raw, [String? source]) {
       final item = resolveItem(raw, source);
-      final code = inventoryDisplayId(item);
+      final code = inventoryDisplayId({
+        ...item,
+        if (item['isCoffee'] == true) 'addonId': null,
+      });
       final key = code == '--' ? '${source ?? ''}/${item['name']}' : code;
       return result.putIfAbsent(
         key,
@@ -893,15 +906,17 @@ class BranchReportData {
             : 'Available';
         if (at != null) {
           item['allocationDate'] = at;
-          item['allocationSnapshot'] =
-              reportValue(item['allocationSnapshot']) +
-              reportValue(
-                variant['assignedStartingStock'] ??
-                    variant['startingStock'] ??
-                    row['assignedStartingStock'] ??
-                    variant['bundleCount'] ??
-                    variant['stock'],
-              );
+          if (row['isAddon'] != true) {
+            item['allocationSnapshot'] =
+                reportValue(item['allocationSnapshot']) +
+                reportValue(
+                  variant['assignedStartingStock'] ??
+                      variant['startingStock'] ??
+                      row['assignedStartingStock'] ??
+                      variant['bundleCount'] ??
+                      variant['stock'],
+                );
+          }
           if (row['origin'] == 'unbundle') {
             final unbundledQuantity = reportValue(
               variant['assignedStartingStock'] ??
@@ -924,6 +939,36 @@ class BranchReportData {
         final item = ensure(raw);
         final refund = reportRefund(sale);
         final qty = reportValue(raw['quantity']).abs();
+        final addonName = '${raw['addonName'] ?? ''}'.trim();
+        final addonId = '${raw['addonId'] ?? ''}'.trim();
+        final addonPrice = reportValue(raw['addonPriceDelta']);
+        Map<String, dynamic>? addonItem;
+        var addonCostPrice = reportValue(raw['addonCostPrice']);
+        if (addonName.isNotEmpty) {
+          final resolvedAddon = resolveItem({
+            'id': addonId,
+            'name': addonName,
+            'type': 'Add-ons',
+            'isAddon': true,
+            'price': addonPrice,
+            if (raw['addonCostPrice'] != null)
+              'costPrice': raw['addonCostPrice'],
+          }, addonId.isEmpty ? null : addonId);
+          addonCostPrice = reportValue(
+            raw['addonCostPrice'] ?? resolvedAddon['costPrice'],
+          );
+          addonItem = ensure(resolvedAddon, addonId.isEmpty ? null : addonId);
+          addonItem['type'] = 'Add-ons';
+          addonItem['price'] = addonPrice;
+          final addonQuantity = qty;
+          (addonItem['history'] as List).add({
+            'time': cashRecordDate(sale['timestamp'] ?? sale['createdAt']),
+            'activity': refund ? 'Refund' : 'Sold',
+            'name': addonName,
+            'qty': addonQuantity,
+            'sales': addonQuantity * addonPrice,
+          });
+        }
         (item['history'] as List).add({
           'time': cashRecordDate(sale['timestamp'] ?? sale['createdAt']),
           'activity': refund
@@ -931,7 +976,11 @@ class BranchReportData {
                     ? 'Inventory replacement'
                     : 'Cash refund')
               : 'Sold',
+          'name': item['name'],
           'qty': refund && sale['refundMethod'] != 'inventory' ? 0.0 : -qty,
+          'sales':
+              qty *
+              reportValue(raw['price'] ?? raw['unitPrice'] ?? item['price']),
         });
         if (!reportInRange(
           sale['timestamp'] ?? sale['createdAt'],
@@ -943,14 +992,32 @@ class BranchReportData {
         item['relevant'] = true;
         if (!refund && item['type'] == 'Beverages') {
           final size = '${raw['coffeeSize'] ?? raw['variant'] ?? 'Regular'}';
-          final price = reportValue(raw['price'] ?? raw['unitPrice']);
+          final price =
+              reportValue(raw['price'] ?? raw['unitPrice'] ?? item['price']) -
+              addonPrice;
+          final sizeCost =
+              reportValue(raw['costPrice']) -
+              (addonItem == null ? 0 : addonCostPrice);
           final sizes = item['sizeSales'] as Map<String, Map<String, dynamic>>;
           final detail = sizes.putIfAbsent(
             '$size|$price',
-            () => {'size': size, 'sold': 0.0, 'price': price, 'sales': 0.0},
+            () => {
+              'size': size,
+              'sold': 0.0,
+              'price': price,
+              'sales': 0.0,
+              'totalCost': 0.0,
+              'costRecordedSold': 0.0,
+            },
           );
           detail['sold'] = reportValue(detail['sold']) + qty;
           detail['sales'] = reportValue(detail['sales']) + qty * price;
+          if (raw['costPrice'] != null) {
+            detail['totalCost'] =
+                reportValue(detail['totalCost']) + qty * sizeCost;
+            detail['costRecordedSold'] =
+                reportValue(detail['costRecordedSold']) + qty;
+          }
         }
         final field = refund ? 'refund' : 'sold';
         final receiptGross = (sale['items'] as List? ?? [])
@@ -968,34 +1035,58 @@ class BranchReportData {
         final lineRevenue = sale['total'] == null || receiptGross == 0
             ? lineGross
             : reportValue(sale['total']).abs() * lineGross / receiptGross;
+        final addonGross = addonItem == null ? 0.0 : qty * addonPrice;
+        final addonRevenue = lineGross == 0
+            ? addonGross
+            : lineRevenue * addonGross / lineGross;
+        final beverageRevenue = lineRevenue - addonRevenue;
         item['netSales'] =
             reportValue(item['netSales']) +
-            (refund ? -lineRevenue : lineRevenue);
+            (refund ? -beverageRevenue : beverageRevenue);
         final saleTax = reportValue(
           sale['tax'] ?? sale['vatAmount'] ?? sale['taxAmount'] ?? sale['vat'],
         );
         final lineTax = receiptGross == 0
             ? 0.0
             : saleTax * lineGross / receiptGross;
+        final addonTax = lineGross == 0
+            ? 0.0
+            : lineTax * addonGross / lineGross;
         item['vatAmount'] =
-            reportValue(item['vatAmount']) + (refund ? -lineTax : lineTax);
+            reportValue(item['vatAmount']) +
+            (refund ? -(lineTax - addonTax) : lineTax - addonTax);
         if (refund && sale['refundMethod'] == 'inventory') {
           item['totalCost'] =
               reportValue(item['totalCost']) +
-              qty * reportValue(raw['costPrice']);
+              qty *
+                  (reportValue(raw['costPrice']) -
+                      (addonItem == null ? 0 : addonCostPrice));
         }
         item[field] =
             reportValue(item[field]) + reportValue(raw['quantity']).abs();
         if (field == 'sold') {
           item['totalCost'] =
               reportValue(item['totalCost']) +
-              qty * reportValue(raw['costPrice']);
-          item['sales'] =
-              reportValue(item['sales']) +
-              reportValue(raw['quantity']).abs() *
-                  reportValue(
-                    raw['price'] ?? raw['unitPrice'] ?? item['price'],
-                  );
+              qty *
+                  (reportValue(raw['costPrice']) -
+                      (addonItem == null ? 0 : addonCostPrice));
+          item['sales'] = reportValue(item['sales']) + lineGross - addonGross;
+        }
+        if (addonItem != null) {
+          addonItem['relevant'] = true;
+          final addonField = refund ? 'refund' : 'sold';
+          addonItem[addonField] = reportValue(addonItem[addonField]) + qty;
+          addonItem['netSales'] =
+              reportValue(addonItem['netSales']) +
+              (refund ? -addonRevenue : addonRevenue);
+          addonItem['vatAmount'] =
+              reportValue(addonItem['vatAmount']) +
+              (refund ? -addonTax : addonTax);
+          if (addonField == 'sold') {
+            addonItem['sales'] = reportValue(addonItem['sales']) + addonGross;
+            addonItem['totalCost'] =
+                reportValue(addonItem['totalCost']) + qty * addonCostPrice;
+          }
         }
       }
     }
@@ -1035,10 +1126,12 @@ class BranchReportData {
       final missing =
           reportValue(item['allocationSnapshot']) -
           reportValue(item['allocated']);
+      final madeToOrder = ['Beverages', 'Add-ons'].contains(item['type']);
       final hasStockEvidence =
-          item['remaining'] != null ||
-          reportValue(item['allocated']) > 0 ||
-          reportValue(item['allocationSnapshot']) > 0;
+          !madeToOrder &&
+          (item['remaining'] != null ||
+              reportValue(item['allocated']) > 0 ||
+              reportValue(item['allocationSnapshot']) > 0);
       var balance = missing > 0 ? missing : 0.0;
       // A live remaining-stock snapshot anchors today's ledger, including old
       // allocations whose complete movement history was not recorded.

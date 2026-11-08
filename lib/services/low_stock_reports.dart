@@ -16,7 +16,7 @@ Future<void> markStaffInventoryLowStock({
   if (items.length > 450) {
     throw StateError('Select fewer than 451 items at a time.');
   }
-  final branchAdminExists = await _branchHasActiveAdmin(
+  final branchAdminExists = await branchHasActiveAdmin(
     firestore: firestore,
     branchIds: branchIds,
   );
@@ -64,6 +64,9 @@ Future<void> markStaffInventoryLowStock({
       transaction.set(allocationRefs[index], {
         'isLowStock': !branchAdminExists,
         'staffLowStockPendingAdmin': branchAdminExists,
+        'lowStockReportStatus': branchAdminExists
+            ? 'pending_admin'
+            : 'reported',
         'lowStockMarkedAt': FieldValue.serverTimestamp(),
         'lowStockMarkedBy': staffId,
         'lowStockMarkedByName': staffName,
@@ -110,7 +113,7 @@ Future<void> markStaffInventoryLowStock({
   );
 }
 
-Future<bool> _branchHasActiveAdmin({
+Future<bool> branchHasActiveAdmin({
   required FirebaseFirestore firestore,
   required List<String> branchIds,
 }) async {
@@ -126,11 +129,12 @@ Future<bool> _branchHasActiveAdmin({
       (data['staffIds'] as List? ?? const []).map((id) => '$id'),
     );
   }
-  if (memberIds.isEmpty) return false;
   final requests = await firestore.collection('staff_requests').get();
   return requests.docs.any((doc) {
     final data = doc.data();
-    final role = '${data['role'] ?? ''}'.trim().toLowerCase();
+    final role = '${data['role'] ?? (data['adminId'] != null ? 'admin' : '')}'
+        .trim()
+        .toLowerCase();
     final status = '${data['status'] ?? ''}'.trim().toLowerCase();
     final accountIds = {
       doc.id,
@@ -139,9 +143,14 @@ Future<bool> _branchHasActiveAdmin({
       data['staffId'],
       data['adminId'],
     }.whereType<Object>().map((id) => '$id');
-    return accountIds.any(memberIds.contains) &&
+    final branchMembership =
+        accountIds.any(memberIds.contains) ||
+        (data['branchIds'] as List? ?? const []).any(
+          (branchId) => branchIds.contains('$branchId'),
+        );
+    return branchMembership &&
         role == 'admin' &&
-        status == 'accepted' &&
+        (status == 'accepted' || status.isEmpty) &&
         data['isDeleted'] != true &&
         data['isVoided'] != true &&
         data['isDeactivated'] != true &&
@@ -258,12 +267,16 @@ Future<void> submitLowStockReportToSuperAdmin({
     for (var index = 0; index < allocations.length; index++) {
       final allocation = allocations[index].data();
       final item = reportedItems[index];
+      final legacyStaffMark =
+          allocation?['lowStockReportStatus'] == null &&
+          allocation?['isLowStock'] == true &&
+          allocation?['lowStockMarkedBy'] != null;
       if (allocation == null ||
-          allocation['staffLowStockPendingAdmin'] != true) {
+          (allocation['staffLowStockPendingAdmin'] != true &&
+              !legacyStaffMark)) {
         final itemName = '${item['name'] ?? 'This item'}';
         final alreadyReported =
-            allocation?['isLowStock'] == true &&
-            allocation?['staffLowStockPendingAdmin'] != true;
+            allocation?['lowStockReportStatus'] == 'reported';
         throw StateError(
           alreadyReported
               ? '$itemName is already reported.'
@@ -275,6 +288,7 @@ Future<void> submitLowStockReportToSuperAdmin({
       transaction.set(ref, {
         'isLowStock': true,
         'staffLowStockPendingAdmin': false,
+        'lowStockReportStatus': 'reported',
         'lowStockReportedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
     }

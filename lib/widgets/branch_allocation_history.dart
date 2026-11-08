@@ -226,7 +226,7 @@ class AllocationHistoryActions extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             IconButton(
-              tooltip: 'Pending allocations',
+              tooltip: 'Branch allocations',
               onPressed: () => showDialog<void>(
                 context: context,
                 builder: (_) => AllocationHistoryDialog(
@@ -248,23 +248,8 @@ class AllocationHistoryActions extends StatelessWidget {
                 label: Text('$pendingCount'),
                 isLabelVisible: pendingCount > 0,
                 backgroundColor: Colors.red,
-                child: const Icon(Icons.pending_actions),
+                child: const Icon(Icons.inventory_2_outlined),
               ),
-            ),
-            IconButton(
-              tooltip: 'Allocation history',
-              onPressed: () => showBranchAllocationHistory(
-                context,
-                branchId,
-                database: db,
-                initialRecords: snapshot.data?.docs
-                    .where((doc) => doc.data()['kind'] != 'return')
-                    .map(
-                      (doc) => <String, dynamic>{...doc.data(), '_id': doc.id},
-                    )
-                    .toList(),
-              ),
-              icon: const Icon(Icons.history_rounded),
             ),
           ],
         );
@@ -297,6 +282,7 @@ class _AllocationHistoryDialogState extends State<AllocationHistoryDialog> {
   );
   String _query = '';
   bool _issuesOnly = false;
+  late bool _showPending = widget.pendingOnly;
   DateTime _day = DateUtils.dateOnly(DateTime.now());
   DateTime? _endDay;
   final _expanded = <String>{};
@@ -319,36 +305,54 @@ class _AllocationHistoryDialogState extends State<AllocationHistoryDialog> {
   @override
   Widget build(BuildContext context) => _frame(
     context,
-    widget.pendingOnly ? 'Pending allocations' : 'Allocation history',
+    'Branch allocations',
     Column(
       children: [
         Padding(
           padding: const EdgeInsets.all(16),
           child: Column(
             children: [
+              SegmentedButton<bool>(
+                segments: const [
+                  ButtonSegment(
+                    value: true,
+                    label: Text('Pending'),
+                    icon: Icon(Icons.pending_actions),
+                  ),
+                  ButtonSegment(
+                    value: false,
+                    label: Text('Complete'),
+                    icon: Icon(Icons.check_circle_outline),
+                  ),
+                ],
+                selected: {_showPending},
+                onSelectionChanged: (selection) =>
+                    setState(() => _showPending = selection.first),
+              ),
+              const SizedBox(height: 10),
               Row(
                 children: [
                   Expanded(
                     child: TextField(
                       onChanged: (value) =>
                           setState(() => _query = value.trim().toLowerCase()),
-                      decoration: const InputDecoration(
+                      decoration: InputDecoration(
                         hintText: 'Search allocations, admin, or items',
-                        prefixIcon: Icon(Icons.search),
-                        border: OutlineInputBorder(),
+                        prefixIcon: const Icon(Icons.search),
+                        border: const OutlineInputBorder(),
+                        suffixIcon: !_showPending
+                            ? IconButton(
+                                tooltip: 'Filter by date',
+                                onPressed: _pickDates,
+                                icon: const Icon(Icons.date_range_outlined),
+                              )
+                            : null,
                       ),
                     ),
                   ),
-                  const SizedBox(width: 8),
-                  if (!widget.pendingOnly)
-                    IconButton.filledTonal(
-                      tooltip: 'Filter by date',
-                      onPressed: _pickDates,
-                      icon: const Icon(Icons.date_range_outlined),
-                    ),
                 ],
               ),
-              if (!widget.pendingOnly)
+              if (!_showPending)
                 Text(
                   '${MaterialLocalizations.of(context).formatShortDate(_day)} – ${MaterialLocalizations.of(context).formatShortDate(_endDay ?? _day)}',
                 ),
@@ -376,7 +380,7 @@ class _AllocationHistoryDialogState extends State<AllocationHistoryDialog> {
               );
               final scoped = snapshot.data!
                   .where(
-                    (record) => widget.pendingOnly
+                    (record) => _showPending
                         ? ChecklistStatus.incomingOpen(record) &&
                               (!_issuesOnly ||
                                   ChecklistStatus.label(record) ==
@@ -395,12 +399,11 @@ class _AllocationHistoryDialogState extends State<AllocationHistoryDialog> {
                 final search =
                     '${record['allocatedByName']} ${record['branchName']} ${record['staffName']} ${record['_items']}'
                         .toLowerCase();
-                return (widget.pendingOnly || withinDate) &&
-                    search.contains(_query);
+                return (_showPending || withinDate) && search.contains(_query);
               }).toList();
               return Column(
                 children: [
-                  if (widget.pendingOnly && hasIssues)
+                  if (_showPending && hasIssues)
                     Padding(
                       padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
                       child: FilterChip(

@@ -56,10 +56,7 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard>
   int _pageRefreshVersion = 0;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _allocationNotices;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _checklistUpdates;
-  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>?
-  _reconciliationRequests;
   int _pendingReturnCount = 0;
-  int _pendingReconciliationCount = 0;
 
   static const String kShopLogoAsset = 'Assets/Image/ob.jpg';
   final _navItems = const [
@@ -103,7 +100,7 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard>
             final returns = <String>{};
             for (final doc in snapshot.docs) {
               final data = doc.data();
-              if (!ChecklistStatus.returnOpen(data)) continue;
+              if (!ChecklistStatus.returnPendingForSuperAdmin(data)) continue;
               final batchId = data['batchId']?.toString().trim() ?? '';
               returns.add(
                 batchId.isEmpty ? 'return:${doc.id}' : 'return:$batchId',
@@ -115,22 +112,6 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard>
           },
           onError: (Object error) {
             debugPrint('Checklist navigation badges: $error');
-          },
-        );
-    _reconciliationRequests = FirebaseFirestore.instance
-        .collection('inventory_reconciliations')
-        .where('status', isEqualTo: 'pending')
-        .snapshots()
-        .listen(
-          (snapshot) {
-            if (mounted) {
-              setState(
-                () => _pendingReconciliationCount = snapshot.docs.length,
-              );
-            }
-          },
-          onError: (Object error) {
-            debugPrint('Reconciliation navigation badge: $error');
           },
         );
     ShortIdService.refresh().catchError((Object error) {
@@ -203,7 +184,6 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard>
   void dispose() {
     _allocationNotices?.cancel();
     _checklistUpdates?.cancel();
-    _reconciliationRequests?.cancel();
     BranchSession.instance.removeListener(_onBranchChanged);
     _entranceController.dispose();
     super.dispose();
@@ -1158,7 +1138,7 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard>
   );
 
   int _navigationBadgeCount(int index) => switch (index) {
-    2 => _pendingReturnCount + _pendingReconciliationCount,
+    2 => _pendingReturnCount,
     _ => 0,
   };
 }

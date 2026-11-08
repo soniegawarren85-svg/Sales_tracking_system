@@ -1,6 +1,55 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'inventory_display_ids.dart';
 
+Map<String, dynamic> beverageAllocationVersionPatch(
+  Map<String, dynamic> allocation,
+  Map<String, dynamic> changes,
+) {
+  final currentVersion =
+      int.tryParse('${allocation['sizeDefinitionVersion'] ?? 0}') ?? 0;
+  final sizes = (changes['sizes'] as List? ?? const [])
+      .whereType<Map>()
+      .map((size) => Map<String, dynamic>.from(size))
+      .toList();
+  return {
+    if (changes['name'] != null)
+      'name': allocation['branchNameOverride'] ?? changes['name'],
+    if (changes['basePrice'] != null) 'basePrice': changes['basePrice'],
+    if (changes['costPrice'] != null) 'costPrice': changes['costPrice'],
+    'sizes': sizes,
+    'sizeDefinitionVersion': currentVersion + 1,
+    'sizeDefinitionsUpdatedAt': Timestamp.now(),
+    'updatedAt': Timestamp.now(),
+  };
+}
+
+Future<void> syncAllocatedBeverageSizes({
+  required FirebaseFirestore firestore,
+  required String sourceInventoryId,
+  required Map<String, dynamic> changes,
+}) async {
+  if (sourceInventoryId.isEmpty || changes['sizes'] is! List) return;
+  final snapshot = await firestore
+      .collection('staff_inventory')
+      .where('sourceInventoryId', isEqualTo: sourceInventoryId)
+      .get();
+  for (var offset = 0; offset < snapshot.docs.length; offset += 450) {
+    final batch = firestore.batch();
+    for (final document in snapshot.docs.skip(offset).take(450)) {
+      final allocation = document.data();
+      if (allocation['isDeleted'] == true || allocation['isCoffee'] != true) {
+        continue;
+      }
+      batch.set(
+        document.reference,
+        beverageAllocationVersionPatch(allocation, changes),
+        SetOptions(merge: true),
+      );
+    }
+    await batch.commit();
+  }
+}
+
 Future<void> syncAllocatedInventoryMetadata({
   required FirebaseFirestore firestore,
   required String sourceInventoryId,

@@ -4,7 +4,6 @@ import '../services/receipt_tax.dart';
 import 'package:flutter/material.dart';
 import '../services/branch_report_data.dart';
 import 'historical_cash_drawer.dart';
-import 'profile_avatar.dart';
 import 'activity_feed.dart';
 import 'staff_performance_search_header.dart';
 
@@ -128,7 +127,6 @@ class StaffPerformancePanel extends StatefulWidget {
 
 class _StaffPerformancePanelState extends State<StaffPerformancePanel> {
   String? _selected;
-  String? _role;
   String _search = '';
   DateTimeRange _range = DateTimeRange(
     start: DateUtils.dateOnly(DateTime.now()),
@@ -284,19 +282,10 @@ class _StaffPerformancePanelState extends State<StaffPerformancePanel> {
                             performanceAccountRole(doc.data()) == roleQuery,
                       )
                       .toList();
-            final displayedRole = roleQuery ?? _role;
-            final roleMembers = displayedRole == null
-                ? members
-                : members
-                      .where(
-                        (doc) =>
-                            performanceAccountRole(doc.data()) == displayedRole,
-                      )
-                      .toList();
-            final selected = _selected == null
-                ? (widget.roleSelection && _role != null && _search.isEmpty
-                      ? null
-                      : metricSearch
+            final selected = roleQuery != null
+                ? null
+                : _selected == null
+                ? (metricSearch
                       ? members
                             .where(
                               (doc) =>
@@ -339,140 +328,40 @@ class _StaffPerformancePanelState extends State<StaffPerformancePanel> {
                     child: CustomScrollView(
                       physics: const AlwaysScrollableScrollPhysics(),
                       slivers: [
-                        SliverToBoxAdapter(
-                          child: Column(
-                            children: [
-                              Container(
-                                color: AppColors.primaryDeep,
-                                child: Theme(
-                                  data: Theme.of(context).copyWith(
-                                    listTileTheme: const ListTileThemeData(
-                                      textColor: Colors.white,
-                                      iconColor: Colors.white,
+                        SliverPersistentHeader(
+                          pinned: true,
+                          delegate: _PerformanceSummaryHeader(
+                            child: Container(
+                              color: AppColors.primaryDeep,
+                              child: Theme(
+                                data: Theme.of(context).copyWith(
+                                  listTileTheme: const ListTileThemeData(
+                                    textColor: Colors.white,
+                                    iconColor: Colors.white,
+                                  ),
+                                ),
+                                child: ListTile(
+                                  title: const Text(
+                                    'Branch staff',
+                                    style: TextStyle(
+                                      fontSize: 20,
+                                      fontWeight: FontWeight.bold,
                                     ),
                                   ),
-                                  child: ListTile(
-                                    title: const Text(
-                                      'Branch staff',
-                                      style: TextStyle(
-                                        fontSize: 22,
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                    ),
-                                    subtitle: Text(
-                                      '${data['name'] ?? 'Branch'} • ${displayedRole == 'admin'
-                                          ? roleMembers.length == 1
-                                                ? '1 admin'
-                                                : '${roleMembers.length} admins'
-                                          : displayedRole == 'staff'
-                                          ? roleMembers.length == 1
-                                                ? '1 cashier'
-                                                : '${roleMembers.length} cashiers'
-                                          : '${members.length} accounts'}',
-                                    ),
-                                    trailing: IconButton(
-                                      onPressed: () => Navigator.pop(context),
-                                      icon: const Icon(Icons.close),
-                                    ),
+                                  subtitle: Text(
+                                    '${data['name'] ?? 'Branch'} • ${roleQuery == 'admin'
+                                        ? 'Admin performance'
+                                        : roleQuery == 'staff'
+                                        ? 'Cashier performance'
+                                        : 'Daily performance'}',
+                                  ),
+                                  trailing: IconButton(
+                                    onPressed: () => Navigator.pop(context),
+                                    icon: const Icon(Icons.close),
                                   ),
                                 ),
                               ),
-                              const Divider(height: 1),
-                              if (widget.roleSelection && roleQuery == null)
-                                Padding(
-                                  padding: const EdgeInsets.all(18),
-                                  child: DropdownButtonFormField<String>(
-                                    key: ValueKey(_role),
-                                    initialValue: _role,
-                                    decoration: const InputDecoration(
-                                      labelText: 'Select role',
-                                    ),
-                                    items: const [
-                                      DropdownMenuItem(
-                                        value: 'admin',
-                                        child: Text('Admin'),
-                                      ),
-                                      DropdownMenuItem(
-                                        value: 'staff',
-                                        child: Text('Cashier'),
-                                      ),
-                                    ],
-                                    onChanged: (value) => setState(() {
-                                      _role = value;
-                                      _selected = null;
-                                    }),
-                                  ),
-                                ),
-                              if (roleQuery == null &&
-                                  (!widget.roleSelection || _role != null))
-                                Padding(
-                                  padding: const EdgeInsets.fromLTRB(
-                                    18,
-                                    0,
-                                    18,
-                                    8,
-                                  ),
-                                  child: DropdownButtonFormField<String>(
-                                    key: ValueKey('${_role}_${selected?.id}'),
-                                    initialValue: selected?.id,
-                                    decoration: InputDecoration(
-                                      labelText: widget.roleSelection
-                                          ? (_role == 'admin'
-                                                ? 'Select admin'
-                                                : 'Select cashier')
-                                          : 'Select cashier',
-                                      hintText: 'Select account',
-                                      border: const OutlineInputBorder(),
-                                    ),
-                                    items: roleMembers
-                                        .map(
-                                          (d) => DropdownMenuItem(
-                                            value: d.id,
-                                            child: Text(
-                                              '${_name(d.data())} • ${d.data()['adminId'] ?? d.data()['staffId'] ?? d.id}',
-                                            ),
-                                          ),
-                                        )
-                                        .toList(),
-                                    onChanged: roleMembers.isEmpty
-                                        ? null
-                                        : (value) =>
-                                              setState(() => _selected = value),
-                                  ),
-                                ),
-                              if (widget.roleSelection &&
-                                  roleQuery == null &&
-                                  _role != null &&
-                                  roleMembers.isEmpty)
-                                Padding(
-                                  padding: const EdgeInsets.fromLTRB(
-                                    18,
-                                    0,
-                                    18,
-                                    8,
-                                  ),
-                                  child: Text(
-                                    _role == 'admin'
-                                        ? 'No active admin accounts found.'
-                                        : 'No staff assigned to this branch.',
-                                    style: const TextStyle(
-                                      color: Colors.black54,
-                                    ),
-                                  ),
-                                ),
-                              if (widget.roleSelection && selected != null)
-                                ListTile(
-                                  leading: ProfileAvatar(data: person),
-                                  title: Text(_name(person)),
-                                  subtitle: Text(
-                                    '${person['adminId'] ?? person['staffId'] ?? selected.id} • ${performanceAccountRole(person) == 'admin' ? 'Admin' : 'Cashier'}',
-                                  ),
-                                  trailing: const Icon(
-                                    Icons.check_circle_outline,
-                                    color: Colors.green,
-                                  ),
-                                ),
-                            ],
+                            ),
                           ),
                         ),
                         _searchHeader(),
@@ -546,9 +435,22 @@ class _StaffPerformancePanelState extends State<StaffPerformancePanel> {
                               range: _range,
                               database: _db,
                               cardRows: true,
+                              showEmptyMessage: false,
                             ),
                           ),
-                        if (selected == null && _search.isEmpty)
+                        if (selected == null && roleQuery != null)
+                          SliverToBoxAdapter(
+                            child: ActivityFeed(
+                              actorIds: {...identity.map((id) => '$id')},
+                              branchId: widget.branchId,
+                              includeReceipts: true,
+                              hideSessionEvents: true,
+                              range: _range,
+                              database: _db,
+                              cardRows: true,
+                            ),
+                          )
+                        else if (selected == null && _search.isEmpty)
                           SliverToBoxAdapter(
                             child: ActivityFeed(
                               actorIds: branchIdentities,
@@ -613,7 +515,7 @@ class _StaffPerformancePanelState extends State<StaffPerformancePanel> {
                                       const Padding(
                                         padding: EdgeInsets.all(24),
                                         child: Text(
-                                          'No orders recorded for this staff in this date range.',
+                                          'No activities recorded yet.',
                                           textAlign: TextAlign.center,
                                         ),
                                       )

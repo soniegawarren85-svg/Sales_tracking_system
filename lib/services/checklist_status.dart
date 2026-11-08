@@ -3,6 +3,7 @@ class ChecklistStatus {
   static const awaiting = 'Awaiting Confirmation';
   static const received = 'Received';
   static const awaitingAdmin = 'Awaiting Admin Confirmation';
+  static const awaitingSuperAdmin = 'Awaiting Super Admin Confirmation';
   static const completed = 'Return Completed';
   static const returnDeclined = 'Return Declined';
   static const issue = 'Issue Reported';
@@ -21,8 +22,16 @@ class ChecklistStatus {
 
   static bool returnOpen(Map<String, dynamic> data) =>
       data['kind'] == 'return' &&
+      [awaitingAdmin, awaitingSuperAdmin, discrepancy].contains(label(data));
+
+  static bool returnPendingForAdmin(Map<String, dynamic> data) =>
+      data['kind'] == 'return' &&
       [awaitingAdmin, discrepancy].contains(label(data));
 
+  static bool returnPendingForSuperAdmin(Map<String, dynamic> data) =>
+      data['kind'] == 'return' &&
+      [awaitingSuperAdmin, discrepancy].contains(label(data));
+
   static bool pending(Map<String, dynamic> data, {required bool admin}) =>
-      admin ? returnOpen(data) : incomingOpen(data);
+      admin ? returnPendingForAdmin(data) : incomingOpen(data);
 }

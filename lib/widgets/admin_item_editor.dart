@@ -112,9 +112,13 @@ Future<void> showAdminItemEditor(
   Map<String, dynamic>? category,
   FirebaseFirestore? firestore,
   required Future<String?> Function(Uint8List bytes) upload,
-}) => showDialog<void>(
+}) => showModalBottomSheet<void>(
   context: context,
-  barrierDismissible: false,
+  isScrollControlled: true,
+  useSafeArea: true,
+  backgroundColor: Colors.transparent,
+  isDismissible: false,
+  enableDrag: false,
   builder: (_) => _ItemEditor(
     entry: entry,
     category: category,
@@ -180,9 +184,8 @@ class _ItemEditorState extends State<_ItemEditor> {
   );
   bool _loadingIngredients = false;
   bool _recipeChanged = false;
-  bool _customCost = false;
+  final _ingredientSearch = TextEditingController();
   void _computeCost() {
-    if (_customCost) return;
     _cost.text = _ingredients
         .fold<double>(
           0,
@@ -361,6 +364,7 @@ class _ItemEditorState extends State<_ItemEditor> {
       _expiry,
       _description,
       _additionalBundles,
+      _ingredientSearch,
       ..._sizes.expand((size) => [size.$1, size.$2, size.$3]),
     ]) {
       controller.dispose();
@@ -624,6 +628,13 @@ class _ItemEditorState extends State<_ItemEditor> {
           item: _data,
           changes: patch,
         );
+        if (_type == 'Beverages' && patch.containsKey('sizes')) {
+          await syncAllocatedBeverageSizes(
+            firestore: db,
+            sourceInventoryId: ref.id,
+            changes: patch,
+          );
+        }
       }
       _recordSaveActivity(source, patch, publicId: createdPublicId);
       _finishSave();
@@ -642,14 +653,13 @@ class _ItemEditorState extends State<_ItemEditor> {
     bool number = false,
     bool integer = false,
     bool required = true,
+    bool readOnly = false,
   }) => Padding(
     padding: const EdgeInsets.only(bottom: 14),
     child: TextFormField(
       controller: controller,
       enabled: !_saving,
-      onChanged: (_) {
-        if (controller == _cost) _customCost = true;
-      },
+      readOnly: readOnly,
       keyboardType: number
           ? const TextInputType.numberWithOptions(decimal: true)
           : TextInputType.text,
@@ -701,336 +711,426 @@ class _ItemEditorState extends State<_ItemEditor> {
   @override
   Widget build(BuildContext context) => PopScope(
     canPop: !_saving,
-    child: AlertDialog(
-      backgroundColor: AppColors.surfaceTint,
-      surfaceTintColor: Colors.transparent,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-      title: Text(
-        widget.entry == null ? 'Add item' : 'Edit ${widget.entry!.name}',
-        style: const TextStyle(
-          color: AppColors.primaryDark,
-          fontWeight: FontWeight.w800,
-        ),
+    child: Container(
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.sizeOf(context).height * .92,
       ),
-      content: SizedBox(
-        width: 560,
-        child: SingleChildScrollView(
-          child: Form(
-            key: _form,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
+      decoration: const BoxDecoration(
+        color: AppColors.surfaceTint,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+      ),
+      child: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(22, 18, 12, 14),
+            child: Row(
               children: [
-                if (_saving)
-                  const LinearProgressIndicator(
-                    minHeight: 3,
-                    color: AppColors.primary,
-                  ),
-                ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: ClipRRect(
-                    borderRadius: BorderRadius.circular(12),
-                    child: SizedBox(width: 52, height: 52, child: _image()),
-                  ),
-                  title: const Text('Item picture'),
-                  trailing: IconButton(
-                    tooltip: 'Choose picture',
-                    icon: const Icon(Icons.photo_library_outlined),
-                    onPressed: _saving
-                        ? null
-                        : () async {
-                            final file = await ImagePicker().pickImage(
-                              source: ImageSource.gallery,
-                              maxWidth: 800,
-                              maxHeight: 800,
-                              imageQuality: 70,
-                            );
-                            if (file == null) return;
-                            final bytes = await file.readAsBytes();
-                            if (mounted) {
-                              setState(() {
-                                _photo = bytes;
-                                _upload = widget
-                                    .upload(bytes)
-                                    .catchError((_) => null);
-                              });
-                            }
-                          },
+                Expanded(
+                  child: Text(
+                    widget.entry == null
+                        ? 'Add item'
+                        : 'Edit ${widget.entry!.name}',
+                    style: const TextStyle(
+                      color: AppColors.primaryDark,
+                      fontSize: 20,
+                      fontWeight: FontWeight.w800,
+                    ),
                   ),
                 ),
-                _field(_name, 'Name'),
-                if (_type != 'Beverages')
-                  _field(_price, 'Selling price (\u20b1)', number: true),
-                if (_type != 'Beverages')
-                  _field(_cost, 'Cost price (\u20b1)', number: true),
-                if (_type == 'Bundle')
-                  TextButton(
-                    onPressed: () {
-                      _customCost = false;
-                      _computeCost();
-                    },
-                    child: const Text('Recompute ingredient cost'),
-                  ),
-                if (_type == 'Categories') ...[
-                  _field(
-                    _stock,
-                    widget.entry == null ? 'Stock' : 'Additional stock',
-                    number: true,
-                    integer: true,
-                  ),
-                  TextFormField(
-                    controller: _expiry,
-                    readOnly: true,
-                    decoration: const InputDecoration(
-                      labelText: 'Expiration date',
-                      prefixIcon: Icon(Icons.calendar_today),
-                      border: OutlineInputBorder(),
-                    ),
-                    validator: (value) => DateTime.tryParse(value ?? '') == null
-                        ? 'Choose an expiration date'
-                        : () {
-                            final selectedDate = DateTime.parse(value!);
-                            final isUnchangedExistingDate =
-                                widget.entry != null &&
-                                _inventoryDateText(
-                                      _data['expirationDate'] ?? '',
-                                    ) ==
-                                    value;
-                            if (!isUnchangedExistingDate &&
-                                !DateUtils.dateOnly(
-                                  selectedDate,
-                                ).isAfter(DateUtils.dateOnly(DateTime.now()))) {
-                              return 'Choose a future date. Items expiring today are expired.';
-                            }
-                            return null;
-                          }(),
-                    onTap: _saving
-                        ? null
-                        : () async {
-                            final firstAllowedDate = DateUtils.dateOnly(
-                              DateTime.now(),
-                            ).add(const Duration(days: 1));
-                            final currentDate = DateTime.tryParse(_expiry.text);
-                            final date = await showDatePicker(
-                              context: context,
-                              initialDate:
-                                  currentDate != null &&
-                                      DateUtils.dateOnly(
-                                        currentDate,
-                                      ).isAfter(firstAllowedDate)
-                                  ? currentDate
-                                  : firstAllowedDate,
-                              firstDate: firstAllowedDate,
-                              lastDate: DateTime(2100),
-                            );
-                            if (date != null) {
-                              _expiry.text = date
-                                  .toIso8601String()
-                                  .split('T')
-                                  .first;
-                            }
-                          },
-                  ),
-                  const SizedBox(height: 14),
-                ],
-                if (_type == 'Beverages') ...[
-                  const SizedBox(height: 12),
-                  ..._sizes.map(
-                    (size) => Row(
-                      children: [
-                        Expanded(child: _field(size.$1, 'Size')),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: _field(
-                            size.$3,
-                            'Cost price (₱)',
-                            number: true,
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: _field(
-                            size.$2,
-                            'Selling price (₱)',
-                            number: true,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-                if (_type == 'Bundle') ...[
-                  _field(
-                    _additionalBundles,
-                    'Additional bundles (0–100)',
-                    number: true,
-                    integer: true,
-                  ),
-                  const Divider(),
-                  const Align(
-                    alignment: Alignment.centerLeft,
-                    child: Text(
-                      'Bundle items',
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  if (_loadingIngredients) const LinearProgressIndicator(),
-                  _ScrollingChips(
-                    children: [
-                      for (final type in ['Categories', 'Beverages', 'Add-ons'])
-                        ChoiceChip(
-                          label: Text(type),
-                          selected: _ingredientTab == type,
-                          onSelected: (_) =>
-                              setState(() => _ingredientTab = type),
-                        ),
-                    ],
-                  ),
-                  if (_ingredientTab == 'Categories')
-                    _ScrollingChips(
-                      children: [
-                        ChoiceChip(
-                          label: const Text('All'),
-                          selected: _ingredientCategory == null,
-                          onSelected: (_) =>
-                              setState(() => _ingredientCategory = null),
-                        ),
-                        for (final category
-                            in _ingredientOptions
-                                .where((o) => o['parentName'] != null)
-                                .map((o) => '${o['parentName']}')
-                                .toSet())
-                          ChoiceChip(
-                            label: Text(category),
-                            selected: _ingredientCategory == category,
-                            onSelected: (_) =>
-                                setState(() => _ingredientCategory = category),
-                          ),
-                      ],
-                    ),
-                  ...{
-                        for (final option in [
-                          ..._ingredientOptions,
-                          ..._ingredients,
-                        ])
-                          _ingredientKey(option): option,
-                      }.values
-                      .where((item) {
-                        final type =
-                            item['sourceCollection'] == 'coffee_products'
-                            ? 'Beverages'
-                            : item['sourceCollection'] == 'coffee_addons'
-                            ? 'Add-ons'
-                            : 'Categories';
-                        return type == _ingredientTab &&
-                            (type != 'Categories' ||
-                                _ingredientCategory == null ||
-                                item['parentName'] == _ingredientCategory);
-                      })
-                      .map((option) {
-                        final index = _ingredients.indexWhere(
-                          (i) => _ingredientKey(i) == _ingredientKey(option),
-                        );
-                        final selected = index >= 0;
-                        final item = selected ? _ingredients[index] : option;
-                        return Card(
-                          margin: const EdgeInsets.symmetric(vertical: 8),
-                          child: Padding(
-                            padding: const EdgeInsets.all(16),
-                            child: Column(
-                              children: [
-                                CheckboxListTile(
-                                  contentPadding: EdgeInsets.zero,
-                                  title: Text('${item['name']}'),
-                                  subtitle: Text(
-                                    '₱${item['price'] ?? 0}\nExpires: ${item['expirationDate'] ?? 'Not recorded'}',
-                                  ),
-                                  value: selected,
-                                  onChanged: _saving
-                                      ? null
-                                      : (value) => setState(() {
-                                          _recipeChanged = true;
-                                          _customCost = false;
-                                          if (value == true) {
-                                            _ingredients.add({
-                                              ...option,
-                                              'quantity': 1,
-                                            });
-                                          } else {
-                                            _ingredients.removeAt(index);
-                                          }
-                                          _computeCost();
-                                        }),
-                                ),
-                                if (selected)
-                                  TextFormField(
-                                    key: ValueKey(
-                                      'quantity-${_ingredientKey(item)}',
-                                    ),
-                                    initialValue: '${item['quantity'] ?? 1}',
-                                    enabled: !_saving,
-                                    keyboardType: TextInputType.number,
-                                    decoration: InputDecoration(
-                                      labelText: item['coffeeSize'] == null
-                                          ? 'Quantity per bundle'
-                                          : 'Qty per ${item['coffeeSize']}',
-                                      hintText: 'Enter quantity',
-                                      border: const OutlineInputBorder(),
-                                    ),
-                                    validator: (value) =>
-                                        (int.tryParse(value ?? '') ?? 0) <= 0
-                                        ? 'Enter a quantity greater than zero'
-                                        : null,
-                                    onChanged: (value) {
-                                      _recipeChanged = true;
-                                      item['quantity'] =
-                                          int.tryParse(value) ?? 0;
-                                      _customCost = false;
-                                      _computeCost();
-                                    },
-                                  ),
-                              ],
-                            ),
-                          ),
-                        );
-                      }),
-                ],
-                if (_error != null)
-                  Text(_error!, style: const TextStyle(color: Colors.red)),
+                IconButton(
+                  tooltip: 'Close',
+                  onPressed: _saving ? null : () => Navigator.pop(context),
+                  icon: const Icon(Icons.close),
+                ),
               ],
             ),
           ),
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: _saving ? null : () => Navigator.pop(context),
-          child: const Text('Cancel'),
-        ),
-        FilledButton(
-          onPressed: _saving ? null : _save,
-          child: _saving
-              ? const Row(
+          if (_saving)
+            const LinearProgressIndicator(
+              minHeight: 3,
+              color: AppColors.primary,
+            ),
+          Expanded(
+            child: SingleChildScrollView(
+              padding: EdgeInsets.fromLTRB(
+                22,
+                4,
+                22,
+                MediaQuery.viewInsetsOf(context).bottom + 18,
+              ),
+              child: Form(
+                key: _form,
+                child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: Colors.white,
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: ClipRRect(
+                        borderRadius: BorderRadius.circular(12),
+                        child: SizedBox(width: 52, height: 52, child: _image()),
+                      ),
+                      title: const Text('Item picture'),
+                      trailing: IconButton(
+                        tooltip: 'Choose picture',
+                        icon: const Icon(Icons.photo_library_outlined),
+                        onPressed: _saving
+                            ? null
+                            : () async {
+                                final file = await ImagePicker().pickImage(
+                                  source: ImageSource.gallery,
+                                  maxWidth: 800,
+                                  maxHeight: 800,
+                                  imageQuality: 70,
+                                );
+                                if (file == null) return;
+                                final bytes = await file.readAsBytes();
+                                if (mounted) {
+                                  setState(() {
+                                    _photo = bytes;
+                                    _upload = widget
+                                        .upload(bytes)
+                                        .catchError((_) => null);
+                                  });
+                                }
+                              },
                       ),
                     ),
-                    SizedBox(width: 10),
-                    Text('Saving…'),
+                    _field(_name, 'Name'),
+                    if (_type != 'Beverages')
+                      _field(_price, 'Selling price (\u20b1)', number: true),
+                    if (_type != 'Beverages' && _type != 'Bundle')
+                      _field(_cost, 'Cost price (\u20b1)', number: true),
+                    if (_type == 'Categories') ...[
+                      _field(
+                        _stock,
+                        widget.entry == null ? 'Stock' : 'Additional stock',
+                        number: true,
+                        integer: true,
+                      ),
+                      TextFormField(
+                        controller: _expiry,
+                        readOnly: true,
+                        decoration: const InputDecoration(
+                          labelText: 'Expiration date',
+                          prefixIcon: Icon(Icons.calendar_today),
+                          border: OutlineInputBorder(),
+                        ),
+                        validator: (value) =>
+                            DateTime.tryParse(value ?? '') == null
+                            ? 'Choose an expiration date'
+                            : () {
+                                final selectedDate = DateTime.parse(value!);
+                                final isUnchangedExistingDate =
+                                    widget.entry != null &&
+                                    _inventoryDateText(
+                                          _data['expirationDate'] ?? '',
+                                        ) ==
+                                        value;
+                                if (!isUnchangedExistingDate &&
+                                    !DateUtils.dateOnly(selectedDate).isAfter(
+                                      DateUtils.dateOnly(DateTime.now()),
+                                    )) {
+                                  return 'Choose a future date. Items expiring today are expired.';
+                                }
+                                return null;
+                              }(),
+                        onTap: _saving
+                            ? null
+                            : () async {
+                                final firstAllowedDate = DateUtils.dateOnly(
+                                  DateTime.now(),
+                                ).add(const Duration(days: 1));
+                                final currentDate = DateTime.tryParse(
+                                  _expiry.text,
+                                );
+                                final date = await showDatePicker(
+                                  context: context,
+                                  initialDate:
+                                      currentDate != null &&
+                                          DateUtils.dateOnly(
+                                            currentDate,
+                                          ).isAfter(firstAllowedDate)
+                                      ? currentDate
+                                      : firstAllowedDate,
+                                  firstDate: firstAllowedDate,
+                                  lastDate: DateTime(2100),
+                                );
+                                if (date != null) {
+                                  _expiry.text = date
+                                      .toIso8601String()
+                                      .split('T')
+                                      .first;
+                                }
+                              },
+                      ),
+                      const SizedBox(height: 14),
+                    ],
+                    if (_type == 'Beverages') ...[
+                      const SizedBox(height: 12),
+                      ..._sizes.map(
+                        (size) => Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            _field(size.$1, 'Size'),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: _field(
+                                    size.$3,
+                                    'Cost price (₱)',
+                                    number: true,
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: _field(
+                                    size.$2,
+                                    'Selling price (₱)',
+                                    number: true,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                    if (_type == 'Bundle') ...[
+                      _field(
+                        _additionalBundles,
+                        'Additional bundles (0–100)',
+                        number: true,
+                        integer: true,
+                      ),
+                      _field(
+                        _cost,
+                        'Cost per bundle (₱)',
+                        number: true,
+                        readOnly: true,
+                      ),
+                      const Divider(),
+                      const Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          'Bundle items',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      if (_loadingIngredients) const LinearProgressIndicator(),
+                      TextField(
+                        key: const ValueKey('bundle-ingredient-search'),
+                        controller: _ingredientSearch,
+                        enabled: !_saving,
+                        onChanged: (_) => setState(() {}),
+                        decoration: const InputDecoration(
+                          labelText: 'Search variants',
+                          prefixIcon: Icon(Icons.search),
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      _ScrollingChips(
+                        children: [
+                          for (final type in [
+                            'Categories',
+                            'Beverages',
+                            'Add-ons',
+                          ])
+                            ChoiceChip(
+                              label: Text(type),
+                              selected: _ingredientTab == type,
+                              selectedColor: AppColors.primaryDark,
+                              labelStyle: TextStyle(
+                                color: _ingredientTab == type
+                                    ? Colors.white
+                                    : AppColors.primaryDark,
+                                fontWeight: FontWeight.w700,
+                              ),
+                              onSelected: (_) =>
+                                  setState(() => _ingredientTab = type),
+                            ),
+                        ],
+                      ),
+                      if (_ingredientTab == 'Categories')
+                        _ScrollingChips(
+                          children: [
+                            ChoiceChip(
+                              label: const Text('All'),
+                              selected: _ingredientCategory == null,
+                              onSelected: (_) =>
+                                  setState(() => _ingredientCategory = null),
+                            ),
+                            for (final category
+                                in _ingredientOptions
+                                    .where((o) => o['parentName'] != null)
+                                    .map((o) => '${o['parentName']}')
+                                    .toSet())
+                              ChoiceChip(
+                                label: Text(category),
+                                selected: _ingredientCategory == category,
+                                onSelected: (_) => setState(
+                                  () => _ingredientCategory = category,
+                                ),
+                              ),
+                          ],
+                        ),
+                      ...{
+                            for (final option in [
+                              ..._ingredientOptions,
+                              ..._ingredients,
+                            ])
+                              _ingredientKey(option): option,
+                          }.values
+                          .where((item) {
+                            final type =
+                                item['sourceCollection'] == 'coffee_products'
+                                ? 'Beverages'
+                                : item['sourceCollection'] == 'coffee_addons'
+                                ? 'Add-ons'
+                                : 'Categories';
+                            final query = _ingredientSearch.text
+                                .trim()
+                                .toLowerCase();
+                            return type == _ingredientTab &&
+                                (query.isEmpty ||
+                                    '${item['name']} ${item['parentName'] ?? ''}'
+                                        .toLowerCase()
+                                        .contains(query)) &&
+                                (type != 'Categories' ||
+                                    _ingredientCategory == null ||
+                                    item['parentName'] == _ingredientCategory);
+                          })
+                          .map((option) {
+                            final index = _ingredients.indexWhere(
+                              (i) =>
+                                  _ingredientKey(i) == _ingredientKey(option),
+                            );
+                            final selected = index >= 0;
+                            final item = selected
+                                ? _ingredients[index]
+                                : option;
+                            return Card(
+                              margin: const EdgeInsets.symmetric(vertical: 8),
+                              color: selected
+                                  ? AppColors.primary.withValues(alpha: .08)
+                                  : Colors.white,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(14),
+                                side: BorderSide(
+                                  color: selected
+                                      ? AppColors.primary
+                                      : AppColors.blush,
+                                ),
+                              ),
+                              child: Padding(
+                                padding: const EdgeInsets.all(16),
+                                child: Column(
+                                  children: [
+                                    CheckboxListTile(
+                                      contentPadding: EdgeInsets.zero,
+                                      title: Text('${item['name']}'),
+                                      subtitle: Text(
+                                        '₱${item['price'] ?? 0}\nExpires: ${item['expirationDate'] ?? 'Not recorded'}',
+                                      ),
+                                      value: selected,
+                                      onChanged: _saving
+                                          ? null
+                                          : (value) => setState(() {
+                                              _recipeChanged = true;
+                                              if (value == true) {
+                                                _ingredients.add({
+                                                  ...option,
+                                                  'quantity': 1,
+                                                });
+                                              } else {
+                                                _ingredients.removeAt(index);
+                                              }
+                                              _computeCost();
+                                            }),
+                                    ),
+                                    if (selected)
+                                      TextFormField(
+                                        key: ValueKey(
+                                          'quantity-${_ingredientKey(item)}',
+                                        ),
+                                        initialValue:
+                                            '${item['quantity'] ?? 1}',
+                                        enabled: !_saving,
+                                        keyboardType: TextInputType.number,
+                                        decoration: InputDecoration(
+                                          labelText: item['coffeeSize'] == null
+                                              ? 'Quantity per bundle'
+                                              : 'Qty per ${item['coffeeSize']}',
+                                          hintText: 'Enter quantity',
+                                          border: const OutlineInputBorder(),
+                                        ),
+                                        validator: (value) =>
+                                            (int.tryParse(value ?? '') ?? 0) <=
+                                                0
+                                            ? 'Enter a quantity greater than zero'
+                                            : null,
+                                        onChanged: (value) {
+                                          _recipeChanged = true;
+                                          item['quantity'] =
+                                              int.tryParse(value) ?? 0;
+                                          _computeCost();
+                                        },
+                                      ),
+                                  ],
+                                ),
+                              ),
+                            );
+                          }),
+                    ],
+                    if (_error != null)
+                      Text(_error!, style: const TextStyle(color: Colors.red)),
                   ],
-                )
-              : Text(widget.entry == null ? 'Add' : 'Save'),
-        ),
-      ],
+                ),
+              ),
+            ),
+          ),
+          Padding(
+            padding: EdgeInsets.fromLTRB(
+              22,
+              12,
+              22,
+              MediaQuery.viewInsetsOf(context).bottom + 16,
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: _saving ? null : () => Navigator.pop(context),
+                    child: const Text('Cancel'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: FilledButton(
+                    onPressed: _saving ? null : _save,
+                    child: _saving
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
+                          )
+                        : Text(
+                            widget.entry == null ? 'Add item' : 'Save changes',
+                          ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     ),
   );
 }

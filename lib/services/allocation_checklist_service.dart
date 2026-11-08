@@ -281,6 +281,62 @@ class AllocationChecklistService {
     });
   }
 
+  Future<int> forwardReturns(
+    List<String> ids, {
+    required String actorId,
+    required String actorName,
+    required List<String> scopeIds,
+  }) async {
+    await BranchPermissions.require('allowReturns', database: db);
+    final unique = ids.toSet().toList();
+    if (actorId.trim().isEmpty || unique.isEmpty || unique.length > 200) {
+      throw ArgumentError('Select 1 to 200 pending returns.');
+    }
+    return db.runTransaction((tx) async {
+      final docs = await Future.wait(
+        unique.map(
+          (id) => tx.get(db.collection('allocation_checklist').doc(id)),
+        ),
+      );
+      final pending = docs.where((doc) {
+        final data = doc.data();
+        return data != null && ChecklistStatus.returnPendingForAdmin(data);
+      }).toList();
+      if (pending.any(
+        (doc) => !scopeIds.contains(
+          '${doc.data()?['branchId'] ?? doc.data()?['staffId']}',
+        ),
+      )) {
+        throw StateError('A selected return is outside your assigned branch.');
+      }
+      for (final doc in pending) {
+        tx.update(doc.reference, {
+          'status': ChecklistStatus.awaitingSuperAdmin,
+          'forwardedBy': actorId,
+          'forwardedByName': actorName,
+          'forwardedAt': FieldValue.serverTimestamp(),
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
+        tx.set(
+          db.collection('admin_notifications').doc('return_forward_${doc.id}'),
+          {
+            'title': 'Branch return submitted',
+            'message':
+                '$actorName submitted ${doc.data()?['quantity'] ?? 1} ${doc.data()?['name'] ?? 'item'} return(s) from ${doc.data()?['branchName'] ?? 'a branch'} for Super Admin review.',
+            'type': 'allocation_return',
+            'category': 'Inventory',
+            'requestId': doc.id,
+            'branchId': doc.data()?['branchId'] ?? doc.data()?['staffId'],
+            'isRead': false,
+            'toastShown': false,
+            'createdAt': FieldValue.serverTimestamp(),
+          },
+        );
+      }
+      return pending.length;
+    });
+  }
+
   /// Receiving a return records custody, not saleability (e.g. damaged stock).
   Future<bool> confirmReturn(
     String id, {
@@ -657,6 +713,15 @@ class AllocationChecklistService {
         result['items'] = items;
       } else if (accept) {
         result.addAll(payload);
+        result.addAll({
+          'isLowStock': false,
+          'staffLowStockPendingAdmin': false,
+          'lowStockReportStatus': FieldValue.delete(),
+          'lowStockMarkedAt': FieldValue.delete(),
+          'lowStockMarkedBy': FieldValue.delete(),
+          'lowStockMarkedByName': FieldValue.delete(),
+          'lowStockReportedAt': FieldValue.delete(),
+        });
       }
       if (accept) {
         result['assignedAt'] = FieldValue.serverTimestamp();

@@ -3,7 +3,6 @@ import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../theme/app_colors.dart';
-import '../services/allocation_checklist_service.dart';
 import '../services/bundle_stock_service.dart';
 import '../services/inventory_reconciliation_service.dart';
 import '../services/session_actor.dart';
@@ -18,6 +17,65 @@ Future<void> showMainInventoryBatches(
   context: context,
   builder: (_) => _MainInventoryBatchesDialog(item: item),
 );
+
+List<Map<String, dynamic>> mainInventoryBatchRows(Map<String, dynamic> item) {
+  if (item['isBundle'] != true) {
+    return (item['stockBatches'] as List? ?? [])
+        .whereType<Map>()
+        .map((batch) => Map<String, dynamic>.from(batch))
+        .toList();
+  }
+  final groups = <String, List<Map<String, dynamic>>>{};
+  for (final (index, instance) in bundleRows(item['bundleInstances']).indexed) {
+    if (instance['isDeleted'] == true ||
+        instance['isVoided'] == true ||
+        ![
+          'available',
+          '',
+        ].contains('${instance['status'] ?? 'available'}'.toLowerCase())) {
+      continue;
+    }
+    final batchId = '${instance['batchId'] ?? ''}'.trim();
+    final createdAt =
+        instance['createdAt'] ??
+        instance['assignedAt'] ??
+        item['createdAt'] ??
+        item['timestamp'];
+    final key = batchId.isNotEmpty
+        ? batchId
+        : 'legacy_${createdAt ?? instance['expirationDate'] ?? index}';
+    groups.putIfAbsent(key, () => []).add(instance);
+  }
+  return [
+    for (final (index, entry) in groups.entries.indexed)
+      () {
+        final instances = entry.value;
+        final first = instances.first;
+        final items = bundleRows(first['items']).isNotEmpty
+            ? bundleRows(first['items'])
+            : bundleRows(item['items']);
+        final expirations = [
+          '${first['expirationDate'] ?? ''}',
+          ...items.map((ingredient) => '${ingredient['expirationDate'] ?? ''}'),
+        ].where((value) => value.isNotEmpty).toList()..sort();
+        return <String, dynamic>{
+          'batchId': 'BATCH-${(index + 1).toString().padLeft(3, '0')}',
+          'sourceBatchId': entry.key,
+          'quantity': instances.length,
+          'remaining': instances.length,
+          'createdAt':
+              first['createdAt'] ??
+              first['assignedAt'] ??
+              item['createdAt'] ??
+              item['timestamp'],
+          'expirationDate': expirations.firstOrNull ?? '',
+          'costPrice': first['costPrice'] ?? item['costPrice'],
+          'price': first['price'] ?? item['price'],
+          'items': items,
+        };
+      }(),
+  ];
+}
 
 class _MainInventoryBatchesDialog extends StatefulWidget {
   const _MainInventoryBatchesDialog({required this.item});
@@ -65,17 +123,18 @@ class _MainInventoryBatchesDialogState
 
   @override
   Widget build(BuildContext context) {
-    final storedBatches = (widget.item['stockBatches'] as List? ?? [])
-        .whereType<Map>()
-        .map((batch) => Map<String, dynamic>.from(batch))
-        .toList();
+    final storedBatches = mainInventoryBatchRows(widget.item);
     final legacyStock =
         (num.tryParse(
-                  '${widget.item['stock'] ?? widget.item['startingStock'] ?? 0}',
+                  '${widget.item['isBundle'] == true ? widget.item['bundleCount'] ?? 0 : widget.item['stock'] ?? widget.item['startingStock'] ?? 0}',
                 ) ??
                 0)
             .toInt();
-    final batches = storedBatches.isEmpty && legacyStock > 0
+    final hasBundleInstanceHistory =
+        widget.item['isBundle'] == true &&
+        (widget.item['bundleInstances'] as List? ?? []).isNotEmpty;
+    final batches =
+        storedBatches.isEmpty && legacyStock > 0 && !hasBundleInstanceHistory
         ? [
             {
               'quantity': legacyStock,
@@ -252,11 +311,14 @@ class _MainInventoryBatchesDialogState
     final searchText = [
       'BATCH-${(index + 1).toString().padLeft(3, '0')}',
       batch['batchId'],
+      batch['sourceBatchId'],
       batch['quantity'],
       _dateLabel(batch['createdAt'] ?? widget.item['createdAt']),
       batch['expirationDate'],
       batch['costPrice'] ?? widget.item['costPrice'],
       batch['price'] ?? widget.item['price'] ?? widget.item['basePrice'],
+      for (final item in bundleRows(batch['items']))
+        '${item['name'] ?? item['variant'] ?? ''}',
     ].join(' ').toLowerCase();
     return searchText.contains(query);
   }
@@ -285,6 +347,12 @@ class _InventoryBatchCard extends StatelessWidget {
         '${batch['batchId'] ?? 'BATCH-${(index + 1).toString().padLeft(3, '0')}'}';
     final createdDate = batch['createdAt'] ?? item['createdAt'];
     final expiry = '${batch['expirationDate'] ?? 'No expiry'}';
+    final contents = bundleRows(batch['items'])
+        .map(
+          (item) =>
+              '${item['name'] ?? item['variant'] ?? 'Item'} × ${item['quantity'] ?? 1}',
+        )
+        .join(', ');
 
     return Container(
       key: ValueKey('inventory-batch-card-$index'),
@@ -351,6 +419,17 @@ class _InventoryBatchCard extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 12),
+          if (contents.isNotEmpty) ...[
+            Text(
+              'Contents: $contents',
+              style: const TextStyle(
+                color: AppColors.text,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 10),
+          ],
           Wrap(
             spacing: 8,
             runSpacing: 8,
@@ -855,6 +934,25 @@ bool hasAvailableAllocationBatchAfter(
   return batchDate.isAfter(date);
 });
 
+bool hasNewerBundleVersionAllocation(
+  Map<String, dynamic> source,
+  Iterable<Map<String, dynamic>> candidates,
+  String allocationId,
+  DateTime selectedBatchDate,
+) => candidates.any(
+  (candidate) =>
+      candidate['_id'] != allocationId &&
+      candidate['isBundle'] == true &&
+      bundleInventoryGroupKey(candidate) == bundleInventoryGroupKey(source) &&
+      bundleAllocationVersionKey(candidate) !=
+          bundleAllocationVersionKey(source) &&
+      hasAvailableAllocationBatchAfter(
+        candidate,
+        '${candidate['_id']}',
+        selectedBatchDate,
+      ),
+);
+
 bool allocationBatchRecordIsAvailable(Map<String, dynamic> record) =>
     record['isDeleted'] != true &&
     record['isVoided'] != true &&
@@ -920,10 +1018,10 @@ class _BatchDialogState extends State<_BatchDialog> {
   String? error;
   bool busy = false;
   String action = 'return';
-  String? selectedAllocation, target;
+  String? selectedAllocation;
   final selected = <String>{};
-  late final requestId = widget.db
-      .collection('inventory_reconciliations')
+  late final actionId = widget.db
+      .collection('inventory_bundle_actions')
       .doc()
       .id;
 
@@ -1210,6 +1308,30 @@ class _BatchDialogState extends State<_BatchDialog> {
 
   Future<void> submit() async {
     if (selectedAllocation == null || selected.isEmpty) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(
+          action == 'unbundle' ? 'Confirm unbundle' : 'Confirm return',
+        ),
+        content: Text(
+          action == 'unbundle'
+              ? 'Unbundle ${selected.length} selected batch${selected.length == 1 ? '' : 'es'} now? The available ingredients will be added to this branch inventory.'
+              : 'Mark ${selected.length} selected batch${selected.length == 1 ? '' : 'es'} as returned now?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Proceed'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
     setState(() {
       busy = true;
       error = null;
@@ -1220,34 +1342,16 @@ class _BatchDialogState extends State<_BatchDialog> {
         throw StateError('Connect to the internet before submitting a return.');
       }
       final actor = await resolveBranchInventoryActor(widget.db);
-      final record = records!.firstWhere((r) => r['_id'] == selectedAllocation);
-      if (action == 'return') {
-        await AllocationChecklistService(widget.db).submitReturn(
-          requestId: requestId,
-          sourceCollection: 'staff_inventory',
-          sourceId: selectedAllocation!,
-          lineKey: 'bundle',
-          count: selected.length,
-          reason: 'Return allocated bundle batch',
-          actorId: actor.id,
-          actorName: actor.name,
-          scopeIds: widget.scopeIds,
-          branchId: '${record['staffId']}',
-          branchName: '${record['branchName'] ?? record['staffName'] ?? ''}',
-          instanceIds: selected.toList(),
-        );
-      } else {
-        await InventoryReconciliationService(widget.db).submit(
-          requestId: requestId,
-          allocationId: selectedAllocation!,
-          instanceIds: selected.toList(),
-          action: action,
-          actorId: actor.id,
-          actorName: actor.name,
-          scopeIds: widget.scopeIds,
-          targetAllocationId: target,
-        );
-      }
+      await InventoryReconciliationService(widget.db).execute(
+        actionId: actionId,
+        allocationId: selectedAllocation!,
+        instanceIds: selected.toList(),
+        action: action,
+        actorId: actor.id,
+        actorName: actor.name,
+        actorPublicId: actor.publicId,
+        scopeIds: widget.scopeIds,
+      );
       if (mounted) Navigator.pop(context);
     } catch (e) {
       if (mounted) setState(() => error = e is StateError ? e.message : '$e');
@@ -1263,7 +1367,6 @@ class _BatchDialogState extends State<_BatchDialog> {
   ) {
     if (selectedAllocation != allocationId) {
       selected.clear();
-      target = null;
     }
     selectedAllocation = allocationId;
     for (final instance in instances) {
@@ -1512,28 +1615,25 @@ class _BatchDialogState extends State<_BatchDialog> {
     }
     final sortedDateChips = dateChips.toList()
       ..sort((left, right) => right.compareTo(left));
-    final source = records
-        ?.where((r) => r['_id'] == selectedAllocation)
+    final selectedSource = records
+        ?.where((record) => record['_id'] == selectedAllocation)
         .firstOrNull;
-    final selectedBatchDate = source == null
+    final selectedBatchDate = selectedSource == null
         ? null
-        : reconciliationInstances(source, '$selectedAllocation')
+        : reconciliationInstances(selectedSource, '$selectedAllocation')
                   .where((instance) => selected.contains('${instance['id']}'))
                   .map((instance) => date(instance['assignedAt']))
                   .firstOrNull ??
-              date(source['assignedAt']);
-    final targets = (records ?? [])
-        .where(
-          (r) =>
-              r['_id'] != selectedAllocation &&
-              selectedBatchDate != null &&
-              hasAvailableAllocationBatchAfter(
-                r,
-                '${r['_id']}',
-                selectedBatchDate,
-              ),
-        )
-        .toList();
+              date(selectedSource['assignedAt']);
+    final hasNewerBundleVersion =
+        selectedSource != null &&
+        selectedBatchDate != null &&
+        hasNewerBundleVersionAllocation(
+          selectedSource,
+          records ?? const [],
+          '$selectedAllocation',
+          selectedBatchDate,
+        );
     return PopScope(
       canPop: !busy,
       child: AlertDialog(
@@ -1649,6 +1749,36 @@ class _BatchDialogState extends State<_BatchDialog> {
                     ],
                   ),
                 const SizedBox(height: 12),
+                if (hasNewerBundleVersion)
+                  Container(
+                    width: double.infinity,
+                    margin: const EdgeInsets.only(bottom: 12),
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFFF4D6),
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: const Color(0xFFFFD166)),
+                    ),
+                    child: const Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Icon(
+                          Icons.info_outline_rounded,
+                          color: Color(0xFF9A6700),
+                        ),
+                        SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'A newer bundle recipe has been allocated to this branch. Consider unbundling or returning the selected older batches before using them.',
+                            style: TextStyle(
+                              color: Color(0xFF704B00),
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 if (records == null && error == null) ...[
                   const LinearProgressIndicator(),
                   const SizedBox(height: 12),
@@ -1670,49 +1800,13 @@ class _BatchDialogState extends State<_BatchDialog> {
                     items: const [
                       DropdownMenuItem(value: 'return', child: Text('Return')),
                       DropdownMenuItem(
-                        value: 'convert',
-                        child: Text('Convert to Updated Bundle'),
-                      ),
-                      DropdownMenuItem(
                         value: 'unbundle',
                         child: Text('Unbundle to Individual Items'),
                       ),
                     ],
-                    onChanged: busy
-                        ? null
-                        : (v) => setState(() {
-                            action = v!;
-                            target = null;
-                          }),
+                    onChanged: busy ? null : (v) => setState(() => action = v!),
                   ),
                   const SizedBox(height: 12),
-                  if (action == 'convert') ...[
-                    DropdownButtonFormField<String>(
-                      key: ValueKey('$selectedAllocation-$action'),
-                      isExpanded: true,
-                      decoration: const InputDecoration(
-                        labelText: 'Updated allocated version',
-                      ),
-                      items: targets
-                          .map(
-                            (r) => DropdownMenuItem(
-                              value: '${r['_id']}',
-                              child: Text(
-                                '${r['name']} - ${dateLabel(r['assignedAt'])} - ${formatMoney(num.tryParse('${r['price']}') ?? 0)}',
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                          )
-                          .toList(),
-                      onChanged: busy
-                          ? null
-                          : (v) => setState(() => target = v),
-                    ),
-                    if (targets.isEmpty)
-                      const Text(
-                        'A newer version must be allocated to this branch first.',
-                      ),
-                  ],
                 ],
                 if (records != null &&
                     bundle &&
@@ -2408,13 +2502,8 @@ class _BatchDialogState extends State<_BatchDialog> {
           ),
           if (bundle && !widget.readOnly)
             FilledButton(
-              onPressed:
-                  busy ||
-                      selected.isEmpty ||
-                      (action == 'convert' && target == null)
-                  ? null
-                  : submit,
-              child: Text(busy ? 'Submitting...' : 'Submit request'),
+              onPressed: busy || selected.isEmpty ? null : submit,
+              child: Text(busy ? 'Processing...' : 'Confirm'),
             ),
         ],
       ),
@@ -2454,25 +2543,39 @@ class _BatchInfoChip extends StatelessWidget {
 }
 
 class ReconciliationRequestsButton extends StatelessWidget {
-  const ReconciliationRequestsButton({super.key, this.database});
+  const ReconciliationRequestsButton({
+    super.key,
+    required this.scopeIds,
+    this.database,
+  });
   final FirebaseFirestore? database;
+  final List<String> scopeIds;
   @override
   Widget build(BuildContext context) {
     void open() => showDialog<void>(
       context: context,
-      builder: (_) =>
-          _RequestsDialog(db: database ?? FirebaseFirestore.instance),
+      builder: (_) => _RequestsDialog(
+        db: database ?? FirebaseFirestore.instance,
+        scopeIds: scopeIds,
+      ),
     );
     final db = database ?? FirebaseFirestore.instance;
+    final scopes = scopeIds.where((id) => id.isNotEmpty).toSet();
+    if (scopes.isEmpty) return const SizedBox.shrink();
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
       stream: db
           .collection('inventory_reconciliations')
           .where('status', isEqualTo: 'pending')
           .snapshots(),
       builder: (context, snapshot) {
+        final pendingCount =
+            snapshot.data?.docs
+                .where((doc) => scopes.contains('${doc.data()['staffId']}'))
+                .length ??
+            0;
         final icon = Badge.count(
-          count: snapshot.data?.docs.length ?? 0,
-          isLabelVisible: (snapshot.data?.docs.isNotEmpty ?? false),
+          count: pendingCount,
+          isLabelVisible: pendingCount > 0,
           backgroundColor: Colors.red,
           child: const Icon(Icons.rule_folder_outlined),
         );
@@ -2496,8 +2599,9 @@ class ReconciliationRequestsButton extends StatelessWidget {
 }
 
 class _RequestsDialog extends StatefulWidget {
-  const _RequestsDialog({required this.db});
+  const _RequestsDialog({required this.db, required this.scopeIds});
   final FirebaseFirestore db;
+  final List<String> scopeIds;
   @override
   State<_RequestsDialog> createState() => _RequestsDialogState();
 }
@@ -2550,9 +2654,12 @@ class _RequestsDialogState extends State<_RequestsDialog> {
     });
     try {
       final actor = await resolveSessionActor(widget.db, admin: true);
-      await InventoryReconciliationService(
-        widget.db,
-      ).decide(id, approve: approve, actorId: actor.id);
+      await InventoryReconciliationService(widget.db).decide(
+        id,
+        approve: approve,
+        actorId: actor.id,
+        scopeIds: widget.scopeIds,
+      );
     } catch (e) {
       if (mounted) setState(() => error = e is StateError ? e.message : '$e');
     } finally {
@@ -2756,6 +2863,11 @@ class _RequestsDialogState extends State<_RequestsDialog> {
                           final docs =
                               all.where((doc) {
                                 final data = doc.data();
+                                if (!widget.scopeIds.contains(
+                                  '${data['staffId']}',
+                                )) {
+                                  return false;
+                                }
                                 final status = '${data['status'] ?? ''}';
                                 final pending = status == 'pending';
                                 if (pending != (tab == 0)) return false;

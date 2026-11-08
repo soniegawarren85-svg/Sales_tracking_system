@@ -30,6 +30,12 @@ void main() {
         'staffId': 'STF-0001',
         'name': 'Bundle',
       });
+      await db.collection('staff_inventory').doc('branch-addon').set({
+        'staffId': 'branch-a',
+        'name': 'Vanilla syrup',
+        'isAddon': true,
+        'isDeleted': false,
+      });
       await db.collection('staff_inventory').doc('other').set({
         'staffId': 'other-branch',
         'name': 'Private item',
@@ -67,8 +73,12 @@ void main() {
           .get();
       expect(
         items.docs.map((doc) => doc.id),
-        unorderedEquals(['cookies', 'direct', 'legacy']),
+        unorderedEquals(['cookies', 'direct', 'legacy', 'branch-addon']),
       );
+      final addons = items.docs
+          .where((doc) => doc.data()['isAddon'] == true)
+          .toList();
+      expect(addons.single.data()['name'], 'Vanilla syrup');
       final drawer = await db
           .collection('staff_cash_drawer')
           .where(FieldPath.documentId, whereIn: scope.targets)

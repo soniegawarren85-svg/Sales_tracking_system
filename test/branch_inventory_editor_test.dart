@@ -9,6 +9,56 @@ import 'package:sales_tracking/widgets/branch_allocation_table.dart';
 import 'package:sales_tracking/widgets/branch_inventory_edit_dialog.dart';
 
 void main() {
+  test(
+    'beverage pricing edits publish a new allocation size version',
+    () async {
+      final firestore = FakeFirebaseFirestore();
+      await firestore.doc('staff_inventory/beverage').set({
+        'sourceInventoryId': 'coffee',
+        'isCoffee': true,
+        'name': 'Old flavor',
+        'branchNameOverride': 'Branch flavor',
+        'sizeDefinitionVersion': 2,
+        'branchSizePriceOverrides': {'Large': 99},
+        'sizes': [
+          {'name': 'Small', 'priceDelta': 20, 'costPrice': 5},
+        ],
+      });
+      await firestore.doc('staff_inventory/not-coffee').set({
+        'sourceInventoryId': 'coffee',
+        'items': [],
+      });
+
+      await syncAllocatedBeverageSizes(
+        firestore: firestore,
+        sourceInventoryId: 'coffee',
+        changes: {
+          'name': 'Updated flavor',
+          'basePrice': 0,
+          'costPrice': 9,
+          'sizes': [
+            {'name': 'Small', 'priceDelta': 30, 'costPrice': 9},
+            {'name': 'Large', 'priceDelta': 50, 'costPrice': 15},
+          ],
+        },
+      );
+
+      final updated = (await firestore.doc('staff_inventory/beverage').get())
+          .data()!;
+      expect(updated['name'], 'Branch flavor');
+      expect(updated['sizeDefinitionVersion'], 3);
+      expect(updated['sizes'], hasLength(2));
+      expect((updated['sizes'] as List).first['priceDelta'], 30);
+      expect(updated['branchSizePriceOverrides'], {'Large': 99});
+      expect(
+        (await firestore.doc('staff_inventory/not-coffee').get())
+            .data()!
+            .containsKey('sizeDefinitionVersion'),
+        isFalse,
+      );
+    },
+  );
+
   testWidgets('branch inventory hides zero-stock and items expiring today', (
     tester,
   ) async {
