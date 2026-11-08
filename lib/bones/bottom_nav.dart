@@ -65,6 +65,7 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
     const _TutorialCardState(),
   );
   String? _staffDocumentId;
+  bool? _branchHasAdmin;
   bool _onboardingCheckStarted = false;
   bool _tutorialIsReplay = false;
   bool _tutorialStarting = false;
@@ -440,6 +441,10 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
         );
       }
 
+      _branchHasAdmin ??= await StaffOnboardingService.hasAcceptedBranchAdmin(
+        database: FirebaseFirestore.instance,
+        staffDocumentId: _staffDocumentId!,
+      );
       await _navigateToTutorialStep(0);
       if (!mounted) return;
       final tutorial = TutorialCoachMark(
@@ -516,21 +521,24 @@ class _BottomNavState extends State<BottomNav> with TickerProviderStateMixin {
           'Review your performance summary and sales activity cards here.',
       contentAlign: ContentAlign.bottom,
     ),
-    _StaffTourStep(
-      key: _inventoryChecklistTourKey,
-      pageIndex: 1,
-      title: 'Allocation Checklist',
-      description:
-          'Open Checklist to review items allocated to your staff inventory and confirm receipt.',
-      contentAlign: ContentAlign.bottom,
-    ),
-    _StaffTourStep(
-      key: _inventoryReturnsTourKey,
-      pageIndex: 1,
-      title: 'Inventory Returns',
-      description: 'Use Returns to review and manage inventory return records.',
-      contentAlign: ContentAlign.bottom,
-    ),
+    if (!(_branchHasAdmin ?? false)) ...[
+      _StaffTourStep(
+        key: _inventoryChecklistTourKey,
+        pageIndex: 1,
+        title: 'Allocation Checklist',
+        description:
+            'Open Checklist to review items allocated to your staff inventory and confirm receipt.',
+        contentAlign: ContentAlign.bottom,
+      ),
+      _StaffTourStep(
+        key: _inventoryReturnsTourKey,
+        pageIndex: 1,
+        title: 'Inventory Returns',
+        description:
+            'Use Returns to review and manage inventory return records.',
+        contentAlign: ContentAlign.bottom,
+      ),
+    ],
     _StaffTourStep(
       key: _inventoryTableTourKey,
       pageIndex: 1,

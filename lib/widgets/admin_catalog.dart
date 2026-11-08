@@ -6,6 +6,8 @@ import 'admin_addons.dart';
 import 'inventory_header_transition.dart';
 import 'branch_inventory_monitor.dart';
 import 'branch_allocation_history.dart';
+import 'inventory_activity_history.dart';
+import 'inventory_report.dart';
 import '../services/bundle_stock_service.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -489,6 +491,12 @@ class _AdminCatalogState extends State<AdminCatalog> {
               branchId: _branch,
               database: widget.firestore,
             ),
+            InventoryActivityHistoryButton(
+              branchId: _branch,
+              type: widget.type,
+              addons: widget.type == 'Beverages' && _showAddons,
+              database: widget.firestore,
+            ),
           ],
         ],
       );
@@ -679,6 +687,17 @@ class _AdminCatalogState extends State<AdminCatalog> {
               flex: MediaQuery.sizeOf(context).width < 600 ? 0 : 1,
               child: categorySelector,
             ),
+            if (!widget.gallery && widget.lockedBranchId != null)
+              IconButton(
+                tooltip: 'Inventory report',
+                onPressed: () => showInventoryReport(
+                  context,
+                  branchId: widget.lockedBranchId,
+                  database: widget.firestore,
+                ),
+                icon: const Icon(Icons.assessment_outlined),
+                color: AppColors.primaryDark,
+              ),
             if (widget.actions != null && _branch.isEmpty)
               InventoryHeaderTransition(
                 collapsed: widget.compactHeader,
@@ -718,14 +737,26 @@ class _AdminCatalogState extends State<AdminCatalog> {
               child: _branchPicker(),
             ),
           if (!widget.gallery && widget.lockedBranchId != null)
-            Align(
-              alignment: Alignment.centerLeft,
-              child: Chip(
-                avatar: const Icon(Icons.storefront_rounded, size: 18),
-                label: Text(
-                  'Branch: ${widget.lockedBranchName ?? widget.lockedBranchId}',
+            Row(
+              children: [
+                Expanded(
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Chip(
+                      avatar: const Icon(Icons.storefront_rounded, size: 18),
+                      label: Text(
+                        'Branch: ${widget.lockedBranchName ?? widget.lockedBranchId}',
+                      ),
+                    ),
+                  ),
                 ),
-              ),
+                InventoryActivityHistoryButton(
+                  branchId: widget.lockedBranchId!,
+                  type: widget.type,
+                  addons: widget.type == 'Beverages' && _showAddons,
+                  database: widget.firestore,
+                ),
+              ],
             ),
           if (widget.gallery)
             Wrap(
@@ -756,8 +787,8 @@ class _AdminCatalogState extends State<AdminCatalog> {
               type: widget.type,
               query: _query,
               firestore: widget.firestore,
-              showBatchHistory: widget.showBatchHistory,
-              showActions: widget.showBranchActions,
+              showActions: true,
+              allowVoidAllocation: widget.showBranchActions,
               addons: widget.type == 'Beverages' && _showAddons,
               categoryName: _branch.isNotEmpty && widget.type == 'Categories'
                   ? (_category ?? '__no_allocated_category__')
@@ -769,7 +800,6 @@ class _AdminCatalogState extends State<AdminCatalog> {
                 }
                 setState(() => _branchCategoryKeys = categories);
               },
-              allowEdits: widget.allowBranchEdits,
               allowLowStockReport: widget.allowLowStockReport,
               allowLowStockVoids: widget.allowLowStockVoids,
             )

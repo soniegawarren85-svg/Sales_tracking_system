@@ -9,6 +9,7 @@ import '../services/session_actor.dart';
 import '../services/number_format.dart';
 import '../services/sale_stock.dart';
 import '../services/local_database_sync_service.dart';
+import '../services/branch_report_data.dart';
 
 Future<void> showMainInventoryBatches(
   BuildContext context,
@@ -980,6 +981,7 @@ Future<void> showInventoryBatches(
   String? itemId,
   bool readOnly = false,
   FirebaseFirestore? database,
+  BranchReportData? reportData,
 }) => showDialog<void>(
   context: context,
   builder: (_) => _BatchDialog(
@@ -988,6 +990,7 @@ Future<void> showInventoryBatches(
     itemId: itemId,
     readOnly: readOnly,
     db: database ?? FirebaseFirestore.instance,
+    reportData: reportData,
   ),
 );
 
@@ -998,12 +1001,14 @@ class _BatchDialog extends StatefulWidget {
     required this.db,
     this.itemId,
     this.readOnly = false,
+    this.reportData,
   });
   final String allocationId;
   final List<String> scopeIds;
   final String? itemId;
   final bool readOnly;
   final FirebaseFirestore db;
+  final BranchReportData? reportData;
   @override
   State<_BatchDialog> createState() => _BatchDialogState();
 }
@@ -1304,6 +1309,271 @@ class _BatchDialogState extends State<_BatchDialog> {
     final hour = valueDate.hour % 12 == 0 ? 12 : valueDate.hour % 12;
     final minute = valueDate.minute.toString().padLeft(2, '0');
     return '$hour:$minute ${valueDate.hour < 12 ? 'AM' : 'PM'}';
+  }
+
+  List<Map<String, dynamic>> _activityHistoryRows() {
+    final data = widget.reportData;
+    if (data == null) return const [];
+    final today = DateUtils.dateOnly(DateTime.now());
+    final start = DateUtils.dateOnly(range?.start ?? today);
+    final end = DateUtils.dateOnly(
+      range?.end ?? today,
+    ).add(const Duration(days: 1));
+    final allocationRecords = records ?? const <Map<String, dynamic>>[];
+    final source = allocationRecords.firstOrNull;
+    final sourceIds = allocationRecords
+        .map((record) => '${record['sourceInventoryId'] ?? ''}')
+        .where((id) => id.isNotEmpty)
+        .toSet();
+    final rootNames = allocationRecords
+        .map((record) => '${record['name'] ?? ''}'.trim().toLowerCase())
+        .where((name) => name.isNotEmpty)
+        .toSet();
+    final selectedItems = allocationRecords
+        .expand(
+          (record) =>
+              allocationBatchItemsForRecord(record, itemId: widget.itemId),
+        )
+        .toList();
+    final selectedNames = selectedItems
+        .map(
+          (item) =>
+              '${item['name'] ?? item['variant'] ?? ''}'.trim().toLowerCase(),
+        )
+        .where((name) => name.isNotEmpty)
+        .toSet();
+    final selectedIds = selectedItems
+        .expand(
+          (item) => [
+            item['id'],
+            item['publicId'],
+            item['itemId'],
+            item['variantId'],
+          ],
+        )
+        .where((id) => id != null)
+        .map((id) => '$id')
+        .toSet();
+    bool matchesSelection(Map item) {
+      if (sourceIds.isEmpty && selectedIds.isEmpty && selectedNames.isEmpty) {
+        return true;
+      }
+      final itemIds = [
+        item['id'],
+        item['publicId'],
+        item['itemId'],
+        item['variantId'],
+      ].where((id) => id != null).map((id) => '$id').toSet();
+      final sameId =
+          (widget.itemId != null && itemIds.contains(widget.itemId)) ||
+          selectedIds.intersection(itemIds).isNotEmpty;
+      final name = '${item['name'] ?? ''}'.trim().toLowerCase();
+      final sameName = selectedNames.contains(name) || rootNames.contains(name);
+      final sameSource = sourceIds.contains(
+        '${item['sourceInventoryId'] ?? ''}',
+      );
+      return sameId || sameName || (sameSource && widget.itemId == null);
+    }
+
+    final events = <Map<String, dynamic>>[];
+    for (final branch in widget.scopeIds) {
+      final inventoryItems = data.items(branch, start, end);
+      final selectedInventoryItems = inventoryItems
+          .where(matchesSelection)
+          .toList();
+      for (final item in selectedInventoryItems) {
+        for (final event in (item['history'] as List? ?? []).whereType<Map>()) {
+          final at = date(event['time']);
+          if (at.isBefore(start) || !at.isBefore(end)) continue;
+          final activity = '${event['activity'] ?? 'Activity'}';
+          final row = <String, dynamic>{
+            ...event,
+            'activity': activity.toLowerCase().startsWith('starting allocation')
+                ? 'Opening balance'
+                : activity,
+            'itemName': event['name'] ?? item['name'] ?? 'Item',
+            'branchId': branch,
+          };
+          if (search.isEmpty ||
+              '$row'.toLowerCase().contains(search) ||
+              '${item['id'] ?? ''}'.toLowerCase().contains(search)) {
+            events.add(row);
+          }
+        }
+      }
+      if (DateUtils.isSameDay(start, today)) {
+        for (final current in data.currentInventory(branch, DateTime.now())) {
+          if (!matchesSelection(current)) continue;
+          final item = selectedInventoryItems
+              .where((row) => row['id'] == current['id'])
+              .firstOrNull;
+          final history = (item?['history'] as List? ?? [])
+              .whereType<Map>()
+              .toList();
+          if (history.any(
+            (event) => '${event['activity']}'.toLowerCase().contains('opening'),
+          )) {
+            continue;
+          }
+          final netMovement = history.fold<double>(
+            0,
+            (total, event) => total + reportValue(event['qty']),
+          );
+          final openingBalance =
+              reportValue(current['remaining']) - netMovement;
+          if (openingBalance <= 0) continue;
+          final row = {
+            'time': start,
+            'activity': 'Opening balance',
+            'qty': openingBalance,
+            'balance': openingBalance,
+            'itemName': current['name'] ?? 'Item',
+            'branchId': branch,
+          };
+          if (search.isEmpty || '$row'.toLowerCase().contains(search)) {
+            events.add(row);
+          }
+        }
+      }
+      final allocationIds =
+          allocationRecords
+              .map((record) => '${record['_id'] ?? ''}')
+              .where((id) => id.isNotEmpty)
+              .toSet()
+            ..add(widget.allocationId);
+      for (final log in data.rows('activity_logs')) {
+        final branches = (log['branchIds'] as List? ?? const [])
+            .map((value) => '$value')
+            .toSet();
+        final details = log['details'] as Map? ?? const {};
+        final action = '${log['action'] ?? ''}'.toLowerCase();
+        final at = date(log['createdAt'] ?? log['timestamp']);
+        if ((!branches.contains(branch) &&
+                '${details['branchId'] ?? details['branch'] ?? ''}' !=
+                    branch) ||
+            !allocationIds.contains('${details['allocationId'] ?? ''}') ||
+            at.isBefore(start) ||
+            !at.isBefore(end) ||
+            (!action.contains('return') && !action.contains('unbundl'))) {
+          continue;
+        }
+        final name =
+            details['bundleName'] ??
+            details['item'] ??
+            details['itemName'] ??
+            source?['name'] ??
+            'Inventory item';
+        events.add({
+          'time': at,
+          'activity': action.contains('return') ? 'Returned' : 'Unbundle',
+          'qty': reportValue(details['quantity'] ?? 1),
+          'balance': null,
+          'itemName': name,
+          'branchId': branch,
+        });
+      }
+    }
+    final uniqueEvents = <String, Map<String, dynamic>>{};
+    for (final event in events) {
+      final key = [
+        event['branchId'],
+        date(event['time']).toIso8601String(),
+        event['itemName'],
+        event['activity'],
+        event['qty'],
+      ].join('|');
+      uniqueEvents.putIfAbsent(key, () => event);
+    }
+    events
+      ..clear()
+      ..addAll(uniqueEvents.values);
+    events.sort((a, b) => date(b['time']).compareTo(date(a['time'])));
+    return events;
+  }
+
+  Widget _activityHistoryTable(List<Map<String, dynamic>> events) {
+    const rowHeight = 52.0;
+    final tableHeight = 48.0 + rowHeight * events.length.clamp(1, 5);
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      color: const Color(0xFFFFFBFC),
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: const BorderSide(color: AppColors.blush),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(8),
+        child: events.isEmpty
+            ? const Padding(
+                padding: EdgeInsets.all(18),
+                child: Center(
+                  child: Text('No inventory history for the selected dates.'),
+                ),
+              )
+            : SizedBox(
+                height: tableHeight,
+                child: Scrollbar(
+                  thumbVisibility: events.length > 5,
+                  child: SingleChildScrollView(
+                    child: SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: DataTable(
+                        headingRowHeight: 44,
+                        dataRowMinHeight: rowHeight,
+                        dataRowMaxHeight: rowHeight,
+                        headingRowColor: const WidgetStatePropertyAll(
+                          AppColors.blush,
+                        ),
+                        columns: const [
+                          DataColumn(label: Text('Opening / time')),
+                          DataColumn(label: Text('Item')),
+                          DataColumn(label: Text('Activity')),
+                          DataColumn(label: Text('Qty')),
+                          DataColumn(label: Text('Balance')),
+                        ],
+                        rows: events
+                            .map(
+                              (event) => DataRow(
+                                cells: [
+                                  DataCell(
+                                    Text(
+                                      '${dateLabel(event['time'])} ${timeLabel(event['time'])}',
+                                    ),
+                                  ),
+                                  DataCell(
+                                    Text('${event['itemName'] ?? 'Item'}'),
+                                  ),
+                                  DataCell(
+                                    Text('${event['activity'] ?? 'Activity'}'),
+                                  ),
+                                  DataCell(
+                                    Text(
+                                      num.tryParse(
+                                            '${event['qty'] ?? ''}',
+                                          )?.toStringAsFixed(0) ??
+                                          '—',
+                                    ),
+                                  ),
+                                  DataCell(
+                                    Text(
+                                      num.tryParse(
+                                            '${event['balance'] ?? ''}',
+                                          )?.toStringAsFixed(0) ??
+                                          '—',
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            )
+                            .toList(),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+      ),
+    );
   }
 
   Future<void> submit() async {
@@ -1811,7 +2081,8 @@ class _BatchDialogState extends State<_BatchDialog> {
                 if (records != null &&
                     bundle &&
                     visibleRecords.isEmpty &&
-                    error == null)
+                    error == null &&
+                    !(historyView && widget.reportData != null))
                   Padding(
                     padding: const EdgeInsets.symmetric(vertical: 20),
                     child: Text(
@@ -1823,7 +2094,8 @@ class _BatchDialogState extends State<_BatchDialog> {
                 if (records != null &&
                     !bundle &&
                     visibleRecords.isEmpty &&
-                    error == null)
+                    error == null &&
+                    !(historyView && widget.reportData != null))
                   Padding(
                     padding: const EdgeInsets.symmetric(vertical: 20),
                     child: Text(
@@ -1832,6 +2104,8 @@ class _BatchDialogState extends State<_BatchDialog> {
                           : 'No allocated batches for today. Choose a date to view earlier allocations.',
                     ),
                   ),
+                if (historyView && widget.reportData != null)
+                  _activityHistoryTable(_activityHistoryRows()),
                 if (bundle)
                   for (final record in visibleRecords)
                     for (final batch
@@ -2188,7 +2462,7 @@ class _BatchDialogState extends State<_BatchDialog> {
                           );
                         },
                       )
-                else
+                else if (!bundle)
                   for (final record in visibleRecords)
                     Builder(
                       builder: (context) {
@@ -2215,7 +2489,9 @@ class _BatchDialogState extends State<_BatchDialog> {
                                 '${item['stock'] ?? item['remaining'] ?? item['startingStock'] ?? 0}',
                               ) ??
                               0;
-                          return historyView ? remaining == 0 : remaining > 0;
+                          return historyView
+                              ? remaining == 0 || soldQuantityFor(item) > 0
+                              : remaining > 0;
                         }).toList();
                         final displayItems = isCoffee
                             ? uniqueBeverageAllocationItems(

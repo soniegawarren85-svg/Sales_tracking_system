@@ -196,7 +196,8 @@ void main() {
       expect(find.text('Cookie A'), findsNothing);
       expect(find.byTooltip('Edit branch inventory'), findsNothing);
       expect(find.text('Actions'), findsOneWidget);
-      expect(find.byTooltip('View history'), findsOneWidget);
+      expect(find.byTooltip('View batches'), findsOneWidget);
+      expect(find.byTooltip('View history'), findsNothing);
       expect(find.byTooltip('Void allocation'), findsWidgets);
 
       await tester.ensureVisible(find.byTooltip('Void allocation').first);

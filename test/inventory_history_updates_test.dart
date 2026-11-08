@@ -2,10 +2,12 @@ import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:fake_cloud_firestore/fake_cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sales_tracking/widgets/branch_inventory_edit_dialog.dart';
 import 'package:sales_tracking/widgets/inventory_batches.dart';
 import 'package:sales_tracking/widgets/activity_feed.dart';
+import 'package:sales_tracking/services/branch_report_data.dart';
 import 'package:sales_tracking/services/receipt_tax.dart';
 
 void main() {
@@ -106,6 +108,173 @@ void main() {
       expect(find.byTooltip('Filter allocation dates'), findsOneWidget);
     },
   );
+  testWidgets('batch history shows opening table and sold batch details', (
+    tester,
+  ) async {
+    const connectivityChannel = MethodChannel(
+      'dev.fluttercommunity.plus/connectivity',
+    );
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      connectivityChannel,
+      (call) async => ['none'],
+    );
+    addTearDown(
+      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        connectivityChannel,
+        null,
+      ),
+    );
+    final db = FakeFirebaseFirestore();
+    final now = DateTime.now();
+    await db.collection('sales_inventory').doc('cookies').set({
+      'name': 'Cookies',
+      'items': [
+        {
+          'id': 'cookie-1',
+          'publicId': 'COO-01',
+          'name': 'Chocolate cookie',
+          'stock': 3,
+          'startingStock': 4,
+          'assignedStartingStock': 4,
+          'price': 20,
+          'costPrice': 10,
+        },
+      ],
+    });
+    await db.collection('staff_inventory').doc('cookie-allocation').set({
+      'staffId': 'branch',
+      'sourceInventoryId': 'cookies',
+      'name': 'Cookies',
+      'assignedAt': Timestamp.fromDate(now),
+      'items': [
+        {
+          'id': 'cookie-1',
+          'publicId': 'COO-01',
+          'name': 'Chocolate cookie',
+          'stock': 3,
+          'startingStock': 4,
+          'assignedStartingStock': 4,
+          'price': 20,
+          'costPrice': 10,
+        },
+      ],
+    });
+    await db.collection('completed_sales').doc('sale-1').set({
+      'branchId': 'branch',
+      'timestamp': Timestamp.fromDate(now),
+      'items': [
+        {
+          'id': 'cookie-1',
+          'itemId': 'cookie-1',
+          'name': 'Chocolate cookie',
+          'quantity': 1,
+          'price': 20,
+          'staffInventoryDocId': 'cookie-allocation',
+        },
+      ],
+    });
+    final reportData = BranchReportData({
+      'branches': [
+        {'_id': 'branch', 'name': 'SM Dagupan'},
+      ],
+      'sales_inventory': [
+        {
+          '_id': 'cookies',
+          'name': 'Cookies',
+          'items': [
+            {
+              'id': 'cookie-1',
+              'publicId': 'COO-01',
+              'name': 'Chocolate cookie',
+              'stock': 3,
+              'startingStock': 4,
+              'assignedStartingStock': 4,
+              'price': 20,
+              'costPrice': 10,
+            },
+          ],
+        },
+      ],
+      'staff_inventory': [
+        {
+          '_id': 'cookie-allocation',
+          'staffId': 'branch',
+          'sourceInventoryId': 'cookies',
+          'name': 'Cookies',
+          'assignedAt': Timestamp.fromDate(now),
+          'items': [
+            {
+              'id': 'cookie-1',
+              'publicId': 'COO-01',
+              'name': 'Chocolate cookie',
+              'stock': 3,
+              'startingStock': 4,
+              'assignedStartingStock': 4,
+              'price': 20,
+              'costPrice': 10,
+            },
+          ],
+        },
+      ],
+      'completed_sales': [
+        {
+          '_id': 'sale-1',
+          'branchId': 'branch',
+          'timestamp': Timestamp.fromDate(now),
+          'items': [
+            {
+              'id': 'cookie-1',
+              'itemId': 'cookie-1',
+              'name': 'Chocolate cookie',
+              'quantity': 1,
+              'price': 20,
+              'staffInventoryDocId': 'cookie-allocation',
+            },
+          ],
+        },
+      ],
+    });
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: TextButton(
+              onPressed: () => showInventoryBatches(
+                context,
+                allocationId: 'cookie-allocation',
+                scopeIds: const ['branch'],
+                itemId: 'cookie-1',
+                database: db,
+                reportData: reportData,
+              ),
+              child: const Text('Open batches'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('Open batches'));
+    for (var i = 0; i < 30; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+    await tester.tap(find.text('History'));
+    await tester.pump(const Duration(milliseconds: 300));
+
+    expect(find.text('Opening / time'), findsOneWidget);
+    expect(find.text('Opening balance'), findsOneWidget);
+    expect(find.byType(ExpansionTile), findsOneWidget);
+    await tester.ensureVisible(find.byType(ExpansionTile));
+    await tester.tap(find.byType(ExpansionTile));
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.textContaining('1 sold'), findsNWidgets(2));
+    expect(
+      find.text('No inventory history for the selected dates.'),
+      findsNothing,
+    );
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
   testWidgets('allocation history displays short allocation and sold labels', (
     tester,
   ) async {

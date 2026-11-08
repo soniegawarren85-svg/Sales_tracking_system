@@ -5,7 +5,9 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../services/database_backup.dart';
+import '../services/encrypted_backup.dart';
 import '../services/save_bytes.dart';
+import '../services/super_admin.dart';
 import '../theme/app_colors.dart';
 import 'inventory_records_table.dart';
 
@@ -22,18 +24,27 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
   bool _busy = false;
   String _stage = '';
   String _message = '';
+  String _historySearch = '';
+  String _statusFilter = 'All';
+  bool _newestFirst = true;
+  DateTimeRange? _historyDateRange;
   String _role = '';
   String _userId = '';
   String? _currentHistoryId;
   Uint8List? _createdBytes;
   BackupManifest? _createdManifest;
+  Uint8List? _importedClearBytes;
+  Uint8List? _importedEncryptedBytes;
+  BackupManifest? _importedManifest;
+  String? _importedHistoryId;
+  bool _restoreRunning = false;
 
   FirebaseFirestore get _database =>
       widget.firestore ?? FirebaseFirestore.instance;
   CollectionReference<Map<String, dynamic>> get _history =>
       _database.collection('backup_history');
   bool get _isSuperAdmin => _role == 'super_admin';
-  bool get _canUseManualBackup => _role == 'admin' || _isSuperAdmin;
+  bool get _canUseManualBackup => _isSuperAdmin;
 
   @override
   void initState() {
@@ -52,7 +63,25 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
 
   Future<void> _createBackup() async {
     if (!_canUseManualBackup) {
-      _showMessage('Sign in as an Admin or Super Admin to create a backup.');
+      _showMessage('Only the Super Admin can create a system backup.');
+      return;
+    }
+    final details = await _requestBackupDetails();
+    if (details == null || !mounted) return;
+    final backupName = details.$1;
+    final password = details.$2;
+    bool verified;
+    try {
+      verified = await SuperAdmin.reauthenticateForBackup(
+        password,
+        database: _database,
+      );
+    } catch (error) {
+      _showMessage('Firebase password verification failed: $error');
+      return;
+    }
+    if (!verified) {
+      _showMessage('Firebase Authentication could not verify that password.');
       return;
     }
     final historyRef = _history.doc();
@@ -71,25 +100,51 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
         'createdById': _userId,
         'createdByRole': _role,
       });
-      final bytes = await DatabaseBackup.export(firestore: _database);
-      final manifest = DatabaseBackup.inspect(bytes);
-      if (bytes.length > DatabaseBackup.maxBackupBytes) {
+      final clearBytes = await DatabaseBackup.export(
+        firestore: _database,
+        backupName: backupName,
+        backupId: historyRef.id,
+        onProgress: (completed, total, collection) {
+          if (mounted) {
+            setState(
+              () => _stage =
+                  'Reading $collection ($completed of $total collections)',
+            );
+          }
+        },
+      );
+      final manifest = DatabaseBackup.inspect(clearBytes);
+      if (clearBytes.length > DatabaseBackup.maxBackupBytes) {
         throw const FormatException(
           'Backup exceeds the 50 MB manual export limit.',
         );
       }
+      if (mounted) setState(() => _stage = 'Encrypting and validating file');
+      final bytes = await EncryptedBackup.encrypt(clearBytes, password);
+      final verifiedManifest = DatabaseBackup.inspect(
+        await EncryptedBackup.decrypt(bytes, password),
+      );
+      if (verifiedManifest.documentCount != manifest.documentCount ||
+          verifiedManifest.backupId != manifest.backupId) {
+        throw const FormatException('Encrypted backup validation failed.');
+      }
       await historyRef.update({
-        'backupId': manifest.backupId,
+        'backupId': historyRef.id,
+        'backupName': manifest.backupName,
         'status': 'successful',
         'createdAt': Timestamp.fromDate(startedAt),
         'completedAt': FieldValue.serverTimestamp(),
         'createdById': _userId,
         'createdByRole': _role,
-        'fileName': 'sales-tracking-${manifest.backupId}.json',
+        'fileName': 'sales-tracking-${historyRef.id}.stbackup',
         'fileSizeBytes': bytes.length,
+        'backupVersion': 1,
+        'applicationVersion': manifest.applicationVersion,
+        'encryption': 'PBKDF2-HMAC-SHA256 + AES-256-GCM',
         'documentCount': manifest.documentCount,
         'collectionCounts': manifest.collectionCounts,
-        'storageLocation': 'session_memory',
+        'storageLocation': 'local-only',
+        'fileAvailable': false,
       });
       if (!mounted) return;
       setState(() {
@@ -100,7 +155,14 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
         _message =
             'Backup file created. Download it to save a copy on this device.';
       });
+      await _writeAudit('backup_created', historyRef.id, {
+        'documentCount': manifest.documentCount,
+        'fileSizeBytes': bytes.length,
+      });
     } catch (error) {
+      await _writeAudit('backup_create_failed', historyRef.id, {
+        'errorType': error.runtimeType.toString(),
+      });
       try {
         await historyRef.set({
           'backupId': historyRef.id,
@@ -127,13 +189,18 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
   }
 
   Future<void> _downloadBackup() async {
+    if (!_isSuperAdmin) {
+      _showMessage('Only the Super Admin may download system backups.');
+      return;
+    }
     final bytes = _createdBytes;
     final manifest = _createdManifest;
     if (bytes == null || manifest == null) {
       _showMessage('Create a backup before downloading it.');
       return;
     }
-    final filename = 'sales-tracking-${manifest.backupId}.json';
+    final filename =
+        'sales-tracking-${_currentHistoryId ?? manifest.backupId}.stbackup';
     try {
       final path = kIsWeb
           ? filename
@@ -148,12 +215,15 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
       final historyId = _currentHistoryId;
       if (historyId != null) {
         await _history.doc(historyId).update({
-          'storageLocation': 'local_device',
+          'fileDownloaded': true,
           'downloadedAt': FieldValue.serverTimestamp(),
         });
       }
+      await _writeAudit('backup_downloaded', historyId ?? manifest.backupId);
       if (!mounted) return;
-      _showMessage('Backup downloaded. Store the file in a safe location.');
+      _showMessage(
+        'Encrypted backup downloaded. Keep the password separately.',
+      );
     } catch (error) {
       if (mounted) {
         _showMessage(
@@ -164,10 +234,14 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
   }
 
   Future<void> _selectBackupForPreview() async {
+    if (!_isSuperAdmin) {
+      _showMessage('Only the Super Admin may import system backups.');
+      return;
+    }
     try {
       final selected = await FilePicker.platform.pickFiles(
         type: FileType.custom,
-        allowedExtensions: const ['json', 'txt'],
+        allowedExtensions: const ['stbackup'],
         withData: true,
       );
       if (selected == null) return;
@@ -176,19 +250,345 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
         _showMessage('The selected file could not be read.');
         return;
       }
-      final manifest = DatabaseBackup.inspect(bytes);
-      DatabaseBackup.validate(bytes);
+      final password = await _requestBackupPassword();
+      if (password == null || !mounted) return;
+      final clearBytes = await EncryptedBackup.decrypt(bytes, password);
+      final manifest = DatabaseBackup.inspect(clearBytes);
+      final documents = DatabaseBackup.validate(
+        clearBytes,
+        firestore: _database,
+      );
+      final importedId = _history.doc().id;
+      await _history.doc(importedId).set({
+        'backupId': importedId,
+        'sourceBackupId': manifest.backupId,
+        'backupName': manifest.backupName,
+        'backupType': 'imported',
+        'status': 'imported',
+        'createdAt': Timestamp.fromDate(manifest.createdAt),
+        'importedAt': FieldValue.serverTimestamp(),
+        'importedById': _userId,
+        'importedByRole': _role,
+        'backupVersion': 1,
+        'applicationVersion': manifest.applicationVersion,
+        'documentCount': manifest.documentCount,
+        'fileSizeBytes': bytes.length,
+        'fileAvailable': false,
+      });
+      await _writeAudit('backup_imported', importedId, {
+        'documentCount': manifest.documentCount,
+      });
+      _importedClearBytes = clearBytes;
+      _importedEncryptedBytes = bytes;
+      _importedManifest = manifest;
+      _importedHistoryId = importedId;
       if (!mounted) return;
       await showDialog<void>(
         context: context,
         builder: (context) => _RestorePreviewDialog(
           manifest: manifest,
-          isSuperAdmin: _isSuperAdmin,
+          fileIntegrityValid: documents.length == manifest.documentCount,
+          onRestore: _restoreImportedBackup,
         ),
       );
     } catch (error) {
+      await _writeAudit('backup_import_failed', 'unavailable', {
+        'errorType': error.runtimeType.toString(),
+      });
       if (mounted) _showMessage('Backup validation failed: $error');
     }
+  }
+
+  Future<(String, String)?> _requestBackupDetails() async {
+    final nameController = TextEditingController();
+    final passwordController = TextEditingController();
+    final result = await showDialog<(String, String)>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Create encrypted backup'),
+        content: SizedBox(
+          width: 420,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: nameController,
+                decoration: const InputDecoration(labelText: 'Backup name'),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: passwordController,
+                obscureText: true,
+                decoration: const InputDecoration(
+                  labelText: 'Current Super Admin password',
+                ),
+              ),
+              const SizedBox(height: 10),
+              const Text(
+                'Firebase Authentication verifies this password. It encrypts the file and is never saved.',
+                style: TextStyle(color: AppColors.textMuted),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () {
+              final name = nameController.text.trim();
+              final password = passwordController.text;
+              if (name.isEmpty || password.isEmpty) return;
+              Navigator.pop(context, (name, password));
+            },
+            child: const Text('Verify and create'),
+          ),
+        ],
+      ),
+    );
+    nameController.dispose();
+    passwordController.dispose();
+    return result;
+  }
+
+  Future<String?> _requestBackupPassword() async {
+    final controller = TextEditingController();
+    final result = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Unlock backup'),
+        content: TextField(
+          controller: controller,
+          obscureText: true,
+          autofocus: true,
+          decoration: const InputDecoration(
+            labelText: 'Original backup encryption password',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => controller.text.isEmpty
+                ? null
+                : Navigator.pop(context, controller.text),
+            child: const Text('Decrypt and validate'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    return result;
+  }
+
+  Future<void> _writeAudit(
+    String action,
+    String backupId, [
+    Map<String, Object?> extra = const {},
+  ]) async {
+    try {
+      await _database.collection('backup_audit_logs').add({
+        'action': action,
+        'backupId': backupId,
+        'actorId': _userId,
+        'actorRole': _role,
+        'createdAt': FieldValue.serverTimestamp(),
+        ...extra,
+      });
+    } catch (error) {
+      debugPrint(
+        'Backup activity log could not be saved: ${error.runtimeType}',
+      );
+    }
+  }
+
+  Future<void> _restoreImportedBackup() async {
+    final manifest = _importedManifest;
+    final clearBytes = _importedClearBytes;
+    if (!_isSuperAdmin || manifest == null || clearBytes == null) {
+      _showMessage(
+        'Only a validated backup can be restored by the Super Admin.',
+      );
+      return;
+    }
+    if (_restoreRunning || _busy) return;
+    final password = await _requestCurrentPassword();
+    if (password == null || !mounted) return;
+    if (!await SuperAdmin.reauthenticateForBackup(
+      password,
+      database: _database,
+    )) {
+      _showMessage(
+        'Firebase Authentication could not verify the current password.',
+      );
+      return;
+    }
+
+    final lockRef = _database.collection('backup_restore_locks').doc('system');
+    final owner = '${SuperAdmin.id}-${DateTime.now().microsecondsSinceEpoch}';
+    var acquired = false;
+    setState(() {
+      _busy = true;
+      _restoreRunning = true;
+      _stage = 'Creating a current-system safety backup';
+      _message = '';
+    });
+    try {
+      await _database.runTransaction((transaction) async {
+        final lock = await transaction.get(lockRef);
+        final expiry = lock.data()?['expiresAt'];
+        final lockedUntil = expiry is Timestamp
+            ? expiry.toDate()
+            : DateTime(1970);
+        if (lock.exists && lockedUntil.isAfter(DateTime.now())) {
+          throw StateError('Another restore is already in progress.');
+        }
+        transaction.set(lockRef, {
+          'owner': owner,
+          'expiresAt': Timestamp.fromDate(
+            DateTime.now().add(const Duration(hours: 2)),
+          ),
+          'startedAt': FieldValue.serverTimestamp(),
+        });
+      });
+      acquired = true;
+
+      final safetyClear = await DatabaseBackup.export(
+        firestore: _database,
+        backupName: 'Before restore ${DateTime.now().toIso8601String()}',
+      );
+      final safetyManifest = DatabaseBackup.inspect(safetyClear);
+      final safetyFile = await EncryptedBackup.encrypt(safetyClear, password);
+      final check = DatabaseBackup.inspect(
+        await EncryptedBackup.decrypt(safetyFile, password),
+      );
+      if (check.documentCount != safetyManifest.documentCount) {
+        throw const FormatException(
+          'Safety backup validation failed. Restore was stopped.',
+        );
+      }
+      final safetyName =
+          'sales-tracking-pre-restore-${DateTime.now().millisecondsSinceEpoch}.stbackup';
+      final savedPath = kIsWeb
+          ? safetyName
+          : await FilePicker.platform.saveFile(
+              fileName: safetyName,
+              bytes: safetyFile,
+              type: FileType.custom,
+              allowedExtensions: const ['stbackup'],
+            );
+      if (savedPath == null && !kIsWeb) {
+        throw StateError('Save the safety backup to continue with restore.');
+      }
+      if (savedPath != null) await saveBytes(savedPath, safetyFile);
+      final safetyRef = _history.doc();
+      await safetyRef.set({
+        'backupId': safetyRef.id,
+        'backupName': safetyManifest.backupName,
+        'backupType': 'pre_restore_safety',
+        'status': 'successful',
+        'createdAt': Timestamp.fromDate(safetyManifest.createdAt),
+        'createdById': _userId,
+        'createdByRole': _role,
+        'fileName': safetyName,
+        'fileSizeBytes': safetyFile.length,
+        'backupVersion': 1,
+        'fileDownloaded': true,
+        'fileAvailable': false,
+        'documentCount': safetyManifest.documentCount,
+        'collectionCounts': safetyManifest.collectionCounts,
+      });
+      await _writeAudit('pre_restore_backup_created', safetyRef.id, {
+        'documentCount': safetyManifest.documentCount,
+      });
+
+      final documents = DatabaseBackup.validate(
+        clearBytes,
+        firestore: _database,
+      );
+      final total = documents.length;
+      await DatabaseBackup.restoreMerge(
+        documents,
+        firestore: _database,
+        onProgress: (completed, total) {
+          if (mounted) {
+            setState(() => _stage = 'Merging documents ($completed of $total)');
+          }
+        },
+      );
+      await _writeAudit('backup_restored', manifest.backupId, {
+        'documentCount': total,
+        'restoreMode': 'merge',
+      });
+      if (_importedHistoryId != null) {
+        await _history.doc(_importedHistoryId).update({
+          'status': 'restored',
+          'restoredAt': FieldValue.serverTimestamp(),
+        });
+      }
+      if (mounted) {
+        setState(
+          () => _message =
+              'Restore completed. Existing document IDs were merged; no documents were deleted.',
+        );
+      }
+    } catch (error) {
+      await _writeAudit('backup_restore_failed', manifest.backupId, {
+        'errorType': error.runtimeType.toString(),
+      });
+      if (mounted) setState(() => _message = 'Restore stopped: $error');
+    } finally {
+      if (acquired) {
+        try {
+          await _database.runTransaction((transaction) async {
+            final lock = await transaction.get(lockRef);
+            if (lock.data()?['owner'] == owner) transaction.delete(lockRef);
+          });
+        } catch (_) {}
+      }
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _restoreRunning = false;
+          _stage = '';
+        });
+      }
+    }
+  }
+
+  Future<String?> _requestCurrentPassword() async {
+    final controller = TextEditingController();
+    final result = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Verify Super Admin'),
+        content: TextField(
+          controller: controller,
+          obscureText: true,
+          decoration: const InputDecoration(
+            labelText: 'Current Firebase password',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => controller.text.isEmpty
+                ? null
+                : Navigator.pop(context, controller.text),
+            child: const Text('Verify'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    return result;
   }
 
   void _showMessage(String message) {
@@ -220,6 +620,15 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
           Expanded(
             child: _role.isEmpty
                 ? const Center(child: CircularProgressIndicator())
+                : !_isSuperAdmin
+                ? const Center(
+                    child: Padding(
+                      padding: EdgeInsets.all(24),
+                      child: Text(
+                        'Backup management is available to the Super Admin only.',
+                      ),
+                    ),
+                  )
                 : SingleChildScrollView(
                     padding: const EdgeInsets.all(20),
                     child: Column(
@@ -260,7 +669,7 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
                             return Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                _buildStatusCards(lastSuccessful),
+                                _buildStatusCards(entries, lastSuccessful),
                                 const SizedBox(height: 22),
                                 _buildSectionTitle(
                                   'Backup actions',
@@ -288,15 +697,8 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
                                 ],
                                 const SizedBox(height: 24),
                                 _buildSectionTitle(
-                                  'Automatic backup',
-                                  'Schedules run on Firebase servers and do not require the app to stay open.',
-                                ),
-                                const SizedBox(height: 12),
-                                _buildAutomaticSettings(),
-                                const SizedBox(height: 24),
-                                _buildSectionTitle(
                                   'Backup history',
-                                  'Shows real manual export attempts recorded by this app. Files remain on the device that downloaded them.',
+                                  'History metadata is stored in Firestore. Backup files stay on the device where you saved them.',
                                 ),
                                 const SizedBox(height: 12),
                                 _buildHistory(entries),
@@ -379,7 +781,7 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
         SizedBox(width: 12),
         Expanded(
           child: Text(
-            'Current project plan: Spark (confirmed). Automatic scheduling and secure server-side restore are not enabled. Those require an authorized Firebase backend; Cloud Scheduler/Cloud Functions deployment and Cloud Storage can require Blaze billing and incur charges. No paid service has been activated.',
+            'Manual backups only. Files are encrypted and downloaded to your device; Firestore stores history metadata only. Restore merges records by document ID and never deletes documents. Uploaded image files and Firebase Authentication accounts are not included.',
             style: TextStyle(
               color: Color(0xFF664D03),
               height: 1.45,
@@ -391,31 +793,46 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
     ),
   );
 
-  Widget _buildStatusCards(Map<String, dynamic>? lastSuccessful) {
+  Widget _buildStatusCards(
+    List<Map<String, dynamic>> entries,
+    Map<String, dynamic>? lastSuccessful,
+  ) {
     final lastAt = lastSuccessful == null
         ? 'No successful backup yet'
         : _formatDate(lastSuccessful['createdAt']);
     return LayoutBuilder(
       builder: (context, constraints) {
         final compact = constraints.maxWidth < 620;
+        final totalSize = entries.fold<int>(0, (total, row) {
+          final size = row['fileSizeBytes'];
+          return total + (size is num ? size.toInt() : 0);
+        });
         final cards = [
+          _statusCard(
+            'Total backups',
+            '${entries.where((e) => e['status'] == 'successful').length}',
+            Icons.backup_outlined,
+            AppColors.primary,
+          ),
+          _statusCard(
+            'Latest backup',
+            entries.isEmpty
+                ? 'None yet'
+                : _formatDate(entries.first['createdAt']),
+            Icons.history_rounded,
+            AppColors.primary,
+          ),
+          _statusCard(
+            'Recorded file size',
+            _formatBytes(totalSize),
+            Icons.storage_rounded,
+            AppColors.primary,
+          ),
           _statusCard(
             'Last successful backup',
             lastAt,
             Icons.check_circle_outline_rounded,
             lastSuccessful == null ? AppColors.textMuted : Colors.green,
-          ),
-          _statusCard(
-            'Next scheduled backup',
-            'Not configured',
-            Icons.schedule_rounded,
-            AppColors.textMuted,
-          ),
-          _statusCard(
-            'Backup status',
-            _busy ? 'In progress' : 'Manual only',
-            _busy ? Icons.sync_rounded : Icons.info_outline_rounded,
-            _busy ? AppColors.primary : AppColors.textMuted,
           ),
         ];
         return compact
@@ -427,12 +844,15 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
                   ],
                 ],
               )
-            : Row(
+            : Wrap(
+                spacing: 12,
+                runSpacing: 12,
                 children: [
-                  for (var i = 0; i < cards.length; i++) ...[
-                    Expanded(child: cards[i]),
-                    if (i < cards.length - 1) const SizedBox(width: 12),
-                  ],
+                  for (final card in cards)
+                    SizedBox(
+                      width: (constraints.maxWidth - 12) / 2,
+                      child: card,
+                    ),
                 ],
               );
       },
@@ -485,7 +905,7 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
           icon: Icons.add_to_drive_rounded,
           title: 'Create Backup',
           description:
-              'Read the app collections and prepare a validated JSON export.',
+              'Verify your password, export supported Firestore data, and encrypt a new backup file.',
           buttonLabel: 'Create backup',
           onPressed: _busy ? null : _createBackup,
           color: AppColors.primary,
@@ -494,7 +914,7 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
           icon: Icons.download_rounded,
           title: 'Download Backup',
           description: _createdManifest == null
-              ? 'Create a backup first, then save the generated file to this device.'
+              ? 'Create a backup first, then save its encrypted file to this device.'
               : '${_createdManifest!.documentCount} documents · ${_formatBytes(_createdManifest!.byteLength)}',
           buttonLabel: 'Download file',
           onPressed: _busy || _createdBytes == null ? null : _downloadBackup,
@@ -502,10 +922,10 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
         ),
         _actionCard(
           icon: Icons.restore_rounded,
-          title: 'Upload & Restore',
+          title: 'Import Backup',
           description:
-              'Upload a file to validate it and preview its date and record counts. Restore is locked until secure backend controls are available.',
-          buttonLabel: 'Upload & preview',
+              'Select an encrypted backup, enter its original password, validate it, then preview a merge restore.',
+          buttonLabel: 'Import and preview',
           onPressed: _busy ? null : _selectBackupForPreview,
           color: const Color(0xFF00897B),
         ),
@@ -582,57 +1002,27 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
     ),
   );
 
-  Widget _buildAutomaticSettings() => Container(
-    width: double.infinity,
-    padding: const EdgeInsets.all(16),
-    decoration: BoxDecoration(
-      color: Colors.white,
-      border: Border.all(color: AppColors.border),
-      borderRadius: BorderRadius.circular(16),
-    ),
-    child: Column(
-      children: [
-        SwitchListTile(
-          contentPadding: EdgeInsets.zero,
-          title: const Text(
-            'Enable automatic backup',
-            style: TextStyle(fontWeight: FontWeight.w700),
-          ),
-          subtitle: const Text('Unavailable on the current Spark setup'),
-          value: false,
-          onChanged: null,
-        ),
-        const Divider(),
-        DropdownButtonFormField<String>(
-          initialValue: 'daily',
-          decoration: const InputDecoration(
-            labelText: 'Backup frequency',
-            border: OutlineInputBorder(),
-          ),
-          items: const [
-            DropdownMenuItem(value: 'daily', child: Text('Daily')),
-            DropdownMenuItem(value: 'weekly', child: Text('Weekly')),
-            DropdownMenuItem(value: 'monthly', child: Text('Monthly')),
-          ],
-          onChanged: null,
-        ),
-        const SizedBox(height: 10),
-        const Align(
-          alignment: Alignment.centerLeft,
-          child: Text(
-            'Not scheduled. Enabling this requires a deployed server-side scheduler, verified billing plan, backup storage bucket, retention policy, and budget alerts.',
-            style: TextStyle(
-              color: AppColors.textMuted,
-              fontSize: 12,
-              height: 1.4,
-            ),
-          ),
-        ),
-      ],
-    ),
-  );
-
   Widget _buildHistory(List<Map<String, dynamic>> entries) {
+    final filtered =
+        entries.where((entry) {
+          final query = _historySearch.trim().toLowerCase();
+          final date = _dateOf(entry['createdAt']);
+          return (query.isEmpty ||
+                  '${entry['backupName'] ?? ''} ${entry['backupId'] ?? ''}'
+                      .toLowerCase()
+                      .contains(query)) &&
+              (_statusFilter == 'All' || entry['status'] == _statusFilter) &&
+              (_historyDateRange == null ||
+                  (!date.isBefore(_historyDateRange!.start) &&
+                      !date.isAfter(
+                        _historyDateRange!.end.add(const Duration(days: 1)),
+                      )));
+        }).toList()..sort((a, b) {
+          final order = _dateOf(
+            a['createdAt'],
+          ).compareTo(_dateOf(b['createdAt']));
+          return _newestFirst ? -order : order;
+        });
     if (entries.isEmpty) {
       return Container(
         width: double.infinity,
@@ -660,74 +1050,340 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
         ),
       );
     }
-    return Container(
-      width: double.infinity,
-      decoration: BoxDecoration(
-        color: Colors.white,
-        border: Border.all(color: AppColors.border),
-        borderRadius: BorderRadius.circular(16),
-      ),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: SizedBox(
-          width: 980,
-          child: InventoryRecordsTable(
-            headings: const [
-              'Backup Date & Time',
-              'Type',
-              'File Size',
-              'Status',
-              'Download',
-              'Restore',
-            ],
-            flex: const {0: 1.5, 1: .7, 2: .8, 3: .8, 4: 1, 5: 1},
-            rows: entries.map((entry) {
-              final status = '${entry['status'] ?? 'unknown'}';
-              final bytes = entry['fileSizeBytes'];
-              final downloadedToDevice =
-                  entry['storageLocation'] == 'local_device';
-              final isCurrentSession =
-                  _createdBytes != null &&
-                  _createdManifest?.backupId == entry['backupId'];
-              return <Widget>[
-                Text(_formatDate(entry['createdAt'])),
-                Text('${entry['backupType'] ?? 'Manual'}'),
-                Text(bytes is num ? _formatBytes(bytes.toInt()) : '—'),
-                _statusPill(status),
-                Tooltip(
-                  message: isCurrentSession
-                      ? 'Download the generated backup file.'
-                      : downloadedToDevice
-                      ? 'This file was downloaded on another session/device and is not archived in Firebase.'
-                      : 'This export is no longer in memory and is not stored in Firebase.',
-                  child: TextButton.icon(
-                    onPressed: isCurrentSession ? _downloadBackup : null,
-                    icon: const Icon(Icons.download_outlined, size: 16),
-                    label: Text(
-                      isCurrentSession
-                          ? 'Download'
-                          : downloadedToDevice
-                          ? 'On device'
-                          : 'Not archived',
+    if (filtered.isEmpty) {
+      return const Padding(
+        padding: EdgeInsets.all(20),
+        child: Center(child: Text('No backups match these filters.')),
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            SizedBox(
+              width: 300,
+              child: TextField(
+                decoration: const InputDecoration(
+                  prefixIcon: Icon(Icons.search),
+                  hintText: 'Search backup name or ID',
+                  border: OutlineInputBorder(),
+                  isDense: true,
+                ),
+                onChanged: (value) => setState(() => _historySearch = value),
+              ),
+            ),
+            DropdownButton<String>(
+              value: _statusFilter,
+              items:
+                  const ['All', 'successful', 'failed', 'imported', 'restored']
+                      .map(
+                        (value) => DropdownMenuItem(
+                          value: value,
+                          child: Text(value == 'All' ? 'All statuses' : value),
+                        ),
+                      )
+                      .toList(),
+              onChanged: (value) =>
+                  setState(() => _statusFilter = value ?? 'All'),
+            ),
+            OutlinedButton.icon(
+              onPressed: () async {
+                final now = DateUtils.dateOnly(DateTime.now());
+                final range = await showDateRangePicker(
+                  context: context,
+                  firstDate: DateTime(2020),
+                  lastDate: now,
+                  initialDateRange: _historyDateRange,
+                );
+                if (range != null && mounted) {
+                  setState(() => _historyDateRange = range);
+                }
+              },
+              icon: const Icon(Icons.date_range),
+              label: Text(
+                _historyDateRange == null ? 'Date range' : 'Filtered',
+              ),
+            ),
+            IconButton(
+              tooltip: _newestFirst ? 'Newest first' : 'Oldest first',
+              onPressed: () => setState(() => _newestFirst = !_newestFirst),
+              icon: Icon(
+                _newestFirst ? Icons.south_rounded : Icons.north_rounded,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        Container(
+          width: double.infinity,
+          decoration: BoxDecoration(
+            color: Colors.white,
+            border: Border.all(color: AppColors.border),
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: SizedBox(
+              width: 1420,
+              child: InventoryRecordsTable(
+                headings: const [
+                  'Backup Name',
+                  'Backup ID',
+                  'Date Created',
+                  'Time Created',
+                  'Created By',
+                  'File Size',
+                  'Version',
+                  'Status',
+                  'Actions',
+                ],
+                flex: const {
+                  0: 1.2,
+                  1: 1.2,
+                  2: .8,
+                  3: .7,
+                  4: 1,
+                  5: .7,
+                  6: .5,
+                  7: .7,
+                  8: 1.3,
+                },
+                rows: filtered.map((entry) {
+                  final status = '${entry['status'] ?? 'unknown'}';
+                  final bytes = entry['fileSizeBytes'];
+                  final isCurrentCreated =
+                      _createdBytes != null &&
+                      _currentHistoryId == entry['backupId'];
+                  final isCurrentImported =
+                      _importedEncryptedBytes != null &&
+                      _importedHistoryId == entry['backupId'];
+                  final fileBytes = isCurrentCreated
+                      ? _createdBytes
+                      : isCurrentImported
+                      ? _importedEncryptedBytes
+                      : null;
+                  final date = _dateOf(entry['createdAt']).toLocal();
+                  final hasDate = date.year != 1970;
+                  return <Widget>[
+                    Text(
+                      '${entry['backupName'] ?? entry['backupType'] ?? 'Manual backup'}',
                     ),
-                  ),
-                ),
-                Tooltip(
-                  message: _isSuperAdmin
-                      ? 'Restore requires the secure server-side workflow.'
-                      : 'Only the Super Admin may restore a backup.',
-                  child: TextButton.icon(
-                    onPressed: null,
-                    icon: const Icon(Icons.lock_outline_rounded, size: 16),
-                    label: const Text('Locked'),
-                  ),
-                ),
-              ];
-            }).toList(),
+                    SelectableText('${entry['backupId'] ?? '—'}'),
+                    Text(
+                      hasDate
+                          ? MaterialLocalizations.of(
+                              context,
+                            ).formatMediumDate(date)
+                          : '—',
+                    ),
+                    Text(
+                      hasDate
+                          ? MaterialLocalizations.of(
+                              context,
+                            ).formatTimeOfDay(TimeOfDay.fromDateTime(date))
+                          : '—',
+                    ),
+                    Text(
+                      '${entry['createdByRole'] ?? entry['importedByRole'] ?? ''} · ${entry['createdById'] ?? entry['importedById'] ?? '—'}',
+                    ),
+                    Text(bytes is num ? _formatBytes(bytes.toInt()) : '—'),
+                    Text('${entry['backupVersion'] ?? '1'}'),
+                    _statusPill(status),
+                    Row(
+                      children: [
+                        IconButton(
+                          tooltip: fileBytes == null
+                              ? 'File is not available in this session; import it from device'
+                              : 'Download',
+                          onPressed: fileBytes == null
+                              ? null
+                              : () => _downloadHistoryFile(entry, fileBytes),
+                          icon: const Icon(Icons.download_outlined),
+                        ),
+                        IconButton(
+                          tooltip: 'View details',
+                          onPressed: () => _showBackupDetails(entry),
+                          icon: const Icon(Icons.info_outline),
+                        ),
+                        IconButton(
+                          tooltip: 'Activity details',
+                          onPressed: () => _showBackupActivityDetails(
+                            '${entry['backupId'] ?? ''}',
+                          ),
+                          icon: const Icon(Icons.history_rounded),
+                        ),
+                        IconButton(
+                          tooltip: 'Import this file to enable restore',
+                          onPressed:
+                              isCurrentImported &&
+                                  status == 'imported' &&
+                                  !_busy
+                              ? _confirmRestoreFromHistory
+                              : null,
+                          icon: const Icon(Icons.restore_rounded),
+                        ),
+                      ],
+                    ),
+                  ];
+                }).toList(),
+              ),
+            ),
           ),
         ),
+      ],
+    );
+  }
+
+  Future<void> _downloadHistoryFile(
+    Map<String, dynamic> entry,
+    Uint8List bytes,
+  ) async {
+    if (!_isSuperAdmin) return;
+    final filename =
+        '${entry['fileName'] ?? 'sales-tracking-${entry['backupId']}.stbackup'}';
+    try {
+      final path = kIsWeb
+          ? filename
+          : await FilePicker.platform.saveFile(
+              fileName: filename,
+              bytes: bytes,
+              type: FileType.custom,
+              allowedExtensions: const ['stbackup'],
+            );
+      if (path == null && !kIsWeb) return;
+      if (path != null) await saveBytes(path, bytes);
+      await _writeAudit('backup_downloaded', '${entry['backupId'] ?? ''}');
+      if (mounted) _showMessage('Encrypted backup file downloaded.');
+    } catch (error) {
+      if (mounted) _showMessage('Download failed: $error');
+    }
+  }
+
+  Future<void> _confirmRestoreFromHistory() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Confirm merge restore'),
+        content: const Text(
+          'Matching fields can be replaced by backup values. Documents absent from the backup remain, and nothing is deleted. A fresh encrypted safety backup will be saved first. Continue?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Continue'),
+          ),
+        ],
       ),
     );
+    if (confirmed == true && mounted) await _restoreImportedBackup();
+  }
+
+  Future<void> _showBackupDetails(Map<String, dynamic> entry) async {
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('${entry['backupName'] ?? 'Backup details'}'),
+        content: SizedBox(
+          width: 440,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              for (final row in <String, String>{
+                'Backup ID': '${entry['backupId'] ?? '—'}',
+                'Created': _formatDate(entry['createdAt']),
+                'Created by':
+                    '${entry['createdByRole'] ?? entry['importedByRole'] ?? '—'} · ${entry['createdById'] ?? entry['importedById'] ?? '—'}',
+                'Size': entry['fileSizeBytes'] is num
+                    ? _formatBytes((entry['fileSizeBytes'] as num).toInt())
+                    : '—',
+                'Documents': '${entry['documentCount'] ?? '—'}',
+                'Version': '${entry['backupVersion'] ?? '1'}',
+                'Status': '${entry['status'] ?? 'unknown'}',
+                'File availability':
+                    _currentHistoryId == entry['backupId'] ||
+                        _importedHistoryId == entry['backupId']
+                    ? 'Available in this session'
+                    : 'Not archived in Firebase; check original device',
+              }.entries)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  child: Text('${row.key}: ${row.value}'),
+                ),
+              const SizedBox(height: 8),
+              const Text(
+                'Uploaded images and Firebase Authentication accounts are excluded; Firestore image references remain in the file.',
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _showBackupActivityDetails(String backupId) async {
+    try {
+      final snapshot = await _database
+          .collection('backup_audit_logs')
+          .where('backupId', isEqualTo: backupId)
+          .get(const GetOptions(source: Source.server));
+      final rows = snapshot.docs.map((doc) => doc.data()).toList()
+        ..sort(
+          (a, b) => _dateOf(b['createdAt']).compareTo(_dateOf(a['createdAt'])),
+        );
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Backup activity details'),
+          content: SizedBox(
+            width: 520,
+            child: rows.isEmpty
+                ? const Text(
+                    'No activity records are available for this backup.',
+                  )
+                : ListView.builder(
+                    shrinkWrap: true,
+                    itemCount: rows.length,
+                    itemBuilder: (context, index) {
+                      final row = rows[index];
+                      return ListTile(
+                        leading: const Icon(Icons.history_rounded),
+                        title: Text('${row['action'] ?? 'Activity'}'),
+                        subtitle: Text(
+                          '${row['actorRole'] ?? 'Super Admin'} · ${row['actorId'] ?? '—'} · ${_formatDate(row['createdAt'])}',
+                        ),
+                      );
+                    },
+                  ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Close'),
+            ),
+          ],
+        ),
+      );
+    } catch (error) {
+      if (mounted) {
+        _showMessage('Backup activity logs could not be loaded: $error');
+      }
+    }
   }
 
   Widget _statusPill(String status) {
@@ -857,11 +1513,13 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
 class _RestorePreviewDialog extends StatelessWidget {
   const _RestorePreviewDialog({
     required this.manifest,
-    required this.isSuperAdmin,
+    required this.fileIntegrityValid,
+    required this.onRestore,
   });
 
   final BackupManifest manifest;
-  final bool isSuperAdmin;
+  final bool fileIntegrityValid;
+  final Future<void> Function() onRestore;
 
   @override
   Widget build(BuildContext context) => AlertDialog(
@@ -880,8 +1538,16 @@ class _RestorePreviewDialog extends StatelessWidget {
               ).formatMediumDate(manifest.createdAt.toLocal()),
             ),
             _previewLine('Backup ID', manifest.backupId),
+            _previewLine('Backup name', manifest.backupName),
+            _previewLine('Backup version', '1'),
+            _previewLine('App version', manifest.applicationVersion),
             _previewLine('Total records', '${manifest.documentCount}'),
             _previewLine('File size', '${manifest.byteLength} bytes'),
+            _previewLine('Collections', '${manifest.collectionCounts.length}'),
+            _previewLine(
+              'File integrity',
+              fileIntegrityValid ? 'Valid (AES-GCM authenticated)' : 'Invalid',
+            ),
             const SizedBox(height: 10),
             const Text(
               'Records by collection',
@@ -891,11 +1557,9 @@ class _RestorePreviewDialog extends StatelessWidget {
             for (final entry in manifest.collectionCounts.entries)
               _previewLine(entry.key, '${entry.value}'),
             const SizedBox(height: 12),
-            Text(
-              isSuperAdmin
-                  ? 'Validation passed. Restore is still unavailable until a secure backend can reauthenticate you, create a safety backup, lock writes, and verify recovery.'
-                  : 'Only the Super Admin may restore a backup. This account can validate and preview the file only.',
-              style: const TextStyle(color: AppColors.textMuted, height: 1.4),
+            const Text(
+              'Restore mode: merge by document ID. Fields present in the backup replace matching fields; fields absent from it remain. No production documents are deleted. A fresh encrypted safety backup must be saved before restore.',
+              style: TextStyle(color: AppColors.textMuted, height: 1.4),
             ),
           ],
         ),
@@ -907,9 +1571,35 @@ class _RestorePreviewDialog extends StatelessWidget {
         child: const Text('Close'),
       ),
       FilledButton.icon(
-        onPressed: null,
-        icon: const Icon(Icons.lock_outline_rounded),
-        label: const Text('Restore unavailable'),
+        onPressed: !fileIntegrityValid
+            ? null
+            : () async {
+                final confirmed = await showDialog<bool>(
+                  context: context,
+                  builder: (context) => AlertDialog(
+                    title: const Text('Confirm merge restore'),
+                    content: const Text(
+                      'This will merge backup data into the live database. Matching fields can be replaced. Documents will not be deleted. A safety backup will be saved first. Continue?',
+                    ),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(context, false),
+                        child: const Text('Cancel'),
+                      ),
+                      FilledButton(
+                        onPressed: () => Navigator.pop(context, true),
+                        child: const Text('Continue'),
+                      ),
+                    ],
+                  ),
+                );
+                if (confirmed == true && context.mounted) {
+                  Navigator.pop(context);
+                  await onRestore();
+                }
+              },
+        icon: const Icon(Icons.restore_rounded),
+        label: const Text('Restore with merge'),
       ),
     ],
   );

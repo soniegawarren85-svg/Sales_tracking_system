@@ -5,30 +5,13 @@ import 'package:sales_tracking/services/cash_drawer_service.dart';
 import 'package:sales_tracking/services/cash_float_service.dart';
 
 void main() {
-  test('starting cash changes are limited to before opening and sales', () {
-    final beforeOpening = DateTime(2026, 11, 7, 8, 59);
+  test('starting cash can change until the branch records a sale', () {
     expect(
-      CashFloatService.canChangeStartingCash(
-        now: beforeOpening,
-        openingMinutes: 9 * 60,
-        hasSalesToday: false,
-      ),
+      CashFloatService.canChangeStartingCash(hasSalesToday: false),
       isTrue,
     );
     expect(
-      CashFloatService.canChangeStartingCash(
-        now: DateTime(2026, 11, 7, 9, 1),
-        openingMinutes: 9 * 60,
-        hasSalesToday: false,
-      ),
-      isFalse,
-    );
-    expect(
-      CashFloatService.canChangeStartingCash(
-        now: beforeOpening,
-        openingMinutes: 9 * 60,
-        hasSalesToday: true,
-      ),
+      CashFloatService.canChangeStartingCash(hasSalesToday: true),
       isFalse,
     );
   });
@@ -37,7 +20,7 @@ void main() {
     'starting cash changes apply immediately when sales have not started',
     () async {
       final firestore = FakeFirebaseFirestore();
-      final now = DateTime(2026, 11, 7, 8, 30);
+      final now = DateTime(2026, 11, 7, 18, 30);
       await firestore.collection('branches').doc('branch-one').set({
         'openingMinutes': 9 * 60,
       });
@@ -77,6 +60,32 @@ void main() {
           (await firestore.collection('staff_budget').doc('branch-one').get())
               .data()!;
       expect(budget['allocatedBudget'], 1700);
+    },
+  );
+
+  test(
+    'cash float amounts enforce action-specific minimum and maximum',
+    () async {
+      final firestore = FakeFirebaseFirestore();
+      for (final (amount, startingCash) in [
+        (499.0, false),
+        (5001.0, false),
+        (1499.0, true),
+        (5001.0, true),
+      ]) {
+        await expectLater(
+          CashFloatService.createRequest(
+            firestore: firestore,
+            branchId: 'branch-one',
+            branchName: 'Dagupan',
+            senderId: 'super-admin',
+            senderName: 'Super Admin',
+            amount: amount,
+            startingCash: startingCash,
+          ),
+          throwsA(isA<ArgumentError>()),
+        );
+      }
     },
   );
 
@@ -232,7 +241,7 @@ void main() {
       branchName: 'Dagupan',
       senderId: 'super-admin',
       senderName: 'Super Admin',
-      amount: 300,
+      amount: 500,
       startingCash: false,
     );
     await CashFloatService.receive(
@@ -248,12 +257,12 @@ void main() {
                 .doc('branch-one')
                 .get())
             .data()!;
-    expect(topUpDrawer['balance'], 2300);
+    expect(topUpDrawer['balance'], 2500);
     expect(topUpDrawer['dailyOpeningCash'], 2000);
     final budget =
         (await firestore.collection('staff_budget').doc('branch-one').get())
             .data()!;
-    expect(budget['allocatedBudget'], 2300);
+    expect(budget['allocatedBudget'], 2500);
   });
 
   test('not-received report records reason without crediting drawer', () async {

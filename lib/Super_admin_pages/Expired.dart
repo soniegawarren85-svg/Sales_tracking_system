@@ -416,137 +416,159 @@ class _ExpiredPageState extends State<ExpiredPage>
 
           // ── BODY ────────────────────────────────────────────────────────────
           Expanded(
-            child: StreamBuilder<QuerySnapshot>(
-              stream: _firestore.collection('sales_inventory').snapshots(),
-              builder: (context, snapshot) {
-                if (snapshot.connectionState == ConnectionState.waiting) {
-                  return Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        SizedBox(
-                          width: 52,
-                          height: 52,
-                          child: CircularProgressIndicator(
-                            valueColor: const AlwaysStoppedAnimation(
-                              Color(0xFFFF5252),
+            child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+              stream: _firestore
+                  .collection('stock_adjustments')
+                  .where('type', isEqualTo: 'expired')
+                  .snapshots(),
+              builder: (context, staffExpiredSnapshot) => StreamBuilder<QuerySnapshot>(
+                stream: _firestore.collection('sales_inventory').snapshots(),
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          SizedBox(
+                            width: 52,
+                            height: 52,
+                            child: CircularProgressIndicator(
+                              valueColor: const AlwaysStoppedAnimation(
+                                Color(0xFFFF5252),
+                              ),
+                              strokeWidth: 3.5,
+                              backgroundColor: const Color(
+                                0xFFFF5252,
+                              ).withOpacity(0.12),
                             ),
-                            strokeWidth: 3.5,
-                            backgroundColor: const Color(
-                              0xFFFF5252,
-                            ).withOpacity(0.12),
                           ),
-                        ),
-                        const SizedBox(height: 18),
-                        const Text(
-                          'Scanning inventory...',
-                          style: TextStyle(
-                            color: PinkTheme.textMid,
-                            fontWeight: FontWeight.w600,
-                            fontSize: 14,
+                          const SizedBox(height: 18),
+                          const Text(
+                            'Scanning inventory...',
+                            style: TextStyle(
+                              color: PinkTheme.textMid,
+                              fontWeight: FontWeight.w600,
+                              fontSize: 14,
+                            ),
                           ),
-                        ),
-                      ],
-                    ),
-                  );
-                }
-
-                if (snapshot.hasError) {
-                  return Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.all(20),
-                          decoration: BoxDecoration(
-                            color: PinkTheme.deleteRed.withOpacity(0.1),
-                            shape: BoxShape.circle,
-                          ),
-                          child: const Icon(
-                            Icons.error_rounded,
-                            color: PinkTheme.deleteRed,
-                            size: 44,
-                          ),
-                        ),
-                        const SizedBox(height: 16),
-                        Text(
-                          'Error: ${snapshot.error}',
-                          style: const TextStyle(
-                            color: PinkTheme.deleteRed,
-                            fontSize: 14,
-                          ),
-                          textAlign: TextAlign.center,
-                        ),
-                      ],
-                    ),
-                  );
-                }
-
-                // Build expired list
-                List<Map<String, dynamic>> expiredVariants = [];
-                final docs = snapshot.data?.docs ?? [];
-
-                for (var doc in docs) {
-                  final data = doc.data() as Map<String, dynamic>;
-                  if (data['isDeleted'] == true) continue;
-                  final categoryName = data['name']?.toString() ?? '';
-                  final categoryId = doc.id;
-                  final items = (data['items'] as List<dynamic>?) ?? [];
-                  for (var item in items) {
-                    final itemData = item as Map<String, dynamic>;
-                    final expiryDate =
-                        itemData['expirationDate']?.toString() ?? '';
-                    if (_isExpired(expiryDate)) {
-                      expiredVariants.add({
-                        'categoryId': categoryId,
-                        'categoryName': categoryName,
-                        'id': itemData['id']?.toString() ?? '',
-                        'name': itemData['name']?.toString() ?? '',
-                        'price': itemData['price']?.toString() ?? '0',
-                        'stock': itemData['stock']?.toString() ?? '0',
-                        'startingStock':
-                            itemData['startingStock']?.toString() ?? '0',
-                        'expirationDate': expiryDate,
-                      });
-                    }
-                  }
-                }
-
-                // ── EMPTY STATE ────────────────────────────────────────────────
-                if (expiredVariants.isEmpty) {
-                  return _EmptyExpiredState();
-                }
-
-                // ── LIST ───────────────────────────────────────────────────────
-                return ListView.builder(
-                  physics: const BouncingScrollPhysics(),
-                  padding: const EdgeInsets.fromLTRB(20, 24, 20, 40),
-                  itemCount: expiredVariants.length,
-                  itemBuilder: (context, index) {
-                    final variant = expiredVariants[index];
-                    final daysOverdue = _getDaysOverdue(
-                      variant['expirationDate'],
-                    );
-                    final overdueBadgeColor = _overdueColor(daysOverdue);
-                    final overdueText = _overdueLabel(daysOverdue);
-
-                    return _FadeSlideIn(
-                      index: index,
-                      child: Padding(
-                        padding: const EdgeInsets.only(bottom: 20),
-                        child: _ExpiredCard(
-                          variant: variant,
-                          daysOverdue: daysOverdue,
-                          overdueBadgeColor: overdueBadgeColor,
-                          overdueText: overdueText,
-                          formatDate: _formatDate,
-                          onRestore: () => _restoreVariant(variant),
-                        ),
+                        ],
                       ),
                     );
-                  },
-                );
-              },
+                  }
+
+                  if (snapshot.hasError) {
+                    return Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(20),
+                            decoration: BoxDecoration(
+                              color: PinkTheme.deleteRed.withOpacity(0.1),
+                              shape: BoxShape.circle,
+                            ),
+                            child: const Icon(
+                              Icons.error_rounded,
+                              color: PinkTheme.deleteRed,
+                              size: 44,
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          Text(
+                            'Error: ${snapshot.error}',
+                            style: const TextStyle(
+                              color: PinkTheme.deleteRed,
+                              fontSize: 14,
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
+                        ],
+                      ),
+                    );
+                  }
+
+                  // Build expired list
+                  List<Map<String, dynamic>> expiredVariants = [];
+                  final docs = snapshot.data?.docs ?? [];
+
+                  for (var doc in docs) {
+                    final data = doc.data() as Map<String, dynamic>;
+                    if (data['isDeleted'] == true) continue;
+                    final categoryName = data['name']?.toString() ?? '';
+                    final categoryId = doc.id;
+                    final items = (data['items'] as List<dynamic>?) ?? [];
+                    for (var item in items) {
+                      final itemData = item as Map<String, dynamic>;
+                      final expiryDate =
+                          itemData['expirationDate']?.toString() ?? '';
+                      if (_isExpired(expiryDate)) {
+                        expiredVariants.add({
+                          'categoryId': categoryId,
+                          'categoryName': categoryName,
+                          'id': itemData['id']?.toString() ?? '',
+                          'name': itemData['name']?.toString() ?? '',
+                          'price': itemData['price']?.toString() ?? '0',
+                          'stock': itemData['stock']?.toString() ?? '0',
+                          'startingStock':
+                              itemData['startingStock']?.toString() ?? '0',
+                          'expirationDate': expiryDate,
+                        });
+                      }
+                    }
+                  }
+                  for (final doc in staffExpiredSnapshot.data?.docs ?? []) {
+                    final data = doc.data();
+                    if (data['status'] == 'Voided') continue;
+                    final expiry = data['expirationDate']?.toString() ?? '';
+                    expiredVariants.add({
+                      'categoryId': data['allocationId'] ?? doc.id,
+                      'categoryName':
+                          'Branch: ${data['branchName'] ?? data['branchId'] ?? 'Staff branch'}',
+                      'id': data['itemId']?.toString() ?? '',
+                      'name': data['itemName']?.toString() ?? 'Expired item',
+                      'price': data['price']?.toString() ?? '0',
+                      'stock': data['quantity']?.toString() ?? '0',
+                      'startingStock': data['quantity']?.toString() ?? '0',
+                      'expirationDate': expiry,
+                    });
+                  }
+
+                  // ── EMPTY STATE ────────────────────────────────────────────────
+                  if (expiredVariants.isEmpty) {
+                    return _EmptyExpiredState();
+                  }
+
+                  // ── LIST ───────────────────────────────────────────────────────
+                  return ListView.builder(
+                    physics: const BouncingScrollPhysics(),
+                    padding: const EdgeInsets.fromLTRB(20, 24, 20, 40),
+                    itemCount: expiredVariants.length,
+                    itemBuilder: (context, index) {
+                      final variant = expiredVariants[index];
+                      final daysOverdue = _getDaysOverdue(
+                        variant['expirationDate'],
+                      );
+                      final overdueBadgeColor = _overdueColor(daysOverdue);
+                      final overdueText = _overdueLabel(daysOverdue);
+
+                      return _FadeSlideIn(
+                        index: index,
+                        child: Padding(
+                          padding: const EdgeInsets.only(bottom: 20),
+                          child: _ExpiredCard(
+                            variant: variant,
+                            daysOverdue: daysOverdue,
+                            overdueBadgeColor: overdueBadgeColor,
+                            overdueText: overdueText,
+                            formatDate: _formatDate,
+                            onRestore: () => _restoreVariant(variant),
+                          ),
+                        ),
+                      );
+                    },
+                  );
+                },
+              ),
             ),
           ),
         ],

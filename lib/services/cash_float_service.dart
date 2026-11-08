@@ -7,16 +7,11 @@ class CashFloatService {
   CashFloatService._();
 
   static const collectionName = 'cash_float_requests';
+  static const minimumAddCash = 500.0;
+  static const maximumCashFloat = 5000.0;
 
-  static bool canChangeStartingCash({
-    required DateTime now,
-    required int openingMinutes,
-    required bool hasSalesToday,
-  }) {
-    final minutesSinceMidnight = now.hour * 60 + now.minute;
-    return !hasSalesToday &&
-        minutesSinceMidnight <= openingMinutes.clamp(0, 1440);
-  }
+  static bool canChangeStartingCash({required bool hasSalesToday}) =>
+      !hasSalesToday;
 
   static bool hasSalesToday(
     Iterable<Map<String, dynamic>> sales,
@@ -24,7 +19,9 @@ class CashFloatService {
   ) {
     final today = CashDrawerService.dayKey(now);
     return sales.any((sale) {
-      final date = CashDrawerService.toDate(sale['timestamp']);
+      final date = CashDrawerService.toDate(
+        sale['timestamp'] ?? sale['createdAt'],
+      );
       return date != null && CashDrawerService.dayKey(date) == today;
     });
   }
@@ -51,25 +48,25 @@ class CashFloatService {
         'Starting cash float must be at least ${formatMoney(CashDrawerService.minimumDailyOpeningCash)}.',
       );
     }
+    if (amount > maximumCashFloat) {
+      throw StateError(
+        'Starting cash cannot exceed ${formatMoney(maximumCashFloat)}.',
+      );
+    }
     final effectiveNow = now ?? DateTime.now();
     final today = CashDrawerService.dayKey(effectiveNow);
-    final branch = (await firestore.collection('branches').doc(branchId).get())
-        .data();
     final sales = await firestore
         .collection('completed_sales')
         .where('branchId', isEqualTo: branchId)
         .get();
-    final openingMinutes = (branch?['openingMinutes'] as num?)?.toInt() ?? 600;
     if (!canChangeStartingCash(
-      now: effectiveNow,
-      openingMinutes: openingMinutes,
       hasSalesToday: hasSalesToday(
         sales.docs.map((doc) => doc.data()),
         effectiveNow,
       ),
     )) {
       throw StateError(
-        'Starting cash can only be changed before branch sales begin and before opening time.',
+        'Starting cash cannot be changed because this branch already has sales today.',
       );
     }
 
@@ -151,6 +148,28 @@ class CashFloatService {
         amount,
         'amount',
         'Must be positive and finite.',
+      );
+    }
+    if (amount > maximumCashFloat) {
+      throw ArgumentError.value(
+        amount,
+        'amount',
+        'Cash float cannot exceed ${formatMoney(maximumCashFloat)}.',
+      );
+    }
+    if (startingCash &&
+        !CashDrawerService.meetsMinimumDailyOpeningCash(amount)) {
+      throw ArgumentError.value(
+        amount,
+        'amount',
+        'Starting cash must be at least ${formatMoney(CashDrawerService.minimumDailyOpeningCash)}.',
+      );
+    }
+    if (!startingCash && amount < minimumAddCash) {
+      throw ArgumentError.value(
+        amount,
+        'amount',
+        'Additional cash must be at least ${formatMoney(minimumAddCash)}.',
       );
     }
     if (startingCashChange && !startingCash) {
@@ -288,20 +307,13 @@ class CashFloatService {
     if (initialRequest?['startingCashChange'] == true) {
       final branchId = '${initialRequest?['branchId'] ?? ''}';
       final now = DateTime.now();
-      final branch = branchId.isEmpty
-          ? null
-          : (await firestore.collection('branches').doc(branchId).get()).data();
       final sales = branchId.isEmpty
           ? null
           : await firestore
                 .collection('completed_sales')
                 .where('branchId', isEqualTo: branchId)
                 .get();
-      final openingMinutes =
-          (branch?['openingMinutes'] as num?)?.toInt() ?? 600;
       if (!canChangeStartingCash(
-        now: now,
-        openingMinutes: openingMinutes,
         hasSalesToday: hasSalesToday(
           (sales?.docs ?? const []).map((doc) => doc.data()),
           now,
@@ -326,6 +338,13 @@ class CashFloatService {
           !amount.isFinite) {
         throw StateError('This cash float request has invalid details.');
       }
+      final startingCash = request['requestType'] == 'starting';
+      if (amount > maximumCashFloat ||
+          (startingCash &&
+              !CashDrawerService.meetsMinimumDailyOpeningCash(amount)) ||
+          (!startingCash && amount < minimumAddCash)) {
+        throw StateError('This cash float amount is outside the allowed range.');
+      }
       final drawerRef = firestore.collection('staff_cash_drawer').doc(branchId);
       final budgetRef = firestore.collection('staff_budget').doc(branchId);
       final drawerSnapshot = await transaction.get(drawerRef);
@@ -342,7 +361,6 @@ class CashFloatService {
       final priorAllocation = budgetDate == today
           ? (budget['allocatedBudget'] as num?)?.toDouble() ?? 0
           : 0;
-      final startingCash = request['requestType'] == 'starting';
       final recipientId = '${request['senderId'] ?? ''}';
       final opening = startingCash ? amount : priorOpening;
       final nextBalance = startingCash

@@ -56,6 +56,42 @@ void main() {
     },
   );
 
+  test('detects an accepted admin assigned to the staff branch', () async {
+    await database.collection('staff_requests').doc('staff').set({
+      'role': 'staff',
+      'branchIds': ['dagupan'],
+    });
+    await database.collection('staff_requests').doc('matching-admin').set({
+      'role': 'admin',
+      'status': 'accepted',
+      'branchIds': ['dagupan'],
+    });
+    await database.collection('staff_requests').doc('other-admin').set({
+      'role': 'admin',
+      'status': 'accepted',
+      'branchIds': ['manila'],
+    });
+
+    expect(
+      await StaffOnboardingService.hasAcceptedBranchAdmin(
+        database: database,
+        staffDocumentId: 'staff',
+      ),
+      isTrue,
+    );
+
+    await database.collection('staff_requests').doc('matching-admin').update({
+      'status': 'pending',
+    });
+    expect(
+      await StaffOnboardingService.hasAcceptedBranchAdmin(
+        database: database,
+        staffDocumentId: 'staff',
+      ),
+      isFalse,
+    );
+  });
+
   test('completion is saved to the matching staff document only', () async {
     await database.collection('staff_requests').doc('staff-one').set({
       'role': 'staff',

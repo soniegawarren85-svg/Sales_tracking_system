@@ -116,7 +116,7 @@ List<Map<String, dynamic>> staffInventoryHistoryEntries({
     if (quantity <= 0) continue;
     final isOffline = row['offline'] == true || row['isOffline'] == true;
     result.add({
-      'activity': 'Reduce',
+      'activity': row['type'] == 'expired' ? 'Expired' : 'Reduce',
       'name': '${row['itemName'] ?? ''}'.trim().isNotEmpty
           ? row['itemName']
           : row['categoryName'] ?? categoryName,

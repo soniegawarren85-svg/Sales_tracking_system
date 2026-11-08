@@ -246,6 +246,169 @@ class _ItemEditorState extends State<_ItemEditor> {
     );
   }
 
+  List<Map<String, dynamic>> _visibleIngredientOptions() {
+    final options = <String, Map<String, dynamic>>{
+      for (final option in [..._ingredientOptions, ..._ingredients])
+        _ingredientKey(option): option,
+    }.values;
+    final query = _ingredientSearch.text.trim().toLowerCase();
+    return options.where((item) {
+      final type = item['sourceCollection'] == 'coffee_products'
+          ? 'Beverages'
+          : item['sourceCollection'] == 'coffee_addons'
+          ? 'Add-ons'
+          : 'Categories';
+      return type == _ingredientTab &&
+          (query.isEmpty ||
+              '${item['name']} ${item['parentName'] ?? ''}'
+                  .toLowerCase()
+                  .contains(query)) &&
+          (type != 'Categories' ||
+              _ingredientCategory == null ||
+              item['parentName'] == _ingredientCategory);
+    }).toList();
+  }
+
+  Widget _buildIngredientOptionRow(
+    Map<String, dynamic> option, {
+    bool beverageSize = false,
+  }) {
+    final index = _ingredients.indexWhere(
+      (item) => _ingredientKey(item) == _ingredientKey(option),
+    );
+    final selected = index >= 0;
+    final item = selected ? _ingredients[index] : option;
+    final expiry = '${option['expirationDate'] ?? ''}';
+    return Column(
+      children: [
+        CheckboxListTile(
+          contentPadding: EdgeInsets.zero,
+          dense: beverageSize,
+          title: Text(
+            beverageSize
+                ? '${option['coffeeSize'] ?? 'Size'}'
+                : '${item['name']}',
+          ),
+          subtitle: Text(
+            '₱${option['price'] ?? 0}'
+            '${!beverageSize && expiry.isNotEmpty ? '\nExpires: $expiry' : ''}',
+          ),
+          value: selected,
+          onChanged: _saving
+              ? null
+              : (value) => setState(() {
+                  _recipeChanged = true;
+                  if (value == true) {
+                    _ingredients.add({...option, 'quantity': 1});
+                  } else {
+                    _ingredients.removeAt(index);
+                  }
+                  _computeCost();
+                }),
+        ),
+        if (selected)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: TextFormField(
+              key: ValueKey('quantity-${_ingredientKey(item)}'),
+              initialValue: '${item['quantity'] ?? 1}',
+              enabled: !_saving,
+              keyboardType: TextInputType.number,
+              decoration: InputDecoration(
+                labelText: item['coffeeSize'] == null
+                    ? 'Quantity per bundle'
+                    : 'Qty per ${item['coffeeSize']}',
+                hintText: 'Enter quantity',
+                border: const OutlineInputBorder(),
+              ),
+              validator: (value) => (int.tryParse(value ?? '') ?? 0) <= 0
+                  ? 'Enter a quantity greater than zero'
+                  : null,
+              onChanged: (value) {
+                _recipeChanged = true;
+                item['quantity'] = int.tryParse(value) ?? 0;
+                _computeCost();
+              },
+            ),
+          ),
+      ],
+    );
+  }
+
+  List<Widget> _buildBundleIngredientResults() {
+    final options = _visibleIngredientOptions();
+    if (_ingredientTab != 'Beverages') {
+      return options.map((option) {
+        final selected = _ingredients.any(
+          (item) => _ingredientKey(item) == _ingredientKey(option),
+        );
+        return Card(
+          margin: const EdgeInsets.symmetric(vertical: 8),
+          color: selected
+              ? AppColors.primary.withValues(alpha: .08)
+              : Colors.white,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+            side: BorderSide(
+              color: selected ? AppColors.primary : AppColors.blush,
+            ),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: _buildIngredientOptionRow(option),
+          ),
+        );
+      }).toList();
+    }
+
+    final groups = <String, List<Map<String, dynamic>>>{};
+    for (final option in options) {
+      final key =
+          '${option['sourceInventoryId'] ?? option['parentName'] ?? option['name']}';
+      groups.putIfAbsent(key, () => []).add(option);
+    }
+    return groups.values.map((sizes) {
+      final first = sizes.first;
+      final selectedCount = sizes
+          .where(
+            (size) => _ingredients.any(
+              (item) => _ingredientKey(item) == _ingredientKey(size),
+            ),
+          )
+          .length;
+      return Card(
+        margin: const EdgeInsets.symmetric(vertical: 8),
+        color: Colors.white,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(14),
+          side: const BorderSide(color: AppColors.blush),
+        ),
+        child: Theme(
+          data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+          child: ExpansionTile(
+            key: ValueKey('bundle-beverage-${first['sourceInventoryId']}'),
+            tilePadding: const EdgeInsets.symmetric(horizontal: 16),
+            childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+            title: Text(
+              '${first['name']}'.replaceFirst(RegExp(r'\s*\([^)]*\)$'), ''),
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
+            subtitle: Text(
+              '${sizes.length} sizes'
+              '${selectedCount == 0 ? '' : ' · $selectedCount selected'}',
+            ),
+            children: [
+              for (final size in sizes) ...[
+                const Divider(height: 1),
+                _buildIngredientOptionRow(size, beverageSize: true),
+              ],
+            ],
+          ),
+        ),
+      );
+    }).toList();
+  }
+
   void _finishSave() {
     if (!mounted) return;
     final messenger = ScaffoldMessenger.maybeOf(context);
@@ -518,11 +681,12 @@ class _ItemEditorState extends State<_ItemEditor> {
         return;
       }
       if (_type == 'Bundle') {
-        await updateBundleMetadata(db, ref.id, {
-          ...changes,
-          if (_recipeChanged) 'items': _ingredients,
-        });
-        _recordSaveActivity(source, changes, publicId: bundlePublicId);
+        final patch = inventoryChangedFields(_data, changes);
+        if (_recipeChanged) patch['items'] = _ingredients;
+        if (patch.isNotEmpty) {
+          await updateBundleMetadata(db, ref.id, patch);
+          _recordSaveActivity(source, patch, publicId: bundlePublicId);
+        }
         _finishSave();
         return;
       }
@@ -654,6 +818,7 @@ class _ItemEditorState extends State<_ItemEditor> {
     bool integer = false,
     bool required = true,
     bool readOnly = false,
+    String? Function(String?)? extraValidator,
   }) => Padding(
     padding: const EdgeInsets.only(bottom: 14),
     child: TextFormField(
@@ -680,7 +845,7 @@ class _ItemEditorState extends State<_ItemEditor> {
             return 'Enter a valid ${integer ? 'whole number' : 'amount'}';
           }
         }
-        return null;
+        return extraValidator?.call(value);
       },
     ),
   );
@@ -867,29 +1032,114 @@ class _ItemEditorState extends State<_ItemEditor> {
                     ],
                     if (_type == 'Beverages') ...[
                       const SizedBox(height: 12),
-                      ..._sizes.map(
-                        (size) => Column(
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(color: AppColors.blush),
+                        ),
+                        child: Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
-                            _field(size.$1, 'Size'),
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: _field(
-                                    size.$3,
-                                    'Cost price (₱)',
-                                    number: true,
-                                  ),
+                            const Text(
+                              'Sizes, cost and selling price',
+                              style: TextStyle(
+                                fontWeight: FontWeight.w800,
+                                color: AppColors.primaryDark,
+                              ),
+                            ),
+                            const SizedBox(height: 10),
+                            ..._sizes.asMap().entries.map((entry) {
+                              final index = entry.key;
+                              final size = entry.value;
+                              return Container(
+                                key: ValueKey('beverage-size-$index'),
+                                margin: const EdgeInsets.only(bottom: 12),
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: AppColors.surfaceTint,
+                                  borderRadius: BorderRadius.circular(14),
+                                  border: Border.all(color: AppColors.blush),
                                 ),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                  child: _field(
-                                    size.$2,
-                                    'Selling price (₱)',
-                                    number: true,
-                                  ),
+                                child: Column(
+                                  children: [
+                                    Row(
+                                      children: [
+                                        Expanded(
+                                          child: _field(size.$1, 'Size'),
+                                        ),
+                                        IconButton(
+                                          tooltip: 'Remove size',
+                                          onPressed: _sizes.length == 1
+                                              ? null
+                                              : () => setState(() {
+                                                  final removed = _sizes
+                                                      .removeAt(index);
+                                                  removed.$1.dispose();
+                                                  removed.$2.dispose();
+                                                  removed.$3.dispose();
+                                                }),
+                                          icon: const Icon(
+                                            Icons.remove_circle_outline,
+                                          ),
+                                          color: AppColors.primary,
+                                        ),
+                                      ],
+                                    ),
+                                    Row(
+                                      children: [
+                                        Expanded(
+                                          child: _field(
+                                            size.$3,
+                                            'Cost price (₱)',
+                                            number: true,
+                                          ),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Expanded(
+                                          child: _field(
+                                            size.$2,
+                                            'Selling price (₱)',
+                                            number: true,
+                                            extraValidator: (value) {
+                                              final selling = num.tryParse(
+                                                value ?? '',
+                                              );
+                                              final cost = num.tryParse(
+                                                size.$3.text.trim(),
+                                              );
+                                              if (selling != null &&
+                                                  cost != null &&
+                                                  selling < cost) {
+                                                return 'Selling price must be at least the cost price';
+                                              }
+                                              return null;
+                                            },
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ],
                                 ),
-                              ],
+                              );
+                            }),
+                            Align(
+                              alignment: Alignment.centerLeft,
+                              child: TextButton.icon(
+                                onPressed: _saving
+                                    ? null
+                                    : () => setState(
+                                        () => _sizes.add((
+                                          TextEditingController(),
+                                          TextEditingController(),
+                                          TextEditingController(),
+                                        )),
+                                      ),
+                                icon: const Icon(Icons.add_circle_outline),
+                                label: const Text('Add Size'),
+                              ),
                             ),
                           ],
                         ),
@@ -978,113 +1228,7 @@ class _ItemEditorState extends State<_ItemEditor> {
                               ),
                           ],
                         ),
-                      ...{
-                            for (final option in [
-                              ..._ingredientOptions,
-                              ..._ingredients,
-                            ])
-                              _ingredientKey(option): option,
-                          }.values
-                          .where((item) {
-                            final type =
-                                item['sourceCollection'] == 'coffee_products'
-                                ? 'Beverages'
-                                : item['sourceCollection'] == 'coffee_addons'
-                                ? 'Add-ons'
-                                : 'Categories';
-                            final query = _ingredientSearch.text
-                                .trim()
-                                .toLowerCase();
-                            return type == _ingredientTab &&
-                                (query.isEmpty ||
-                                    '${item['name']} ${item['parentName'] ?? ''}'
-                                        .toLowerCase()
-                                        .contains(query)) &&
-                                (type != 'Categories' ||
-                                    _ingredientCategory == null ||
-                                    item['parentName'] == _ingredientCategory);
-                          })
-                          .map((option) {
-                            final index = _ingredients.indexWhere(
-                              (i) =>
-                                  _ingredientKey(i) == _ingredientKey(option),
-                            );
-                            final selected = index >= 0;
-                            final item = selected
-                                ? _ingredients[index]
-                                : option;
-                            return Card(
-                              margin: const EdgeInsets.symmetric(vertical: 8),
-                              color: selected
-                                  ? AppColors.primary.withValues(alpha: .08)
-                                  : Colors.white,
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(14),
-                                side: BorderSide(
-                                  color: selected
-                                      ? AppColors.primary
-                                      : AppColors.blush,
-                                ),
-                              ),
-                              child: Padding(
-                                padding: const EdgeInsets.all(16),
-                                child: Column(
-                                  children: [
-                                    CheckboxListTile(
-                                      contentPadding: EdgeInsets.zero,
-                                      title: Text('${item['name']}'),
-                                      subtitle: Text(
-                                        '₱${item['price'] ?? 0}\nExpires: ${item['expirationDate'] ?? 'Not recorded'}',
-                                      ),
-                                      value: selected,
-                                      onChanged: _saving
-                                          ? null
-                                          : (value) => setState(() {
-                                              _recipeChanged = true;
-                                              if (value == true) {
-                                                _ingredients.add({
-                                                  ...option,
-                                                  'quantity': 1,
-                                                });
-                                              } else {
-                                                _ingredients.removeAt(index);
-                                              }
-                                              _computeCost();
-                                            }),
-                                    ),
-                                    if (selected)
-                                      TextFormField(
-                                        key: ValueKey(
-                                          'quantity-${_ingredientKey(item)}',
-                                        ),
-                                        initialValue:
-                                            '${item['quantity'] ?? 1}',
-                                        enabled: !_saving,
-                                        keyboardType: TextInputType.number,
-                                        decoration: InputDecoration(
-                                          labelText: item['coffeeSize'] == null
-                                              ? 'Quantity per bundle'
-                                              : 'Qty per ${item['coffeeSize']}',
-                                          hintText: 'Enter quantity',
-                                          border: const OutlineInputBorder(),
-                                        ),
-                                        validator: (value) =>
-                                            (int.tryParse(value ?? '') ?? 0) <=
-                                                0
-                                            ? 'Enter a quantity greater than zero'
-                                            : null,
-                                        onChanged: (value) {
-                                          _recipeChanged = true;
-                                          item['quantity'] =
-                                              int.tryParse(value) ?? 0;
-                                          _computeCost();
-                                        },
-                                      ),
-                                  ],
-                                ),
-                              ),
-                            );
-                          }),
+                      ..._buildBundleIngredientResults(),
                     ],
                     if (_error != null)
                       Text(_error!, style: const TextStyle(color: Colors.red)),

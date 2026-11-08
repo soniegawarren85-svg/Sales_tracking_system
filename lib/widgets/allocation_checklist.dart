@@ -330,6 +330,55 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
     }
   }
 
+  Future<void> acceptAllIncoming(
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
+  ) async {
+    if (acceptingAll || docs.isEmpty || widget.admin) return;
+    final confirmed = await confirmChecklistReceipt(
+      context,
+      title: 'Accept all incoming items?',
+      message:
+          'Confirm that you checked all ${docs.length} pending allocations. Each allocation will be recorded as received.',
+    );
+    if (!confirmed || !mounted) return;
+    setState(() => acceptingAll = true);
+    var accepted = 0;
+    try {
+      final actor = await resolveBranchInventoryActor(widget.db);
+      final service = AllocationChecklistService(widget.db);
+      for (final doc in docs) {
+        try {
+          if (await service.decide(
+            doc.id,
+            accept: true,
+            staffId: actor.id,
+            actorName: actor.name,
+            actorPublicId: actor.publicId,
+            actorRole: actor.role,
+            scopeIds: widget.ids,
+          )) {
+            accepted++;
+          }
+        } catch (error) {
+          debugPrint('Bulk checklist accept ${doc.id}: $error');
+        }
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              accepted == docs.length
+                  ? 'All $accepted allocations accepted.'
+                  : '$accepted of ${docs.length} allocations accepted. Reopen the checklist to retry the rest.',
+            ),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => acceptingAll = false);
+    }
+  }
+
   Future<String?> askReason(bool admin) async {
     var reason = '';
     final form = GlobalKey<FormState>();
@@ -423,6 +472,10 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
                 ? Text(
                     pendingIssue!.type == 'Others'
                         ? 'Submit this issue report: ${pendingIssue!.details}'
+                        : pendingIssue!.type == 'Missing'
+                        ? pendingIssue!.quantity >= allocatedQuantity
+                              ? 'All $allocatedQuantity ${pendingIssue!.itemName} are missing. This allocation will be cancelled, removed from staff inventory, and reported to Admin.'
+                              : '${pendingIssue!.quantity} ${pendingIssue!.itemName} are missing. The remaining $receivingQuantity will be received and the issue will be reported to Admin.'
                         : pendingIssue!.type == 'Damaged' ||
                               pendingIssue!.type == 'Incorrect'
                         ? '${pendingIssue!.quantity} ${pendingIssue!.itemName} will be excluded from staff inventory and sent to Admin for return confirmation. The remaining $receivingQuantity will be received.'
@@ -915,7 +968,7 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
                 child: Text(
                   '${item['name'] ?? 'Item'} — ${returned
                       ? item['quantity']
-                      : type == 'Beverages'
+                      : type.startsWith('Beverages')
                       ? 'Catalog access'
                       : item['bundleCount'] ?? item['stock'] ?? item['startingStock'] ?? 0}',
                   style: TextStyle(color: Colors.grey.shade800, fontSize: 14),
@@ -1294,6 +1347,33 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
                                 : widget.superAdmin
                                 ? 'Accept all (${pending.length})'
                                 : 'Submit all to Super Admin (${pending.length})',
+                          ),
+                        ),
+                      ),
+                    if (!widget.admin &&
+                        !widget.returnsOnly &&
+                        !widget.pendingOnly &&
+                        tab == 0)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+                        child: FilledButton.icon(
+                          onPressed: acceptingAll || pending.isEmpty
+                              ? null
+                              : () => acceptAllIncoming(pending),
+                          icon: acceptingAll
+                              ? const SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Colors.white,
+                                  ),
+                                )
+                              : const Icon(Icons.done_all_rounded),
+                          label: Text(
+                            acceptingAll
+                                ? 'Accepting…'
+                                : 'Accept all (${pending.length})',
                           ),
                         ),
                       ),

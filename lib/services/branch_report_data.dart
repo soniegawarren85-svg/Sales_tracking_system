@@ -65,6 +65,7 @@ class BranchReportData {
       'staff_cash_drawer',
       'daily_reports',
       'admin_settings',
+      'activity_logs',
     ];
     final values = <String, List<Map<String, dynamic>>>{};
     final subscriptions = <StreamSubscription>[];
@@ -740,6 +741,7 @@ class BranchReportData {
         () => {
           'id': code,
           'name': item['name'],
+          'sourceInventoryId': item['sourceInventoryId'] ?? source,
           'allocated': 0.0,
           'allocationSnapshot': 0.0,
           'relevant': false,
@@ -1106,9 +1108,14 @@ class BranchReportData {
             allocation?['isCoffee'] == true ||
             '${loss['type']}'.contains('coffee'),
       }, loss['sourceInventoryId'] ?? allocation?['sourceInventoryId']);
+      final lossLabel = '${loss['type'] ?? loss['reason'] ?? ''}'.toLowerCase();
       (item['history'] as List).add({
         'time': cashRecordDate(loss['createdAt'] ?? loss['timestamp']),
-        'activity': 'Reduce',
+        'activity': lossLabel.contains('damag')
+            ? 'Damaged'
+            : lossLabel.contains('expir')
+            ? 'Expired'
+            : 'Reduce',
         'qty': -reportValue(loss['quantity']),
       });
       if (!reportInRange(loss['createdAt'] ?? loss['timestamp'], start, end)) {

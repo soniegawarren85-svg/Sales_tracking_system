@@ -19,9 +19,15 @@ class SalesReportMetrics extends StatelessWidget {
     super.key,
     required this.metrics,
     required this.onDetails,
+    this.previousMetrics = const {},
+    this.currentLabel = 'Current period',
+    this.previousLabel = 'Previous period',
   });
   final Map<String, String> metrics;
   final ValueChanged<String> onDetails;
+  final Map<String, double> previousMetrics;
+  final String currentLabel;
+  final String previousLabel;
   @override
   Widget build(BuildContext context) {
     const icons = {
@@ -84,17 +90,43 @@ class SalesReportMetrics extends StatelessWidget {
                                       style: const TextStyle(fontSize: 12),
                                     ),
                                     const SizedBox(height: 5),
-                                    FittedBox(
-                                      fit: BoxFit.scaleDown,
-                                      alignment: Alignment.centerLeft,
-                                      child: Text(
-                                        metrics[entry.key] ?? '—',
-                                        style: const TextStyle(
-                                          fontSize: 22,
-                                          fontWeight: FontWeight.w800,
+                                    if (previousMetrics.containsKey(
+                                      entry.key,
+                                    )) ...[
+                                      FittedBox(
+                                        fit: BoxFit.scaleDown,
+                                        alignment: Alignment.centerLeft,
+                                        child: Text(
+                                          metrics[entry.key] ?? '—',
+                                          style: const TextStyle(
+                                            fontSize: 22,
+                                            fontWeight: FontWeight.w900,
+                                            color: AppColors.primaryDark,
+                                          ),
                                         ),
                                       ),
-                                    ),
+                                      const SizedBox(height: 4),
+                                      _MetricPeriodComparison(
+                                        name: entry.key,
+                                        current: _metricAmount(
+                                          metrics[entry.key],
+                                        ),
+                                        previous: previousMetrics[entry.key]!,
+                                        currentLabel: currentLabel,
+                                        previousLabel: previousLabel,
+                                      ),
+                                    ] else
+                                      FittedBox(
+                                        fit: BoxFit.scaleDown,
+                                        alignment: Alignment.centerLeft,
+                                        child: Text(
+                                          metrics[entry.key] ?? '—',
+                                          style: const TextStyle(
+                                            fontSize: 22,
+                                            fontWeight: FontWeight.w800,
+                                          ),
+                                        ),
+                                      ),
                                     const SizedBox(height: 5),
                                     Text(
                                       entry.key == 'Items allocated'
@@ -134,6 +166,289 @@ class SalesReportMetrics extends StatelessWidget {
       ],
     );
   }
+}
+
+double _metricAmount(String? value) {
+  if (value == null) return 0;
+  return double.tryParse(value.replaceAll(RegExp(r'[^0-9.-]'), '')) ?? 0;
+}
+
+class _MetricPeriodComparison extends StatelessWidget {
+  const _MetricPeriodComparison({
+    required this.name,
+    required this.current,
+    required this.previous,
+    required this.currentLabel,
+    required this.previousLabel,
+  });
+
+  final String name;
+  final double current;
+  final double previous;
+  final String currentLabel;
+  final String previousLabel;
+
+  @override
+  Widget build(BuildContext context) {
+    final delta = current - previous;
+    final inverseTrend = name == 'Total cost' || name == 'Total loss';
+    final favorable = inverseTrend ? delta < 0 : delta > 0;
+    final color = delta == 0
+        ? AppColors.textMuted
+        : favorable
+        ? const Color(0xFF218838)
+        : const Color(0xFFC62828);
+    final percent = previous <= 0
+        ? (current > 0 ? 'NEW' : '0.0%')
+        : '${delta > 0 ? '+' : ''}${(delta / previous * 100).toStringAsFixed(1)}%';
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          '$previousLabel · ${formatMoney(previous)}',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(
+            fontSize: 10,
+            color: AppColors.textMuted,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                '$currentLabel vs previous',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 9, color: AppColors.textMuted),
+              ),
+            ),
+            Text(
+              percent,
+              style: TextStyle(
+                fontSize: 10,
+                color: color,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ],
+        ),
+        SizedBox(
+          height: 14,
+          width: double.infinity,
+          child: CustomPaint(
+            painter: _ComparisonLinePainter(
+              previous: previous,
+              current: current,
+              color: color,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class PeriodComparisonCards extends StatelessWidget {
+  const PeriodComparisonCards({
+    super.key,
+    required this.current,
+    required this.previous,
+    required this.currentLabel,
+    required this.previousLabel,
+  });
+
+  final double current;
+  final double previous;
+  final String currentLabel;
+  final String previousLabel;
+
+  @override
+  Widget build(BuildContext context) {
+    final delta = current - previous;
+    final changePercent = previous <= 0
+        ? (current > 0 ? 100.0 : 0.0)
+        : delta / previous * 100;
+    final changeColor = delta > 0
+        ? const Color(0xFF218838)
+        : delta < 0
+        ? const Color(0xFFC62828)
+        : AppColors.textMuted;
+    final changeLabel = previous <= 0 && current > 0
+        ? 'NEW'
+        : '${delta > 0 ? '+' : ''}${changePercent.toStringAsFixed(1)}%';
+
+    Widget card({
+      required String label,
+      required double amount,
+      required bool highlighted,
+    }) => Container(
+      constraints: const BoxConstraints(minHeight: 116),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        gradient: highlighted
+            ? const LinearGradient(
+                colors: [Color(0xFFFFF5F7), Color(0xFFFBE4EB)],
+              )
+            : null,
+        color: highlighted ? null : Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: highlighted
+              ? AppColors.primary.withValues(alpha: .25)
+              : AppColors.blush,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.primaryDark.withValues(alpha: .06),
+            blurRadius: 12,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: AppColors.textMuted,
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 7),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(
+              formatMoney(amount),
+              style: const TextStyle(
+                color: AppColors.primaryDark,
+                fontSize: 19,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+          ),
+          const SizedBox(height: 4),
+          if (highlighted)
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  children: [
+                    Icon(
+                      delta > 0
+                          ? Icons.trending_up_rounded
+                          : delta < 0
+                          ? Icons.trending_down_rounded
+                          : Icons.trending_flat_rounded,
+                      size: 15,
+                      color: changeColor,
+                    ),
+                    const SizedBox(width: 3),
+                    Expanded(
+                      child: Text(
+                        '$changeLabel vs previous',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: changeColor,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                SizedBox(
+                  height: 18,
+                  width: double.infinity,
+                  child: CustomPaint(
+                    painter: _ComparisonLinePainter(
+                      previous: previous,
+                      current: current,
+                      color: changeColor,
+                    ),
+                  ),
+                ),
+              ],
+            )
+          else
+            const Text(
+              'Comparison period',
+              style: TextStyle(fontSize: 10, color: AppColors.textMuted),
+            ),
+        ],
+      ),
+    );
+
+    return Row(
+      children: [
+        Expanded(
+          child: card(
+            label: previousLabel,
+            amount: previous,
+            highlighted: false,
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: card(label: currentLabel, amount: current, highlighted: true),
+        ),
+      ],
+    );
+  }
+}
+
+class _ComparisonLinePainter extends CustomPainter {
+  const _ComparisonLinePainter({
+    required this.previous,
+    required this.current,
+    required this.color,
+  });
+
+  final double previous;
+  final double current;
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final maxValue = math.max(previous, current);
+    final minValue = math.min(previous, current);
+    final span = math.max(1.0, maxValue - minValue);
+    final startY =
+        size.height - 3 - (previous - minValue) / span * (size.height - 6);
+    final endY =
+        size.height - 3 - (current - minValue) / span * (size.height - 6);
+    final path = Path()
+      ..moveTo(2, startY)
+      ..cubicTo(
+        size.width * .35,
+        startY,
+        size.width * .6,
+        endY,
+        size.width - 3,
+        endY,
+      );
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = 2.5
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+    canvas.drawPath(path, paint);
+    canvas.drawCircle(Offset(size.width - 3, endY), 3, Paint()..color = color);
+  }
+
+  @override
+  bool shouldRepaint(covariant _ComparisonLinePainter oldDelegate) =>
+      oldDelegate.previous != previous ||
+      oldDelegate.current != current ||
+      oldDelegate.color != color;
 }
 
 class SalesReportDashboard extends StatelessWidget {

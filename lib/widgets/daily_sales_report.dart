@@ -262,6 +262,37 @@ class _DailySalesReportState extends State<DailySalesReport> {
         }
         final data = snapshot.data!;
         final start = range.$1, end = range.$2;
+        final comparisonDuration = end.difference(start);
+        final previousStart = start.subtract(comparisonDuration);
+        final previousSales = data
+            .sales(widget.branchId, previousStart, start)
+            .where(
+              (sale) =>
+                  !reportRefund(sale) &&
+                  sale['isDeleted'] != true &&
+                  sale['type'] != 'reduce' &&
+                  sale['status'] != 'reduced',
+            )
+            .toList();
+        final previousTotal = previousSales.fold<double>(
+          0,
+          (sum, sale) => sum + reportValue(sale['total']),
+        );
+        final previousTotalVat = previousSales.fold<double>(
+          0,
+          (sum, sale) =>
+              sum +
+              reportValue(
+                sale['tax'] ??
+                    sale['vatAmount'] ??
+                    sale['taxAmount'] ??
+                    sale['vat'],
+              ),
+        );
+        final previousNetSales = previousSales.fold<double>(
+          0,
+          (sum, sale) => sum + receiptVatableSales(sale),
+        );
         final sales = data
             .sales(widget.branchId, start, end)
             .where(
@@ -369,16 +400,30 @@ class _DailySalesReportState extends State<DailySalesReport> {
             });
           }
         }
+        final allocated = branches.keys.fold<double>(0, (total, branch) {
+          final branchItems = data.items(branch, start, end);
+          return total +
+              branchItems.fold<double>(0, (branchTotal, item) {
+                final allocations = (item['history'] as List? ?? const [])
+                    .whereType<Map>()
+                    .where(
+                      (event) =>
+                          event['activity'] == 'Allocation' &&
+                          reportInRange(event['time'], start, end),
+                    )
+                    .fold<double>(
+                      0,
+                      (sum, event) => sum + reportValue(event['qty']),
+                    );
+                return branchTotal + allocations;
+              });
+        });
         final current = currentReportAllocations(data, DateTime.now())
             .where(
               (row) =>
                   widget.branchId == null || row['branchId'] == widget.branchId,
             )
             .toList();
-        final allocated = current.fold<double>(
-          0,
-          (sum, row) => sum + reportValue(row['quantity']),
-        );
         final financialRows = branches.entries.map((branch) {
           final totals = data.totals(branch.key, start, end);
           return <String, dynamic>{
@@ -392,10 +437,23 @@ class _DailySalesReportState extends State<DailySalesReport> {
                 (totals['Reduce'] ?? 0.0) + (totals['Refunds'] ?? 0.0),
           };
         }).toList();
+        final previousFinancialRows = branches.entries.map((branch) {
+          final totals = data.totals(branch.key, previousStart, start);
+          return <String, dynamic>{
+            'branch': branch.value,
+            'Total cost': totals['Total cost'] ?? 0.0,
+            'Total profit': totals['Total profit'] ?? 0.0,
+            'Total net profit': totals['Total net profit'] ?? 0.0,
+            'Total loss':
+                (totals['Reduce'] ?? 0.0) + (totals['Refunds'] ?? 0.0),
+          };
+        }).toList();
         double financialTotal(String field) => financialRows.fold<double>(
           0,
           (sum, row) => sum + reportValue(row[field]),
         );
+        double previousFinancialTotal(String field) => previousFinancialRows
+            .fold<double>(0, (sum, row) => sum + reportValue(row[field]));
         final metrics = {
           'Total sales': money(total),
           'Total sold items': '${sold.toInt()}',
@@ -409,6 +467,21 @@ class _DailySalesReportState extends State<DailySalesReport> {
           'Total net sales': money(totalNetSales),
           'Total loss': money(financialTotal('Total loss')),
         };
+        final previousMetrics = {
+          'Total sales': previousTotal,
+          'Total cost': previousFinancialTotal('Total cost'),
+          'Total profit': previousFinancialTotal('Total profit'),
+          'Total VAT': previousTotalVat,
+          'Total net profit': previousFinancialTotal('Total net profit'),
+          'Total net sales': previousNetSales,
+          'Total loss': previousFinancialTotal('Total loss'),
+        };
+        final comparisonCurrentLabel = period == 'Custom'
+            ? 'Selected range'
+            : 'This $period';
+        final comparisonPreviousLabel = period == 'Custom'
+            ? 'Previous ${comparisonDuration.inDays} days'
+            : 'Previous $period';
         final rows = allRows
             .where(
               (r) =>
@@ -705,7 +778,24 @@ class _DailySalesReportState extends State<DailySalesReport> {
                 padding: const EdgeInsets.all(20),
                 children: [
                   const SizedBox(height: 16),
-                  SalesReportMetrics(metrics: metrics, onDetails: showDetails),
+                  PeriodComparisonCards(
+                    current: total,
+                    previous: previousTotal,
+                    currentLabel: period == 'Custom'
+                        ? 'Selected range'
+                        : 'This $period',
+                    previousLabel: period == 'Custom'
+                        ? 'Previous ${comparisonDuration.inDays} days'
+                        : 'Previous $period',
+                  ),
+                  const SizedBox(height: 12),
+                  SalesReportMetrics(
+                    metrics: metrics,
+                    previousMetrics: previousMetrics,
+                    currentLabel: comparisonCurrentLabel,
+                    previousLabel: comparisonPreviousLabel,
+                    onDetails: showDetails,
+                  ),
                   const SizedBox(height: 12),
                   SalesReportDashboard(
                     data: data,

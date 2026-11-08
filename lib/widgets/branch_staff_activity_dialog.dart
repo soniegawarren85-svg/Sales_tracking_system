@@ -44,7 +44,8 @@ class BranchStaffActivityDialog extends StatefulWidget {
 
 class _BranchStaffActivityDialogState extends State<BranchStaffActivityDialog> {
   String _search = '';
-  DateTime? _date = DateUtils.dateOnly(DateTime.now());
+  DateTime? _dateStart = DateUtils.dateOnly(DateTime.now());
+  DateTime? _dateEnd = DateUtils.dateOnly(DateTime.now());
   FirebaseFirestore get _firestore =>
       widget.firestore ?? FirebaseFirestore.instance;
 
@@ -67,11 +68,8 @@ class _BranchStaffActivityDialogState extends State<BranchStaffActivityDialog> {
     ];
   }
 
-  Widget _sessionList(List<String> assignedUserIds) => _sessionQueryList(
-    _sessionQueries(assignedUserIds),
-    0,
-    const [],
-  );
+  Widget _sessionList(List<String> assignedUserIds) =>
+      _sessionQueryList(_sessionQueries(assignedUserIds), 0, const []);
 
   Widget _sessionQueryList(
     List<Query<Map<String, dynamic>>> queries,
@@ -80,40 +78,42 @@ class _BranchStaffActivityDialogState extends State<BranchStaffActivityDialog> {
   ) {
     if (index == queries.length) return _filteredSessions(records);
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-        stream: queries[index].snapshots(),
-        builder: (context, snapshot) {
-          if (snapshot.hasError) {
-            return const Center(
-              child: Text(
-                'Unable to load session logs. Check connection and access permissions.',
-              ),
-            );
-          }
-          if (!snapshot.hasData) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          return _sessionQueryList(
-            queries,
-            index + 1,
-            [...records, ...snapshot.data!.docs.map((doc) => doc.data())],
+      stream: queries[index].snapshots(),
+      builder: (context, snapshot) {
+        if (snapshot.hasError) {
+          return const Center(
+            child: Text(
+              'Unable to load session logs. Check connection and access permissions.',
+            ),
           );
-        },
-      );
+        }
+        if (!snapshot.hasData) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        return _sessionQueryList(queries, index + 1, [
+          ...records,
+          ...snapshot.data!.docs.map((doc) => doc.data()),
+        ]);
+      },
+    );
   }
 
   Widget _filteredSessions(List<Map<String, dynamic>> records) {
     records.sort(
-      (a, b) => (sessionTime(b['loginAt']) ?? DateTime(1970))
-          .compareTo(sessionTime(a['loginAt']) ?? DateTime(1970)),
+      (a, b) => (sessionTime(b['loginAt']) ?? DateTime(1970)).compareTo(
+        sessionTime(a['loginAt']) ?? DateTime(1970),
+      ),
     );
     final filtered = records.where((row) {
+      if (_sessionRole(row) != 'Staff') return false;
       final date = sessionTime(row['loginAt']);
       final role = _sessionRole(row);
-      return (_date == null ||
+      return ((_dateStart == null && _dateEnd == null) ||
               (date != null &&
-                  date.year == _date!.year &&
-                  date.month == _date!.month &&
-                  date.day == _date!.day)) &&
+                  (_dateStart == null ||
+                      !DateUtils.dateOnly(date).isBefore(_dateStart!)) &&
+                  (_dateEnd == null ||
+                      !DateUtils.dateOnly(date).isAfter(_dateEnd!)))) &&
           ('$role ${row.values.join(' ')} ${publicItemId((row['staffId'] ?? '').toString())}')
               .toLowerCase()
               .contains(_search);
@@ -131,6 +131,7 @@ class _BranchStaffActivityDialogState extends State<BranchStaffActivityDialog> {
       _ => 'Staff',
     };
   }
+
   @override
   Widget build(BuildContext context) => Dialog(
     backgroundColor: Colors.white,
@@ -184,23 +185,30 @@ class _BranchStaffActivityDialogState extends State<BranchStaffActivityDialog> {
                   ),
                 ),
                 IconButton(
-                  tooltip: _date == null
-                      ? 'Filter by date'
-                      : MaterialLocalizations.of(
-                          context,
-                        ).formatShortDate(_date!),
+                  tooltip: _dateStart == null && _dateEnd == null
+                      ? 'Filter by date range'
+                      : 'Filter: ${_dateStart == null ? 'Any' : MaterialLocalizations.of(context).formatShortDate(_dateStart!)} – ${_dateEnd == null ? 'Any' : MaterialLocalizations.of(context).formatShortDate(_dateEnd!)}',
                   icon: const Icon(
-                    Icons.calendar_month,
+                    Icons.date_range_rounded,
                     color: AppColors.primaryDark,
                   ),
                   onPressed: () async {
-                    final date = await showDatePicker(
+                    final now = DateUtils.dateOnly(DateTime.now());
+                    final range = await showDateRangePicker(
                       context: context,
-                      initialDate: _date ?? DateTime.now(),
+                      initialDateRange: DateTimeRange(
+                        start: _dateStart ?? _dateEnd ?? now,
+                        end: _dateEnd ?? _dateStart ?? now,
+                      ),
                       firstDate: DateTime(2020),
-                      lastDate: DateTime.now(),
+                      lastDate: now,
                     );
-                    if (date != null && mounted) setState(() => _date = date);
+                    if (range != null && mounted) {
+                      setState(() {
+                        _dateStart = DateUtils.dateOnly(range.start);
+                        _dateEnd = DateUtils.dateOnly(range.end);
+                      });
+                    }
                   },
                 ),
               ],
@@ -221,17 +229,14 @@ class _BranchStaffActivityDialogState extends State<BranchStaffActivityDialog> {
                         );
                       }
                       if (!branch.hasData) {
-                        return const Center(
-                          child: CircularProgressIndicator(),
-                        );
+                        return const Center(child: CircularProgressIndicator());
                       }
-                      final userIds = (branch.data!.data()?['staffIds']
-                                  as List? ??
-                              [])
-                          .map((id) => '$id'.trim())
-                          .where((id) => id.isNotEmpty)
-                          .toSet()
-                          .toList();
+                      final userIds =
+                          (branch.data!.data()?['staffIds'] as List? ?? [])
+                              .map((id) => '$id'.trim())
+                              .where((id) => id.isNotEmpty)
+                              .toSet()
+                              .toList();
                       return _sessionList(userIds);
                     },
                   ),
@@ -301,16 +306,7 @@ class StaffSessionTable extends StatelessWidget {
           'Hours',
           'IP address',
         ],
-        flex: const {
-          0: 1,
-          1: 2,
-          2: 1,
-          3: 1.8,
-          4: 1.8,
-          5: 1,
-          6: .8,
-          7: 1.5,
-        },
+        flex: const {0: 1, 1: 2, 2: 1, 3: 1.8, 4: 1.8, 5: 1, 6: .8, 7: 1.5},
         rows: sessions
             .map(
               (session) => <Widget>[

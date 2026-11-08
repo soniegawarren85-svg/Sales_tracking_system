@@ -1,3 +1,4 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sales_tracking/widgets/admin_catalog.dart';
 import 'package:fake_cloud_firestore/fake_cloud_firestore.dart';
@@ -204,6 +205,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    expect(find.byTooltip('Inventory report'), findsNothing);
     final branch = tester.getTopLeft(
       find.byType(DropdownButtonFormField<String>),
     );
@@ -467,6 +469,68 @@ void main() {
 
     expect(find.text('Branch: SM Dagupan'), findsOneWidget);
     expect(find.byType(DropdownButtonFormField<String>), findsNothing);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('branch admin can view batches but cannot void allocations', (
+    tester,
+  ) async {
+    final db = FakeFirebaseFirestore();
+    await db.collection('branches').doc('dagupan').set({'name': 'SM Dagupan'});
+    await db.collection('sales_inventory').doc('cookies').set({
+      'name': 'Cookies',
+      'items': [
+        {
+          'id': 'cookie-1',
+          'publicId': 'COO-01',
+          'name': 'Cookie A',
+          'stock': 3,
+          'costPrice': 10,
+          'price': 20,
+        },
+      ],
+    });
+    await db.collection('staff_inventory').doc('cookie-allocation').set({
+      'staffId': 'dagupan',
+      'branchName': 'SM Dagupan',
+      'sourceInventoryId': 'cookies',
+      'name': 'Cookies',
+      'assignedAt': Timestamp.now(),
+      'items': [
+        {
+          'id': 'cookie-1',
+          'publicId': 'COO-01',
+          'name': 'Cookie A',
+          'stock': 3,
+          'startingStock': 3,
+          'assignedStartingStock': 3,
+          'costPrice': 10,
+          'price': 20,
+        },
+      ],
+    });
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: AdminCatalog(
+            firestore: db,
+            type: 'Categories',
+            showBranchActions: false,
+            onOpen: (_) {},
+            lockedBranchId: 'dagupan',
+            lockedBranchName: 'SM Dagupan',
+          ),
+        ),
+      ),
+    );
+    for (var i = 0; i < 10; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+
+    expect(find.byTooltip('View batches'), findsOneWidget);
+    expect(find.byTooltip('Void allocation'), findsNothing);
+    expect(find.byTooltip('Inventory report'), findsOneWidget);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox());
   });

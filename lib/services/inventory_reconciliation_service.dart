@@ -186,6 +186,21 @@ class InventoryReconciliationService {
         !['convert', 'unbundle'].contains(action)) {
       throw ArgumentError('Select bundles and a reconciliation reason.');
     }
+    // Staff unbundling is a local inventory operation; only bundle conversion
+    // needs an administrator review.
+    if (action == 'unbundle') {
+      await execute(
+        actionId: requestId,
+        allocationId: allocationId,
+        instanceIds: instanceIds,
+        action: action,
+        actorId: actorId,
+        actorName: actorName,
+        actorPublicId: '',
+        scopeIds: scopeIds,
+      );
+      return;
+    }
     final request = db.collection('inventory_reconciliations').doc(requestId);
     final source = db.collection('staff_inventory').doc(allocationId);
     await _validatedTransaction((tx) async {

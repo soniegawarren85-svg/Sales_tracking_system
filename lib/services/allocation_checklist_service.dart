@@ -14,7 +14,10 @@ class AllocationChecklistService {
           .map((e) => Map<String, dynamic>.from(e))
           .toList();
   static String type(Map<String, dynamic> data) =>
-      data['isCoffee'] == true || data['isAddon'] == true
+      data['isAddon'] == true ||
+          data['sourceCollection']?.toString() == 'coffee_addons'
+      ? 'Beverages Add-ons'
+      : data['isCoffee'] == true
       ? 'Beverages'
       : data['isBundle'] == true
       ? 'Bundle'
@@ -70,6 +73,9 @@ class AllocationChecklistService {
           'allocationId': id,
           'branchId': data['staffId'],
           'staffId': actorId,
+          'staffName': data['staffName'] ?? data['branchName'] ?? 'Branch',
+          'reportedByName': actorName,
+          'reportedByRole': admin ? 'admin' : 'staff',
           'reason': reason.trim(),
           'isRead': false,
           'toastShown': false,
@@ -555,7 +561,7 @@ class AllocationChecklistService {
       final target = await tx.get(destination);
       final current = target.data() ?? <String, dynamic>{};
       final bundle = pending['isBundle'] == true;
-      final beverage = type(pending) == 'Beverages';
+      final beverage = type(pending).startsWith('Beverages');
       final incoming = rows(pending['items']);
       final issueItemIndex = issueType == null || bundle
           ? -1
@@ -587,6 +593,8 @@ class AllocationChecklistService {
           'Issue quantity cannot exceed the allocated quantity.',
         );
       }
+      final fullyMissing =
+          issueType == 'Missing' && issueQuantity >= issueBaseQuantity;
       if (!accept && !target.exists) {
         throw StateError(
           'Source inventory is missing. Ask the administrator to restore it before declining.',
@@ -622,7 +630,7 @@ class AllocationChecklistService {
       final result = <String, dynamic>{
         if (accept) ...payload,
         ...current,
-        if (accept) 'isDeleted': false,
+        if (accept) 'isDeleted': !fullyMissing,
         'updatedAt': FieldValue.serverTimestamp(),
       };
       if (bundle) {
@@ -732,7 +740,11 @@ class AllocationChecklistService {
         tx.set(destination, result, SetOptions(merge: true));
       }
       tx.update(ref, {
-        'status': accept ? ChecklistStatus.received : 'declined',
+        'status': fullyMissing
+            ? 'Cancelled - Missing'
+            : accept
+            ? ChecklistStatus.received
+            : 'declined',
         if (accept) 'confirmedBy': staffId,
         if (accept) 'confirmedByName': actorName,
         if (accept && actorPublicId.isNotEmpty)
@@ -801,17 +813,26 @@ class AllocationChecklistService {
           tx.set(
             db.collection('admin_notifications').doc('allocation_issue_$id'),
             {
-              'title': 'Allocation discrepancy reported',
+              'title': fullyMissing
+                  ? 'Allocation cancelled - all items missing'
+                  : 'Allocation discrepancy reported',
               'message':
-                  '${pending['staffName'] ?? 'Branch'} reported $issueDescription for ${pending['name'] ?? 'allocated items'}.',
+                  '${pending['staffName'] ?? 'Branch'} reported $issueDescription for ${pending['name'] ?? 'allocated items'}.${fullyMissing ? ' The allocation was cancelled and excluded from staff inventory.' : ''}',
               'type': 'allocation_issue',
               'category': 'Inventory',
               'allocationId': id,
               'branchId': pending['staffId'],
               'staffId': staffId,
+              'staffName':
+                  pending['staffName'] ?? pending['branchName'] ?? 'Branch',
+              'reportedByName': actorName,
+              'reportedByRole': actorRole,
               'issueType': issueType,
               'issueQuantity': issueQuantity,
               'issueItemName': issueItemName,
+              'allocationStatus': fullyMissing
+                  ? 'Cancelled - Missing'
+                  : ChecklistStatus.received,
               'reason': savedIssueReason,
               'isRead': false,
               'toastShown': false,

@@ -66,6 +66,92 @@ class _LoginScreenState extends State<LoginScreen>
   final TextEditingController _passwordController = TextEditingController();
   bool _obscurePassword = true;
   bool _isLoading = false;
+  bool _rememberMe = false;
+  DateTime? _loginCooldownUntil;
+  Timer? _cooldownTimer;
+
+  String _loginPreferenceKey(String username, String suffix) {
+    final encoded = base64Url.encode(
+      utf8.encode(username.trim().toLowerCase()),
+    );
+    return 'login.$encoded.$suffix';
+  }
+
+  Future<void> _restoreLoginPreferences() async {
+    final prefs = await SharedPreferences.getInstance();
+    final remembered = prefs.getBool('login.rememberMe') ?? false;
+    final savedUsername = prefs.getString('login.rememberedUsername') ?? '';
+    if (mounted && remembered && savedUsername.isNotEmpty) {
+      _usernameController.text = savedUsername;
+      setState(() => _rememberMe = true);
+    }
+    final username = savedUsername.trim().toLowerCase();
+    if (username.isEmpty) return;
+    final until = prefs.getInt(_loginPreferenceKey(username, 'cooldownUntil'));
+    if (until != null && until > DateTime.now().millisecondsSinceEpoch) {
+      _beginCooldown(DateTime.fromMillisecondsSinceEpoch(until));
+    }
+  }
+
+  void _beginCooldown(DateTime until) {
+    _cooldownTimer?.cancel();
+    if (!mounted) return;
+    setState(() => _loginCooldownUntil = until);
+    _cooldownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted || !DateTime.now().isBefore(until)) {
+        timer.cancel();
+        if (mounted) setState(() => _loginCooldownUntil = null);
+        return;
+      }
+      setState(() {});
+    });
+  }
+
+  Future<void> _recordInvalidLogin(String username) async {
+    final prefs = await SharedPreferences.getInstance();
+    final key = _loginPreferenceKey(username, 'failedAttempts');
+    final attempts = (prefs.getInt(key) ?? 0) + 1;
+    if (attempts >= 5) {
+      final until = DateTime.now().add(const Duration(minutes: 5));
+      await prefs.setInt(
+        _loginPreferenceKey(username, 'cooldownUntil'),
+        until.millisecondsSinceEpoch,
+      );
+      await prefs.remove(key);
+      _beginCooldown(until);
+    } else {
+      await prefs.setInt(key, attempts);
+    }
+  }
+
+  Future<void> _clearInvalidLoginCount(String username) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_loginPreferenceKey(username, 'failedAttempts'));
+    await prefs.remove(_loginPreferenceKey(username, 'cooldownUntil'));
+    _cooldownTimer?.cancel();
+    if (mounted) setState(() => _loginCooldownUntil = null);
+  }
+
+  String _cooldownRemainingLabel() {
+    final remaining = _loginCooldownUntil?.difference(DateTime.now());
+    if (remaining == null || remaining.isNegative) return '0:00';
+    final seconds = remaining.inSeconds;
+    return '${(seconds ~/ 60).toString()}:${(seconds % 60).toString().padLeft(2, '0')}';
+  }
+
+  Future<void> _setRememberMe(bool value) async {
+    setState(() => _rememberMe = value);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('login.rememberMe', value);
+    if (value) {
+      await prefs.setString(
+        'login.rememberedUsername',
+        _usernameController.text.trim(),
+      );
+    } else {
+      await prefs.remove('login.rememberedUsername');
+    }
+  }
 
   late AnimationController _animController;
   late Animation<double> _fadeAnim;
@@ -91,6 +177,7 @@ class _LoginScreenState extends State<LoginScreen>
     super.initState();
     _initializeAnimations();
     _animController.forward();
+    unawaited(_restoreLoginPreferences());
   }
 
   @override
@@ -115,12 +202,20 @@ class _LoginScreenState extends State<LoginScreen>
   void dispose() {
     _usernameController.dispose();
     _passwordController.dispose();
+    _cooldownTimer?.cancel();
     if (_animController.isAnimating) _animController.stop();
     _animController.dispose();
     super.dispose();
   }
 
   void _showMessage(String message, {bool isError = false}) {
+    if (isError && message == invalidLoginCredentialsMessage()) {
+      unawaited(_recordInvalidLogin(_usernameController.text));
+    }
+    if (!isError && message.startsWith('Welcome')) {
+      unawaited(_clearInvalidLoginCount(_usernameController.text));
+      TextInput.finishAutofillContext(shouldSave: _rememberMe);
+    }
     if (!mounted) return;
     if (!isError && message.startsWith('Welcome')) {
       showTopNotification(
@@ -529,6 +624,24 @@ class _LoginScreenState extends State<LoginScreen>
 
   Future<void> _onSignInPressed() async {
     if (_isLoading) return;
+    final enteredUsername = _usernameController.text.trim().toLowerCase();
+    if (enteredUsername.isNotEmpty) {
+      final prefs = await SharedPreferences.getInstance();
+      final until = prefs.getInt(
+        _loginPreferenceKey(enteredUsername, 'cooldownUntil'),
+      );
+      if (until != null && until > DateTime.now().millisecondsSinceEpoch) {
+        _beginCooldown(DateTime.fromMillisecondsSinceEpoch(until));
+      }
+    }
+    if (_loginCooldownUntil != null &&
+        DateTime.now().isBefore(_loginCooldownUntil!)) {
+      _showMessage(
+        'Please wait for the login cooldown to finish.',
+        isError: true,
+      );
+      return;
+    }
     final rawInput = _usernameController.text;
     final rawPassword = _passwordController.text;
     final validationMessage = _loginValidationMessage(rawInput, rawPassword);
@@ -540,6 +653,10 @@ class _LoginScreenState extends State<LoginScreen>
     final username = isAccountId
         ? _normalizeUsername(rawInput)
         : rawInput.trim().toLowerCase();
+    if (_rememberMe) {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('login.rememberedUsername', rawInput.trim());
+    }
     final password = rawPassword;
     var accountDocs = <QueryDocumentSnapshot<Map<String, dynamic>>>[];
 
@@ -1271,7 +1388,8 @@ class _LoginScreenState extends State<LoginScreen>
 
   // ── Form ──────────────────────────────────────────────────────────────────
   Widget _buildForm() {
-    return Column(
+    return AutofillGroup(
+      child: Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _buildInputField(
@@ -1279,6 +1397,7 @@ class _LoginScreenState extends State<LoginScreen>
           controller: _usernameController,
           icon: Icons.badge_outlined,
           keyboardType: TextInputType.emailAddress,
+          autofillHints: const [AutofillHints.username],
         ),
         const SizedBox(height: 18),
         _buildInputField(
@@ -1298,30 +1417,80 @@ class _LoginScreenState extends State<LoginScreen>
             onPressed: () =>
                 setState(() => _obscurePassword = !_obscurePassword),
           ),
+          autofillHints: const [AutofillHints.password],
         ),
-        const SizedBox(height: 10),
-        Align(
-          alignment: Alignment.centerRight,
-          child: TextButton(
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const ForgotPasswordScreen()),
-            ),
-            style: TextButton.styleFrom(
-              padding: EdgeInsets.zero,
-              minimumSize: Size.zero,
-              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-            ),
-            child: Text(
-              'Forgot password?',
-              style: GoogleFonts.dmSans(
-                fontSize: 13,
-                color: AppColors.primary,
-                fontWeight: FontWeight.w600,
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            SizedBox(
+              height: 36,
+              child: Checkbox.adaptive(
+                value: _rememberMe,
+                activeColor: AppColors.primary,
+                onChanged: (value) => _setRememberMe(value ?? false),
               ),
             ),
-          ),
+            GestureDetector(
+              onTap: () => _setRememberMe(!_rememberMe),
+              child: Text(
+                'Remember me',
+                style: GoogleFonts.dmSans(
+                  fontSize: 13,
+                  color: AppColors.primaryDark,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+            const Spacer(),
+            TextButton(
+              onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const ForgotPasswordScreen()),
+              ),
+              style: TextButton.styleFrom(
+                padding: EdgeInsets.zero,
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              child: Text(
+                'Forgot password?',
+                style: GoogleFonts.dmSans(
+                  fontSize: 13,
+                  color: AppColors.primary,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ],
         ),
+        if (_loginCooldownUntil != null &&
+            DateTime.now().isBefore(_loginCooldownUntil!)) ...[
+          const SizedBox(height: 6),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+            decoration: BoxDecoration(
+              color: AppColors.blush.withOpacity(.7),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.lock_clock_rounded,
+                  size: 17,
+                  color: AppColors.primary,
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  'Too many attempts. Try again in ${_cooldownRemainingLabel()}.',
+                  style: GoogleFonts.dmSans(
+                    color: AppColors.primaryDark,
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
         const SizedBox(height: 32),
         _buildSignInButton(),
         const SizedBox(height: 24),
@@ -1344,6 +1513,7 @@ class _LoginScreenState extends State<LoginScreen>
         ),
         const SizedBox(height: 16),
       ],
+      ),
     );
   }
 
@@ -1356,6 +1526,7 @@ class _LoginScreenState extends State<LoginScreen>
     bool isPasswordField = false,
     Widget? suffixIcon,
     TextInputType keyboardType = TextInputType.text,
+    Iterable<String>? autofillHints,
   }) {
     return Container(
       decoration: BoxDecoration(
@@ -1394,9 +1565,11 @@ class _LoginScreenState extends State<LoginScreen>
               : null,
           enableSuggestions: !isPasswordField,
           autocorrect: !isPasswordField,
-          autofillHints: isPasswordField
-              ? null
-              : const [AutofillHints.username],
+          autofillHints:
+              autofillHints ??
+              (isPasswordField
+                  ? const [AutofillHints.password]
+                  : const [AutofillHints.username]),
           style: GoogleFonts.dmSans(
             fontSize: 15,
             color: AppColors.text,

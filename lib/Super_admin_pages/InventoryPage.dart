@@ -15,6 +15,7 @@ import '../widgets/admin_category_sheet.dart';
 import '../widgets/admin_item_editor.dart';
 import '../widgets/admin_void_inventory.dart';
 import '../widgets/admin_catalog.dart';
+import '../widgets/inventory_report.dart';
 import '../widgets/inventory_header_transition.dart';
 import 'CoffeeMenuPage.dart';
 import 'dart:convert';
@@ -3350,6 +3351,19 @@ class _InventoryPageState extends State<InventoryPage>
                                 ),
                               ),
                             ),
+                            if (_monitorBranch.isNotEmpty)
+                              IconButton(
+                                tooltip: 'Inventory report',
+                                onPressed: () => showInventoryReport(
+                                  context,
+                                  branchId: _monitorBranch,
+                                  database: _firestore,
+                                ),
+                                icon: const Icon(
+                                  Icons.assessment_outlined,
+                                  color: Colors.white,
+                                ),
+                              ),
                             const AllocationChecklistButton(
                               scopeIds: [],
                               isAdmin: true,
@@ -3406,7 +3420,6 @@ class _InventoryPageState extends State<InventoryPage>
                     setState(() => _monitorBranch = value);
                     widget.onBranchSelected?.call(value);
                   },
-                  allowBranchEdits: false,
                   showBranchActions: true,
                   allowLowStockVoids: true,
                   pinnedControls: true,

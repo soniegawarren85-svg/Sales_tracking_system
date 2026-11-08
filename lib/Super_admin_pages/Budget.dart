@@ -668,6 +668,7 @@ class _BudgetPageState extends State<BudgetPage>
     double amount, {
     bool changeStartingCash = false,
     required ValueChanged<bool> onSavingChanged,
+    required ValueChanged<String?> onValidationChanged,
     required VoidCallback onSuccess,
   }) async {
     if (_cashFloatSavingBranches.contains(branchId)) return;
@@ -675,6 +676,7 @@ class _BudgetPageState extends State<BudgetPage>
       setState(() => _cashFloatSavingBranches.add(branchId));
     }
     onSavingChanged(true);
+    onValidationChanged(null);
     try {
       await BranchPermissions.require(
         'adminAllowAllocations',
@@ -694,57 +696,50 @@ class _BudgetPageState extends State<BudgetPage>
           (drawer?['dailyOpeningCash'] as num?)?.toDouble() ??
           (drawer?['openingCash'] as num?)?.toDouble() ??
           0;
+      final currentDrawerBalance =
+          (drawer?['balance'] as num?)?.toDouble() ?? 0;
       final hasStartingCash =
-          drawer != null && drawer['drawerDate'] == today && currentOpening > 0;
+          (drawer != null &&
+              drawer['drawerDate'] == today &&
+              currentOpening > 0) ||
+          currentDrawerBalance > 0 ||
+          (_currentAllocations[branchId] ?? 0) > 0;
       final startingCash = changeStartingCash || !hasStartingCash;
       if (changeStartingCash) {
         if (!hasStartingCash) {
-          _showSnack(
-            'There is no starting cash to change for today.',
-            Colors.orange.shade700,
-          );
+          onValidationChanged('There is no starting cash to change for today.');
           return;
         }
-        final branchFuture = _firestore
-            .collection('branches')
-            .doc(branchId)
-            .get();
         final salesFuture = _firestore
             .collection('completed_sales')
             .where('branchId', isEqualTo: branchId)
             .get();
-        final branch = (await branchFuture).data();
         final sales = await salesFuture;
         final now = DateTime.now();
-        final openingMinutes =
-            (branch?['openingMinutes'] as num?)?.toInt() ?? 600;
         if (!CashFloatService.canChangeStartingCash(
-          now: now,
-          openingMinutes: openingMinutes,
           hasSalesToday: CashFloatService.hasSalesToday(
             sales.docs.map((doc) => doc.data()),
             now,
           ),
         )) {
-          _showSnack(
-            'Starting cash can only be changed before branch sales begin and before opening time.',
-            Colors.orange.shade700,
-          );
-          return;
-        }
-        if (!CashDrawerService.meetsMinimumDailyOpeningCash(amount)) {
-          _showSnack(
-            'Starting cash float must be at least ${formatMoney(CashDrawerService.minimumDailyOpeningCash)}.',
-            Colors.orange.shade700,
+          onValidationChanged(
+            'Starting cash cannot be changed because this branch already has sales today.',
           );
           return;
         }
       }
-      if (startingCash &&
-          !CashDrawerService.meetsMinimumDailyOpeningCash(amount)) {
-        _showSnack(
-          'Starting cash float must be at least ${formatMoney(CashDrawerService.minimumDailyOpeningCash)}.',
-          Colors.orange.shade700,
+      final minimum = changeStartingCash || startingCash
+          ? CashDrawerService.minimumDailyOpeningCash
+          : CashFloatService.minimumAddCash;
+      if (amount < minimum) {
+        onValidationChanged(
+          '${changeStartingCash || startingCash ? 'Starting cash' : 'Add Cash'} minimum is ${formatMoney(minimum)}.',
+        );
+        return;
+      }
+      if (amount > CashFloatService.maximumCashFloat) {
+        onValidationChanged(
+          'Cash amount is too high. Maximum is ${formatMoney(CashFloatService.maximumCashFloat)}.',
         );
         return;
       }
@@ -822,10 +817,7 @@ class _BudgetPageState extends State<BudgetPage>
       );
     } catch (error) {
       if (mounted) {
-        _showSnack(
-          'Unable to allocate cash float: $error',
-          Colors.red.shade600,
-        );
+        onValidationChanged('Unable to allocate cash float: $error');
       }
     } finally {
       if (mounted && _cashFloatSavingBranches.contains(branchId)) {
@@ -7125,6 +7117,7 @@ class _BudgetPageState extends State<BudgetPage>
   ) {
     var isSending = false;
     var isClosing = false;
+    String? validationMessage;
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -7172,10 +7165,15 @@ class _BudgetPageState extends State<BudgetPage>
                                     (drawer?['openingCash'] as num?)
                                         ?.toDouble() ??
                                     0;
+                                final drawerBalance =
+                                    (drawer?['balance'] as num?)?.toDouble() ??
+                                    0;
                                 final hasStartingCash =
-                                    drawer != null &&
-                                    drawer['drawerDate'] == today &&
-                                    currentOpening > 0;
+                                    (drawer != null &&
+                                        drawer['drawerDate'] == today &&
+                                        currentOpening > 0) ||
+                                    drawerBalance > 0 ||
+                                    (_currentAllocations[branchId] ?? 0) > 0;
                                 return _buildBranchAllocationPanel(
                                   branchId: branchId,
                                   branchName: branchName,
@@ -7185,9 +7183,17 @@ class _BudgetPageState extends State<BudgetPage>
                                   isSending: isSending,
                                   cashDrawerLoaded: drawerSnapshot.hasData,
                                   hasStartingCash: hasStartingCash,
+                                  validationMessage: validationMessage,
                                   onSavingChanged: (sending) {
                                     if (!isClosing && context.mounted) {
                                       setSheetState(() => isSending = sending);
+                                    }
+                                  },
+                                  onValidationChanged: (message) {
+                                    if (context.mounted && !isClosing) {
+                                      setSheetState(
+                                        () => validationMessage = message,
+                                      );
                                     }
                                   },
                                   onSuccess: () {
@@ -7648,26 +7654,42 @@ class _BudgetPageState extends State<BudgetPage>
     required bool isSending,
     required bool cashDrawerLoaded,
     required bool hasStartingCash,
+    required String? validationMessage,
     required ValueChanged<bool> onSavingChanged,
+    required ValueChanged<String?> onValidationChanged,
     required VoidCallback onSuccess,
     required VoidCallback onAmountChanged,
   }) {
     void submitCashFloat({bool changeStartingCash = false}) {
       if (!enabled) {
-        _showSnack(
-          'Assign staff to this branch first.',
-          Colors.orange.shade700,
-        );
+        onValidationChanged('Assign staff to this branch first.');
         return;
       }
+      onValidationChanged(null);
       final amountText = controller.text.trim();
       if (amountText.isEmpty) {
-        _showSnack('Please enter an amount', Colors.orange.shade700);
+        onValidationChanged('Enter a cash amount.');
         return;
       }
       final amount = double.tryParse(amountText);
       if (amount == null || !amount.isFinite || amount <= 0) {
-        _showSnack('Invalid cash amount', Colors.red.shade600);
+        onValidationChanged('Enter a valid cash amount.');
+        return;
+      }
+      final isStartingCash = !hasStartingCash;
+      final minimum = changeStartingCash || isStartingCash
+          ? CashDrawerService.minimumDailyOpeningCash
+          : CashFloatService.minimumAddCash;
+      if (amount < minimum) {
+        onValidationChanged(
+          '${changeStartingCash || isStartingCash ? 'Starting cash' : 'Add Cash'} must be at least ${formatMoney(minimum)}.',
+        );
+        return;
+      }
+      if (amount > CashFloatService.maximumCashFloat) {
+        onValidationChanged(
+          'Amount is too high. Maximum cash float is ${formatMoney(CashFloatService.maximumCashFloat)}.',
+        );
         return;
       }
       _requestBranchCashFloat(
@@ -7676,6 +7698,7 @@ class _BudgetPageState extends State<BudgetPage>
         amount,
         changeStartingCash: changeStartingCash,
         onSavingChanged: onSavingChanged,
+        onValidationChanged: onValidationChanged,
         onSuccess: onSuccess,
       );
     }
@@ -7878,12 +7901,12 @@ class _BudgetPageState extends State<BudgetPage>
               ),
               decoration: InputDecoration(
                 labelText: hasStartingCash
-                    ? 'Additional cash amount'
+                    ? 'Cash amount'
                     : 'Starting cash amount',
                 hintText: '0.00',
                 helperText: !hasStartingCash
-                    ? 'Set Starting Cash minimum: ${formatMoney(CashDrawerService.minimumDailyOpeningCash)}'
-                    : 'Additional cash float for $branchName',
+                    ? 'Starting cash: ₱1,500–₱5,000'
+                    : 'Add Cash: ₱500–₱5,000 · Change starting cash: ₱1,500–₱5,000',
                 prefixIcon: const Icon(Icons.payments_rounded, color: kDeep),
                 filled: true,
                 fillColor: Colors.white,
@@ -7900,11 +7923,48 @@ class _BudgetPageState extends State<BudgetPage>
                   borderSide: const BorderSide(color: kPrimary, width: 2),
                 ),
               ),
-              onChanged: (_) => onAmountChanged(),
+              onChanged: (_) {
+                if (validationMessage != null) onValidationChanged(null);
+                onAmountChanged();
+              },
             ),
           ),
+          if (validationMessage != null) ...[
+            const SizedBox(height: 8),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFEBEE),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: const Color(0xFFE57373)),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Icon(
+                    Icons.error_outline_rounded,
+                    color: Color(0xFFC62828),
+                    size: 18,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      validationMessage,
+                      style: const TextStyle(
+                        color: Color(0xFFC62828),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
           const SizedBox(height: 10),
           Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               FilledButton.icon(
                 onPressed: isSending || !cashDrawerLoaded

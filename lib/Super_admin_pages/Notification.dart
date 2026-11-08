@@ -1,6 +1,7 @@
 import 'package:sales_tracking/theme/app_colors.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import '../services/low_stock_reports.dart';
 
 class NotificationPage extends StatefulWidget {
   const NotificationPage({super.key});
@@ -15,6 +16,16 @@ class _NotificationPageState extends State<NotificationPage>
   late final Animation<double> _fadeAnim;
   late final Animation<Offset> _slideAnim;
   bool _dialogOpen = false;
+  final Map<String, Future<bool>> _branchAdminChecks = {};
+
+  Future<bool> _branchHasAdmin(String branchId) =>
+      _branchAdminChecks.putIfAbsent(
+        branchId,
+        () => branchHasActiveAdmin(
+          firestore: FirebaseFirestore.instance,
+          branchIds: [branchId],
+        ),
+      );
 
   Stream<QuerySnapshot> get _adminNotificationStream {
     try {
@@ -108,6 +119,22 @@ class _NotificationPageState extends State<NotificationPage>
               children: [
                 Text(data['message']?.toString() ?? ''),
                 const SizedBox(height: 14),
+                if (data['branchName'] != null)
+                  Text('Branch: ${data['branchName']}'),
+                if (data['branchId'] != null)
+                  Text('Branch ID: ${data['branchId']}'),
+                if (data['staffName'] != null)
+                  Text('Reported by: ${data['staffName']}'),
+                if (data['issueType'] != null)
+                  Text('Issue: ${data['issueType']}'),
+                if (data['issueItemName'] != null)
+                  Text('Item: ${data['issueItemName']}'),
+                if (data['issueQuantity'] != null)
+                  Text('Quantity: ${data['issueQuantity']}'),
+                if ('${data['reason'] ?? ''}'.trim().isNotEmpty)
+                  Text('Reason: ${data['reason']}'),
+                if (data['allocationId'] != null)
+                  Text('Allocation reference: ${data['allocationId']}'),
                 if (reportDate != null)
                   Text('Report date: ${reportDate.split('T').first}'),
                 if (cashDrawerTotal != null)
@@ -164,17 +191,11 @@ class _NotificationPageState extends State<NotificationPage>
       vsync: this,
       duration: const Duration(milliseconds: 650),
     );
-    _fadeAnim = CurvedAnimation(
-      parent: _animController,
-      curve: Curves.easeOut,
-    );
+    _fadeAnim = CurvedAnimation(parent: _animController, curve: Curves.easeOut);
     _slideAnim = Tween<Offset>(
       begin: const Offset(0, 0.05),
       end: Offset.zero,
-    ).animate(CurvedAnimation(
-      parent: _animController,
-      curve: Curves.easeOut,
-    ));
+    ).animate(CurvedAnimation(parent: _animController, curve: Curves.easeOut));
     _animController.forward();
   }
 
@@ -202,9 +223,7 @@ class _NotificationPageState extends State<NotificationPage>
                     if (snapshot.connectionState == ConnectionState.waiting) {
                       return const Padding(
                         padding: EdgeInsets.only(top: 60),
-                        child: Center(
-                          child: CircularProgressIndicator(),
-                        ),
+                        child: Center(child: CircularProgressIndicator()),
                       );
                     }
 
@@ -249,7 +268,11 @@ class _NotificationPageState extends State<NotificationPage>
     return Container(
       decoration: const BoxDecoration(
         gradient: LinearGradient(
-          colors: [AppColors.primaryDeep, AppColors.primaryDark, AppColors.primary],
+          colors: [
+            AppColors.primaryDeep,
+            AppColors.primaryDark,
+            AppColors.primary,
+          ],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
@@ -318,7 +341,9 @@ class _NotificationPageState extends State<NotificationPage>
                       constraints: const BoxConstraints(maxWidth: 118),
                       child: Container(
                         padding: const EdgeInsets.symmetric(
-                            horizontal: 10, vertical: 7),
+                          horizontal: 10,
+                          vertical: 7,
+                        ),
                         decoration: BoxDecoration(
                           color: Colors.white.withOpacity(0.15),
                           borderRadius: BorderRadius.circular(20),
@@ -479,12 +504,17 @@ class _NotificationPageState extends State<NotificationPage>
   ) {
     final bool isRead = notif['isRead'] == true;
     final String type = notif['type']?.toString() ?? 'general';
-    final IconData iconData = type == 'report'
+    final isAllocationReport = [
+      'allocation_issue',
+      'allocation_declined',
+    ].contains(type);
+    final IconData iconData = type == 'report' || isAllocationReport
         ? Icons.assignment_rounded
         : Icons.notifications_rounded;
-    final Color iconColor =
-        type == 'report' ? AppColors.primary : AppColors.primaryDeep;
-    final Color iconBg = type == 'report'
+    final Color iconColor = type == 'report' || isAllocationReport
+        ? AppColors.primary
+        : AppColors.primaryDeep;
+    final Color iconBg = type == 'report' || isAllocationReport
         ? AppColors.blush
         : const Color(0xFFEDE7F6);
 
@@ -579,11 +609,7 @@ class _NotificationPageState extends State<NotificationPage>
                           ),
                         ],
                       ),
-                      child: Icon(
-                        iconData,
-                        color: iconColor,
-                        size: 22,
-                      ),
+                      child: Icon(iconData, color: iconColor, size: 22),
                     ),
                     const SizedBox(width: 12),
                     Expanded(
@@ -618,7 +644,9 @@ class _NotificationPageState extends State<NotificationPage>
                                     shape: BoxShape.circle,
                                     boxShadow: [
                                       BoxShadow(
-                                        color: AppColors.primary.withOpacity(0.40),
+                                        color: AppColors.primary.withOpacity(
+                                          0.40,
+                                        ),
                                         blurRadius: 6,
                                         spreadRadius: 1,
                                       ),
@@ -647,7 +675,10 @@ class _NotificationPageState extends State<NotificationPage>
                 ),
               ),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 10,
+                ),
                 decoration: BoxDecoration(
                   color: isRead
                       ? const Color(0xFFFAFAFA)
@@ -688,6 +719,30 @@ class _NotificationPageState extends State<NotificationPage>
                     ),
                     Row(
                       children: [
+                        if (isAllocationReport) ...[
+                          FutureBuilder<bool>(
+                            future: _branchHasAdmin(
+                              '${notif['branchId'] ?? ''}',
+                            ),
+                            builder: (context, branchAdmin) => TextButton.icon(
+                              onPressed: () async {
+                                if (_dialogOpen) return;
+                                await _markFirestoreNotificationRead(docId);
+                                _showNotificationDetail(notif);
+                              },
+                              icon: const Icon(
+                                Icons.visibility_outlined,
+                                size: 14,
+                              ),
+                              label: Text(
+                                branchAdmin.data == true
+                                    ? 'View Admin report'
+                                    : 'View staff reports',
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 4),
+                        ],
                         const Icon(
                           Icons.access_time_rounded,
                           size: 11,

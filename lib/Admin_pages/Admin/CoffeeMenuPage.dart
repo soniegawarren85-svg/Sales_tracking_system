@@ -136,10 +136,10 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
     );
   }
 
-  InputDecoration _inputDeco(String label, IconData icon) => InputDecoration(
+  InputDecoration _inputDeco(String label, [IconData? icon]) => InputDecoration(
     labelText: label,
     labelStyle: TextStyle(color: Colors.grey.shade600, fontSize: 14),
-    prefixIcon: Icon(icon, color: _primary, size: 20),
+    prefixIcon: icon == null ? null : Icon(icon, color: _primary, size: 20),
     filled: true,
     fillColor: Colors.white,
     contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
@@ -484,10 +484,7 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
                               RegExp(r'[0-9.]'),
                             ),
                           ],
-                          decoration: _inputDeco(
-                            'Selling (₱)',
-                            Icons.payments_outlined,
-                          ),
+                          decoration: _inputDeco('Selling (₱)'),
                         ),
                       ),
                       const SizedBox(width: 8),
@@ -502,10 +499,7 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
                               RegExp(r'[0-9.]'),
                             ),
                           ],
-                          decoration: _inputDeco(
-                            'Cost (₱)',
-                            Icons.receipt_long_outlined,
-                          ),
+                          decoration: _inputDeco('Cost (₱)'),
                         ),
                       ),
                       const SizedBox(width: 4),
@@ -881,18 +875,23 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
                                     RegExp(r'[0-9.]'),
                                   ),
                                 ],
-                                decoration: _inputDeco('Selling (₱)', Icons.payments_outlined),
+                                decoration: _inputDeco('Selling (₱)'),
                               ),
                             ),
                             const SizedBox(width: 8),
                             Expanded(
                               child: TextField(
                                 controller: size.costController,
-                                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                                keyboardType:
+                                    const TextInputType.numberWithOptions(
+                                      decimal: true,
+                                    ),
                                 inputFormatters: [
-                                  FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
+                                  FilteringTextInputFormatter.allow(
+                                    RegExp(r'[0-9.]'),
+                                  ),
                                 ],
-                                decoration: _inputDeco('Cost (₱)', Icons.receipt_long_outlined),
+                                decoration: _inputDeco('Cost (₱)'),
                               ),
                             ),
                             IconButton(
@@ -932,8 +931,12 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
                 ElevatedButton(
                   onPressed: () async {
                     if (sizeDrafts.any((size) {
-                      final cost = num.tryParse(size.costController.text.trim());
-                      final price = num.tryParse(size.priceController.text.trim());
+                      final cost = num.tryParse(
+                        size.costController.text.trim(),
+                      );
+                      final price = num.tryParse(
+                        size.priceController.text.trim(),
+                      );
                       return cost == null ||
                           !cost.isFinite ||
                           cost < 0 ||
@@ -941,7 +944,10 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
                           !price.isFinite ||
                           price < cost;
                     })) {
-                      _showSnack('Enter valid costs and selling prices for every size.', isError: true);
+                      _showSnack(
+                        'Enter valid costs and selling prices for every size.',
+                        isError: true,
+                      );
                       return;
                     }
                     final newImageUrl = editImageBytes.isEmpty
@@ -1952,10 +1958,9 @@ class _OptionDraft {
     String name = '',
     String priceDelta = '',
     String costPrice = '',
-  })
-    : nameController = TextEditingController(text: name),
-      priceController = TextEditingController(text: priceDelta),
-      costController = TextEditingController(text: costPrice);
+  }) : nameController = TextEditingController(text: name),
+       priceController = TextEditingController(text: priceDelta),
+       costController = TextEditingController(text: costPrice);
 
   void dispose() {
     nameController.dispose();

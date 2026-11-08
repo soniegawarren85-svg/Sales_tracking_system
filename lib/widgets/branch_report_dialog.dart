@@ -17,6 +17,7 @@ import '../services/branch_report_data.dart';
 import '../services/save_bytes.dart';
 import '../theme/app_colors.dart';
 import 'admin_sales_overview.dart';
+import 'sales_report_dashboard.dart';
 import 'branch_analytics_bars.dart';
 import 'branch_allocation_table.dart';
 import 'historical_cash_drawer.dart';
@@ -1137,6 +1138,19 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
     String timeLabel(int minutes) =>
         TimeOfDay(hour: minutes ~/ 60, minute: minutes % 60).format(context);
     final totals = reportTotals(data);
+    final comparisonStart = range.$1.subtract(range.$2.difference(range.$1));
+    double periodSales(DateTime start, DateTime end) => data
+        .sales(widget.branchId, start, end)
+        .where(
+          (sale) =>
+              !reportRefund(sale) &&
+              sale['isDeleted'] != true &&
+              sale['type'] != 'reduce' &&
+              sale['status'] != 'reduced',
+        )
+        .fold<double>(0, (sum, sale) => sum + reportValue(sale['total']));
+    final comparisonCurrent = periodSales(range.$1, range.$2);
+    final comparisonPrevious = periodSales(comparisonStart, range.$1);
     final summaryTotals = totals.entries
         .where((entry) => entry.key != 'Total loss')
         .map((entry) {
@@ -1190,6 +1204,17 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
         ? const Color(0xFF1976D2)
         : const Color(0xFFE53935);
     return [
+      section(
+        'Sales comparison',
+        PeriodComparisonCards(
+          current: comparisonCurrent,
+          previous: comparisonPrevious,
+          currentLabel: _period == 'Range' ? 'Selected range' : 'This $_period',
+          previousLabel: _period == 'Range'
+              ? 'Previous ${range.$2.difference(range.$1).inDays} days'
+              : 'Previous $_period',
+        ),
+      ),
       section(
         'Sales summary',
         Column(
@@ -1258,11 +1283,18 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
         Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Wrap(
-              spacing: 10,
-              children: ['Categories', 'Bundle', 'Beverages', 'Add-ons']
-                  .map(
-                    (type) => ChoiceChip(
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [
+                  for (final type in [
+                    'Categories',
+                    'Bundle',
+                    'Beverages',
+                    'Add-ons',
+                  ]) ...[
+                    if (type != 'Categories') const SizedBox(width: 10),
+                    ChoiceChip(
                       label: Text(type),
                       selected: type == 'Add-ons'
                           ? _tableAddons
@@ -1272,8 +1304,9 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
                         if (!_tableAddons) _tableType = type;
                       }),
                     ),
-                  )
-                  .toList(),
+                  ],
+                ],
+              ),
             ),
             const SizedBox(height: 12),
             SingleChildScrollView(

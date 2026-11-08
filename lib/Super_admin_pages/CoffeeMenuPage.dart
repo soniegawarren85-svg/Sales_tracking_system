@@ -134,10 +134,10 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
     );
   }
 
-  InputDecoration _inputDeco(String label, IconData icon) => InputDecoration(
+  InputDecoration _inputDeco(String label, [IconData? icon]) => InputDecoration(
     labelText: label,
     labelStyle: TextStyle(color: Colors.grey.shade600, fontSize: 14),
-    prefixIcon: Icon(icon, color: _primary, size: 20),
+    prefixIcon: icon == null ? null : Icon(icon, color: _primary, size: 20),
     filled: true,
     fillColor: Colors.white,
     contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
@@ -464,10 +464,7 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
                               RegExp(r'[0-9.]'),
                             ),
                           ],
-                          decoration: _inputDeco(
-                            'Selling (₱)',
-                            Icons.payments_outlined,
-                          ),
+                          decoration: _inputDeco('Selling (₱)'),
                         ),
                       ),
                       const SizedBox(width: 8),
@@ -482,10 +479,7 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
                               RegExp(r'[0-9.]'),
                             ),
                           ],
-                          decoration: _inputDeco(
-                            'Cost (₱)',
-                            Icons.receipt_long_outlined,
-                          ),
+                          decoration: _inputDeco('Cost (₱)'),
                         ),
                       ),
                       const SizedBox(width: 4),
@@ -861,10 +855,7 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
                                     RegExp(r'[0-9.]'),
                                   ),
                                 ],
-                                decoration: _inputDeco(
-                                  'Selling (₱)',
-                                  Icons.payments_outlined,
-                                ),
+                                decoration: _inputDeco('Selling (₱)'),
                               ),
                             ),
                             const SizedBox(width: 8),
@@ -880,10 +871,7 @@ class _CoffeeMenuPageState extends State<CoffeeMenuPage>
                                     RegExp(r'[0-9.]'),
                                   ),
                                 ],
-                                decoration: _inputDeco(
-                                  'Cost (₱)',
-                                  Icons.receipt_long_outlined,
-                                ),
+                                decoration: _inputDeco('Cost (₱)'),
                               ),
                             ),
                             IconButton(

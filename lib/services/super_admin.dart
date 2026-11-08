@@ -33,7 +33,9 @@ class SuperAdmin {
     final prefs = preferences ?? await SharedPreferences.getInstance();
     if (database != null) {
       final profileRef = database.collection('super_admin_profiles').doc(id);
-      final profile = (await profileRef.get(const GetOptions(source: Source.server))).data();
+      final profile = (await profileRef.get(
+        const GetOptions(source: Source.server),
+      )).data();
       final linkedUid = '${profile?['authUid'] ?? ''}'.trim();
       if (linkedUid.isNotEmpty) {
         final auth = authentication ?? FirebaseAuth.instance;
@@ -43,15 +45,29 @@ class SuperAdmin {
               '${profile![key]}'.trim(),
         }) {
           try {
-            final credential = await auth.signInWithEmailAndPassword(email: email, password: password);
+            final credential = await auth.signInWithEmailAndPassword(
+              email: email,
+              password: password,
+            );
             if (credential.user?.uid != linkedUid) {
               await auth.signOut();
               return false;
             }
-            await syncVerifiedProfileEmail(profile: profileRef, user: credential.user, reload: false);
+            await syncVerifiedProfileEmail(
+              profile: profileRef,
+              user: credential.user,
+              reload: false,
+            );
             return true;
           } on FirebaseAuthException catch (error) {
-            if (!['invalid-credential', 'wrong-password', 'user-not-found', 'invalid-email'].contains(error.code)) rethrow;
+            if (![
+              'invalid-credential',
+              'wrong-password',
+              'user-not-found',
+              'invalid-email',
+            ].contains(error.code)) {
+              rethrow;
+            }
           }
         }
         // Once linked, old local/default passwords must never bypass Auth.
@@ -76,6 +92,70 @@ class SuperAdmin {
     return storedHash == null
         ? password == 'Super@123'
         : storedHash == _passwordHash(password);
+  }
+
+  /// Verifies the Super Admin password against linked Firebase Authentication
+  /// without changing the active app's authentication session.
+  static Future<bool> reauthenticateForBackup(
+    String password, {
+    FirebaseFirestore? database,
+  }) async {
+    final db = database ?? FirebaseFirestore.instance;
+    final profileRef = db.collection('super_admin_profiles').doc(id);
+    final profile = (await profileRef.get(
+      const GetOptions(source: Source.server),
+    )).data();
+    final linkedUid = '${profile?['authUid'] ?? ''}'.trim();
+    if (linkedUid.isEmpty) {
+      throw StateError(
+        'This Super Admin profile is not linked to Firebase Authentication. Secure backup creation requires a linked account.',
+      );
+    }
+    final emails = <String>{
+      for (final field in ['pendingAuthEmail', 'authEmail', 'email'])
+        if ('${profile?[field] ?? ''}'.trim().isNotEmpty)
+          '${profile![field]}'.trim(),
+    };
+    if (emails.isEmpty) {
+      throw StateError('The linked Super Admin account has no sign-in email.');
+    }
+
+    final app = await Firebase.initializeApp(
+      name:
+          'superAdminBackupVerification${DateTime.now().microsecondsSinceEpoch}',
+      options: Firebase.app().options,
+    );
+    try {
+      final auth = FirebaseAuth.instanceFor(app: app);
+      for (final email in emails) {
+        try {
+          final result = await auth.signInWithEmailAndPassword(
+            email: email,
+            password: password,
+          );
+          final user = result.user;
+          if (user?.uid == linkedUid && user != null) {
+            await user.reauthenticateWithCredential(
+              EmailAuthProvider.credential(email: email, password: password),
+            );
+            return true;
+          }
+          throw StateError('The verified account does not match this profile.');
+        } on FirebaseAuthException catch (error) {
+          if (![
+            'invalid-credential',
+            'wrong-password',
+            'user-not-found',
+            'invalid-email',
+          ].contains(error.code)) {
+            rethrow;
+          }
+        }
+      }
+      return false;
+    } finally {
+      await app.delete();
+    }
   }
 
   static Future<void> updatePassword(

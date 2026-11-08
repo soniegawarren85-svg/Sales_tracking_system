@@ -1801,6 +1801,16 @@ class _SalesCardState extends State<_SalesCard>
                             ),
                           ),
                           const Spacer(),
+                          IconButton(
+                            tooltip: 'View sale reduction history',
+                            visualDensity: VisualDensity.compact,
+                            onPressed: _showReducedItemsDialog,
+                            icon: const Icon(
+                              Icons.history_rounded,
+                              color: _C.caramel,
+                              size: 19,
+                            ),
+                          ),
                           AnimatedRotation(
                             turns: _expanded ? 0 : 0.5,
                             duration: const Duration(milliseconds: 200),

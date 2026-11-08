@@ -5,6 +5,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 class BackupManifest {
   const BackupManifest({
     required this.backupId,
+    required this.backupName,
+    required this.applicationVersion,
     required this.createdAt,
     required this.documentCount,
     required this.collectionCounts,
@@ -12,6 +14,8 @@ class BackupManifest {
   });
 
   final String backupId;
+  final String backupName;
+  final String applicationVersion;
   final DateTime createdAt;
   final int documentCount;
   final Map<String, int> collectionCounts;
@@ -25,6 +29,8 @@ class DatabaseBackup {
     'admin_notifications',
     'admin_settings',
     'activity_logs',
+    'backup_audit_logs',
+    'backup_history',
     'allocation_checklist',
     'branches',
     'budget_history',
@@ -34,8 +40,13 @@ class DatabaseBackup {
     'completed_sales',
     'counters',
     'daily_reports',
+    'events',
+    'inventory_bundle_actions',
+    'inventory_reconciliations',
     'inventory_reports',
     'messages',
+    'message_status',
+    'notifications',
     'pending_order_history',
     'pending_orders',
     'sales_inventory',
@@ -44,9 +55,17 @@ class DatabaseBackup {
     'staff_inventory',
     'staff_inventory_history',
     'staff_login_sessions',
+    'staff_profiles',
     'staff_requests',
     'stock_adjustments',
     'system_counters',
+    'super_admin_profiles',
+    'daily_stock_reports',
+    'low_stock_reports',
+    'return_batches',
+    'return_batch_items',
+    'cash_float_requests',
+    'cash_float_history',
   ];
   static dynamic encode(dynamic value) {
     if (value is DateTime) return encode(Timestamp.fromDate(value));
@@ -105,8 +124,11 @@ class DatabaseBackup {
     return value;
   }
 
-  static dynamic decode(dynamic value) {
-    if (value is List) return value.map(decode).toList();
+  static dynamic decode(dynamic value, {FirebaseFirestore? firestore}) {
+    final db = firestore ?? FirebaseFirestore.instance;
+    if (value is List) {
+      return value.map((item) => decode(item, firestore: db)).toList();
+    }
     if (value is Map) {
       switch (value['__type']) {
         case 'double':
@@ -122,24 +144,37 @@ class DatabaseBackup {
             (value['longitude'] as num).toDouble(),
           );
         case 'reference':
-          return FirebaseFirestore.instance.doc(value['path'] as String);
+          return db.doc(value['path'] as String);
         case 'blob':
           return Blob(base64Decode(value['data'] as String));
       }
-      return value.map((k, v) => MapEntry(k.toString(), decode(v)));
+      return value.map(
+        (k, v) => MapEntry(k.toString(), decode(v, firestore: db)),
+      );
     }
     return value;
   }
 
-  static Future<Uint8List> export({FirebaseFirestore? firestore}) async {
+  static Future<Uint8List> export({
+    FirebaseFirestore? firestore,
+    String backupName = 'Manual backup',
+    String? backupId,
+    void Function(int completed, int total, String collection)? onProgress,
+  }) async {
     final db = firestore ?? FirebaseFirestore.instance;
     final records = <String, dynamic>{};
-    for (final name in collections) {
+    for (var index = 0; index < collections.length; index++) {
+      final name = collections[index];
+      onProgress?.call(index, collections.length, name);
       try {
         final snapshot = await db
             .collection(name)
             .get(const GetOptions(source: Source.server));
         for (final doc in snapshot.docs) {
+          if (name == 'backup_history' &&
+              doc.data()['status'] == 'in_progress') {
+            continue;
+          }
           records[doc.reference.path] = encode(_sanitize(doc.data()));
           if (name == 'messages') {
             final messages = await doc.reference
@@ -158,6 +193,11 @@ class DatabaseBackup {
         );
       }
     }
+    onProgress?.call(
+      collections.length,
+      collections.length,
+      'Validating export',
+    );
     final createdAt = DateTime.now().toUtc();
     final counts = <String, int>{};
     for (final path in records.keys) {
@@ -169,7 +209,11 @@ class DatabaseBackup {
         jsonEncode({
           'format': 'sales-tracking-backup',
           'version': 1,
-          'backupId': 'manual-${createdAt.microsecondsSinceEpoch}',
+          'backupId': backupId ?? 'manual-${createdAt.microsecondsSinceEpoch}',
+          'backupName': backupName.trim().isEmpty
+              ? 'Manual backup'
+              : backupName.trim(),
+          'applicationVersion': '1.0.7',
           'createdAt': createdAt.toIso8601String(),
           'documentCount': records.length,
           'collectionCounts': counts,
@@ -219,9 +263,26 @@ class DatabaseBackup {
     if (declaredCount is! int || declaredCount != documents.length) {
       throw const FormatException('Backup document count does not match.');
     }
+    final declaredCounts = data['collectionCounts'];
+    if (declaredCounts is! Map ||
+        declaredCounts.length != counts.length ||
+        counts.entries.any(
+          (entry) => declaredCounts[entry.key] != entry.value,
+        )) {
+      throw const FormatException('Backup collection counts do not match.');
+    }
+    final appVersion = '${data['applicationVersion'] ?? ''}';
+    final appMajor = int.tryParse(appVersion.split('.').first);
+    if (appMajor != null && appMajor != 1) {
+      throw FormatException(
+        'Backup app version $appVersion is not compatible with this restore format.',
+      );
+    }
     return BackupManifest(
       backupId:
           '${data['backupId'] ?? 'legacy-${createdAt.microsecondsSinceEpoch}'}',
+      backupName: '${data['backupName'] ?? 'Imported backup'}',
+      applicationVersion: '${data['applicationVersion'] ?? 'legacy'}',
       createdAt: createdAt,
       documentCount: documents.length,
       collectionCounts: counts,
@@ -243,15 +304,45 @@ class DatabaseBackup {
     return false;
   }
 
-  static Map<String, Map<String, dynamic>> validate(Uint8List bytes) {
+  static Map<String, Map<String, dynamic>> validate(
+    Uint8List bytes, {
+    FirebaseFirestore? firestore,
+  }) {
     inspect(bytes);
     final data = jsonDecode(utf8.decode(bytes));
     final result = <String, Map<String, dynamic>>{};
     for (final entry in (data['documents'] as Map).entries) {
       result[entry.key.toString()] = Map<String, dynamic>.from(
-        decode(entry.value) as Map,
+        decode(entry.value, firestore: firestore) as Map,
       );
     }
     return result;
+  }
+
+  /// Merges validated records by their original document paths in safe batches.
+  /// Existing fields absent from the backup and documents absent from the
+  /// backup are left untouched.
+  static Future<int> restoreMerge(
+    Map<String, Map<String, dynamic>> documents, {
+    required FirebaseFirestore firestore,
+    void Function(int completed, int total)? onProgress,
+  }) async {
+    final entries = documents.entries.toList();
+    var completed = 0;
+    for (var start = 0; start < entries.length; start += 400) {
+      final batch = firestore.batch();
+      final page = entries.skip(start).take(400);
+      for (final entry in page) {
+        batch.set(
+          firestore.doc(entry.key),
+          entry.value,
+          SetOptions(merge: true),
+        );
+      }
+      await batch.commit();
+      completed += page.length;
+      onProgress?.call(completed, entries.length);
+    }
+    return completed;
   }
 }

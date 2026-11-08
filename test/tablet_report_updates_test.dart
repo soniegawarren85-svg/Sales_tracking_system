@@ -101,7 +101,7 @@ void main() {
       expect(find.textContaining('report · All branches'), findsNothing);
       final card = find.ancestor(
         of: find.text('Total cost'),
-        matching: find.byType(Card),
+        matching: find.byType(Material),
       );
       expect(
         find.descendant(of: card, matching: find.text('₱60.00')),

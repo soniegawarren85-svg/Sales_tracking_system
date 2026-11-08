@@ -12,6 +12,7 @@ import '../services/sale_stock.dart';
 import '../services/low_stock_reports.dart';
 import '../services/session_actor.dart';
 import '../services/staff_allocation_scope.dart';
+import '../services/staff_expiry_service.dart';
 import 'dart:async';
 import 'dart:convert';
 
@@ -85,6 +86,7 @@ class _AllCategPageState extends State<AllCategPage>
   List<Map<String, dynamic>> _pendingOfflineReductions = const [];
   bool _inventoryOnline = false;
   bool _syncingOfflineReductions = false;
+  bool _expirySweepRunning = false;
 
   bool get _isFilteredCategory =>
       (widget.selectedCategoryName?.trim().isNotEmpty ?? false) ||
@@ -236,6 +238,24 @@ class _AllCategPageState extends State<AllCategPage>
     return _staffInventoryStreamCache = ids.length == 1
         ? query.where('staffId', isEqualTo: ids.first).snapshots()
         : query.where('staffId', whereIn: ids).snapshots();
+  }
+
+  Future<void> _sweepExpiredStaffInventory(
+    List<Map<String, dynamic>> records,
+  ) async {
+    if (_expirySweepRunning || records.isEmpty || _staffInventoryIds.isEmpty) {
+      return;
+    }
+    _expirySweepRunning = true;
+    try {
+      await StaffExpiryService(
+        FirebaseFirestore.instance,
+      ).process(records, _staffInventoryIds.toSet());
+    } catch (error) {
+      debugPrint('Unable to process expired staff stock: $error');
+    } finally {
+      _expirySweepRunning = false;
+    }
   }
 
   @override
@@ -420,7 +440,10 @@ class _AllCategPageState extends State<AllCategPage>
   }
 
   bool _hasExpiredBundleInventory(Map<String, dynamic> bundle) {
-    return staffBundleAllocationExpired(bundle);
+    return staffBundleAllocationExpired(bundle) ||
+        (bundle['bundleInstances'] as List? ?? const []).whereType<Map>().any(
+          (instance) => instance['expired'] == true,
+        );
   }
 
   String _availabilityLabel({
@@ -745,17 +768,6 @@ class _AllCategPageState extends State<AllCategPage>
     if (status == 'sold') return 'Sold';
     if (status == 'reduced') return 'Reduced';
     return 'Available';
-  }
-
-  bool _isExpiredItem(String expirationDate) {
-    try {
-      final expiryDate = DateTime.parse(expirationDate);
-      return !DateUtils.dateOnly(
-        expiryDate,
-      ).isAfter(DateUtils.dateOnly(DateTime.now()));
-    } catch (e) {
-      return false;
-    }
   }
 
   Future<void> _showStockAdjustmentDialog({
@@ -5019,6 +5031,12 @@ class _AllCategPageState extends State<AllCategPage>
     return '$year-$month-$day';
   }
 
+  bool _isExpiredItem(String expirationDate) {
+    final expiry = DateTime.tryParse(expirationDate.trim());
+    return expiry != null &&
+        !DateUtils.dateOnly(expiry).isAfter(DateUtils.dateOnly(DateTime.now()));
+  }
+
   DateTime? _allocationDateTime(dynamic value) {
     return value is Timestamp
         ? value.toDate()
@@ -5422,7 +5440,10 @@ class _AllCategPageState extends State<AllCategPage>
                   _allocationDateLabel(
                     addon['assignedAt'] ??
                         addon['allocatedAt'] ??
-                        category['assignedAt'],
+                        addon['confirmedAt'] ??
+                        category['assignedAt'] ??
+                        category['allocatedAt'] ??
+                        category['confirmedAt'],
                   ),
                   width: 120,
                 ),
@@ -7125,6 +7146,15 @@ class _AllCategPageState extends State<AllCategPage>
                     authoritative: !snapshot.data!.metadata.isFromCache,
                   ),
                 );
+                if (!snapshot.data!.metadata.isFromCache &&
+                    !_expirySweepRunning &&
+                    _staffInventoryIds.isNotEmpty) {
+                  final expiryRecords = docs.map((doc) {
+                    final data = doc.data() as Map<String, dynamic>;
+                    return {...data, '_localDocId': doc.id};
+                  }).toList();
+                  unawaited(_sweepExpiredStaffInventory(expiryRecords));
+                }
               }
               return StreamBuilder<QuerySnapshot>(
                 stream: _rootInventoryStream,
@@ -7265,9 +7295,13 @@ class _AllCategPageState extends State<AllCategPage>
                             .whereType<Map>()
                             .map((item) => Map<String, dynamic>.from(item))
                             .where((item) {
-                              final expirationDate =
-                                  item['expirationDate']?.toString() ?? '';
-                              return !_isExpiredItem(expirationDate) &&
+                              final expiry =
+                                  (item['expirationDate'] ??
+                                          item['expiryDate'] ??
+                                          item['expireDate'] ??
+                                          '')
+                                      .toString();
+                              return !_isExpiredItem(expiry) &&
                                   (rootItems.isEmpty ||
                                       rootItems.any(
                                         (root) =>
@@ -7420,6 +7454,16 @@ class _AllCategPageState extends State<AllCategPage>
                         final addonData = Map<String, dynamic>.from(addon);
                         addonData['isAddon'] = true;
                         addonData['sourceDocId'] = data['sourceDocId'];
+                        addonData['assignedAt'] ??=
+                            data['assignedAt'] ??
+                            data['allocatedAt'] ??
+                            data['confirmedAt'] ??
+                            data['createdAt'];
+                        addonData['allocatedAt'] ??=
+                            data['allocatedAt'] ??
+                            data['assignedAt'] ??
+                            data['confirmedAt'] ??
+                            data['createdAt'];
                         return addonData;
                       });
                     }

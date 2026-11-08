@@ -10,6 +10,7 @@ import 'package:sales_tracking/theme/app_colors.dart';
 import '../../services/public_item_id.dart';
 import '../../widgets/password_strength_checklist.dart';
 import '../../widgets/admin_page_skeleton.dart';
+import '../../widgets/branch_staff_activity_dialog.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -87,6 +88,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
   bool _showAdminPanel = false;
   bool _isCreatingStaff = false;
   String _accountSearch = '';
+  String _branchStaffSearch = '';
   final _creating = ValueNotifier(false);
   BuildContext? _createSheetContext;
   final _createStaffFormKey = GlobalKey<FormState>();
@@ -104,12 +106,10 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
   bool _showConfirmPassword = false;
 
   bool _matchesAccountSearch(AdminModel member) {
-    final terms = _accountSearch.trim().toLowerCase().split(
-      RegExp(r'\s+'),
-    )..removeWhere((term) => term.isEmpty);
+    final terms = _accountSearch.trim().toLowerCase().split(RegExp(r'\s+'))
+      ..removeWhere((term) => term.isEmpty);
     if (terms.isEmpty) return true;
-    final inactive =
-        member.status == 'deactivated' || member.isInactiveByLogin;
+    final inactive = member.status == 'deactivated' || member.isInactiveByLogin;
     final searchable = [
       member.id,
       member.publicId,
@@ -296,6 +296,24 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
         final accepted = staff
             .where((member) => member.status == 'accepted')
             .toList();
+        final branchSearch = _branchStaffSearch.trim().toLowerCase();
+        final visibleBranchStaff = accepted.where((member) {
+          if (branchSearch.isEmpty) return true;
+          final text = [
+            member.id,
+            member.publicId,
+            member.firstName,
+            member.lastName,
+            member.email,
+            member.phone,
+            member.address,
+            member.role,
+            ...member.details.values.where(
+              (value) => value is String || value is num || value is bool,
+            ),
+          ].join(' ').toLowerCase();
+          return text.contains(branchSearch);
+        }).toList();
         final deactivated = staff
             .where((member) => member.status == 'deactivated')
             .toList();
@@ -376,14 +394,62 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                   child: _buildDeactivatedStaffButton(deactivated),
                 ),
                 Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 20, 16, 8),
-                  child: Text(
-                    'Staff Accounts · $branchName',
-                    style: const TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                      color: AppColors.primaryDark,
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+                  child: TextField(
+                    onChanged: (value) =>
+                        setState(() => _branchStaffSearch = value),
+                    decoration: InputDecoration(
+                      hintText:
+                          'Search cashier name, ID, email, phone or details',
+                      prefixIcon: const Icon(Icons.search_rounded),
+                      filled: true,
+                      fillColor: Colors.white,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(16),
+                        borderSide: const BorderSide(color: AppColors.border),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(16),
+                        borderSide: const BorderSide(color: AppColors.border),
+                      ),
                     ),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 4, 12, 8),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          'Staff Accounts · $branchName',
+                          style: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.bold,
+                            color: AppColors.primaryDark,
+                          ),
+                        ),
+                      ),
+                      if (MediaQuery.sizeOf(context).width >= 600)
+                        TextButton.icon(
+                          onPressed: () => showBranchStaffActivity(
+                            context,
+                            BranchSession.instance.branchId ?? '',
+                            branchName,
+                          ),
+                          icon: const Icon(Icons.history_rounded),
+                          label: const Text('Activity Logs'),
+                        )
+                      else
+                        IconButton(
+                          tooltip: 'Activity Logs',
+                          onPressed: () => showBranchStaffActivity(
+                            context,
+                            BranchSession.instance.branchId ?? '',
+                            branchName,
+                          ),
+                          icon: const Icon(Icons.history_rounded),
+                        ),
+                    ],
                   ),
                 ),
                 if (accepted.isEmpty && deactivated.isEmpty)
@@ -391,7 +457,12 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                     padding: EdgeInsets.all(24),
                     child: Text('No staff assigned to this branch yet.'),
                   ),
-                ...accepted.asMap().entries.map(
+                if (visibleBranchStaff.isEmpty && accepted.isNotEmpty)
+                  const Padding(
+                    padding: EdgeInsets.all(20),
+                    child: Text('No staff match your search.'),
+                  ),
+                ...visibleBranchStaff.asMap().entries.map(
                   (entry) => Padding(
                     padding: const EdgeInsets.symmetric(
                       horizontal: 16,

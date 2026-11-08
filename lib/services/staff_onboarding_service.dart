@@ -10,6 +10,49 @@ class StaffOnboardingService {
   static bool requiresTutorial(Map<String, dynamic> profile) =>
       profile['onboardingCompleted'] == false;
 
+  static Future<bool> hasAcceptedBranchAdmin({
+    required FirebaseFirestore database,
+    required String staffDocumentId,
+  }) async {
+    if (staffDocumentId.trim().isEmpty || staffDocumentId.contains('/')) {
+      throw ArgumentError('A valid staff account is required.');
+    }
+    final staff = await database
+        .collection('staff_requests')
+        .doc(staffDocumentId)
+        .get()
+        .timeout(const Duration(seconds: 10));
+    if (!staff.exists) {
+      throw StateError('The signed-in staff account could not be found.');
+    }
+    final profile = staff.data() ?? const <String, dynamic>{};
+    final branchIds = {
+      ...(profile['branchIds'] as List? ?? const [])
+          .map((value) => '$value'.trim())
+          .where((value) => value.isNotEmpty),
+      if ('${profile['branchId'] ?? ''}'.trim().isNotEmpty)
+        '${profile['branchId']}'.trim(),
+    };
+    if (branchIds.isEmpty) return false;
+    final admins = await database
+        .collection('staff_requests')
+        .where('role', isEqualTo: 'admin')
+        .where('status', isEqualTo: 'accepted')
+        .get()
+        .timeout(const Duration(seconds: 10));
+    return admins.docs.any((doc) {
+      final data = doc.data();
+      final assignedBranches = {
+        ...(data['branchIds'] as List? ?? const [])
+            .map((value) => '$value'.trim())
+            .where((value) => value.isNotEmpty),
+        if ('${data['branchId'] ?? ''}'.trim().isNotEmpty)
+          '${data['branchId']}'.trim(),
+      };
+      return assignedBranches.intersection(branchIds).isNotEmpty;
+    });
+  }
+
   static Future<bool> shouldShowTutorial({
     required FirebaseFirestore database,
     required String staffDocumentId,

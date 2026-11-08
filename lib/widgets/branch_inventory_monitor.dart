@@ -1,12 +1,9 @@
 import 'dart:async';
-import 'branch_inventory_edit_dialog.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../theme/app_colors.dart';
 import '../services/bundle_stock_service.dart';
 import '../services/branch_inventory_void_service.dart';
-import '../services/branch_inventory_editor.dart';
-import '../services/branch_permissions.dart';
 import '../services/branch_report_data.dart';
 import 'historical_cash_drawer.dart';
 import 'branch_allocation_table.dart';
@@ -40,24 +37,22 @@ class BranchInventoryMonitor extends StatefulWidget {
     this.type = 'All',
     this.query = '',
     this.firestore,
-    this.showBatchHistory = true,
     this.addons = false,
     this.categoryName,
     this.onCategoriesChanged,
-    this.allowEdits = true,
     this.showActions = true,
     this.allowLowStockReport = false,
     this.allowLowStockVoids = false,
+    this.allowVoidAllocation = true,
   });
   final FirebaseFirestore? firestore;
-  final bool showBatchHistory;
   final bool addons;
   final String? categoryName;
   final ValueChanged<Set<String>>? onCategoriesChanged;
-  final bool allowEdits;
   final bool showActions;
   final bool allowLowStockReport;
   final bool allowLowStockVoids;
+  final bool allowVoidAllocation;
   final String branchId, type, query;
   @override
   State<BranchInventoryMonitor> createState() => _BranchInventoryMonitorState();
@@ -119,36 +114,15 @@ class _BranchInventoryMonitorState extends State<BranchInventoryMonitor> {
                     .contains(widget.query.trim().toLowerCase()),
           )
           .toList();
-      return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-        stream: (widget.firestore ?? FirebaseFirestore.instance)
-            .collection('admin_settings')
-            .doc('transactions')
-            .snapshots(),
-        builder: (context, _) => FutureBuilder<bool>(
-          future: widget.allowEdits
-              ? BranchPermissions.allowed(
-                  'adminAllowInventoryEdits',
-                  database: widget.firestore,
-                  branchId: widget.branchId,
-                )
-              : Future<bool>.value(false),
-          builder: (context, permission) => _buildInventory(
-            context,
-            data,
-            rows,
-            canEdit: permission.data == true,
-          ),
-        ),
-      );
+      return _buildInventory(context, data, rows);
     },
   );
 
   Widget _buildInventory(
     BuildContext context,
     BranchReportData data,
-    List<Map<String, dynamic>> rows, {
-    required bool canEdit,
-  }) {
+    List<Map<String, dynamic>> rows,
+  ) {
     bool low(Map row) =>
         row['isLowStock'] == true ||
         (widget.allowLowStockReport &&
@@ -252,27 +226,20 @@ class _BranchInventoryMonitorState extends State<BranchInventoryMonitor> {
                     allocationId: '${row['allocationId']}',
                     scopeIds: [widget.branchId],
                     itemId: row['allocationItemId']?.toString(),
-                    readOnly: widget.showBatchHistory,
+                    readOnly: true,
                     database: widget.firestore,
+                    reportData: data,
                   ),
                 ),
-              IconButton(
-                tooltip: 'View history',
-                icon: const Icon(Icons.history),
-                onPressed: () =>
-                    showBranchItemHistory(context, data, widget.branchId, row),
-              ),
-              if (canEdit)
+              if (widget.allowVoidAllocation)
                 IconButton(
-                  tooltip: 'Edit branch inventory',
-                  icon: const Icon(Icons.edit_outlined),
-                  onPressed: () => _editInventoryItem(context, row),
+                  tooltip: 'Void allocation',
+                  icon: const Icon(
+                    Icons.block_outlined,
+                    color: Colors.redAccent,
+                  ),
+                  onPressed: () => _voidAllocation(context, row),
                 ),
-              IconButton(
-                tooltip: 'Void allocation',
-                icon: const Icon(Icons.block_outlined, color: Colors.redAccent),
-                onPressed: () => _voidAllocation(context, row),
-              ),
             ],
           ),
         ),
@@ -480,43 +447,6 @@ class _BranchInventoryMonitorState extends State<BranchInventoryMonitor> {
           SnackBar(content: Text('Unable to void allocation: $error')),
         );
       }
-    }
-  }
-
-  Future<void> _editInventoryItem(
-    BuildContext context,
-    Map<String, dynamic> item,
-  ) async {
-    final branchId = widget.branchId;
-    final db = widget.firestore ?? FirebaseFirestore.instance;
-    final result = await showDialog<BranchInventoryEdit>(
-      context: context,
-      builder: (_) => BranchInventoryEditDialog(
-        item: item,
-        onSave: (value) async {
-          await BranchPermissions.require(
-            'adminAllowInventoryEdits',
-            database: db,
-            branchId: branchId,
-          );
-          await updateBranchInventoryItem(
-            firestore: db,
-            branchId: branchId,
-            item: item,
-            name: value.name,
-            price: value.price,
-            stock: value.stock,
-            sizePrices: value.sizePrices.isEmpty ? null : value.sizePrices,
-            expirationDate: value.expirationDate,
-            updateExpirationDate: item['type'] == 'Add-ons',
-          );
-        },
-      ),
-    );
-    if (result != null && context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Branch inventory updated.')),
-      );
     }
   }
 }

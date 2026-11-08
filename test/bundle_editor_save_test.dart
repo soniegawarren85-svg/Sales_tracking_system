@@ -217,6 +217,88 @@ void main() {
     },
   );
   testWidgets(
+    'bundle beverage sizes are grouped and saving unchanged recipe adds no stock',
+    (tester) async {
+      final db = FakeFirebaseFirestore();
+      await db.collection('coffee_products').doc('smoothie').set({
+        'name': 'Dubai Chewy Smoothie',
+        'isAvailable': true,
+        'basePrice': 0,
+        'sizes': [
+          {'name': 'Small', 'priceDelta': 110, 'costPrice': 50},
+          {'name': 'Medium', 'priceDelta': 120, 'costPrice': 70},
+          {'name': 'Large', 'priceDelta': 140, 'costPrice': 100},
+        ],
+      });
+      final bundle = <String, dynamic>{
+        'id': 'cookies',
+        'name': 'Box of Cookies',
+        'price': 500,
+        'costPrice': 50,
+        'isBundle': true,
+        'bundleCount': 1,
+        'bundleInstances': [
+          {'id': 'existing-batch', 'status': 'available'},
+        ],
+        'items': [
+          {
+            'sourceInventoryId': 'smoothie',
+            'variantId': 'Small',
+            'name': 'Dubai Chewy Smoothie (Small)',
+            'coffeeSize': 'Small',
+            'quantity': 1,
+            'costPrice': 50,
+          },
+        ],
+      };
+      await db.collection('sales_inventory').doc('cookies').set(bundle);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Builder(
+            builder: (context) => Scaffold(
+              body: TextButton(
+                onPressed: () => showAdminItemEditor(
+                  context,
+                  entry: AdminCatalogEntry(
+                    id: 'BND-001',
+                    name: 'Box of Cookies',
+                    type: 'Bundle',
+                    source: bundle,
+                    details: bundle,
+                    images: const [],
+                  ),
+                  firestore: db,
+                  upload: (_) async => null,
+                ),
+                child: const Text('Edit'),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.text('Edit'));
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(find.text('Beverages'));
+      await tester.tap(find.text('Beverages'));
+      await tester.pumpAndSettle();
+      expect(find.byType(ExpansionTile), findsOneWidget);
+      expect(find.text('Dubai Chewy Smoothie'), findsOneWidget);
+      expect(find.text('Small'), findsNothing);
+      await tester.tap(find.text('Dubai Chewy Smoothie'));
+      await tester.pumpAndSettle();
+      expect(find.text('Small'), findsOneWidget);
+      expect(find.text('Medium'), findsOneWidget);
+      expect(find.text('Large'), findsOneWidget);
+      expect(find.textContaining('Expires:'), findsNothing);
+      await tester.tap(find.widgetWithText(FilledButton, 'Save changes'));
+      await tester.pumpAndSettle();
+      final saved = (await db.doc('sales_inventory/cookies').get()).data()!;
+      expect(saved['bundleCount'], 1);
+      expect((saved['bundleInstances'] as List).single['id'], 'existing-batch');
+      expect(tester.takeException(), isNull);
+    },
+  );
+  testWidgets(
     'metadata save preserves concurrent stock and allocation snapshots',
     (tester) async {
       final db = FakeFirebaseFirestore();
