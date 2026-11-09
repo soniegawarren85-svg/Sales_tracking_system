@@ -2,12 +2,25 @@ import 'dart:async';
 import 'dart:convert';
 import '../theme/app_colors.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:image_picker/image_picker.dart';
 import '../services/transaction_settings.dart';
 import '../services/catalog_image_service.dart';
 import '../services/activity_log.dart';
 import '../services/branch_status.dart';
+import '../services/qr_image_decoder.dart';
+
+String? discountPercentValidationMessage(String rawValue) {
+  final value = double.tryParse(rawValue.trim());
+  if (value == null || !value.isFinite || value < 1 || value > 20) {
+    return 'Discount must be from 1% to 20%.';
+  }
+  return null;
+}
+
+bool validPaymentMethodName(String value) =>
+    RegExp(r'^[A-Za-z ]+$').hasMatch(value.trim());
 
 String _formatDiscountPercent(dynamic value) {
   final percent = num.tryParse('$value');
@@ -45,6 +58,261 @@ Future<bool> confirmSetting(BuildContext context, String message) async =>
     ) ??
     false;
 
+class _SettingEditorDialog extends StatefulWidget {
+  const _SettingEditorDialog({
+    required this.kind,
+    required this.row,
+    required this.existing,
+  });
+
+  final String kind;
+  final Map<String, dynamic>? row;
+  final List<Map<String, dynamic>> existing;
+
+  @override
+  State<_SettingEditorDialog> createState() => _SettingEditorDialogState();
+}
+
+class _SettingEditorDialogState extends State<_SettingEditorDialog> {
+  late final TextEditingController _name;
+  late final TextEditingController _percent;
+  late String _qr;
+  bool _uploading = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _name = TextEditingController(text: widget.row?['name'] ?? '');
+    _percent = TextEditingController(text: '${widget.row?['percent'] ?? ''}');
+    _qr = '${widget.row?['qrUrl'] ?? ''}';
+  }
+
+  @override
+  void dispose() {
+    _name.dispose();
+    _percent.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    backgroundColor: AppColors.surface,
+    titleTextStyle: const TextStyle(
+      color: AppColors.primaryDeep,
+      fontSize: 24,
+      fontWeight: FontWeight.bold,
+    ),
+    title: Text(
+      '${widget.row == null ? 'Add' : 'Edit'} ${widget.kind == 'discounts' ? 'discount' : 'payment method'}',
+    ),
+    content: SizedBox(
+      width: 440,
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: _name,
+              inputFormatters: widget.kind == 'discounts'
+                  ? null
+                  : [FilteringTextInputFormatter.allow(RegExp('[A-Za-z ]'))],
+              decoration: InputDecoration(
+                labelText: 'Name',
+                helperText: widget.kind == 'discounts'
+                    ? null
+                    : 'Letters and spaces only.',
+              ),
+            ),
+            if (widget.kind == 'discounts')
+              TextField(
+                controller: _percent,
+                keyboardType: TextInputType.number,
+                onChanged: (_) => setState(() => _error = null),
+                decoration: InputDecoration(
+                  labelText: 'Discount percent',
+                  suffixText: '%',
+                  helperText: 'Maximum allowed discount is 20%.',
+                  errorText: _percent.text.isEmpty
+                      ? null
+                      : discountPercentValidationMessage(_percent.text),
+                ),
+              )
+            else
+              OutlinedButton.icon(
+                icon: const Icon(Icons.qr_code),
+                label: Text(
+                  _uploading
+                      ? 'Uploading…'
+                      : _qr.isEmpty
+                      ? 'Upload QR code'
+                      : 'Replace QR code',
+                ),
+                onPressed: _uploading
+                    ? null
+                    : () async {
+                        final picked = await ImagePicker().pickImage(
+                          source: ImageSource.gallery,
+                        );
+                        if (picked == null || !mounted) return;
+                        setState(() => _uploading = true);
+                        try {
+                          final bytes = await picked.readAsBytes();
+                          final qrPayload = decodeQrImage(bytes);
+                          if (qrPayload.trim().isEmpty) {
+                            throw const FormatException(
+                              'The selected QR code is empty.',
+                            );
+                          }
+                          final url = await uploadCatalogImage(
+                            bytes,
+                            folder: 'payment_qr',
+                          );
+                          if (url == null) {
+                            throw StateError('Upload failed');
+                          }
+                          _qr = url;
+                          _error = null;
+                        } catch (e) {
+                          _error = e is FormatException
+                              ? e.message
+                              : 'Hindi ma-validate ang QR code. Subukang mag-upload ng malinaw na QR image.';
+                        } finally {
+                          if (mounted) setState(() => _uploading = false);
+                        }
+                      },
+              ),
+            if (widget.kind != 'discounts' && _qr.isNotEmpty) ...[
+              const SizedBox(height: 16),
+              Container(
+                height: 300,
+                width: double.infinity,
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  border: Border.all(color: AppColors.border),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: _qr.startsWith('data:image/')
+                    ? Image.memory(
+                        base64Decode(_qr.split(',').last),
+                        fit: BoxFit.contain,
+                        errorBuilder: (_, _, _) =>
+                            const Text('Unable to load QR code'),
+                      )
+                    : Image.network(
+                        _qr,
+                        fit: BoxFit.contain,
+                        errorBuilder: (_, _, _) =>
+                            const Text('Unable to load QR code'),
+                      ),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'This QR code appears in the staff payment screen after saving.',
+                style: TextStyle(color: AppColors.textMuted),
+              ),
+            ],
+            if (_error != null)
+              Container(
+                width: double.infinity,
+                margin: const EdgeInsets.only(top: 10),
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFF1F1),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: const Color(0xFFFFC7C7)),
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Icon(
+                      Icons.error_outline,
+                      color: Colors.red,
+                      size: 19,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        _error!,
+                        style: const TextStyle(color: Color(0xFFB3261E)),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+          ],
+        ),
+      ),
+    ),
+    actions: [
+      TextButton(
+        onPressed: _uploading ? null : () => Navigator.pop(context),
+        child: const Text('Cancel'),
+      ),
+      FilledButton(
+        style: FilledButton.styleFrom(
+          backgroundColor: AppColors.primaryDeep,
+          foregroundColor: Colors.white,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+        ),
+        onPressed: _uploading
+            ? null
+            : () {
+                final value = double.tryParse(_percent.text);
+                final discountValidation = discountPercentValidationMessage(
+                  _percent.text,
+                );
+                if (widget.existing.any(
+                  (entry) =>
+                      entry['id'] != widget.row?['id'] &&
+                      '${entry['name']}'.toLowerCase() ==
+                          _name.text.trim().toLowerCase(),
+                )) {
+                  setState(
+                    () => _error =
+                        'This name is already used, including voided records.',
+                  );
+                  return;
+                }
+                if (_name.text.trim().isEmpty ||
+                    (widget.kind != 'discounts' &&
+                        (!validPaymentMethodName(_name.text) ||
+                            _name.text.trim().toLowerCase() == 'cash')) ||
+                    (widget.kind == 'discounts' &&
+                        discountValidation != null) ||
+                    (widget.kind != 'discounts' &&
+                        widget.row == null &&
+                        _qr.isEmpty)) {
+                  setState(
+                    () => _error = widget.kind == 'discounts'
+                        ? discountValidation
+                        : !validPaymentMethodName(_name.text)
+                        ? 'Payment method names may contain letters and spaces only.'
+                        : 'Enter a name and upload a readable QR code.',
+                  );
+                  return;
+                }
+                Navigator.pop(context, {
+                  ...?widget.row,
+                  'id':
+                      widget.row?['id'] ??
+                      DateTime.now().microsecondsSinceEpoch.toString(),
+                  'name': _name.text.trim(),
+                  if (widget.kind == 'discounts')
+                    'percent': value
+                  else
+                    'qrUrl': _qr,
+                });
+              },
+        child: const Text('Save'),
+      ),
+    ],
+  );
+}
+
 class TransactionSettingsDialog extends StatefulWidget {
   const TransactionSettingsDialog({
     super.key,
@@ -63,21 +331,19 @@ class TransactionSettingsDialog extends StatefulWidget {
 }
 
 class _TransactionSettingsDialogState extends State<TransactionSettingsDialog> {
-  final _controllers = <TextEditingController>[];
-  @override
-  void dispose() {
-    for (final controller in _controllers) {
-      controller.dispose();
-    }
-    super.dispose();
-  }
-
   bool voided = false, busy = false;
   String? _taxTinDraft;
+  Map<String, dynamic>? _latestSettings;
   late String? selectedBranchId;
-  late final reference = (widget.firestore ?? FirebaseFirestore.instance)
+  late final _firestore = widget.firestore ?? FirebaseFirestore.instance;
+  late final reference = _firestore
       .collection('admin_settings')
       .doc('transactions');
+  late final _branchesStream = _firestore
+      .collection('branches')
+      .orderBy('name')
+      .snapshots();
+  late final _settingsStream = reference.snapshots();
 
   @override
   void initState() {
@@ -109,7 +375,7 @@ class _TransactionSettingsDialogState extends State<TransactionSettingsDialog> {
           patch['payments'] is List &&
           branchIds.length > 1;
       final currentSettings = preservePaymentQr
-          ? (await reference.get()).data() ?? {}
+          ? _latestSettings ?? (await reference.get()).data() ?? {}
           : <String, dynamic>{};
       Map<String, dynamic> patchForBranch(String branchId) {
         if (!preservePaymentQr) {
@@ -144,12 +410,13 @@ class _TransactionSettingsDialogState extends State<TransactionSettingsDialog> {
         return {...patch, 'payments': payments};
       }
 
-      await reference.set({
+      final write = reference.set({
         'branchSettings': {
           for (final branchId in branchIds) branchId: patchForBranch(branchId),
         },
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
+      unawaited(_observeSettingsWrite(write));
       unawaited(
         ActivityLog.record(
           'settings_updated',
@@ -164,7 +431,7 @@ class _TransactionSettingsDialogState extends State<TransactionSettingsDialog> {
           },
         ),
       );
-      if (mounted) notify(message);
+      if (mounted) notify('$message Saved locally; syncing to branch.');
     } catch (e) {
       if (mounted) notify('Unable to save: $e');
     } finally {
@@ -172,191 +439,32 @@ class _TransactionSettingsDialogState extends State<TransactionSettingsDialog> {
     }
   }
 
+  Future<void> _observeSettingsWrite(Future<void> write) async {
+    try {
+      await write;
+    } catch (error) {
+      debugPrint('Transaction settings sync failed: $error');
+      if (mounted) {
+        notify('Settings are saved on this device but could not sync: $error');
+      }
+    }
+  }
+
   Future<Map<String, dynamic>?> edit(
     Map<String, dynamic>? row, {
     required String branchId,
   }) async {
+    final latestSettings = _latestSettings;
+    if (!mounted || latestSettings == null) return null;
     final existing = settingRows(
-      settingsForBranch((await reference.get()).data() ?? {}, branchId),
+      settingsForBranch(latestSettings, branchId),
       widget.kind,
     );
-    if (!mounted) return null;
-    final name = TextEditingController(text: row?['name'] ?? '');
-    final percent = TextEditingController(text: '${row?['percent'] ?? ''}');
-    _controllers.addAll([name, percent]);
-    var qr = '${row?['qrUrl'] ?? ''}';
-    var uploading = false;
-    String? error;
-    final result = await showDialog<Map<String, dynamic>>(
+    return showDialog<Map<String, dynamic>>(
       context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, update) => AlertDialog(
-          backgroundColor: AppColors.surface,
-          titleTextStyle: const TextStyle(
-            color: AppColors.primaryDeep,
-            fontSize: 24,
-            fontWeight: FontWeight.bold,
-          ),
-          title: Text(
-            '${row == null ? 'Add' : 'Edit'} ${widget.kind == 'discounts' ? 'discount' : 'payment method'}',
-          ),
-          content: SizedBox(
-            width: 440,
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  TextField(
-                    controller: name,
-                    decoration: const InputDecoration(labelText: 'Name'),
-                  ),
-                  if (widget.kind == 'discounts')
-                    TextField(
-                      controller: percent,
-                      keyboardType: TextInputType.number,
-                      decoration: const InputDecoration(
-                        labelText: 'Discount percent',
-                      ),
-                    )
-                  else
-                    OutlinedButton.icon(
-                      icon: const Icon(Icons.qr_code),
-                      label: Text(
-                        uploading
-                            ? 'Uploading…'
-                            : qr.isEmpty
-                            ? 'Upload QR code'
-                            : 'Replace QR code',
-                      ),
-                      onPressed: uploading
-                          ? null
-                          : () async {
-                              final picked = await ImagePicker().pickImage(
-                                source: ImageSource.gallery,
-                              );
-                              if (picked == null) return;
-                              update(() => uploading = true);
-                              try {
-                                final url = await uploadCatalogImage(
-                                  await picked.readAsBytes(),
-                                  folder: 'payment_qr',
-                                );
-                                if (url == null) {
-                                  throw StateError('Upload failed');
-                                }
-                                qr = url;
-                              } catch (e) {
-                                error = '$e';
-                              }
-
-                              if (context.mounted) {
-                                update(() => uploading = false);
-                              }
-                            },
-                    ),
-                  if (widget.kind != 'discounts' && qr.isNotEmpty) ...[
-                    const SizedBox(height: 16),
-                    Container(
-                      height: 300,
-                      width: double.infinity,
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        border: Border.all(color: AppColors.border),
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                      child: qr.startsWith('data:image/')
-                          ? Image.memory(
-                              base64Decode(qr.split(',').last),
-                              fit: BoxFit.contain,
-                              errorBuilder: (_, _, _) =>
-                                  const Text('Unable to load QR code'),
-                            )
-                          : Image.network(
-                              qr,
-                              fit: BoxFit.contain,
-                              errorBuilder: (_, _, _) =>
-                                  const Text('Unable to load QR code'),
-                            ),
-                    ),
-                    const SizedBox(height: 8),
-                    const Text(
-                      'This QR code appears in the staff payment screen after saving.',
-                      style: TextStyle(color: AppColors.textMuted),
-                    ),
-                  ],
-                  if (error != null)
-                    Text(error!, style: const TextStyle(color: Colors.red)),
-                ],
-              ),
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: uploading ? null : () => Navigator.pop(context),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              style: FilledButton.styleFrom(
-                backgroundColor: AppColors.primaryDeep,
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-              ),
-              onPressed: uploading
-                  ? null
-                  : () {
-                      final value = double.tryParse(percent.text);
-                      if (existing.any(
-                        (entry) =>
-                            entry['id'] != row?['id'] &&
-                            '${entry['name']}'.toLowerCase() ==
-                                name.text.trim().toLowerCase(),
-                      )) {
-                        update(
-                          () => error =
-                              'This name is already used, including voided records.',
-                        );
-                        return;
-                      }
-                      if (name.text.trim().isEmpty ||
-                          (widget.kind != 'discounts' &&
-                              name.text.trim().toLowerCase() == 'cash') ||
-                          (widget.kind == 'discounts' &&
-                              (value == null ||
-                                  !value.isFinite ||
-                                  value <= 0 ||
-                                  value > 100)) ||
-                          (widget.kind != 'discounts' &&
-                              row == null &&
-                              qr.isEmpty)) {
-                        update(
-                          () => error =
-                              'Enter a name and ${widget.kind == 'discounts' ? 'a percentage from 1 to 100' : 'upload a QR code'}.',
-                        );
-                        return;
-                      }
-                      Navigator.pop(context, {
-                        ...?row,
-                        'id':
-                            row?['id'] ??
-                            DateTime.now().microsecondsSinceEpoch.toString(),
-                        'name': name.text.trim(),
-                        if (widget.kind == 'discounts')
-                          'percent': value
-                        else
-                          'qrUrl': qr,
-                      });
-                    },
-              child: const Text('Save'),
-            ),
-          ],
-        ),
-      ),
+      builder: (context) =>
+          _SettingEditorDialog(kind: widget.kind, row: row, existing: existing),
     );
-
-    return result;
   }
 
   Widget _branchDropdown(
@@ -439,10 +547,7 @@ class _TransactionSettingsDialogState extends State<TransactionSettingsDialog> {
     content: SizedBox(
       width: 620,
       child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-        stream: (widget.firestore ?? FirebaseFirestore.instance)
-            .collection('branches')
-            .orderBy('name')
-            .snapshots(),
+        stream: _branchesStream,
         builder: (context, branchSnapshot) {
           if (branchSnapshot.hasError) {
             return Text('Unable to load branches: ${branchSnapshot.error}');
@@ -478,7 +583,7 @@ class _TransactionSettingsDialogState extends State<TransactionSettingsDialog> {
                         ?.toString() ??
                     branchId;
           return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-            stream: reference.snapshots(),
+            stream: _settingsStream,
             builder: (context, snapshot) {
               if (snapshot.hasError) {
                 return Text('Unable to load settings: ${snapshot.error}');
@@ -487,11 +592,14 @@ class _TransactionSettingsDialogState extends State<TransactionSettingsDialog> {
                 return const Center(child: CircularProgressIndicator());
               }
               final rawSettings = snapshot.data!.data() ?? {};
-              final data = settingsForBranch(rawSettings, branchId);
+              _latestSettings = rawSettings;
+              final settingsByBranch = {
+                for (final branch in branches)
+                  branch.id: settingsForBranch(rawSettings, branch.id),
+              };
+              final data = settingsByBranch[branchId]!;
               if (widget.kind == 'tax') {
-                final branchTaxSettings = branches
-                    .map((branch) => settingsForBranch(rawSettings, branch.id))
-                    .toList();
+                final branchTaxSettings = settingsByBranch.values.toList();
                 final taxEnabled = isAllBranches
                     ? branchTaxSettings.every(
                         (settings) => settings['taxEnabled'] == true,
@@ -654,10 +762,8 @@ class _TransactionSettingsDialogState extends State<TransactionSettingsDialog> {
                                     value: isAllBranches
                                         ? branches.every(
                                             (branch) =>
-                                                settingsForBranch(
-                                                  rawSettings,
-                                                  branch.id,
-                                                )[entry.key] !=
+                                                settingsByBranch[branch
+                                                    .id]![entry.key] !=
                                                 false,
                                           )
                                         : data[entry.key] != false,
@@ -689,10 +795,8 @@ class _TransactionSettingsDialogState extends State<TransactionSettingsDialog> {
                                   value: isAllBranches
                                       ? branches.every(
                                           (branch) =>
-                                              settingsForBranch(
-                                                rawSettings,
-                                                branch.id,
-                                              )[entry.key] !=
+                                              settingsByBranch[branch.id]![entry
+                                                  .key] !=
                                               false,
                                         )
                                       : data[entry.key] != false,
@@ -727,10 +831,7 @@ class _TransactionSettingsDialogState extends State<TransactionSettingsDialog> {
               final discountsEnabled = isAllBranches
                   ? branches.every(
                       (branch) =>
-                          settingsForBranch(
-                            rawSettings,
-                            branch.id,
-                          )['discountsEnabled'] ==
+                          settingsByBranch[branch.id]!['discountsEnabled'] ==
                           true,
                     )
                   : data['discountsEnabled'] == true;

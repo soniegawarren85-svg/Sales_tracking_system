@@ -3,6 +3,7 @@ import '../services/number_format.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'AllSalesAnalyticsPage.dart';
+import '../services/branch_status.dart';
 
 // ─────────────────────────────────────────────────────────────
 //  Design tokens
@@ -302,8 +303,15 @@ class _BranchSalesReportPageState extends State<BranchSalesReportPage> {
             );
           }
           final branches = (branchSnapshot.data?.docs ?? [])
-              .where((doc) => doc.data()['isVoided'] != true)
+              .where((doc) => isActiveBranch(doc.data()))
               .toList();
+          final activeBranchIds = branches.map((doc) => doc.id).toSet();
+          final activeStaffIds = branches
+              .expand(
+                (doc) =>
+                    (doc.data()['staffIds'] as List? ?? []).map((id) => '$id'),
+              )
+              .toSet();
           final selectedMatches = branches
               .where((doc) => doc.id == _branchId)
               .toList();
@@ -326,6 +334,8 @@ class _BranchSalesReportPageState extends State<BranchSalesReportPage> {
               ) {
                 final sale = doc.data();
                 return _isSelectedDate(sale['timestamp']) &&
+                    (activeBranchIds.contains('${sale['branchId'] ?? ''}') ||
+                        activeStaffIds.contains('${sale['userId'] ?? ''}')) &&
                     (_branchId == null ||
                         sale['branchId']?.toString() == _branchId ||
                         staffIds.contains(sale['userId']?.toString()));

@@ -105,6 +105,54 @@ void main() {
     expect(items.single['allocated'], 10);
     expect(items.single['price'], 50);
   });
+  test('accepted category and bundle inventory appear in branch inventory', () {
+    final data = BranchReportData({
+      'sales_inventory': [
+        {
+          '_id': 'category-source',
+          'name': 'Cookies',
+          'items': [
+            {'id': 'cookie-1', 'name': 'Cookie', 'publicId': 'CO-001'},
+          ],
+        },
+        {
+          '_id': 'bundle-source',
+          'name': 'Cookie Box',
+          'isBundle': true,
+          'items': [],
+        },
+      ],
+      'staff_inventory': [
+        {
+          '_id': 'branch-category',
+          'staffId': 'b',
+          'sourceInventoryId': 'category-source',
+          'items': [
+            {
+              'id': 'cookie-1',
+              'name': 'Cookie',
+              'publicId': 'CO-001',
+              'stock': 5,
+            },
+          ],
+        },
+        {
+          '_id': 'branch-bundle',
+          'staffId': 'b',
+          'sourceInventoryId': 'bundle-source',
+          'isBundle': true,
+          'bundleCount': 3,
+        },
+      ],
+    });
+
+    final inventory = data.currentInventory('b', DateTime(2026, 10, 4));
+
+    expect(inventory.map((row) => row['type']), contains('Categories'));
+    expect(inventory.map((row) => row['type']), contains('Bundle'));
+    expect(inventory.map((row) => row['remaining']), contains(5));
+    expect(inventory.map((row) => row['remaining']), contains(3));
+  });
   test(
     'branch summary profit matches itemized profit when a sale has no items',
     () {

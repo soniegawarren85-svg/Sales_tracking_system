@@ -456,6 +456,7 @@ class _StaffPerformancePanelState extends State<StaffPerformancePanel> {
                               actorIds: branchIdentities,
                               branchId: widget.branchId,
                               includeReceipts: true,
+                              includeBranchActivity: true,
                               hideSessionEvents: true,
                               range: _range,
                               database: _db,

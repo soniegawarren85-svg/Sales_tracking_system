@@ -1,9 +1,11 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../services/account_password_service.dart';
 import '../services/database_backup.dart';
 import '../services/encrypted_backup.dart';
 import '../services/save_bytes.dart';
@@ -25,11 +27,10 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
   String _stage = '';
   String _message = '';
   String _historySearch = '';
-  String _statusFilter = 'All';
-  bool _newestFirst = true;
   DateTimeRange? _historyDateRange;
   String _role = '';
   String _userId = '';
+  String _actorName = '';
   String? _currentHistoryId;
   Uint8List? _createdBytes;
   BackupManifest? _createdManifest;
@@ -44,7 +45,8 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
   CollectionReference<Map<String, dynamic>> get _history =>
       _database.collection('backup_history');
   bool get _isSuperAdmin => _role == 'super_admin';
-  bool get _canUseManualBackup => _isSuperAdmin;
+  bool get _canManageBackup => _isSuperAdmin || _role == 'admin';
+  bool get _canUseManualBackup => _canManageBackup;
 
   @override
   void initState() {
@@ -59,11 +61,89 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
       _role = preferences.getString('lastRole')?.trim().toLowerCase() ?? '';
       _userId = preferences.getString('lastUserId')?.trim() ?? '';
     });
+    await _loadActorName();
+  }
+
+  Future<void> _loadActorName() async {
+    try {
+      Map<String, dynamic>? profile;
+      if (_isSuperAdmin) {
+        profile =
+            (await _database
+                    .collection('super_admin_profiles')
+                    .doc(SuperAdmin.id)
+                    .get())
+                .data();
+      } else if (_role == 'admin' && _userId.isNotEmpty) {
+        profile =
+            (await _database.collection('staff_requests').doc(_userId).get())
+                .data();
+      }
+      if (!mounted) return;
+      setState(() {
+        _actorName =
+            _fullName(profile) ?? (_isSuperAdmin ? 'Super Admin' : 'Admin');
+      });
+    } catch (error) {
+      debugPrint('Backup creator name could not be loaded: $error');
+      if (mounted) {
+        setState(() => _actorName = _isSuperAdmin ? 'Super Admin' : 'Admin');
+      }
+    }
+  }
+
+  String? _fullName(Map<String, dynamic>? profile) {
+    if (profile == null) return null;
+    final name = [
+      profile['firstName'],
+      profile['middleName'],
+      profile['lastName'],
+    ].where((part) => part != null && '$part'.trim().isNotEmpty).join(' ');
+    return name.trim().isEmpty ? null : name.trim();
+  }
+
+  Future<String> _nextBackupCode() async {
+    final existing = await _history.get();
+    var highest = existing.docs.length;
+    for (final doc in existing.docs) {
+      final code = '${doc.data()['backupCode'] ?? ''}';
+      final match = RegExp(r'^Bkp-(\d+)$').firstMatch(code);
+      if (match != null) {
+        final value = int.tryParse(match.group(1)!) ?? 0;
+        if (value > highest) highest = value;
+      }
+    }
+    final counter = _database.collection('system_counters').doc('public_Bkp');
+    return _database.runTransaction((transaction) async {
+      final snapshot = await transaction.get(counter);
+      final current = (snapshot.data()?['count'] as num?)?.toInt() ?? 0;
+      final next = (current > highest ? current : highest) + 1;
+      transaction.set(counter, {'count': next});
+      return 'Bkp-${next.toString().padLeft(4, '0')}';
+    });
+  }
+
+  Future<String?> _archiveBackup(
+    String backupId,
+    String backupCode,
+    Uint8List bytes,
+  ) async {
+    final path = 'system_backups/$backupId/$backupCode.stbackup';
+    await FirebaseStorage.instance
+        .ref(path)
+        .putData(
+          bytes,
+          SettableMetadata(
+            contentType: 'application/octet-stream',
+            customMetadata: {'backupId': backupId, 'backupCode': backupCode},
+          ),
+        );
+    return path;
   }
 
   Future<void> _createBackup() async {
     if (!_canUseManualBackup) {
-      _showMessage('Only the Super Admin can create a system backup.');
+      _showMessage('Only Admin and Super Admin accounts can create backups.');
       return;
     }
     final details = await _requestBackupDetails();
@@ -72,18 +152,16 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
     final password = details.$2;
     bool verified;
     try {
-      verified = await SuperAdmin.reauthenticateForBackup(
-        password,
-        database: _database,
-      );
+      verified = await _reauthenticate(password);
     } catch (error) {
-      _showMessage('Firebase password verification failed: $error');
+      _showMessage('Account password verification failed: $error');
       return;
     }
     if (!verified) {
-      _showMessage('Firebase Authentication could not verify that password.');
+      _showMessage('The current account password could not be verified.');
       return;
     }
+    final backupCode = await _nextBackupCode();
     final historyRef = _history.doc();
     final startedAt = DateTime.now().toUtc();
     setState(() {
@@ -94,11 +172,13 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
     try {
       await historyRef.set({
         'backupId': historyRef.id,
+        'backupCode': backupCode,
         'backupType': 'manual',
         'status': 'in_progress',
         'createdAt': FieldValue.serverTimestamp(),
         'createdById': _userId,
         'createdByRole': _role,
+        'createdByName': _actorName,
       });
       final clearBytes = await DatabaseBackup.export(
         firestore: _database,
@@ -128,23 +208,36 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
           verifiedManifest.backupId != manifest.backupId) {
         throw const FormatException('Encrypted backup validation failed.');
       }
+      String? storagePath;
+      String? archiveError;
+      try {
+        storagePath = await _archiveBackup(historyRef.id, backupCode, bytes);
+      } catch (error) {
+        archiveError = '$error';
+        debugPrint('Encrypted backup archive failed: $error');
+      }
       await historyRef.update({
         'backupId': historyRef.id,
+        'backupCode': backupCode,
         'backupName': manifest.backupName,
         'status': 'successful',
         'createdAt': Timestamp.fromDate(startedAt),
         'completedAt': FieldValue.serverTimestamp(),
         'createdById': _userId,
         'createdByRole': _role,
-        'fileName': 'sales-tracking-${historyRef.id}.stbackup',
+        'fileName': 'sales-tracking-$backupCode.stbackup',
         'fileSizeBytes': bytes.length,
         'backupVersion': 1,
         'applicationVersion': manifest.applicationVersion,
         'encryption': 'PBKDF2-HMAC-SHA256 + AES-256-GCM',
         'documentCount': manifest.documentCount,
         'collectionCounts': manifest.collectionCounts,
-        'storageLocation': 'local-only',
-        'fileAvailable': false,
+        'storageLocation': storagePath == null
+            ? 'local-only'
+            : 'firebase-storage',
+        'storagePath': storagePath,
+        'fileAvailable': storagePath != null,
+        'createdByName': _actorName,
       });
       if (!mounted) return;
       setState(() {
@@ -152,8 +245,9 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
         _createdManifest = manifest;
         _currentHistoryId = historyRef.id;
         _stage = '';
-        _message =
-            'Backup file created. Download it to save a copy on this device.';
+        _message = archiveError == null
+            ? 'Encrypted backup created and archived. Download it any time from backup history.'
+            : 'Encrypted backup created on this device, but cloud archiving failed. Download it now and retry later. $archiveError';
       });
       await _writeAudit('backup_created', historyRef.id, {
         'documentCount': manifest.documentCount,
@@ -189,8 +283,8 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
   }
 
   Future<void> _downloadBackup() async {
-    if (!_isSuperAdmin) {
-      _showMessage('Only the Super Admin may download system backups.');
+    if (!_canManageBackup) {
+      _showMessage('Only Admin and Super Admin accounts may download backups.');
       return;
     }
     final bytes = _createdBytes;
@@ -199,8 +293,16 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
       _showMessage('Create a backup before downloading it.');
       return;
     }
-    final filename =
-        'sales-tracking-${_currentHistoryId ?? manifest.backupId}.stbackup';
+    final backupCode = _currentHistoryId == null
+        ? manifest.backupId
+        : await _history
+              .doc(_currentHistoryId)
+              .get()
+              .then(
+                (snapshot) =>
+                    '${snapshot.data()?['backupCode'] ?? manifest.backupId}',
+              );
+    final filename = 'sales-tracking-$backupCode.stbackup';
     try {
       final path = kIsWeb
           ? filename
@@ -234,8 +336,8 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
   }
 
   Future<void> _selectBackupForPreview() async {
-    if (!_isSuperAdmin) {
-      _showMessage('Only the Super Admin may import system backups.');
+    if (!_canManageBackup) {
+      _showMessage('Only Admin and Super Admin accounts may import backups.');
       return;
     }
     try {
@@ -259,8 +361,18 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
         firestore: _database,
       );
       final importedId = _history.doc().id;
+      final backupCode = await _nextBackupCode();
+      String? storagePath;
+      String? archiveError;
+      try {
+        storagePath = await _archiveBackup(importedId, backupCode, bytes);
+      } catch (error) {
+        archiveError = '$error';
+        debugPrint('Imported backup archive failed: $error');
+      }
       await _history.doc(importedId).set({
         'backupId': importedId,
+        'backupCode': backupCode,
         'sourceBackupId': manifest.backupId,
         'backupName': manifest.backupName,
         'backupType': 'imported',
@@ -273,7 +385,13 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
         'applicationVersion': manifest.applicationVersion,
         'documentCount': manifest.documentCount,
         'fileSizeBytes': bytes.length,
-        'fileAvailable': false,
+        'fileAvailable': storagePath != null,
+        'fileName': 'sales-tracking-$backupCode.stbackup',
+        'storageLocation': storagePath == null
+            ? 'local-only'
+            : 'firebase-storage',
+        'storagePath': storagePath,
+        'createdByName': _actorName,
       });
       await _writeAudit('backup_imported', importedId, {
         'documentCount': manifest.documentCount,
@@ -282,6 +400,9 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
       _importedEncryptedBytes = bytes;
       _importedManifest = manifest;
       _importedHistoryId = importedId;
+      if (archiveError != null) {
+        _showMessage('Imported backup could not be archived: $archiveError');
+      }
       if (!mounted) return;
       await showDialog<void>(
         context: context,
@@ -319,13 +440,14 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
               TextField(
                 controller: passwordController,
                 obscureText: true,
-                decoration: const InputDecoration(
-                  labelText: 'Current Super Admin password',
+                decoration: InputDecoration(
+                  labelText:
+                      'Current ${_isSuperAdmin ? 'Super Admin' : 'Admin'} password',
                 ),
               ),
               const SizedBox(height: 10),
               const Text(
-                'Firebase Authentication verifies this password. It encrypts the file and is never saved.',
+                'Your current account password verifies this request and encrypts the file. The password is never saved.',
                 style: TextStyle(color: AppColors.textMuted),
               ),
             ],
@@ -409,27 +531,22 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
   Future<void> _restoreImportedBackup() async {
     final manifest = _importedManifest;
     final clearBytes = _importedClearBytes;
-    if (!_isSuperAdmin || manifest == null || clearBytes == null) {
+    if (!_canManageBackup || manifest == null || clearBytes == null) {
       _showMessage(
-        'Only a validated backup can be restored by the Super Admin.',
+        'Only Admin and Super Admin accounts can restore a validated backup.',
       );
       return;
     }
     if (_restoreRunning || _busy) return;
     final password = await _requestCurrentPassword();
     if (password == null || !mounted) return;
-    if (!await SuperAdmin.reauthenticateForBackup(
-      password,
-      database: _database,
-    )) {
-      _showMessage(
-        'Firebase Authentication could not verify the current password.',
-      );
+    if (!await _reauthenticate(password)) {
+      _showMessage('The current account password could not be verified.');
       return;
     }
 
     final lockRef = _database.collection('backup_restore_locks').doc('system');
-    final owner = '${SuperAdmin.id}-${DateTime.now().microsecondsSinceEpoch}';
+    final owner = '$_userId-${DateTime.now().microsecondsSinceEpoch}';
     var acquired = false;
     setState(() {
       _busy = true;
@@ -485,9 +602,16 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
         throw StateError('Save the safety backup to continue with restore.');
       }
       if (savedPath != null) await saveBytes(savedPath, safetyFile);
+      final safetyCode = await _nextBackupCode();
       final safetyRef = _history.doc();
+      final safetyStoragePath = await _archiveBackup(
+        safetyRef.id,
+        safetyCode,
+        safetyFile,
+      );
       await safetyRef.set({
         'backupId': safetyRef.id,
+        'backupCode': safetyCode,
         'backupName': safetyManifest.backupName,
         'backupType': 'pre_restore_safety',
         'status': 'successful',
@@ -498,7 +622,10 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
         'fileSizeBytes': safetyFile.length,
         'backupVersion': 1,
         'fileDownloaded': true,
-        'fileAvailable': false,
+        'fileAvailable': true,
+        'storageLocation': 'firebase-storage',
+        'storagePath': safetyStoragePath,
+        'createdByName': _actorName,
         'documentCount': safetyManifest.documentCount,
         'collectionCounts': safetyManifest.collectionCounts,
       });
@@ -565,12 +692,12 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
     final result = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Verify Super Admin'),
+        title: Text('Verify ${_isSuperAdmin ? 'Super Admin' : 'Admin'}'),
         content: TextField(
           controller: controller,
           obscureText: true,
           decoration: const InputDecoration(
-            labelText: 'Current Firebase password',
+            labelText: 'Current account password',
           ),
         ),
         actions: [
@@ -596,11 +723,21 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
   }
 
   Query<Map<String, dynamic>> _historyQuery() {
-    Query<Map<String, dynamic>> query = _history.limit(100);
-    if (!_isSuperAdmin) {
-      query = query.where('createdById', isEqualTo: _userId);
+    return _history.limit(100);
+  }
+
+  Future<bool> _reauthenticate(String password) async {
+    if (_isSuperAdmin) {
+      return SuperAdmin.reauthenticateForBackup(password, database: _database);
     }
-    return query;
+    if (_role != 'admin' || _userId.isEmpty) return false;
+    final account =
+        (await _database
+                .collection('staff_requests')
+                .doc(_userId)
+                .get(const GetOptions(source: Source.server)))
+            .data();
+    return account != null && await matchesAccountPassword(account, password);
   }
 
   @override
@@ -620,12 +757,12 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
           Expanded(
             child: _role.isEmpty
                 ? const Center(child: CircularProgressIndicator())
-                : !_isSuperAdmin
+                : !_canManageBackup
                 ? const Center(
                     child: Padding(
                       padding: EdgeInsets.all(24),
                       child: Text(
-                        'Backup management is available to the Super Admin only.',
+                        'Backup management is available to Admin and Super Admin accounts.',
                       ),
                     ),
                   )
@@ -634,8 +771,6 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        _buildPlanNotice(),
-                        const SizedBox(height: 18),
                         StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
                           stream: _historyQuery().snapshots(),
                           builder: (context, snapshot) {
@@ -654,13 +789,39 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
                             }
                             final entries =
                                 snapshot.data!.docs
-                                    .map((doc) => doc.data())
+                                    .map(
+                                      (doc) =>
+                                          Map<String, dynamic>.from(doc.data()),
+                                    )
                                     .toList()
                                   ..sort(
                                     (a, b) => _dateOf(
-                                      b['createdAt'],
-                                    ).compareTo(_dateOf(a['createdAt'])),
+                                      a['createdAt'],
+                                    ).compareTo(_dateOf(b['createdAt'])),
                                   );
+                            var nextLegacyCode = 0;
+                            for (final entry in entries) {
+                              final code = '${entry['backupCode'] ?? ''}';
+                              final match = RegExp(
+                                r'^Bkp-(\d+)$',
+                              ).firstMatch(code);
+                              if (match != null) {
+                                final number =
+                                    int.tryParse(match.group(1)!) ?? 0;
+                                if (number > nextLegacyCode) {
+                                  nextLegacyCode = number;
+                                }
+                              } else {
+                                nextLegacyCode++;
+                                entry['backupCode'] =
+                                    'Bkp-${nextLegacyCode.toString().padLeft(4, '0')}';
+                              }
+                            }
+                            entries.sort(
+                              (a, b) => _dateOf(
+                                b['createdAt'],
+                              ).compareTo(_dateOf(a['createdAt'])),
+                            );
                             final lastSuccessful = entries
                                 .where(
                                   (entry) => entry['status'] == 'successful',
@@ -673,7 +834,7 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
                                 const SizedBox(height: 22),
                                 _buildSectionTitle(
                                   'Backup actions',
-                                  'Manual exports are saved to your device; they are not archived in Firebase.',
+                                  'Create, download, and restore encrypted system backups.',
                                 ),
                                 const SizedBox(height: 12),
                                 _buildActions(),
@@ -696,11 +857,6 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
                                   _messageCard(_message),
                                 ],
                                 const SizedBox(height: 24),
-                                _buildSectionTitle(
-                                  'Backup history',
-                                  'History metadata is stored in Firestore. Backup files stay on the device where you saved them.',
-                                ),
-                                const SizedBox(height: 12),
                                 _buildHistory(entries),
                               ],
                             );
@@ -742,7 +898,7 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                'Backup Management',
+                'Back and Restore',
                 style: TextStyle(
                   color: Colors.white,
                   fontSize: 21,
@@ -761,33 +917,6 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
           tooltip: 'Close',
           onPressed: _busy ? null : () => Navigator.pop(context),
           icon: const Icon(Icons.close, color: Colors.white),
-        ),
-      ],
-    ),
-  );
-
-  Widget _buildPlanNotice() => Container(
-    width: double.infinity,
-    padding: const EdgeInsets.all(16),
-    decoration: BoxDecoration(
-      color: const Color(0xFFFFF7E6),
-      border: Border.all(color: const Color(0xFFF2D59A)),
-      borderRadius: BorderRadius.circular(16),
-    ),
-    child: const Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Icon(Icons.info_outline_rounded, color: Color(0xFF9A6700)),
-        SizedBox(width: 12),
-        Expanded(
-          child: Text(
-            'Manual backups only. Files are encrypted and downloaded to your device; Firestore stores history metadata only. Restore merges records by document ID and never deletes documents. Uploaded image files and Firebase Authentication accounts are not included.',
-            style: TextStyle(
-              color: Color(0xFF664D03),
-              height: 1.45,
-              fontSize: 13,
-            ),
-          ),
         ),
       ],
     ),
@@ -1007,22 +1136,23 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
         entries.where((entry) {
           final query = _historySearch.trim().toLowerCase();
           final date = _dateOf(entry['createdAt']);
-          return (query.isEmpty ||
-                  '${entry['backupName'] ?? ''} ${entry['backupId'] ?? ''}'
-                      .toLowerCase()
-                      .contains(query)) &&
-              (_statusFilter == 'All' || entry['status'] == _statusFilter) &&
+          final searchable = [
+            entry['backupName'],
+            entry['backupCode'],
+            entry['backupId'],
+            entry['backupType'],
+            entry['status'],
+            entry['createdByName'],
+          ].join(' ').toLowerCase();
+          return (query.isEmpty || searchable.contains(query)) &&
               (_historyDateRange == null ||
                   (!date.isBefore(_historyDateRange!.start) &&
                       !date.isAfter(
                         _historyDateRange!.end.add(const Duration(days: 1)),
                       )));
-        }).toList()..sort((a, b) {
-          final order = _dateOf(
-            a['createdAt'],
-          ).compareTo(_dateOf(b['createdAt']));
-          return _newestFirst ? -order : order;
-        });
+        }).toList()..sort(
+          (a, b) => _dateOf(b['createdAt']).compareTo(_dateOf(a['createdAt'])),
+        );
     if (entries.isEmpty) {
       return Container(
         width: double.infinity,
@@ -1065,32 +1195,21 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
           crossAxisAlignment: WrapCrossAlignment.center,
           children: [
             SizedBox(
-              width: 300,
+              width: 360,
               child: TextField(
                 decoration: const InputDecoration(
                   prefixIcon: Icon(Icons.search),
-                  hintText: 'Search backup name or ID',
+                  hintText: 'Search backup name, ID, or status',
                   border: OutlineInputBorder(),
                   isDense: true,
                 ),
                 onChanged: (value) => setState(() => _historySearch = value),
               ),
             ),
-            DropdownButton<String>(
-              value: _statusFilter,
-              items:
-                  const ['All', 'successful', 'failed', 'imported', 'restored']
-                      .map(
-                        (value) => DropdownMenuItem(
-                          value: value,
-                          child: Text(value == 'All' ? 'All statuses' : value),
-                        ),
-                      )
-                      .toList(),
-              onChanged: (value) =>
-                  setState(() => _statusFilter = value ?? 'All'),
-            ),
-            OutlinedButton.icon(
+            IconButton(
+              tooltip: _historyDateRange == null
+                  ? 'Filter by date range'
+                  : 'Date range filter is active',
               onPressed: () async {
                 final now = DateUtils.dateOnly(DateTime.now());
                 final range = await showDateRangePicker(
@@ -1103,16 +1222,9 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
                   setState(() => _historyDateRange = range);
                 }
               },
-              icon: const Icon(Icons.date_range),
-              label: Text(
-                _historyDateRange == null ? 'Date range' : 'Filtered',
-              ),
-            ),
-            IconButton(
-              tooltip: _newestFirst ? 'Newest first' : 'Oldest first',
-              onPressed: () => setState(() => _newestFirst = !_newestFirst),
-              icon: Icon(
-                _newestFirst ? Icons.south_rounded : Icons.north_rounded,
+              icon: Badge(
+                isLabelVisible: _historyDateRange != null,
+                child: const Icon(Icons.date_range),
               ),
             ),
           ],
@@ -1128,10 +1240,9 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
           child: SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: SizedBox(
-              width: 1420,
+              width: 1100,
               child: InventoryRecordsTable(
                 headings: const [
-                  'Backup Name',
                   'Backup ID',
                   'Date Created',
                   'Time Created',
@@ -1142,15 +1253,14 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
                   'Actions',
                 ],
                 flex: const {
-                  0: 1.2,
-                  1: 1.2,
-                  2: .8,
-                  3: .7,
-                  4: 1,
-                  5: .7,
-                  6: .5,
-                  7: .7,
-                  8: 1.3,
+                  0: 1,
+                  1: .8,
+                  2: .7,
+                  3: 1,
+                  4: .7,
+                  5: .5,
+                  6: .7,
+                  7: 1,
                 },
                 rows: filtered.map((entry) {
                   final status = '${entry['status'] ?? 'unknown'}';
@@ -1166,13 +1276,13 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
                       : isCurrentImported
                       ? _importedEncryptedBytes
                       : null;
+                  final storagePath = '${entry['storagePath'] ?? ''}'.trim();
                   final date = _dateOf(entry['createdAt']).toLocal();
                   final hasDate = date.year != 1970;
                   return <Widget>[
-                    Text(
-                      '${entry['backupName'] ?? entry['backupType'] ?? 'Manual backup'}',
+                    SelectableText(
+                      '${entry['backupCode'] ?? entry['backupId'] ?? '—'}',
                     ),
-                    SelectableText('${entry['backupId'] ?? '—'}'),
                     Text(
                       hasDate
                           ? MaterialLocalizations.of(
@@ -1187,44 +1297,27 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
                             ).formatTimeOfDay(TimeOfDay.fromDateTime(date))
                           : '—',
                     ),
-                    Text(
-                      '${entry['createdByRole'] ?? entry['importedByRole'] ?? ''} · ${entry['createdById'] ?? entry['importedById'] ?? '—'}',
-                    ),
+                    Text(_createdByLabel(entry)),
                     Text(bytes is num ? _formatBytes(bytes.toInt()) : '—'),
                     Text('${entry['backupVersion'] ?? '1'}'),
                     _statusPill(status),
                     Row(
                       children: [
                         IconButton(
-                          tooltip: fileBytes == null
-                              ? 'File is not available in this session; import it from device'
-                              : 'Download',
-                          onPressed: fileBytes == null
+                          tooltip: 'Download encrypted backup',
+                          onPressed: !_canManageBackup
                               ? null
-                              : () => _downloadHistoryFile(entry, fileBytes),
+                              : () => _downloadHistoryFile(
+                                  entry,
+                                  fileBytes,
+                                  storagePath,
+                                ),
                           icon: const Icon(Icons.download_outlined),
                         ),
                         IconButton(
                           tooltip: 'View details',
                           onPressed: () => _showBackupDetails(entry),
                           icon: const Icon(Icons.info_outline),
-                        ),
-                        IconButton(
-                          tooltip: 'Activity details',
-                          onPressed: () => _showBackupActivityDetails(
-                            '${entry['backupId'] ?? ''}',
-                          ),
-                          icon: const Icon(Icons.history_rounded),
-                        ),
-                        IconButton(
-                          tooltip: 'Import this file to enable restore',
-                          onPressed:
-                              isCurrentImported &&
-                                  status == 'imported' &&
-                                  !_busy
-                              ? _confirmRestoreFromHistory
-                              : null,
-                          icon: const Icon(Icons.restore_rounded),
                         ),
                       ],
                     ),
@@ -1240,11 +1333,28 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
 
   Future<void> _downloadHistoryFile(
     Map<String, dynamic> entry,
-    Uint8List bytes,
+    Uint8List? bytes,
+    String storagePath,
   ) async {
-    if (!_isSuperAdmin) return;
+    if (!_canManageBackup) return;
+    try {
+      bytes ??= storagePath.isEmpty
+          ? null
+          : await FirebaseStorage.instance
+                .ref(storagePath)
+                .getData(DatabaseBackup.maxBackupBytes * 2);
+      if (bytes == null) {
+        _showMessage(
+          'This older backup file is not archived. Import its saved .stbackup file to download or restore it.',
+        );
+        return;
+      }
+    } catch (error) {
+      _showMessage('Backup file could not be downloaded: $error');
+      return;
+    }
     final filename =
-        '${entry['fileName'] ?? 'sales-tracking-${entry['backupId']}.stbackup'}';
+        '${entry['fileName'] ?? 'sales-tracking-${entry['backupCode'] ?? entry['backupId']}.stbackup'}';
     try {
       final path = kIsWeb
           ? filename
@@ -1263,34 +1373,11 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
     }
   }
 
-  Future<void> _confirmRestoreFromHistory() async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Confirm merge restore'),
-        content: const Text(
-          'Matching fields can be replaced by backup values. Documents absent from the backup remain, and nothing is deleted. A fresh encrypted safety backup will be saved first. Continue?',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Continue'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed == true && mounted) await _restoreImportedBackup();
-  }
-
   Future<void> _showBackupDetails(Map<String, dynamic> entry) async {
     await showDialog<void>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text('${entry['backupName'] ?? 'Backup details'}'),
+        title: Text('${entry['backupCode'] ?? 'Backup details'}'),
         content: SizedBox(
           width: 440,
           child: Column(
@@ -1298,10 +1385,10 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               for (final row in <String, String>{
-                'Backup ID': '${entry['backupId'] ?? '—'}',
+                'Backup ID':
+                    '${entry['backupCode'] ?? entry['backupId'] ?? '—'}',
                 'Created': _formatDate(entry['createdAt']),
-                'Created by':
-                    '${entry['createdByRole'] ?? entry['importedByRole'] ?? '—'} · ${entry['createdById'] ?? entry['importedById'] ?? '—'}',
+                'Created by': _createdByLabel(entry),
                 'Size': entry['fileSizeBytes'] is num
                     ? _formatBytes((entry['fileSizeBytes'] as num).toInt())
                     : '—',
@@ -1309,10 +1396,12 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
                 'Version': '${entry['backupVersion'] ?? '1'}',
                 'Status': '${entry['status'] ?? 'unknown'}',
                 'File availability':
-                    _currentHistoryId == entry['backupId'] ||
-                        _importedHistoryId == entry['backupId']
+                    '${entry['storagePath'] ?? ''}'.trim().isNotEmpty
+                    ? 'Archived securely'
+                    : _currentHistoryId == entry['backupId'] ||
+                          _importedHistoryId == entry['backupId']
                     ? 'Available in this session'
-                    : 'Not archived in Firebase; check original device',
+                    : 'Not archived',
               }.entries)
                 Padding(
                   padding: const EdgeInsets.symmetric(vertical: 4),
@@ -1333,57 +1422,6 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
         ],
       ),
     );
-  }
-
-  Future<void> _showBackupActivityDetails(String backupId) async {
-    try {
-      final snapshot = await _database
-          .collection('backup_audit_logs')
-          .where('backupId', isEqualTo: backupId)
-          .get(const GetOptions(source: Source.server));
-      final rows = snapshot.docs.map((doc) => doc.data()).toList()
-        ..sort(
-          (a, b) => _dateOf(b['createdAt']).compareTo(_dateOf(a['createdAt'])),
-        );
-      if (!mounted) return;
-      await showDialog<void>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('Backup activity details'),
-          content: SizedBox(
-            width: 520,
-            child: rows.isEmpty
-                ? const Text(
-                    'No activity records are available for this backup.',
-                  )
-                : ListView.builder(
-                    shrinkWrap: true,
-                    itemCount: rows.length,
-                    itemBuilder: (context, index) {
-                      final row = rows[index];
-                      return ListTile(
-                        leading: const Icon(Icons.history_rounded),
-                        title: Text('${row['action'] ?? 'Activity'}'),
-                        subtitle: Text(
-                          '${row['actorRole'] ?? 'Super Admin'} · ${row['actorId'] ?? '—'} · ${_formatDate(row['createdAt'])}',
-                        ),
-                      );
-                    },
-                  ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Close'),
-            ),
-          ],
-        ),
-      );
-    } catch (error) {
-      if (mounted) {
-        _showMessage('Backup activity logs could not be loaded: $error');
-      }
-    }
   }
 
   Widget _statusPill(String status) {
@@ -1466,25 +1504,12 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
       color: Colors.white,
       border: Border(top: BorderSide(color: AppColors.border)),
     ),
-    child: Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Expanded(
-          child: Text(
-            'Manual exports exclude authentication credentials and reset tokens. Uploaded image files and Firebase Authentication accounts are not included; image references stored in Firestore remain in the export.',
-            style: TextStyle(
-              color: AppColors.textMuted,
-              fontSize: 11,
-              height: 1.4,
-            ),
-          ),
-        ),
-        const SizedBox(width: 12),
-        TextButton(
-          onPressed: _busy ? null : () => Navigator.pop(context),
-          child: const Text('Close'),
-        ),
-      ],
+    child: Align(
+      alignment: Alignment.centerRight,
+      child: TextButton(
+        onPressed: _busy ? null : () => Navigator.pop(context),
+        child: const Text('Close'),
+      ),
     ),
   );
 
@@ -1507,6 +1532,21 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
     if (bytes < 1024) return '$bytes B';
     if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
     return '${(bytes / (1024 * 1024)).toStringAsFixed(2)} MB';
+  }
+
+  String _createdByLabel(Map<String, dynamic> entry) {
+    final name = '${entry['createdByName'] ?? entry['importedByName'] ?? ''}'
+        .trim();
+    if (name.isNotEmpty) return name;
+    final role = '${entry['createdByRole'] ?? entry['importedByRole'] ?? ''}'
+        .trim()
+        .toLowerCase();
+    final creatorId = '${entry['createdById'] ?? entry['importedById'] ?? ''}';
+    if (creatorId == _userId && _actorName.isNotEmpty) return _actorName;
+    if (role == 'super_admin' && _actorName.isNotEmpty) return _actorName;
+    if (role == 'super_admin') return 'Super Admin';
+    if (role == 'admin') return 'Admin';
+    return '—';
   }
 }
 

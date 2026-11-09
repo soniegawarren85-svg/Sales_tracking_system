@@ -28,6 +28,22 @@ List<Map<String, dynamic>> bundleDrinkServings(Map<String, dynamic> bundle) {
   return result;
 }
 
+bool bundleIncludesAddon(Map<String, dynamic> bundle, Map addon) {
+  final addonId = '${addon['id'] ?? addon['sourceInventoryId'] ?? ''}'.trim();
+  if (addonId.isEmpty) return false;
+  return (bundle['bundleItems'] as List? ?? const [])
+      .whereType<Map>()
+      .any((part) {
+        if (part['sourceCollection'] != 'coffee_addons') return false;
+        return [
+          part['sourceInventoryId'],
+          part['variantId'],
+          part['itemId'],
+          part['id'],
+        ].any((value) => '${value ?? ''}'.trim() == addonId);
+      });
+}
+
 Map<String, dynamic> customizeBundle(
   Map<String, dynamic> bundle,
   List<Map<String, dynamic>> drinks,
@@ -39,7 +55,10 @@ Map<String, dynamic> customizeBundle(
         (drink['addons'] as List).whereType<Map>().fold<double>(
           0,
           (sum, addon) =>
-              sum + (num.tryParse('${addon['priceDelta']}')?.toDouble() ?? 0),
+              sum +
+              (addon['includedInBundle'] == true
+                  ? 0
+                  : num.tryParse('${addon['priceDelta']}')?.toDouble() ?? 0),
         ),
   );
   final description = drinks
@@ -80,18 +99,32 @@ class BundleBeverageDialog extends StatefulWidget {
   const BundleBeverageDialog({
     super.key,
     required this.bundle,
-    required this.addons,
+    this.addons = const [],
+    this.addonsFuture,
   });
   final Map<String, dynamic> bundle;
   final List<Map<String, dynamic>> addons;
+  final Future<List<Map<String, dynamic>>>? addonsFuture;
   @override
   State<BundleBeverageDialog> createState() => _BundleBeverageDialogState();
 }
 
 class _BundleBeverageDialogState extends State<BundleBeverageDialog> {
   late final drinks = bundleDrinkServings(widget.bundle);
+  late List<Map<String, dynamic>> _availableAddons = widget.addons;
   final Set<int> _done = {};
   int _active = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.addonsFuture
+        ?.then<void>((addons) {
+          if (mounted) setState(() => _availableAddons = addons);
+        })
+        .catchError((Object _) {});
+  }
+
   String sizeOf(int index) =>
       '${drinks[index]['coffeeSize'] ?? drinks[index]['variantId']}';
   @override
@@ -185,12 +218,16 @@ class _BundleBeverageDialogState extends State<BundleBeverageDialog> {
                           )
                           .toList(),
                     ),
-                    if (widget.addons.isNotEmpty) ...[
+                    if (_availableAddons.isNotEmpty) ...[
                       const SizedBox(height: 12),
                       const Text('Optional add-ons'),
                       Wrap(
                         spacing: 8,
-                        children: widget.addons.map((addon) {
+                        children: _availableAddons.map((addon) {
+                          final included = bundleIncludesAddon(
+                            widget.bundle,
+                            addon,
+                          );
                           final selected = (drinks[index]['addons'] as List)
                               .cast<Map<String, dynamic>>();
                           final chosen = selected.any(
@@ -198,11 +235,15 @@ class _BundleBeverageDialogState extends State<BundleBeverageDialog> {
                           );
                           return FilterChip(
                             label: Text(
-                              '${addon['name']} (+₱${addon['priceDelta']})',
+                              included
+                                  ? '${addon['name']} (Included in bundle)'
+                                  : '${addon['name']} (+₱${addon['priceDelta']})',
                             ),
-                            selected: chosen,
+                            selected: included || chosen,
                             selectedColor: AppColors.blush,
-                            onSelected: (value) => setState(() {
+                            onSelected: included
+                                ? null
+                                : (value) => setState(() {
                               if (value) {
                                 selected.add({...addon});
                               } else {

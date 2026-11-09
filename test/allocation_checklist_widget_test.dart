@@ -318,6 +318,73 @@ void main() {
     expect(find.text('Accept'), findsNothing);
     expect(tester.takeException(), isNull);
   });
+  testWidgets('Super Admin rejection terminally declines a return', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(800, 1200);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    SharedPreferences.setMockInitialValues({
+      'lastRole': 'super_admin',
+      'lastUserId': 'super-admin',
+      'superAdminId': 'Spr-001',
+    });
+    final db = FakeFirebaseFirestore();
+    await db.doc('allocation_checklist/returned').set({
+      'kind': 'return',
+      'createdAt': Timestamp.now(),
+      'status': 'Awaiting Super Admin Confirmation',
+      'name': 'Cookie',
+      'quantity': 2,
+      'staffId': 'branch',
+      'branchId': 'branch',
+      'batchId': 'batch',
+    });
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: AllocationChecklistButton(
+            scopeIds: const [],
+            isAdmin: true,
+            isSuperAdmin: true,
+            database: db,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Returns'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byType(ExpansionTile).first);
+    await tester.pumpAndSettle();
+    expect(find.text('Return records • 1 item'), findsOneWidget);
+    await tester.ensureVisible(find.text('Reject'));
+    await tester.pump();
+    await tester.tap(find.text('Reject'));
+    await tester.pump();
+    expect(find.text('Reject this return'), findsOneWidget);
+    await tester.enterText(
+      find.byType(TextFormField),
+      'Items were not delivered.',
+    );
+    await tester.tap(find.widgetWithText(FilledButton, 'Reject Return'));
+    await tester.pumpAndSettle();
+    expect(find.text('Return rejected'), findsOneWidget);
+
+    final saved = (await db.doc('allocation_checklist/returned').get()).data()!;
+    expect(saved['status'], 'Return Declined');
+    expect(saved['declineReason'], 'Items were not delivered.');
+    expect(saved['reportedBy'], isNull);
+    expect(
+      (await db.doc('activity_logs/return_returned').get()).data()?['action'],
+      'return_rejected',
+    );
+    await tester.tap(find.text('Done'));
+    await tester.pumpAndSettle();
+    expect(find.text('Reject'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
   for (final width in [360.0, 768.0]) {
     testWidgets('admin checklist at $width watches returns across branches', (
       tester,

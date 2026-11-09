@@ -151,7 +151,9 @@ class _ItemEditorState extends State<_ItemEditor> {
   late final _price = TextEditingController(
     text: '${_data['basePrice'] ?? _data['price'] ?? ''}',
   );
-  late final _stock = TextEditingController(text: '0');
+  late final _stock = TextEditingController(
+    text: '${_data['stock'] ?? _data['startingStock'] ?? 0}',
+  );
   late final _expiry = TextEditingController(
     text: _inventoryDateText(_data['expirationDate'] ?? ''),
   );
@@ -423,6 +425,28 @@ class _ItemEditorState extends State<_ItemEditor> {
 
   String _ingredientTab = 'Categories';
   String? _ingredientCategory;
+
+  String? _bundleStockValidationError() {
+    final bundleCount = int.tryParse(_additionalBundles.text) ?? 0;
+    if (bundleCount <= 0) return null;
+    for (final ingredient in _ingredients) {
+      if (ingredient['isCoffee'] == true ||
+          ingredient['isAddon'] == true ||
+          ingredient['sourceCollection'] == 'coffee_addons' ||
+          ingredient['untrackedStock'] == true) {
+        continue;
+      }
+      final required = bundleQuantity(ingredient['quantity']) * bundleCount;
+      final available = bundleQuantity(
+        ingredient['stock'] ?? ingredient['startingStock'],
+      );
+      if (required > available) {
+        return '${ingredient['name'] ?? 'Ingredient'} needs $required, but only $available is available.';
+      }
+    }
+    return null;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -569,7 +593,7 @@ class _ItemEditorState extends State<_ItemEditor> {
           'Each bundle item needs a quantity greater than zero.',
         );
       }
-      final addedStock = _type == 'Categories' ? int.parse(_stock.text) : 0;
+      final targetStock = _type == 'Categories' ? int.parse(_stock.text) : 0;
       final existingStock = reportValueForSave(
         _data['stock'] ?? _data['startingStock'],
       ).toInt();
@@ -587,14 +611,28 @@ class _ItemEditorState extends State<_ItemEditor> {
           'createdAt': _data['createdAt'] ?? Timestamp.now(),
         });
       }
-      if (addedStock > 0) {
+      final stockDelta = targetStock - existingStock;
+      if (stockDelta > 0) {
         stockBatches.add({
-          'quantity': addedStock,
+          'quantity': stockDelta,
           'costPrice': cost,
           'price': prices.first.price,
           'expirationDate': _expiry.text,
           'createdAt': Timestamp.now(),
         });
+      } else if (stockDelta < 0 && stockBatches.isNotEmpty) {
+        var reduction = -stockDelta;
+        for (
+          var index = stockBatches.length - 1;
+          index >= 0 && reduction > 0;
+          index--
+        ) {
+          final batch = stockBatches[index];
+          final quantity = reportValueForSave(batch['quantity']).toInt();
+          final removed = quantity < reduction ? quantity : reduction;
+          batch['quantity'] = quantity - removed;
+          reduction -= removed;
+        }
       }
       if (_type == 'Categories' &&
           _inventoryDateText(_data['expirationDate'] ?? '') != _expiry.text) {
@@ -618,13 +656,7 @@ class _ItemEditorState extends State<_ItemEditor> {
             : num.parse(_price.text.trim()),
         'imageUrl': ?url,
         if (_type == 'Categories') ...{
-          'stock':
-              int.parse(_stock.text) +
-              (widget.entry == null
-                  ? 0
-                  : reportValueForSave(
-                      _data['stock'] ?? _data['startingStock'],
-                    ).toInt()),
+          'stock': targetStock,
           'expirationDate': _expiry.text,
           'stockBatches': stockBatches,
           if (widget.entry == null) 'startingStock': int.parse(_stock.text),
@@ -925,6 +957,7 @@ class _ItemEditorState extends State<_ItemEditor> {
               ),
               child: Form(
                 key: _form,
+                autovalidateMode: AutovalidateMode.onUserInteraction,
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
@@ -962,13 +995,29 @@ class _ItemEditorState extends State<_ItemEditor> {
                     ),
                     _field(_name, 'Name'),
                     if (_type != 'Beverages')
-                      _field(_price, 'Selling price (\u20b1)', number: true),
+                      _field(
+                        _price,
+                        'Selling price (\u20b1)',
+                        number: true,
+                        extraValidator: _type == 'Bundle'
+                            ? (value) {
+                                final selling = num.tryParse(value ?? '');
+                                final cost = num.tryParse(_cost.text.trim());
+                                if (selling != null &&
+                                    cost != null &&
+                                    selling < cost) {
+                                  return 'Bundle price must be at least its cost (₱${cost.toStringAsFixed(2)}).';
+                                }
+                                return null;
+                              }
+                            : null,
+                      ),
                     if (_type != 'Beverages' && _type != 'Bundle')
                       _field(_cost, 'Cost price (\u20b1)', number: true),
                     if (_type == 'Categories') ...[
                       _field(
                         _stock,
-                        widget.entry == null ? 'Stock' : 'Additional stock',
+                        'Current stock',
                         number: true,
                         integer: true,
                       ),
@@ -1151,6 +1200,7 @@ class _ItemEditorState extends State<_ItemEditor> {
                         'Additional bundles (0–100)',
                         number: true,
                         integer: true,
+                        extraValidator: (_) => _bundleStockValidationError(),
                       ),
                       _field(
                         _cost,

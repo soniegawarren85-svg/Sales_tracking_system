@@ -203,4 +203,55 @@ void main() {
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('all-branch report details exclude voided branches', (
+    tester,
+  ) async {
+    final today = DateUtils.dateOnly(DateTime.now());
+    final data = BranchReportData({
+      'branches': [
+        {'_id': 'lingayen', 'name': 'Lingayen'},
+        {'_id': 'dagupan', 'name': 'SM Dagupan'},
+        {'_id': 'urdaneta', 'name': 'SM Urdaneta'},
+        {'_id': 'test', 'name': 'Test Branch'},
+        {'_id': 'voided', 'name': 'ZZZZ', 'isVoided': true},
+      ],
+      'completed_sales': [
+        for (final branch in ['dagupan', 'urdaneta', 'test'])
+          {
+            '_id': 'sale-$branch',
+            'branchId': branch,
+            'timestamp': today.add(const Duration(hours: 1)),
+            'total': 100,
+            'tax': 10,
+          },
+        {
+          '_id': 'sale-voided',
+          'branchId': 'voided',
+          'timestamp': today.add(const Duration(hours: 1)),
+          'total': 900,
+          'tax': 90,
+        },
+      ],
+    });
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: DailySalesReport(data: Stream.value(data))),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('₱30.00'), findsOneWidget);
+
+    await tester.tap(find.text('Total VAT'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Lingayen'), findsOneWidget);
+    expect(find.text('SM Dagupan'), findsOneWidget);
+    expect(find.text('SM Urdaneta'), findsOneWidget);
+    expect(find.text('Test Branch'), findsOneWidget);
+    expect(find.text('ZZZZ'), findsNothing);
+    expect(find.text('₱90.00'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
 }

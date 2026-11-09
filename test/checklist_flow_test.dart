@@ -90,6 +90,7 @@ void main() {
       expect(await submit(), true);
       expect(await submit(), false);
       final stock = (await db.doc('staff_inventory/stock').get()).data()!;
+      expect(stock['isDeleted'], isFalse);
       expect((stock['items'] as List).single['stock'], 3);
       final returns = (await db.doc('allocation_checklist/return').get())
           .data()!;
@@ -105,6 +106,7 @@ void main() {
         reason: 'One missing',
         scopeIds: [],
       );
+
       expect(
         (await db.doc('allocation_checklist/return').get()).data()!['status'],
         ChecklistStatus.discrepancy,
@@ -136,6 +138,38 @@ void main() {
       await sub.cancel();
     },
   );
+
+  test('accepting a bundle keeps its received inventory active', () async {
+    await db.doc('allocation_checklist/bundle-delivery').set({
+      'kind': 'incoming',
+      'status': ChecklistStatus.awaiting,
+      'staffId': 'branch',
+      'staffName': 'Branch A',
+      'targetDocId': 'branch-bundle',
+      'sourceInventoryId': 'central-bundle',
+      'isBundle': true,
+      'bundleCount': 3,
+      'bundleInstances': [
+        {'id': 'bundle-1', 'status': 'available'},
+        {'id': 'bundle-2', 'status': 'available'},
+        {'id': 'bundle-3', 'status': 'available'},
+      ],
+    });
+
+    await service.decide(
+      'bundle-delivery',
+      accept: true,
+      staffId: 'staff',
+      actorName: 'Staff A',
+      scopeIds: ['branch'],
+    );
+
+    final bundle = (await db.doc('staff_inventory/branch-bundle').get())
+        .data()!;
+    expect(bundle['isDeleted'], isFalse);
+    expect(bundle['bundleCount'], 3);
+    expect(bundle['bundleInstances'], hasLength(3));
+  });
 
   test(
     'branch admin forwards returned inventory for Super Admin review',

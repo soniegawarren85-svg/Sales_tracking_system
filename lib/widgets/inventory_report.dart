@@ -25,7 +25,9 @@ Future<void> showInventoryReport(
   context: context,
   builder: (_) => InventoryReportDialog(
     branchId: branchId,
-    data: BranchReportData.watch(firestore: database),
+    data: branchId == null
+        ? BranchReportData.watch(firestore: database)
+        : BranchReportData.watchInventoryReport(branchId, firestore: database),
   ),
 );
 
@@ -179,6 +181,13 @@ class _InventoryReportDialogState extends State<InventoryReportDialog> {
     final result = <Map<String, dynamic>>[];
     for (final branch in branchIds) {
       for (final item in data.items(branch, start, end)) {
+        // Sales can contain stale catalog rows. Only report stock movement for
+        // products that were allocated to this branch at some point.
+        if (reportValue(item['allocated']) <= 0 &&
+            reportValue(item['allocationSnapshot']) <= 0 &&
+            item['remaining'] == null) {
+          continue;
+        }
         for (final event in (item['history'] as List? ?? []).whereType<Map>()) {
           final at = _date(event['time']);
           if (at == null || at.isBefore(start) || !at.isBefore(end)) continue;
@@ -243,13 +252,44 @@ class _InventoryReportDialogState extends State<InventoryReportDialog> {
           (row) => matches('${row['activity'] ?? ''}'.trim().toLowerCase()),
         )
         .fold<double>(0, (total, row) => total + reportValue(row['qty']).abs());
+    double refundCount() => movements
+        .where(
+          (row) => '${row['activity'] ?? ''}'.toLowerCase().contains('refund'),
+        )
+        .length
+        .toDouble();
     final allocated = amount(
       (name) => name.contains('allocation') || name.contains('allocated'),
     );
+    final startingStock = widget.branchId == null
+        ? movements
+              .where(
+                (row) =>
+                    '${row['activity'] ?? ''}'.toLowerCase().contains(
+                      'opening',
+                    ) ||
+                    '${row['activity'] ?? ''}'.toLowerCase().contains(
+                      'starting',
+                    ),
+              )
+              .fold<double>(
+                0,
+                (total, row) => total + reportValue(row['qty']).abs(),
+              )
+        : data
+              .items(
+                widget.branchId!,
+                DateUtils.dateOnly(_selectedRange.start),
+                DateUtils.dateOnly(
+                  _selectedRange.end,
+                ).add(const Duration(days: 1)),
+              )
+              .fold<double>(
+                0,
+                (total, row) => total + reportValue(row['starting']),
+              );
     return {
-      'Starting Stock': amount(
-        (name) => name.contains('opening') || name.contains('starting'),
-      ),
+      'Starting Stock': startingStock,
       'Stock Received': widget.branchId == null
           ? amount((name) => name.contains('received'))
           : allocated,
@@ -263,6 +303,8 @@ class _InventoryReportDialogState extends State<InventoryReportDialog> {
             name.contains('reduce') ||
             name.contains('unbundle'),
       ),
+      'Reduced Items': amount((name) => name.contains('reduce')),
+      'Refund Records': refundCount(),
       'Damaged Items': amount((name) => name.contains('damaged')),
       'Expired Items': amount((name) => name.contains('expired')),
       'Remaining Stock': _currentInventory(
@@ -275,15 +317,14 @@ class _InventoryReportDialogState extends State<InventoryReportDialog> {
     BranchReportData data,
     List<Map<String, dynamic>> inventory,
   ) {
-    double stockValue(Map row, String key) {
-      final quantity = reportValue(row['quantity']);
-      if (row['stockTracked'] != true) return 0;
-      final unit = reportValue(row[key]);
-      return quantity * unit;
-    }
-
     return {
       'Total Products': inventory.length.toDouble(),
+      'Total Categories': inventory
+          .where(
+            (row) => row['type'] == 'Categories' || row['type'] == 'Category',
+          )
+          .length
+          .toDouble(),
       'Total Bundles': inventory
           .where((row) => row['type'] == 'Bundle' || row['isBundle'] == true)
           .length
@@ -292,23 +333,24 @@ class _InventoryReportDialogState extends State<InventoryReportDialog> {
           .where((row) => row['type'] == 'Beverages' || row['isCoffee'] == true)
           .length
           .toDouble(),
+      'Total Add-ons': inventory
+          .where((row) => row['type'] == 'Add-ons' || row['isAddon'] == true)
+          .length
+          .toDouble(),
       'Total Stock Quantity': inventory.fold<double>(
         0,
         (total, row) => total + reportValue(row['quantity']),
-      ),
-      'Total Inventory Cost': inventory.fold<double>(
-        0,
-        (total, row) => total + stockValue(row, 'costPrice'),
-      ),
-      'Total Inventory Value': inventory.fold<double>(
-        0,
-        (total, row) => total + stockValue(row, 'price'),
       ),
       'Low Stock Items': inventory
           .where(
             (row) =>
                 '${row['status'] ?? ''}'.toLowerCase().contains('low stock') ||
-                row['isLowStock'] == true,
+                row['isLowStock'] == true ||
+                (row['stockTracked'] == true &&
+                    inventoryLowStock(
+                      row['quantity'],
+                      type: '${row['type'] ?? 'Categories'}',
+                    )),
           )
           .length
           .toDouble(),
@@ -338,13 +380,7 @@ class _InventoryReportDialogState extends State<InventoryReportDialog> {
     [],
     ['OVERALL INVENTORY'],
     ['Metric', 'Value'],
-    for (final entry in summary.entries)
-      [
-        entry.key,
-        entry.key.startsWith('Total Inventory')
-            ? entry.value.toStringAsFixed(2)
-            : entry.value,
-      ],
+    for (final entry in summary.entries) [entry.key, entry.value],
     [],
     ['STOCK MOVEMENT'],
     ['Metric', 'Quantity'],
@@ -654,7 +690,9 @@ class _InventoryReportDialogState extends State<InventoryReportDialog> {
                   children: [
                     const Expanded(
                       child: Text(
-                          'Current inventory',
+                        'Current inventory',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                         style: TextStyle(
                           color: AppColors.primaryDark,
                           fontSize: 17,
@@ -662,13 +700,21 @@ class _InventoryReportDialogState extends State<InventoryReportDialog> {
                         ),
                       ),
                     ),
-                    OutlinedButton.icon(
-                      onPressed: _busy ? null : _pickRange,
-                      icon: const Icon(Icons.date_range_rounded, size: 18),
-                      label: Text(
-                        '${_dateLabel(_selectedRange.start)} – ${_dateLabel(_selectedRange.end)}',
+                    if (MediaQuery.sizeOf(context).width < 460)
+                      IconButton(
+                        tooltip:
+                            '${_dateLabel(_selectedRange.start)} – ${_dateLabel(_selectedRange.end)}',
+                        onPressed: _busy ? null : _pickRange,
+                        icon: const Icon(Icons.date_range_rounded),
+                      )
+                    else
+                      OutlinedButton.icon(
+                        onPressed: _busy ? null : _pickRange,
+                        icon: const Icon(Icons.date_range_rounded, size: 18),
+                        label: Text(
+                          '${_dateLabel(_selectedRange.start)} – ${_dateLabel(_selectedRange.end)}',
+                        ),
                       ),
-                    ),
                   ],
                 ),
               ),
@@ -706,9 +752,7 @@ class _InventoryReportDialogState extends State<InventoryReportDialog> {
                                 width: width,
                                 child: _InventoryReportMetric(
                                   title: entry.key,
-                                  value: entry.key.startsWith('Total Inventory')
-                                      ? formatMoney(entry.value)
-                                      : entry.value.toStringAsFixed(0),
+                                  value: entry.value.toStringAsFixed(0),
                                   icon: _summaryIcon(entry.key),
                                 ),
                               ),
@@ -716,6 +760,8 @@ class _InventoryReportDialogState extends State<InventoryReportDialog> {
                         );
                       },
                     ),
+                    const SizedBox(height: 18),
+                    _InventoryCompositionGraph(inventory: inventory),
                     const SizedBox(height: 18),
                     const Text(
                       'Stock movement',
@@ -878,11 +924,11 @@ class _InventoryReportDialogState extends State<InventoryReportDialog> {
 
   IconData _summaryIcon(String title) => switch (title) {
     'Total Products' => Icons.inventory_2_outlined,
-    'Total Bundles' => Icons.all_inbox_outlined,
+    'Total Categories' => Icons.category_outlined,
+    'Total Bundles' => Icons.all_inbox_rounded,
     'Total Beverages' => Icons.local_cafe_outlined,
-    'Total Stock Quantity' => Icons.numbers_rounded,
-    'Total Inventory Cost' => Icons.payments_outlined,
-    'Total Inventory Value' => Icons.account_balance_wallet_outlined,
+    'Total Add-ons' => Icons.add_circle_outline_rounded,
+    'Total Stock Quantity' => Icons.confirmation_number_rounded,
     'Low Stock Items' => Icons.warning_amber_rounded,
     'Out of Stock Items' => Icons.remove_shopping_cart_outlined,
     _ => Icons.event_busy_outlined,
@@ -958,6 +1004,92 @@ class _InventoryReportMetric extends StatelessWidget {
       ],
     ),
   );
+}
+
+class _InventoryCompositionGraph extends StatelessWidget {
+  const _InventoryCompositionGraph({required this.inventory});
+
+  final List<Map<String, dynamic>> inventory;
+
+  @override
+  Widget build(BuildContext context) {
+    final groups = <String, int>{
+      'Categories': inventory
+          .where(
+            (row) => row['type'] == 'Categories' || row['type'] == 'Category',
+          )
+          .length,
+      'Bundles': inventory
+          .where((row) => row['type'] == 'Bundle' || row['isBundle'] == true)
+          .length,
+      'Beverages': inventory
+          .where((row) => row['type'] == 'Beverages' || row['isCoffee'] == true)
+          .length,
+      'Add-ons': inventory
+          .where((row) => row['type'] == 'Add-ons' || row['isAddon'] == true)
+          .length,
+    };
+    final maximum = groups.values.fold<int>(
+      0,
+      (max, count) => count > max ? count : max,
+    );
+    const colors = [
+      AppColors.primaryDark,
+      Color(0xFFD85775),
+      Color(0xFF9B6BB0),
+      Color(0xFFE6A34A),
+    ];
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(17),
+        border: Border.all(color: AppColors.blush),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Inventory by type',
+            style: TextStyle(
+              color: AppColors.primaryDark,
+              fontSize: 15,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          const SizedBox(height: 12),
+          for (final indexed in groups.entries.indexed) ...[
+            Row(
+              children: [
+                SizedBox(width: 82, child: Text(indexed.$2.key)),
+                Expanded(
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: LinearProgressIndicator(
+                      minHeight: 11,
+                      value: maximum == 0 ? 0 : indexed.$2.value / maximum,
+                      backgroundColor: AppColors.blush,
+                      color: colors[indexed.$1],
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                SizedBox(
+                  width: 24,
+                  child: Text(
+                    '${indexed.$2.value}',
+                    textAlign: TextAlign.end,
+                    style: const TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                ),
+              ],
+            ),
+            if (indexed.$1 < groups.length - 1) const SizedBox(height: 9),
+          ],
+        ],
+      ),
+    );
+  }
 }
 
 class _InventoryMovementMetric extends StatelessWidget {

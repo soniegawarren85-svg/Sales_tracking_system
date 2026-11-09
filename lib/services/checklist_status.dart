@@ -8,6 +8,8 @@ class ChecklistStatus {
   static const returnDeclined = 'Return Declined';
   static const issue = 'Issue Reported';
   static const discrepancy = 'Discrepancy Reported';
+  static const notReceivedPending = 'Not Received - Pending Super Admin';
+  static const notReceivedRestored = 'Not Received - Stock Restored';
 
   static String label(Map<String, dynamic> data) => switch (data['status']) {
     'pending' => awaiting,
@@ -19,6 +21,10 @@ class ChecklistStatus {
 
   static bool incomingOpen(Map<String, dynamic> data) =>
       data['kind'] != 'return' && [awaiting, issue].contains(label(data));
+
+  static bool allocationNeedsSuperAdminReview(Map<String, dynamic> data) =>
+      data['kind'] == 'not_received' &&
+      label(data) == notReceivedPending;
 
   static bool returnOpen(Map<String, dynamic> data) =>
       data['kind'] == 'return' &&

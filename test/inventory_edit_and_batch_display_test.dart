@@ -9,6 +9,71 @@ import 'package:sales_tracking/widgets/inventory_batches.dart';
 import 'package:sales_tracking/services/branch_report_data.dart';
 
 void main() {
+  testWidgets('main inventory editor sets current stock directly', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    final db = FakeFirebaseFirestore();
+    final item = <String, dynamic>{
+      'id': 'cookie',
+      'name': 'Cookie',
+      'price': 50,
+      'costPrice': 20,
+      'stock': 10,
+      'startingStock': 10,
+      'expirationDate': '2099-12-31',
+      'stockBatches': [
+        {'quantity': 10, 'expirationDate': '2099-12-31'},
+      ],
+    };
+    final category = {
+      'id': 'cookies',
+      'name': 'Cookies',
+      'items': [item],
+    };
+    await db.doc('sales_inventory/cookies').set(category);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: TextButton(
+              onPressed: () => showAdminItemEditor(
+                context,
+                entry: AdminCatalogEntry(
+                  id: 'cookie',
+                  name: 'Cookie',
+                  type: 'Categories',
+                  source: category,
+                  details: item,
+                  images: const [],
+                ),
+                firestore: db,
+                upload: (_) async => null,
+              ),
+              child: const Text('Edit'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('Edit'));
+    await tester.pumpAndSettle();
+    expect(find.text('Current stock'), findsOneWidget);
+    await tester.enterText(
+      find.byWidgetPredicate(
+        (widget) => widget is TextFormField && widget.controller?.text == '10',
+      ),
+      '4',
+    );
+    await tester.tap(find.widgetWithText(FilledButton, 'Save changes'));
+    await tester.pumpAndSettle();
+    final saved = (await db.doc('sales_inventory/cookies').get()).data()!;
+    final savedItem = (saved['items'] as List).single as Map;
+    expect(savedItem['stock'], 4);
+    expect((savedItem['stockBatches'] as List).single['quantity'], 4);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('catalog edits refresh metadata in existing allocations', (
     tester,
   ) async {
@@ -106,7 +171,7 @@ void main() {
       'Pistachio Dubai Chewy XL',
     );
     await tester.enterText(find.byType(TextFormField).at(1), '120');
-    await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+    await tester.tap(find.widgetWithText(FilledButton, 'Save changes'));
     await tester.pump();
     await tester.pumpAndSettle();
 

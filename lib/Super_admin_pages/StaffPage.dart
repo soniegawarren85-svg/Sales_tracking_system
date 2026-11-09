@@ -90,8 +90,9 @@ String? validateStaffPasswordConfirmation(String? value, String password) {
 }
 
 class StaffPage extends StatefulWidget {
-  const StaffPage({super.key, this.onBack});
+  const StaffPage({super.key, this.onBack, this.firestore});
   final VoidCallback? onBack;
+  final FirebaseFirestore? firestore;
 
   @override
   State<StaffPage> createState() => _StaffPageState();
@@ -129,6 +130,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
   final _confirmPasswordFieldKey = GlobalKey<FormFieldState<String>>();
   bool _showCreatePassword = false;
   bool _showConfirmPassword = false;
+  late final Stream<QuerySnapshot<Map<String, dynamic>>> _staffStream;
 
   bool _matchesAccountSearch(AdminModel member) {
     final terms = _accountSearch.trim().toLowerCase().split(
@@ -157,13 +159,12 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
     return terms.every(searchable.contains);
   }
 
-  // ─── STREAMS ──────────────────────────────────────────────
-  Stream<QuerySnapshot<Map<String, dynamic>>> get _staffStream =>
-      FirebaseFirestore.instance.collection('staff_requests').snapshots();
-
   @override
   void initState() {
     super.initState();
+    _staffStream = (widget.firestore ?? FirebaseFirestore.instance)
+        .collection('staff_requests')
+        .snapshots();
     _tabController = TabController(length: 2, vsync: this);
     _tabController.addListener(_handleStaffTabChanged);
 
@@ -408,9 +409,12 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                   padding: const EdgeInsets.symmetric(horizontal: 16),
                   child: _buildDeactivatedStaffButton(deactivated),
                 ),
-                const Padding(
+                Padding(
                   padding: EdgeInsets.all(16),
-                  child: AdminStaffBranches(includeAdmins: true),
+                  child: AdminStaffBranches(
+                    includeAdmins: true,
+                    firestore: widget.firestore,
+                  ),
                 ),
 
                 const Padding(
@@ -451,6 +455,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                       index: entry.key,
                       admin: entry.value,
                       isInactiveByLogin: entry.value.isInactiveByLogin,
+                      firestore: widget.firestore,
                       onDeactivate: () =>
                           _updateAdminStatus(entry.value, 'deactivated'),
                       onActivate: () =>
@@ -624,6 +629,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                                 admin: accountRows[index],
                                 isInactiveByLogin:
                                     accountRows[index].isInactiveByLogin,
+                                firestore: widget.firestore,
                                 onDeactivate: () => _updateAdminStatus(
                                   accountRows[index],
                                   'deactivated',
@@ -2952,6 +2958,7 @@ class _AnimatedAdminCard extends StatefulWidget {
   final int index;
   final AdminModel admin;
   final bool isInactiveByLogin;
+  final FirebaseFirestore? firestore;
   final VoidCallback onDeactivate;
   final VoidCallback onActivate;
 
@@ -2959,6 +2966,7 @@ class _AnimatedAdminCard extends StatefulWidget {
     required this.index,
     required this.admin,
     this.isInactiveByLogin = false,
+    this.firestore,
     required this.onDeactivate,
     required this.onActivate,
   });
@@ -3231,9 +3239,10 @@ class _AnimatedAdminCardState extends State<_AnimatedAdminCard>
                           ),
                         ),
                         StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                          stream: FirebaseFirestore.instance
-                              .collection('branches')
-                              .snapshots(),
+                          stream:
+                              (widget.firestore ?? FirebaseFirestore.instance)
+                                  .collection('branches')
+                                  .snapshots(),
                           builder: (context, snapshot) {
                             final ids = [
                               widget.admin.id,

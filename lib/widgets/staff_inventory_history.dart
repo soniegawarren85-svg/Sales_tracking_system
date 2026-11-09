@@ -257,9 +257,13 @@ List<Map<String, dynamic>> staffInventoryHistoryEntries({
       }
       final quantity = _historyQuantity(item['quantity'] ?? 1);
       if (quantity <= 0) continue;
+      final itemVariant = '${item['variant'] ?? ''}'.trim();
+      final displayName = kind == 'categories' && itemVariant.isNotEmpty
+          ? itemVariant
+          : item['name'] ?? categoryName;
       result.add({
         'activity': refund ? 'Refund' : 'Sold',
-        'name': item['name'] ?? categoryName,
+        'name': displayName,
         'itemId': item['itemId'] ?? item['coffeeId'] ?? item['publicId'] ?? '',
         'quantity': quantity,
         'price': item['price'] ?? 0,

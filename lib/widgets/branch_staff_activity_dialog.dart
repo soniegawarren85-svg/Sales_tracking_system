@@ -105,7 +105,6 @@ class _BranchStaffActivityDialogState extends State<BranchStaffActivityDialog> {
       ),
     );
     final filtered = records.where((row) {
-      if (_sessionRole(row) != 'Staff') return false;
       final date = sessionTime(row['loginAt']);
       final role = _sessionRole(row);
       return ((_dateStart == null && _dateEnd == null) ||

@@ -214,34 +214,40 @@ class _BranchInventoryMonitorState extends State<BranchInventoryMonitor> {
           inventory: true,
           addons: widget.addons,
           showActions: widget.showActions,
-          actions: (row) => Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if ('${row['allocationId'] ?? ''}'.isNotEmpty)
-                IconButton(
-                  tooltip: 'View batches',
-                  icon: const Icon(Icons.layers_outlined),
-                  onPressed: () => showInventoryBatches(
-                    context,
-                    allocationId: '${row['allocationId']}',
-                    scopeIds: [widget.branchId],
-                    itemId: row['allocationItemId']?.toString(),
-                    readOnly: true,
-                    database: widget.firestore,
-                    reportData: data,
+          actions: (row) {
+            if (widget.type == 'Beverages' &&
+                !['S', 'Small'].contains('${row['_sizeLabel']}')) {
+              return const SizedBox.shrink();
+            }
+            return Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if ('${row['allocationId'] ?? ''}'.isNotEmpty)
+                  IconButton(
+                    tooltip: 'View batches',
+                    icon: const Icon(Icons.layers_outlined),
+                    onPressed: () => showInventoryBatches(
+                      context,
+                      allocationId: '${row['allocationId']}',
+                      scopeIds: [widget.branchId],
+                      itemId: row['allocationItemId']?.toString(),
+                      readOnly: true,
+                      database: widget.firestore,
+                      reportData: data,
+                    ),
                   ),
-                ),
-              if (widget.allowVoidAllocation)
-                IconButton(
-                  tooltip: 'Void allocation',
-                  icon: const Icon(
-                    Icons.block_outlined,
-                    color: Colors.redAccent,
+                if (widget.allowVoidAllocation)
+                  IconButton(
+                    tooltip: 'Void allocation',
+                    icon: const Icon(
+                      Icons.block_outlined,
+                      color: Colors.redAccent,
+                    ),
+                    onPressed: () => _voidAllocation(context, row),
                   ),
-                  onPressed: () => _voidAllocation(context, row),
-                ),
-            ],
-          ),
+              ],
+            );
+          },
         ),
         if (rows.isEmpty)
           const Padding(

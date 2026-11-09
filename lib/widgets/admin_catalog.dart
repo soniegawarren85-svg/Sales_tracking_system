@@ -124,12 +124,9 @@ String catalogExpiryLabel(AdminCatalogEntry entry) {
           .toSet()
           .toList()
         ..sort();
-  if (dates.isEmpty) {
-    return '${entry.source['expirationDate'] ?? ''}'.isEmpty
-        ? 'Not recorded'
-        : '${entry.source['expirationDate']}'.split('T').first;
-  }
-  return dates.join('\n');
+  if (dates.isNotEmpty) return dates.first;
+  final sourceDate = '${entry.source['expirationDate'] ?? ''}';
+  return sourceDate.isEmpty ? 'Not recorded' : sourceDate.split('T').first;
 }
 
 class AdminCatalogEntry {
@@ -687,17 +684,6 @@ class _AdminCatalogState extends State<AdminCatalog> {
               flex: MediaQuery.sizeOf(context).width < 600 ? 0 : 1,
               child: categorySelector,
             ),
-            if (!widget.gallery && widget.lockedBranchId != null)
-              IconButton(
-                tooltip: 'Inventory report',
-                onPressed: () => showInventoryReport(
-                  context,
-                  branchId: widget.lockedBranchId,
-                  database: widget.firestore,
-                ),
-                icon: const Icon(Icons.assessment_outlined),
-                color: AppColors.primaryDark,
-              ),
             if (widget.actions != null && _branch.isEmpty)
               InventoryHeaderTransition(
                 collapsed: widget.compactHeader,
@@ -749,6 +735,16 @@ class _AdminCatalogState extends State<AdminCatalog> {
                       ),
                     ),
                   ),
+                ),
+                IconButton(
+                  tooltip: 'Inventory report',
+                  onPressed: () => showInventoryReport(
+                    context,
+                    branchId: widget.lockedBranchId,
+                    database: widget.firestore,
+                  ),
+                  icon: const Icon(Icons.assessment_outlined),
+                  color: AppColors.primaryDark,
                 ),
                 InventoryActivityHistoryButton(
                   branchId: widget.lockedBranchId!,

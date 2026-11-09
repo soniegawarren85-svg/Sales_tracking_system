@@ -377,6 +377,54 @@ void main() {
     expect(activity['branchIds'], ['branch']);
   });
   test(
+    'unbundling a bundle batch aggregates the physical item quantity',
+    () async {
+      final instances = [
+        for (var index = 0; index < 16; index++)
+          {
+            'id': 'batch-instance-$index',
+            'batchId': 'bundle-batch-001',
+            'status': 'available',
+            'items': [cookie(4, '2099-01-01'), beverage()],
+          },
+      ];
+      await db.doc('staff_inventory/old').update({
+        'bundleCount': 16,
+        'bundleInstances': instances,
+      });
+
+      await service.execute(
+        actionId: 'unbundle-sixteen',
+        allocationId: 'old',
+        instanceIds: instances.map((instance) => '${instance['id']}').toList(),
+        action: 'unbundle',
+        actorId: 'staff',
+        actorName: 'Staff',
+        actorPublicId: 'STF-001',
+        scopeIds: ['branch'],
+      );
+
+      final outputs = (await db.collection('staff_inventory').get()).docs
+          .where((doc) => doc.data()['bundleActionId'] == 'unbundle-sixteen')
+          .toList();
+      expect(outputs, hasLength(1));
+      final output = outputs.single.data();
+      final item = (output['items'] as List).single as Map;
+      expect(output['origin'], 'unbundle');
+      expect(output['batchId'], 'unbundle_old_bundle-batch-001');
+      expect(item['stock'], 64);
+      expect(item['startingStock'], 64);
+      expect(item['assignedStartingStock'], 64);
+
+      final activity =
+          (await db.doc('activity_logs/bundle_action_unbundle-sixteen').get())
+              .data()!;
+      final details = activity['details'] as Map;
+      expect(details['unbundledQuantity'], 64);
+      expect((details['items'] as List).single['quantity'], 64);
+    },
+  );
+  test(
     'staff can return selected bundle instances without a request',
     () async {
       final service = InventoryReconciliationService(db);

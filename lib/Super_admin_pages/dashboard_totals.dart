@@ -1,14 +1,13 @@
 import 'package:flutter/material.dart';
 import '../services/branch_report_data.dart';
+import '../services/branch_status.dart';
 import '../widgets/admin_sales_overview.dart';
 import '../theme/app_colors.dart';
 
 int currentAllocatedQuantity(BranchReportData report, DateTime day) {
   final branchIds = report
       .rows('branches')
-      .where(
-        (branch) => branch['isVoided'] != true && branch['isDeleted'] != true,
-      )
+      .where(isActiveBranch)
       .map((branch) => '${branch['_id'] ?? ''}')
       .where((id) => id.isNotEmpty)
       .toSet();
@@ -44,10 +43,7 @@ class SuperAdminTotals extends StatelessWidget {
       final today = DateUtils.dateOnly(DateTime.now());
       final branchIds = report
           .rows('branches')
-          .where(
-            (branch) =>
-                branch['isVoided'] != true && branch['isDeleted'] != true,
-          )
+          .where(isActiveBranch)
           .map((branch) => '${branch['_id'] ?? ''}')
           .where((id) => id.isNotEmpty)
           .toSet();

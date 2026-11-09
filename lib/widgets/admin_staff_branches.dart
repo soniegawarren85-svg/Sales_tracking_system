@@ -258,6 +258,42 @@ class _BranchStaffSheetState extends State<_BranchStaffSheet> {
   bool _saving = false;
   String? _error;
   String _selectedRole = 'staff';
+  final _searchController = TextEditingController();
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _confirmAndAssign(
+    QueryDocumentSnapshot<Map<String, dynamic>> staff,
+    bool assign,
+  ) async {
+    final name = _staffName(staff.data());
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(assign ? 'Assign account?' : 'Remove assignment?'),
+        content: Text(
+          assign
+              ? 'Assign $name to this branch?'
+              : 'Remove $name from this branch?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(assign ? 'Assign' : 'Remove'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true && mounted) await _assign(staff, assign);
+  }
 
   Future<void> _assign(
     QueryDocumentSnapshot<Map<String, dynamic>> staff,
@@ -333,149 +369,169 @@ class _BranchStaffSheetState extends State<_BranchStaffSheet> {
     BuildContext context,
   ) => StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
     stream: widget.branch.snapshots(),
-    builder: (context, branch) =>
-        StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-          stream: widget.firestore.collection('staff_requests').snapshots(),
-          builder: (context, snapshot) {
-            if (snapshot.hasError || branch.hasError) {
-              return const Center(
-                child: Text('Unable to load staff assignments.'),
+    builder: (context, branch) => StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: widget.firestore.collection('staff_requests').snapshots(),
+      builder: (context, snapshot) {
+        if (snapshot.hasError || branch.hasError) {
+          return const Center(child: Text('Unable to load staff assignments.'));
+        }
+        if (!snapshot.hasData || !branch.hasData) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        final ids = (branch.data!.data()?['staffIds'] as List? ?? [])
+            .map((id) => '$id')
+            .toSet();
+        final staff = snapshot.data!.docs
+            .where(
+              (doc) =>
+                  _assignmentRole(doc.data()) ==
+                      (widget.includeAdmins ? _selectedRole : 'staff') &&
+                  (_isActiveForAssignment(
+                        doc.data(),
+                        _assignmentRole(doc.data()),
+                      ) ||
+                      ids.contains(_staffKey(doc))),
+            )
+            .where((doc) {
+              if (!widget.allowAssignment && !ids.contains(_staffKey(doc))) {
+                return false;
+              }
+              if (ids.contains(_staffKey(doc))) return true;
+              final branchIds = (doc.data()['branchIds'] as List? ?? []).map(
+                (id) => '$id',
               );
-            }
-            if (!snapshot.hasData || !branch.hasData) {
-              return const Center(child: CircularProgressIndicator());
-            }
-            final ids = (branch.data!.data()?['staffIds'] as List? ?? [])
-                .map((id) => '$id')
-                .toSet();
-            final staff = snapshot.data!.docs
-                .where(
-                  (doc) =>
-                      _assignmentRole(doc.data()) ==
-                          (widget.includeAdmins ? _selectedRole : 'staff') &&
-                      (_isActiveForAssignment(
-                            doc.data(),
-                            _assignmentRole(doc.data()),
-                          ) ||
-                          ids.contains(_staffKey(doc))),
-                )
-                .where((doc) {
-                  if (!widget.allowAssignment &&
-                      !ids.contains(_staffKey(doc))) {
-                    return false;
-                  }
-                  if (ids.contains(_staffKey(doc))) return true;
-                  final branchIds = (doc.data()['branchIds'] as List? ?? [])
-                      .map((id) => '$id');
-                  return !branchIds.any((id) => id != widget.branch.id);
-                })
-                .toList();
-            staff.sort(
-              (a, b) => (ids.contains(_staffKey(b)) ? 1 : 0).compareTo(
-                ids.contains(_staffKey(a)) ? 1 : 0,
+              return !branchIds.any((id) => id != widget.branch.id);
+            })
+            .where((doc) {
+              final query = _searchController.text.trim().toLowerCase();
+              if (query.isEmpty) return true;
+              final data = doc.data();
+              return '${_staffName(data)} ${_assignmentRole(data)} ${_staffKey(doc)}'
+                  .toLowerCase()
+                  .contains(query);
+            })
+            .toList();
+        staff.sort(
+          (a, b) => (ids.contains(_staffKey(b)) ? 1 : 0).compareTo(
+            ids.contains(_staffKey(a)) ? 1 : 0,
+          ),
+        );
+        return Column(
+          children: [
+            ListTile(
+              title: Text(
+                'Staff in ${branch.data!.data()?['name'] ?? 'Branch'}',
+                style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 20,
+                ),
               ),
-            );
-            return Column(
-              children: [
-                ListTile(
-                  title: Text(
-                    'Staff in ${branch.data!.data()?['name'] ?? 'Branch'}',
-                    style: const TextStyle(
-                      fontWeight: FontWeight.bold,
-                      fontSize: 20,
+              subtitle: Text(
+                widget.allowAssignment
+                    ? 'Assigned staff and available accounts'
+                    : 'Staff assigned to this branch',
+              ),
+              trailing: IconButton(
+                tooltip: 'Close',
+                onPressed: () => Navigator.pop(context),
+                icon: const Icon(Icons.close),
+              ),
+            ),
+            if (_saving) const LinearProgressIndicator(),
+            if (_error != null)
+              Padding(
+                padding: const EdgeInsets.all(12),
+                child: Text(_error!, style: const TextStyle(color: Colors.red)),
+              ),
+            if (widget.includeAdmins)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+                child: DropdownButtonFormField<String>(
+                  initialValue: _selectedRole,
+                  decoration: const InputDecoration(
+                    labelText: 'Select role to assign',
+                    border: OutlineInputBorder(),
+                  ),
+                  items: const [
+                    DropdownMenuItem(
+                      value: 'staff',
+                      child: Text('Staff / Cashier'),
                     ),
-                  ),
-                  subtitle: Text(
-                    widget.allowAssignment
-                        ? 'Assigned staff and available accounts'
-                        : 'Staff assigned to this branch',
-                  ),
-                  trailing: IconButton(
-                    tooltip: 'Close',
-                    onPressed: () => Navigator.pop(context),
-                    icon: const Icon(Icons.close),
+                    DropdownMenuItem(value: 'admin', child: Text('Admin')),
+                  ],
+                  onChanged: _saving
+                      ? null
+                      : (role) {
+                          if (role != null) {
+                            setState(() => _selectedRole = role);
+                          }
+                        },
+                ),
+              ),
+            if (widget.allowAssignment)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                child: TextField(
+                  controller: _searchController,
+                  onChanged: (_) => setState(() {}),
+                  decoration: const InputDecoration(
+                    hintText: 'Search cashier or admin',
+                    prefixIcon: Icon(Icons.search),
+                    border: OutlineInputBorder(),
                   ),
                 ),
-                if (_saving) const LinearProgressIndicator(),
-                if (_error != null)
-                  Padding(
-                    padding: const EdgeInsets.all(12),
-                    child: Text(
-                      _error!,
-                      style: const TextStyle(color: Colors.red),
+              ),
+            Expanded(
+              child: ListView(
+                children: [
+                  if (staff.isEmpty)
+                    const ListTile(
+                      title: Text('No available accounts for this role.'),
                     ),
-                  ),
-                if (widget.includeAdmins)
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
-                    child: DropdownButtonFormField<String>(
-                      initialValue: _selectedRole,
-                      decoration: const InputDecoration(
-                        labelText: 'Select role to assign',
-                        border: OutlineInputBorder(),
+                  ...staff.map((doc) {
+                    final data = doc.data();
+                    final assigned = ids.contains(_staffKey(doc));
+                    final elsewhere = (data['branchIds'] as List? ?? []).any(
+                      (id) => id != widget.branch.id,
+                    );
+                    final title = Text(
+                      '${_staffName(data)}${widget.includeAdmins ? ' • ${_assignmentRole(data) == 'admin' ? 'Admin' : 'Cashier'}' : ''}',
+                    );
+                    if (!widget.allowAssignment) {
+                      return ListTile(
+                        leading: ProfileAvatar(data: data),
+                        title: title,
+                      );
+                    }
+                    return CheckboxListTile(
+                      value: assigned,
+                      secondary: ProfileAvatar(data: data),
+                      title: title,
+                      subtitle: Text(
+                        assigned
+                            ? (data['status'] == 'accepted'
+                                  ? 'Assigned to this branch'
+                                  : 'Deactivated')
+                            : elsewhere
+                            ? 'Assigned to another branch'
+                            : 'Available to assign',
                       ),
-                      items: const [
-                        DropdownMenuItem(
-                          value: 'staff',
-                          child: Text('Staff / Cashier'),
-                        ),
-                        DropdownMenuItem(value: 'admin', child: Text('Admin')),
-                      ],
-                      onChanged: _saving
+                      activeColor: AppColors.primary,
+                      onChanged: _saving || (!assigned && elsewhere)
                           ? null
-                          : (role) {
-                              if (role != null) {
-                                setState(() => _selectedRole = role);
+                          : (value) {
+                              if (value != null) {
+                                _confirmAndAssign(doc, value);
                               }
                             },
-                    ),
-                  ),
-                Expanded(
-                  child: ListView(
-                    children: [
-                      if (staff.isEmpty)
-                        const ListTile(
-                          title: Text('No available accounts for this role.'),
-                        ),
-                      ...staff.map((doc) {
-                        final data = doc.data();
-                        final assigned = ids.contains(_staffKey(doc));
-                        final elsewhere = (data['branchIds'] as List? ?? [])
-                            .any((id) => id != widget.branch.id);
-                        final title = Text(
-                          '${_staffName(data)}${widget.includeAdmins ? ' • ${_assignmentRole(data) == 'admin' ? 'Admin' : 'Cashier'}' : ''}',
-                        );
-                        if (!widget.allowAssignment) {
-                          return ListTile(
-                            leading: ProfileAvatar(data: data),
-                            title: title,
-                          );
-                        }
-                        return CheckboxListTile(
-                          value: assigned,
-                          secondary: ProfileAvatar(data: data),
-                          title: title,
-                          subtitle: Text(
-                            assigned
-                                ? (data['status'] == 'accepted'
-                                      ? 'Assigned to this branch'
-                                      : 'Deactivated')
-                                : elsewhere
-                                ? 'Assigned to another branch'
-                                : 'Available to assign',
-                          ),
-                          activeColor: AppColors.primary,
-                          onChanged: _saving || (!assigned && elsewhere)
-                              ? null
-                              : (value) => _assign(doc, value == true),
-                        );
-                      }),
-                    ],
-                  ),
-                ),
-              ],
-            );
-          },
-        ),
+                    );
+                  }),
+                ],
+              ),
+            ),
+          ],
+        );
+      },
+    ),
   );
 }

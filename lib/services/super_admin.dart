@@ -39,11 +39,19 @@ class SuperAdmin {
       final linkedUid = '${profile?['authUid'] ?? ''}'.trim();
       if (linkedUid.isNotEmpty) {
         final auth = authentication ?? FirebaseAuth.instance;
-        for (final email in <String>{
+        // Email changes can leave the cached profile fields behind briefly.
+        // If this device already has the linked identity, its current Auth
+        // email is the authoritative additional sign-in candidate.
+        final currentUser = auth.currentUser;
+        final emails = <String>{
           for (final key in ['pendingAuthEmail', 'authEmail', 'email'])
             if ('${profile?[key] ?? ''}'.trim().isNotEmpty)
               '${profile![key]}'.trim(),
-        }) {
+          if (currentUser?.uid == linkedUid &&
+              (currentUser?.email ?? '').trim().isNotEmpty)
+            currentUser!.email!.trim(),
+        };
+        for (final email in emails) {
           try {
             final credential = await auth.signInWithEmailAndPassword(
               email: email,
@@ -53,11 +61,18 @@ class SuperAdmin {
               await auth.signOut();
               return false;
             }
-            await syncVerifiedProfileEmail(
-              profile: profileRef,
-              user: credential.user,
-              reload: false,
-            );
+            // A successful credential check must not be turned into a failed
+            // login just because optional profile-email synchronization fails.
+            try {
+              await syncVerifiedProfileEmail(
+                profile: profileRef,
+                user: credential.user,
+                reload: false,
+              );
+            } catch (_) {
+              // The verified Auth session remains valid; profile sync can retry
+              // on the next sign-in or account settings visit.
+            }
             return true;
           } on FirebaseAuthException catch (error) {
             if (![

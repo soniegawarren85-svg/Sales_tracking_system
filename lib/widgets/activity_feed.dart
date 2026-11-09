@@ -18,6 +18,7 @@ class ActivityFeed extends StatefulWidget {
     this.includeReceipts = false,
     this.hideSessionEvents = false,
     this.hideAdminActivities = false,
+    this.excludedActions = const {},
     this.showEmptyMessage = true,
   });
   final String? actorId, branchId;
@@ -31,6 +32,7 @@ class ActivityFeed extends StatefulWidget {
   final bool includeReceipts;
   final bool hideSessionEvents;
   final bool hideAdminActivities;
+  final Set<String> excludedActions;
   final bool showEmptyMessage;
 
   @override
@@ -74,28 +76,6 @@ class _ActivityFeedState extends State<ActivityFeed> {
         RegExp(r'^[a-z]'),
         (match) => match[0]!.toUpperCase(),
       );
-
-  String _formatValue(dynamic value) {
-    if (value == null || value == '') return 'Not set';
-    if (value is Timestamp) return value.toDate().toLocal().toString();
-    if (value is DateTime) return value.toLocal().toString();
-    if (value is List) {
-      return value.map(_formatValue).join('\n');
-    }
-    if (value is Map) {
-      if (value.containsKey('name') &&
-          (value.containsKey('quantity') || value.containsKey('qty'))) {
-        return '${value['name']} × ${value['quantity'] ?? value['qty']}';
-      }
-      return value.entries
-          .map(
-            (entry) =>
-                '${_label('${entry.key}')}: ${_formatValue(entry.value)}',
-          )
-          .join(' • ');
-    }
-    return '$value';
-  }
 
   DateTime? _dateOf(dynamic value) {
     if (value is Timestamp) return value.toDate().toLocal();
@@ -251,8 +231,10 @@ class _ActivityFeedState extends State<ActivityFeed> {
                               '',
                             ),
                           )) &&
+                      !widget.excludedActions.contains('${r['action']}') &&
                       (actors.isEmpty ||
                           actors.contains('${r['actorId']}') ||
+                          actors.contains('${r['actorPublicId']}') ||
                           (includeBranchActivity &&
                               branchActions.contains(r['action']) &&
                               branchId != null &&
@@ -300,6 +282,13 @@ class _ActivityFeedState extends State<ActivityFeed> {
           children: [
             ...pageRows.map((r) {
               final action = '${r['action'] ?? 'activity'}';
+              final details = r['details'] as Map? ?? const {};
+              final updatedFields =
+                  action == 'settings_updated' && details['fields'] is List
+                  ? (details['fields'] as List)
+                        .map((field) => _label('$field'))
+                        .join(', ')
+                  : null;
               final date = _dateOf(r['createdAt']);
               final actorName = '${r['actorName'] ?? 'Unknown user'}';
               final actorId = '${r['actorPublicId'] ?? ''}'.trim();
@@ -361,6 +350,17 @@ class _ActivityFeedState extends State<ActivityFeed> {
                               ),
                             ],
                           ),
+                          if (updatedFields != null &&
+                              updatedFields.isNotEmpty) ...[
+                            const SizedBox(height: 4),
+                            Text(
+                              'Updated fields: $updatedFields',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.blueGrey.shade700,
+                              ),
+                            ),
+                          ],
                           const SizedBox(height: 6),
                           const SizedBox(height: 10),
                           Wrap(
@@ -531,6 +531,7 @@ class _RecentActivityPanelState extends State<RecentActivityPanel> {
         cardRows: true,
         hideSessionEvents: true,
         hideAdminActivities: true,
+        excludedActions: const {'bundle_unbundled'},
       ),
     ],
   );

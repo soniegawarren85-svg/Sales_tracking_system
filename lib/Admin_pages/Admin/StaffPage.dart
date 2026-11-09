@@ -66,8 +66,9 @@ String? validateStaffPasswordConfirmation(String? value, String password) {
 }
 
 class StaffPage extends StatefulWidget {
-  const StaffPage({super.key, this.onBack});
+  const StaffPage({super.key, this.onBack, this.firestore});
   final VoidCallback? onBack;
+  final FirebaseFirestore? firestore;
 
   @override
   State<StaffPage> createState() => _StaffPageState();
@@ -104,6 +105,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
   final _confirmPasswordFieldKey = GlobalKey<FormFieldState<String>>();
   bool _showCreatePassword = false;
   bool _showConfirmPassword = false;
+  late final Stream<QuerySnapshot<Map<String, dynamic>>> _staffStream;
 
   bool _matchesAccountSearch(AdminModel member) {
     final terms = _accountSearch.trim().toLowerCase().split(RegExp(r'\s+'))
@@ -130,13 +132,12 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
     return terms.every(searchable.contains);
   }
 
-  // ─── STREAMS ──────────────────────────────────────────────
-  Stream<QuerySnapshot<Map<String, dynamic>>> get _staffStream =>
-      FirebaseFirestore.instance.collection('staff_requests').snapshots();
-
   @override
   void initState() {
     super.initState();
+    _staffStream = (widget.firestore ?? FirebaseFirestore.instance)
+        .collection('staff_requests')
+        .snapshots();
     _tabController = TabController(length: 2, vsync: this);
     _tabController.addListener(_handleStaffTabChanged);
 

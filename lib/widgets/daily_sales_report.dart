@@ -16,6 +16,7 @@ import '../services/number_format.dart';
 import '../services/inventory_display_ids.dart';
 import '../services/receipt_tax.dart';
 import '../services/report_pdf_theme.dart';
+import '../services/branch_status.dart';
 import '../theme/app_colors.dart';
 import 'inventory_records_table.dart';
 import 'admin_page_skeleton.dart';
@@ -264,10 +265,23 @@ class _DailySalesReportState extends State<DailySalesReport> {
         final start = range.$1, end = range.$2;
         final comparisonDuration = end.difference(start);
         final previousStart = start.subtract(comparisonDuration);
+        final allBranchRows = data.rows('branches');
+        // Keep the comparison scoped to current branches. Voided branches can
+        // still have historical sales, but must not appear in this breakdown.
+        final activeBranchRows = allBranchRows.where(isActiveBranch).toList();
+        final activeBranchIds = activeBranchRows
+            .map((branch) => '${branch['_id']}')
+            .where((id) => id.isNotEmpty)
+            .toSet();
+        bool isIncludedInAllBranchReport(Map<String, dynamic> sale) =>
+            widget.branchId != null ||
+            allBranchRows.isEmpty ||
+            activeBranchIds.contains('${sale['branchId'] ?? ''}');
         final previousSales = data
             .sales(widget.branchId, previousStart, start)
             .where(
               (sale) =>
+                  isIncludedInAllBranchReport(sale) &&
                   !reportRefund(sale) &&
                   sale['isDeleted'] != true &&
                   sale['type'] != 'reduce' &&
@@ -297,6 +311,7 @@ class _DailySalesReportState extends State<DailySalesReport> {
             .sales(widget.branchId, start, end)
             .where(
               (s) =>
+                  isIncludedInAllBranchReport(s) &&
                   !reportRefund(s) &&
                   s['isDeleted'] != true &&
                   s['type'] != 'reduce' &&
@@ -341,7 +356,7 @@ class _DailySalesReportState extends State<DailySalesReport> {
           (sum, value) => sum + value,
         );
         final branches = {
-          for (final b in data.rows('branches'))
+          for (final b in activeBranchRows)
             if (widget.branchId == null || b['_id'] == widget.branchId)
               '${b['_id']}': '${b['name'] ?? b['branchName'] ?? b['_id']}',
           if (widget.branchId != null &&

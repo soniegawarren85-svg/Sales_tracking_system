@@ -9,6 +9,7 @@ import '../widgets/branch_daily_summary.dart';
 import '../widgets/historical_cash_drawer.dart';
 import 'inventory_display_ids.dart';
 import 'analytics_hours.dart';
+import 'branch_status.dart';
 
 double reportValue(dynamic value) => num.tryParse('$value')?.toDouble() ?? 0;
 bool reportClosingAvailable(
@@ -51,6 +52,109 @@ bool reportRefund(Map row) =>
     '${row['salesId']}'.toUpperCase().startsWith('R-');
 
 class BranchReportData {
+  static Stream<BranchReportData> watchInventoryReport(
+    String branchId, {
+    FirebaseFirestore? firestore,
+  }) {
+    final db = firestore ?? FirebaseFirestore.instance;
+    final values = <String, List<Map<String, dynamic>>>{};
+    final subscriptions = <StreamSubscription>[];
+    const expected = 10;
+    late StreamController<BranchReportData> controller;
+
+    void emitIfReady() {
+      if (values.length != expected || controller.isClosed) return;
+      final allocations = <String, Map<String, dynamic>>{};
+      for (final row in [
+        ...?values['staff_inventory_by_staff'],
+        ...?values['staff_inventory_by_branch'],
+      ]) {
+        allocations['${row['_id']}'] = row;
+      }
+      controller.add(
+        BranchReportData({
+          for (final entry in values.entries)
+            if (!entry.key.startsWith('staff_inventory_by_'))
+              entry.key: entry.value,
+          'staff_inventory': allocations.values.toList(),
+        }),
+      );
+    }
+
+    void watchQuery(String key, Query<Map<String, dynamic>> query) {
+      subscriptions.add(
+        query.snapshots().listen((snapshot) {
+          values[key] = snapshot.docs
+              .map((doc) => <String, dynamic>{...doc.data(), '_id': doc.id})
+              .toList();
+          emitIfReady();
+        }, onError: controller.addError),
+      );
+    }
+
+    controller = StreamController<BranchReportData>(
+      onListen: () {
+        subscriptions.add(
+          db.collection('branches').doc(branchId).snapshots().listen((
+            snapshot,
+          ) {
+            values['branches'] = snapshot.exists
+                ? [
+                    <String, dynamic>{...snapshot.data()!, '_id': snapshot.id},
+                  ]
+                : [];
+            emitIfReady();
+          }, onError: controller.addError),
+        );
+        watchQuery(
+          'completed_sales',
+          db
+              .collection('completed_sales')
+              .where('branchId', isEqualTo: branchId),
+        );
+        watchQuery(
+          'stock_adjustments',
+          db
+              .collection('stock_adjustments')
+              .where('branchId', isEqualTo: branchId),
+        );
+        watchQuery(
+          'staff_inventory_by_staff',
+          db
+              .collection('staff_inventory')
+              .where('staffId', isEqualTo: branchId),
+        );
+        watchQuery(
+          'staff_inventory_by_branch',
+          db
+              .collection('staff_inventory')
+              .where('branchId', isEqualTo: branchId),
+        );
+        watchQuery(
+          'staff_inventory_history',
+          db
+              .collection('staff_inventory_history')
+              .where('staffId', isEqualTo: branchId),
+        );
+        watchQuery('sales_inventory', db.collection('sales_inventory'));
+        watchQuery('coffee_products', db.collection('coffee_products'));
+        watchQuery('coffee_addons', db.collection('coffee_addons'));
+        watchQuery(
+          'activity_logs',
+          db
+              .collection('activity_logs')
+              .where('branchIds', arrayContains: branchId),
+        );
+      },
+      onCancel: () async {
+        for (final subscription in subscriptions) {
+          await subscription.cancel();
+        }
+      },
+    );
+    return controller.stream;
+  }
+
   static Stream<BranchReportData> watch({FirebaseFirestore? firestore}) {
     const names = [
       'branches',
@@ -108,6 +212,11 @@ class BranchReportData {
       collection == 'completed_sales'
       ? (collections[collection] ?? []).map(refundValueRecord).toList()
       : collections[collection] ?? [];
+  Set<String> activeBranchIds() => rows('branches')
+      .where(isActiveBranch)
+      .map((branch) => '${branch['_id'] ?? ''}')
+      .where((id) => id.isNotEmpty)
+      .toSet();
 
   bool refundsEnabled(String? branch) =>
       settingsForBranch(
@@ -930,6 +1039,8 @@ class BranchReportData {
                 'time': at,
                 'activity': 'Unbundle',
                 'qty': unbundledQuantity,
+                'batchId':
+                    row['batchId'] ?? row['bundleActionId'] ?? row['_id'],
               });
             }
           }
@@ -980,6 +1091,8 @@ class BranchReportData {
               : 'Sold',
           'name': item['name'],
           'qty': refund && sale['refundMethod'] != 'inventory' ? 0.0 : -qty,
+          if (item['type'] == 'Beverages')
+            'size': raw['coffeeSize'] ?? raw['variant'] ?? 'Regular',
           'sales':
               qty *
               reportValue(raw['price'] ?? raw['unitPrice'] ?? item['price']),

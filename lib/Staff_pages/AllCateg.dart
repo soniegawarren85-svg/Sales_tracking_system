@@ -12,6 +12,7 @@ import '../services/sale_stock.dart';
 import '../services/low_stock_reports.dart';
 import '../services/session_actor.dart';
 import '../services/staff_allocation_scope.dart';
+import '../services/staff_addon_inventory.dart';
 import '../services/staff_expiry_service.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -321,6 +322,70 @@ class _AllCategPageState extends State<AllCategPage>
       }
     }
   }
+
+  Future<void> _showPendingOfflineReductions() => showDialog<void>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: const Row(
+        children: [
+          Icon(Icons.cloud_upload_outlined, color: Color(0xFF8A4B08)),
+          SizedBox(width: 10),
+          Expanded(child: Text('Pending reductions')),
+        ],
+      ),
+      content: SizedBox(
+        width: 460,
+        child: ListView.separated(
+          shrinkWrap: true,
+          itemCount: _pendingOfflineReductions.length,
+          separatorBuilder: (_, _) => const Divider(height: 1),
+          itemBuilder: (context, index) {
+            final reduction = _pendingOfflineReductions[index];
+            final itemName = '${reduction['itemName'] ?? 'Inventory item'}';
+            final category = '${reduction['categoryName'] ?? ''}';
+            final variant = '${reduction['variant'] ?? ''}'.trim();
+            return ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const CircleAvatar(
+                backgroundColor: Color(0xFFFFF3E0),
+                child: Icon(
+                  Icons.remove_circle_outline,
+                  color: Color(0xFF8A4B08),
+                ),
+              ),
+              title: Text(
+                variant.isEmpty ? itemName : '$itemName ($variant)',
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+              subtitle: Text(
+                [
+                  if (category.isNotEmpty) category,
+                  '${reduction['reason'] ?? 'Stock reduction'}',
+                  if ('${reduction['comment'] ?? ''}'.trim().isNotEmpty)
+                    '${reduction['comment']}',
+                  if ('${reduction['syncError'] ?? ''}'.trim().isNotEmpty)
+                    'Sync issue: ${reduction['syncError']}',
+                ].join(' · '),
+              ),
+              trailing: Text(
+                '-${reduction['quantity'] ?? 0}',
+                style: const TextStyle(
+                  color: Color(0xFF8A4B08),
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+            );
+          },
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Close'),
+        ),
+      ],
+    ),
+  );
 
   Future<void> _queueOfflineStockReduction({
     required String id,
@@ -5182,27 +5247,30 @@ class _AllCategPageState extends State<AllCategPage>
     );
   }
 
-  Widget _buildCoffeeCategoryCard(Map<String, dynamic> category, int index) {
+  Widget _buildCoffeeCategoryCard(
+    Map<String, dynamic> category,
+    int index, {
+    required List<Map<String, dynamic>> allocatedAddons,
+  }) {
     final coffeeName = category['categoryName']?.toString() ?? 'Beverages';
     final coffeeId = _displayItemId(category);
     final items =
         (category['items'] as List?)?.cast<Map<String, dynamic>>() ?? [];
-    final addonByName = <String, Map<String, dynamic>>{};
-    for (final rawAddon in (category['addonOptions'] as List?) ?? const []) {
-      if (rawAddon is! Map) continue;
-      final addon = Map<String, dynamic>.from(rawAddon);
-      addon['isLowStock'] =
-          addon['isLowStock'] == true ||
-          addon['staffLowStockPendingAdmin'] == true;
-      if (addon['isDeleted'] == true || bundleExpired(addon, DateTime.now())) {
-        continue;
-      }
-      final addonName = addon['name']?.toString().trim().toLowerCase() ?? '';
-      if (addonName.isNotEmpty) {
-        addonByName.putIfAbsent(addonName, () => addon);
-      }
-    }
-    final addonDocs = addonByName.values.toList();
+    final addonDocs =
+        mergeStaffAddonOptions(
+          beverageOptions: ((category['addonOptions'] as List?) ?? const [])
+              .whereType<Map>(),
+          allocatedAddons: allocatedAddons,
+        ).where((addon) {
+          addon['isLowStock'] =
+              addon['isLowStock'] == true ||
+              addon['staffLowStockPendingAdmin'] == true;
+          if (addon['isDeleted'] == true ||
+              bundleExpired(addon, DateTime.now())) {
+            return false;
+          }
+          return true;
+        }).toList();
 
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
       stream: FirebaseFirestore.instance
@@ -6428,6 +6496,7 @@ class _AllCategPageState extends State<AllCategPage>
   Widget _buildCategoryList(
     List<Map<String, dynamic>> categoryDocs, {
     String emptyMessage = 'No items found.',
+    List<Map<String, dynamic>> allocatedAddons = const [],
   }) {
     final compact = MediaQuery.sizeOf(context).width < 900;
     if (categoryDocs.isEmpty) {
@@ -6635,7 +6704,11 @@ class _AllCategPageState extends State<AllCategPage>
       itemBuilder: (context, index) {
         final category = categoryDocs[index];
         if (category['isCoffee'] == true) {
-          return _buildCoffeeCategoryCard(category, index);
+          return _buildCoffeeCategoryCard(
+            category,
+            index,
+            allocatedAddons: allocatedAddons,
+          );
         }
         final categoryName = category['categoryName']?.toString() ?? 'Unknown';
         final categoryId = category['categoryId']?.toString() ?? '';
@@ -7664,6 +7737,12 @@ class _AllCategPageState extends State<AllCategPage>
                                     ],
                                   ),
                                 ),
+                                IconButton(
+                                  tooltip: 'View pending reductions',
+                                  onPressed: _showPendingOfflineReductions,
+                                  icon: const Icon(Icons.visibility_outlined),
+                                  color: const Color(0xFF8A4B08),
+                                ),
                               ],
                             ),
                           ),
@@ -7709,6 +7788,7 @@ class _AllCategPageState extends State<AllCategPage>
                               ? _buildCategoryList(
                                   searchedCoffeeDocs,
                                   emptyMessage: 'No beverage items found.',
+                                  allocatedAddons: searchedAddonDocs,
                                 )
                               : widget.selectedIsBundle
                               ? _buildBundleList(searchedBundleDocs)
@@ -7725,6 +7805,7 @@ class _AllCategPageState extends State<AllCategPage>
                               ? _buildCategoryList(
                                   searchedCoffeeDocs,
                                   emptyMessage: 'No beverage items found.',
+                                  allocatedAddons: searchedAddonDocs,
                                 )
                               : _showCategories
                               ? _buildCategoryList(

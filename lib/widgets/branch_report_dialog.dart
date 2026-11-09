@@ -14,6 +14,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import '../services/branch_report_data.dart';
+import '../services/branch_status.dart';
 import '../services/save_bytes.dart';
 import '../theme/app_colors.dart';
 import 'admin_sales_overview.dart';
@@ -207,6 +208,9 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
   }
 
   Map<String, double> reportTotals(BranchReportData data) {
+    if (!data.activeBranchIds().contains(widget.branchId)) {
+      return const {};
+    }
     final values = data.allocationReportTotals(
       widget.branchId!,
       range.$1,
@@ -255,16 +259,25 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
             : 'Yearly'} Report';
   String get dates =>
       '${range.$1.month}/${range.$1.day}/${range.$1.year} - ${range.$2.subtract(const Duration(days: 1)).month}/${range.$2.subtract(const Duration(days: 1)).day}/${range.$2.year}';
+  List<Map<String, dynamic>> activeSales(BranchReportData data) {
+    final activeIds = data.activeBranchIds();
+    if (widget.branchId != null && !activeIds.contains(widget.branchId)) {
+      return const [];
+    }
+    return data
+        .sales(widget.branchId, range.$1, range.$2)
+        .where((row) => activeIds.contains('${row['branchId'] ?? ''}'))
+        .toList();
+  }
+
   List<Map<String, dynamic>> filteredSales(BranchReportData data) =>
-      data
-          .sales(widget.branchId, range.$1, range.$2)
-          .where((row) => receiptMatchesSearch(row, _search))
-          .toList()
-        ..sort(
-          (a, b) => (cashRecordDate(b['timestamp']) ?? DateTime(0)).compareTo(
-            cashRecordDate(a['timestamp']) ?? DateTime(0),
-          ),
-        );
+      activeSales(
+        data,
+      ).where((row) => receiptMatchesSearch(row, _search)).toList()..sort(
+        (a, b) => (cashRecordDate(b['timestamp']) ?? DateTime(0)).compareTo(
+          cashRecordDate(a['timestamp']) ?? DateTime(0),
+        ),
+      );
 
   Widget section(String title, Widget child) => Container(
     width: double.infinity,
@@ -295,8 +308,7 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
   Map<String, double> branchAmounts(BranchReportData data) {
     final totals = <String, double>{
       for (final branch in data.rows('branches'))
-        if (branch['isVoided'] != true && branch['isDeleted'] != true)
-          '${branch['_id']}': 0,
+        if (isActiveBranch(branch)) '${branch['_id']}': 0,
     };
     for (final id in totals.keys.toList()) {
       final field = _comparison == 'Refund'
@@ -337,7 +349,7 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
         : _period == 'Year'
         ? at.month - 1
         : DateUtils.dateOnly(at).difference(range.$1).inDays;
-    for (final sale in data.sales(widget.branchId, range.$1, range.$2)) {
+    for (final sale in activeSales(data)) {
       final at = cashRecordDate(sale['timestamp'] ?? sale['createdAt']);
       if (at == null) continue;
       final index = bucket(at);
@@ -472,8 +484,7 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
     final amounts = branchAmounts(data);
     final names = {
       for (final row in data.rows('branches'))
-        if (row['isVoided'] != true && row['isDeleted'] != true)
-          '${row['_id']}': '${row['name']}',
+        if (isActiveBranch(row)) '${row['_id']}': '${row['name']}',
     };
     final chart = widget.branchId == null ? null : bars(data);
     pdf.addPage(
@@ -863,8 +874,7 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
     final amounts = branchAmounts(data);
     final names = {
       for (final row in data.rows('branches'))
-        if (row['isVoided'] != true && row['isDeleted'] != true)
-          '${row['_id']}': '${row['name']}',
+        if (isActiveBranch(row)) '${row['_id']}': '${row['name']}',
     };
     final matchingBranchIds = amounts.keys
         .where(
@@ -1134,9 +1144,6 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
             .firstOrNull ??
         {};
     _closingMinutes = (settings['closingMinutes'] as num?)?.toInt() ?? 1140;
-    final openingMinutes = (settings['openingMinutes'] as num?)?.toInt() ?? 600;
-    String timeLabel(int minutes) =>
-        TimeOfDay(hour: minutes ~/ 60, minute: minutes % 60).format(context);
     final totals = reportTotals(data);
     final comparisonStart = range.$1.subtract(range.$2.difference(range.$1));
     double periodSales(DateTime start, DateTime end) => data
@@ -1249,26 +1256,17 @@ class _BranchReportDialogState extends State<BranchReportDialog> {
                     ),
                   ),
                 ),
-            if (_period == 'Day')
-              Text(
-                'Shop hours: ${timeLabel(openingMinutes)}–${timeLabel(_closingMinutes)}. Closing cash drawer is available from ${timeLabel(_closingMinutes)} and includes later cash orders that day. GCash is excluded.',
-                style: const TextStyle(
-                  fontSize: 12,
-                  color: AppColors.textMuted,
-                ),
-              ),
             const SizedBox(height: 12),
             OutlinedButton.icon(
               onPressed: () => showDialog<void>(
                 context: context,
                 builder: (_) => BranchReceiptsDialog(
-                  sales: data.sales(widget.branchId, range.$1, range.$2),
+                  sales: activeSales(data),
                   period: dates,
                   recordsStream: widget.reportData != null
                       ? null
                       : BranchReportData.watch().map(
-                          (fresh) =>
-                              fresh.sales(widget.branchId, range.$1, range.$2),
+                          (fresh) => activeSales(fresh),
                         ),
                 ),
               ),

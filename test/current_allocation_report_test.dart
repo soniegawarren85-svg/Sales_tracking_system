@@ -254,6 +254,72 @@ void main() {
     expect(unbundles.map((event) => event['qty']), everyElement(2));
   });
 
+  test('unbundle history uses total ingredient quantity and final balance', () {
+    final data = BranchReportData({
+      'sales_inventory': [
+        {
+          '_id': 'category-source',
+          'items': [
+            {
+              'id': 'PISTACHIO-01',
+              'publicId': 'PISTACHIO-01',
+              'name': 'Pistachio Dubai Chewy',
+              'stock': 0,
+              'price': 100,
+            },
+          ],
+        },
+      ],
+      'staff_inventory': [
+        {
+          '_id': 'original-allocation',
+          'staffId': 'b',
+          'sourceInventoryId': 'category-source',
+          'assignedAt': day,
+          'items': [
+            {
+              'id': 'PISTACHIO-01',
+              'publicId': 'PISTACHIO-01',
+              'name': 'Pistachio Dubai Chewy',
+              'stock': 112,
+              'assignedStartingStock': 112,
+              'price': 100,
+            },
+          ],
+        },
+        {
+          '_id': 'unbundle-batch',
+          'staffId': 'b',
+          'sourceInventoryId': 'category-source',
+          'origin': 'unbundle',
+          'assignedAt': day,
+          'items': [
+            {
+              'id': 'PISTACHIO-01',
+              'publicId': 'PISTACHIO-01',
+              'name': 'Pistachio Dubai Chewy',
+              'stock': 64,
+              'startingStock': 64,
+              'assignedStartingStock': 64,
+              'origin': 'unbundle',
+              'price': 100,
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(data.currentInventory('b', day).single['remaining'], 176);
+    final history =
+        data.items('b', day, end).single['history']
+            as List<Map<String, dynamic>>;
+    final unbundle = history.singleWhere(
+      (event) => event['activity'] == 'Unbundle',
+    );
+    expect(unbundle['qty'], 64);
+    expect(unbundle['balance'], 176);
+  });
+
   test('branch table cost is cost price multiplied by sold quantity', () {
     expect(
       branchStockCost({
@@ -421,7 +487,7 @@ void main() {
       );
       await tester.pumpAndSettle();
       final categoryWrap = find
-          .ancestor(of: find.text('Categories'), matching: find.byType(Wrap))
+          .ancestor(of: find.text('Categories'), matching: find.byType(Row))
           .first;
       final categoryChoices = tester
           .widgetList<ChoiceChip>(

@@ -46,6 +46,7 @@ class AllocationChecklistService {
       final status = admin
           ? ChecklistStatus.discrepancy
           : ChecklistStatus.issue;
+      final eventId = ref.collection('events').doc().id;
       tx.update(ref, {
         'status': status,
         'issueReason': reason.trim(),
@@ -53,9 +54,7 @@ class AllocationChecklistService {
         'reportedByName': actorName,
         'reportedAt': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),
-      });
-      tx.update(ref, {
-        'reports.${ref.collection('events').doc().id}': {
+        'reports.$eventId': {
           'status': status,
           'reason': reason.trim(),
           'actorId': actorId,
@@ -530,7 +529,13 @@ class AllocationChecklistService {
     if (!accept && reason.trim().isEmpty) {
       throw ArgumentError('Please enter a decline reason.');
     }
-    const quantityIssues = {'Missing', 'Extra', 'Incorrect', 'Damaged'};
+    const quantityIssues = {
+      'Missing',
+      'Extra',
+      'Incorrect',
+      'Damaged',
+      'Not received',
+    };
     if (issueType != null &&
         (!accept ||
             !quantityIssues.contains(issueType) ||
@@ -594,7 +599,8 @@ class AllocationChecklistService {
         );
       }
       final fullyMissing =
-          issueType == 'Missing' && issueQuantity >= issueBaseQuantity;
+          (issueType == 'Missing' || issueType == 'Not received') &&
+          issueQuantity >= issueBaseQuantity;
       if (!accept && !target.exists) {
         throw StateError(
           'Source inventory is missing. Ask the administrator to restore it before declining.',
@@ -618,6 +624,20 @@ class AllocationChecklistService {
           : issueType == 'Extra'
           ? issueBaseQuantity + issueQuantity
           : issueBaseQuantity - issueQuantity;
+      final unreceivedItem = issueType == 'Not received' && !bundle
+          ? {
+              ...incoming[issueItemIndex],
+              'stock': issueQuantity,
+              'startingStock': issueQuantity,
+            }
+          : null;
+      final unreceivedInstances = issueType == 'Not received' && bundle
+          ? rows(pending['bundleInstances'])
+                .skip(
+                  rows(pending['bundleInstances']).length - issueQuantity,
+                )
+                .toList()
+          : const <Map<String, dynamic>>[];
       final payload = Map<String, dynamic>.from(pending)
         ..remove('targetDocId')
         ..remove('status')
@@ -630,7 +650,7 @@ class AllocationChecklistService {
       final result = <String, dynamic>{
         if (accept) ...payload,
         ...current,
-        if (accept) 'isDeleted': !fullyMissing,
+        if (accept) 'isDeleted': fullyMissing,
         'updatedAt': FieldValue.serverTimestamp(),
       };
       if (bundle) {
@@ -797,6 +817,44 @@ class AllocationChecklistService {
                     )
                     .toList(),
         });
+        if (issueType == 'Not received') {
+          tx.set(
+            db.collection('allocation_checklist').doc('${id}_not_received'),
+            {
+              'kind': 'not_received',
+              'status': ChecklistStatus.notReceivedPending,
+              'deliveryId': pending['deliveryId'] ?? id,
+              'originalAllocationId': id,
+              'staffId': pending['staffId'],
+              'branchId': pending['staffId'],
+              'staffName': pending['staffName'],
+              'branchName': pending['branchName'] ?? pending['staffName'],
+              'allocatedBy': pending['allocatedBy'],
+              'allocatedByName': pending['allocatedByName'],
+              'allocatedByAdminId': pending['allocatedByAdminId'],
+              'sourceInventoryId': pending['sourceInventoryId'],
+              'sourceCollection': pending['sourceCollection'] ?? 'sales_inventory',
+              'isBundle': bundle,
+              'isCoffee': false,
+              'isAddon': false,
+              'name': pending['name'] ?? issueItemName,
+              'issueType': 'Not received',
+              'issueQuantity': issueQuantity,
+              'issueItemId': issueItemId,
+              'issueItemName': issueItemName,
+              'issueReason': savedIssueReason,
+              'reportedBy': staffId,
+              'reportedByName': actorName,
+              'reportedAt': FieldValue.serverTimestamp(),
+              if (bundle) ...{
+                'bundleCount': issueQuantity,
+                'bundleInstances': unreceivedInstances,
+              } else
+                'items': [unreceivedItem],
+              'createdAt': FieldValue.serverTimestamp(),
+            },
+          );
+        }
         if (issueType != null) {
           final issueDescription =
               '$issueType: $issueItemName × $issueQuantity';
@@ -886,4 +944,78 @@ class AllocationChecklistService {
       return true;
     });
   }
+
+  Future<bool> restoreNotReceived(
+    String id, {
+    required String actorId,
+    required String actorName,
+  }) => db.runTransaction<bool>((tx) async {
+    final reportRef = db.collection('allocation_checklist').doc(id);
+    final report = (await tx.get(reportRef)).data();
+    if (report == null ||
+        !ChecklistStatus.allocationNeedsSuperAdminReview(report)) {
+      return false;
+    }
+    final sourceCollection =
+        '${report['sourceCollection'] ?? 'sales_inventory'}';
+    final sourceId = '${report['sourceInventoryId'] ?? ''}';
+    if (sourceCollection != 'sales_inventory' || sourceId.isEmpty) {
+      throw StateError('The original inventory item could not be found.');
+    }
+    final sourceRef = db.collection(sourceCollection).doc(sourceId);
+    final source = (await tx.get(sourceRef)).data();
+    if (source == null) {
+      throw StateError('The original inventory item could not be found.');
+    }
+    if (report['isBundle'] == true) {
+      final existing = rows(source['bundleInstances']);
+      final restored = rows(report['bundleInstances']).map((instance) {
+        final available = Map<String, dynamic>.from(instance)
+          ..['status'] = 'available'
+          ..remove('assignedAt')
+          ..remove('batchId');
+        return available;
+      });
+      tx.update(sourceRef, {
+        'bundleCount': quantity(source['bundleCount']) +
+            quantity(report['bundleCount'] ?? report['issueQuantity']),
+        'bundleInstances': [...existing, ...restored],
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+    } else {
+      final sourceItems = rows(source['items']);
+      final reportedItems = rows(report['items']);
+      if (reportedItems.isEmpty) {
+        throw StateError('The unreceived item details are missing.');
+      }
+      for (final reported in reportedItems) {
+        final reportedId = '${reported['id'] ?? ''}';
+        final index = sourceItems.indexWhere((item) =>
+            reportedId.isNotEmpty
+                ? '${item['id'] ?? ''}' == reportedId
+                : '${item['name'] ?? ''}' == '${reported['name'] ?? ''}');
+        if (index < 0) {
+          throw StateError(
+            'The original variant ${reported['name'] ?? ''} could not be found.',
+          );
+        }
+        final sourceItem = sourceItems[index];
+        final stock = quantity(sourceItem['stock'] ?? sourceItem['startingStock']);
+        final returned = quantity(reported['stock'] ?? reported['startingStock']);
+        sourceItems[index] = {...sourceItem, 'stock': stock + returned};
+      }
+      tx.update(sourceRef, {
+        'items': sourceItems,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+    }
+    tx.update(reportRef, {
+      'status': ChecklistStatus.notReceivedRestored,
+      'stockRestoredAt': FieldValue.serverTimestamp(),
+      'stockRestoredBy': actorId,
+      'stockRestoredByName': actorName,
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+    return true;
+  });
 }

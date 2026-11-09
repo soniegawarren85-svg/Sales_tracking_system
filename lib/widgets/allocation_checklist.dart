@@ -187,10 +187,10 @@ class _BranchAdminAwareChecklistButtonState
     future: _adminExists,
     builder: (context, snapshot) {
       if (snapshot.hasError) {
-        return Tooltip(
-          message: 'Unable to verify branch admin: ${snapshot.error}',
-          child: const Icon(Icons.warning_amber_rounded, color: Colors.orange),
-        );
+        // This is a visibility check only. Firestore can be temporarily
+        // unavailable while the app is offline; do not surface that check as
+        // an inventory warning or block the rest of the screen.
+        return const SizedBox.shrink();
       }
       if (!snapshot.hasData || snapshot.data == true) {
         return const SizedBox.shrink();
@@ -379,7 +379,11 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
     }
   }
 
-  Future<String?> askReason(bool admin) async {
+  Future<String?> askReason(
+    bool admin, {
+    String title = 'Report Issue',
+    String submitLabel = 'Submit report',
+  }) async {
     var reason = '';
     final form = GlobalKey<FormState>();
     return showDialog<String>(
@@ -387,7 +391,7 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
       useRootNavigator: true,
       builder: (dialogContext) => AlertDialog(
         constraints: const BoxConstraints(maxWidth: 420),
-        title: Text('Report Issue'),
+        title: Text(title),
         content: Form(
           key: form,
           child: TextFormField(
@@ -414,7 +418,7 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
                 Navigator.of(dialogContext).pop(reason.trim());
               }
             },
-            child: const Text('Submit report'),
+            child: Text(submitLabel),
           ),
         ],
       ),
@@ -422,7 +426,14 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
   }
 
   Future<_ChecklistIssue?> askIncomingIssue(Map<String, dynamic> data) async {
-    const issueTypes = ['Missing', 'Extra', 'Incorrect', 'Damaged', 'Others'];
+    const issueTypes = [
+      'Missing',
+      'Extra',
+      'Incorrect',
+      'Damaged',
+      'Not received',
+      'Others',
+    ];
     final items = AllocationChecklistService.rows(data['items']);
     final physicalStock =
         data['isBundle'] == true ||
@@ -460,6 +471,7 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
               ? 0
               : switch (pendingIssue!.type) {
                   'Missing' ||
+                  'Not received' ||
                   'Damaged' ||
                   'Incorrect' => allocatedQuantity - pendingIssue!.quantity,
                   'Extra' => allocatedQuantity + pendingIssue!.quantity,
@@ -479,6 +491,8 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
                         : pendingIssue!.type == 'Damaged' ||
                               pendingIssue!.type == 'Incorrect'
                         ? '${pendingIssue!.quantity} ${pendingIssue!.itemName} will be excluded from staff inventory and sent to Admin for return confirmation. The remaining $receivingQuantity will be received.'
+                        : pendingIssue!.type == 'Not received'
+                        ? '${pendingIssue!.quantity} ${pendingIssue!.itemName} will be reported as not received. Super Admin must review it and restore that quantity to main inventory. The remaining $receivingQuantity will be received.'
                         : '${pendingIssue!.type == 'Missing' ? 'Only' : 'Staff inventory will receive'} $receivingQuantity ${pendingIssue!.itemName}${pendingIssue!.type == 'Missing' ? ' will be added to staff inventory.' : ' including the reported extra quantity.'}',
                   )
                 : Form(
@@ -638,7 +652,13 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
     List<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
     bool accept,
   ) async {
-    final reason = accept ? '' : await askReason(true);
+    final reason = accept
+        ? ''
+        : await askReason(
+            true,
+            title: widget.superAdmin ? 'Reject this return' : 'Report Issue',
+            submitLabel: widget.superAdmin ? 'Reject Return' : 'Submit report',
+          );
     if (reason == null || !mounted) return;
     String message;
     var success = false;
@@ -646,25 +666,24 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
       final actor = await resolveSessionActor(widget.db, admin: true);
       final service = AllocationChecklistService(widget.db);
       var changed = 0;
-      if (accept) {
-        if (widget.superAdmin) {
-          for (var start = 0; start < docs.length; start += 200) {
-            changed += await service.decideReturns(
-              docs.skip(start).take(200).map((doc) => doc.id).toList(),
-              accept: true,
-              actorId: actor.id,
-              actorName: actor.name,
-            );
-          }
-        } else {
-          for (var start = 0; start < docs.length; start += 200) {
-            changed += await service.forwardReturns(
-              docs.skip(start).take(200).map((doc) => doc.id).toList(),
-              actorId: actor.id,
-              actorName: actor.name,
-              scopeIds: widget.ids,
-            );
-          }
+      if (widget.superAdmin) {
+        for (var start = 0; start < docs.length; start += 200) {
+          changed += await service.decideReturns(
+            docs.skip(start).take(200).map((doc) => doc.id).toList(),
+            accept: accept,
+            actorId: actor.id,
+            actorName: actor.name,
+            reason: reason,
+          );
+        }
+      } else if (accept) {
+        for (var start = 0; start < docs.length; start += 200) {
+          changed += await service.forwardReturns(
+            docs.skip(start).take(200).map((doc) => doc.id).toList(),
+            actorId: actor.id,
+            actorName: actor.name,
+            scopeIds: widget.ids,
+          );
         }
       } else {
         for (final doc in docs) {
@@ -687,6 +706,8 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
           ? widget.superAdmin
                 ? '$changed returned item records accepted successfully.'
                 : '$changed return records submitted to Super Admin.'
+          : widget.superAdmin
+          ? '$changed return records rejected. They will no longer appear as pending.'
           : 'Issue reported for $changed return records. They remain pending for acceptance.';
     } catch (error) {
       message =
@@ -707,6 +728,8 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
                     ? widget.superAdmin
                           ? 'Return accepted'
                           : 'Return submitted'
+                    : widget.superAdmin
+                    ? 'Return rejected'
                     : 'Issue reported'
               : 'Return status',
         ),
@@ -811,6 +834,8 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
                   ? incomingIssue?.type == 'Damaged' ||
                             incomingIssue?.type == 'Incorrect'
                         ? 'Issue reported. The affected quantity is pending Admin return confirmation.'
+                        : incomingIssue?.type == 'Not received'
+                        ? 'Not received quantity reported. It is pending Super Admin review.'
                         : incomingIssue?.hasPhysicalQuantity == true
                         ? 'Issue reported and the adjusted quantity was received.'
                         : 'Report submitted.'

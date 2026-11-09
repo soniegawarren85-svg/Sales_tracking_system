@@ -5,6 +5,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'admin_recent_sales.dart';
 import '../services/branch_report_data.dart';
+import '../services/branch_status.dart';
 
 /// Receipt totals are counted once; refund records are excluded from gross sales.
 List<Map<String, dynamic>> completedReceipts(
@@ -127,7 +128,7 @@ class _AdminSalesOverviewState extends State<AdminSalesOverview> {
         }
         return _totals(
           snapshot.data!.docs
-              .where((doc) => doc.data()['isVoided'] != true)
+              .where((doc) => isActiveBranch(doc.data()))
               .map((doc) => doc.id)
               .toSet(),
         );
@@ -337,7 +338,8 @@ class _AdminBranchRankingState extends State<AdminBranchRanking> {
                   }
                   final names = {
                     for (final doc in branches.data!.docs)
-                      doc.id: '${doc.data()['name'] ?? 'Branch'}',
+                      if (isActiveBranch(doc.data()))
+                        doc.id: '${doc.data()['name'] ?? 'Branch'}',
                   };
                   final totals = <String, double>{};
                   final items = <String, Map<String, double>>{};
@@ -345,7 +347,7 @@ class _AdminBranchRankingState extends State<AdminBranchRanking> {
                     snapshot.data!.docs.map((doc) => doc.data()),
                   )) {
                     final id = '${sale['branchId'] ?? ''}';
-                    if (id.isEmpty) continue;
+                    if (id.isEmpty || !names.containsKey(id)) continue;
                     totals[id] = (totals[id] ?? 0) + saleNumber(sale['total']);
                     final sold = items.putIfAbsent(id, () => {});
                     for (final item in saleItems(sale)) {

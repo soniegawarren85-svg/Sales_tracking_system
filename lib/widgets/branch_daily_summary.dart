@@ -87,11 +87,13 @@ class BranchDailySummary extends StatefulWidget {
     required this.day,
     this.compact = false,
     this.onCashAction,
+    this.currentCashDrawer,
   });
   final String branchId;
   final DateTime day;
   final bool compact;
   final VoidCallback? onCashAction;
+  final double? currentCashDrawer;
   @override
   State<BranchDailySummary> createState() => _BranchDailySummaryState();
 }
@@ -172,6 +174,8 @@ class _BranchDailySummaryState extends State<BranchDailySummary> {
       if (widget.compact) {
         final startingFund = snapshot.data!['Starting fund'] ?? 0;
         final hasStartingCash = startingFund > 0;
+        final closingCash =
+            widget.currentCashDrawer ?? snapshot.data!['Closing cash drawer']!;
         return Column(
           crossAxisAlignment: CrossAxisAlignment.end,
           mainAxisSize: MainAxisSize.min,
@@ -186,7 +190,7 @@ class _BranchDailySummaryState extends State<BranchDailySummary> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(
-                    '₱${snapshot.data!['Closing cash drawer']!.toStringAsFixed(2)}',
+                    '₱${closingCash.toStringAsFixed(2)}',
                     style: const TextStyle(
                       color: Colors.white,
                       fontSize: 18,

@@ -565,6 +565,7 @@ class _ReturnBatchListState extends State<ReturnBatchList> {
                   child: ReturnDecisionButtons(
                     key: ValueKey(batch.first.id),
                     forwardToSuperAdmin: widget.forwardToSuperAdmin,
+                    superAdmin: widget.superAdmin,
                     onDecision: (accept) => widget.onDecision!(pending, accept),
                   ),
                 ),
@@ -663,9 +664,11 @@ class ReturnDecisionButtons extends StatefulWidget {
     super.key,
     required this.onDecision,
     this.forwardToSuperAdmin = false,
+    this.superAdmin = false,
   });
   final Future<void> Function(bool accept) onDecision;
   final bool forwardToSuperAdmin;
+  final bool superAdmin;
   @override
   State<ReturnDecisionButtons> createState() => _ReturnDecisionButtonsState();
 }
@@ -718,7 +721,7 @@ class _ReturnDecisionButtonsState extends State<ReturnDecisionButtons> {
       OutlinedButton.icon(
         onPressed: saving ? null : () => decide(false),
         icon: const Icon(Icons.report_problem_outlined, size: 18),
-        label: const Text('Report Issue'),
+        label: Text(widget.superAdmin ? 'Reject' : 'Report Issue'),
       ),
       if (saving && !confirming)
         const Row(

@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import '../services/branch_report_data.dart';
+import '../services/branch_status.dart';
 import '../services/number_format.dart';
 import '../services/receipt_tax.dart';
 import '../theme/app_colors.dart';
@@ -471,6 +472,9 @@ class SalesReportDashboard extends StatelessWidget {
         .sales(branchId, start, end)
         .where(
           (s) =>
+              (branchId == null
+                  ? data.activeBranchIds().contains('${s['branchId'] ?? ''}')
+                  : data.activeBranchIds().contains(branchId)) &&
               !reportRefund(s) &&
               s['type'] != 'reduce' &&
               s['status'] != 'reduced',
@@ -478,14 +482,13 @@ class SalesReportDashboard extends StatelessWidget {
         .toList();
     final branches = {
       for (final b in data.rows('branches'))
-        if (b['isVoided'] != true &&
-            b['isDeleted'] != true &&
-            (branchId == null || b['_id'] == branchId))
+        if (isActiveBranch(b) && (branchId == null || b['_id'] == branchId))
           '${b['_id']}': '${b['name'] ?? b['branchName'] ?? b['_id']}',
     };
     final byBranch = <String, double>{}, payments = <String, double>{};
     final ranked = <String, Map<String, dynamic>>{};
     for (final sale in sales) {
+      if (!branches.containsKey('${sale['branchId'] ?? ''}')) continue;
       final amount = reportValue(sale['total']);
       final branch = branches['${sale['branchId']}'] ?? 'Unassigned';
       byBranch[branch] = (byBranch[branch] ?? 0) + amount;

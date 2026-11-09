@@ -80,7 +80,12 @@ class InventoryReconciliationService {
         throw StateError('Selected stock changed. Reopen the batch and retry.');
       }
       final output = action == 'unbundle'
-          ? reconcileBundleContents(selected, null)
+          ? {
+              'loose': _aggregateUnbundledItems(
+                selected,
+                allocationId: allocationId,
+              ),
+            }
           : const <String, dynamic>{'loose': <Map<String, dynamic>>[]};
       _validateLooseSources(output);
       for (final instance in selected) {
@@ -112,6 +117,9 @@ class InventoryReconciliationService {
             'isDeleted': false,
             'origin': 'unbundle',
             'bundleActionId': actionId,
+            'sourceBundleAllocationId': allocationId,
+            'sourceBundleBatchId': item['sourceBatchId'],
+            'batchId': item['unbundleBatchId'],
             'assignedAt': FieldValue.serverTimestamp(),
             'items': [
               {
@@ -137,6 +145,10 @@ class InventoryReconciliationService {
         'branchId': data['staffId'],
         'branchName': data['branchName'] ?? data['staffName'] ?? '',
         'items': loose,
+        'unbundledQuantity': loose.fold<int>(
+          0,
+          (sum, item) => sum + bundleQuantity(item['quantity']),
+        ),
       };
       tx.set(activity, {
         'action': action == 'unbundle' ? 'bundle_unbundled' : 'bundle_returned',
@@ -482,6 +494,48 @@ class InventoryReconciliationService {
       });
     });
   }
+}
+
+List<Map<String, dynamic>> _aggregateUnbundledItems(
+  List<Map<String, dynamic>> instances, {
+  required String allocationId,
+}) {
+  final groups =
+      <
+        ({String batch, String ingredient, String expiry}),
+        Map<String, dynamic>
+      >{};
+  for (final instance in instances) {
+        final instanceBatch = '${instance['batchId'] ?? ''}'.trim();
+        final sourceBatch = instanceBatch.isEmpty ? allocationId : instanceBatch;
+    final items = bundleRows(
+      reconcileBundleContents([instance], null)['loose'],
+    );
+    for (final item in items) {
+      final expiry = '${item['expirationDate'] ?? ''}';
+      final key = (
+        batch: sourceBatch,
+        ingredient: ingredientIdentity(item),
+        expiry: expiry,
+      );
+      final quantity = bundleQuantity(item['quantity']);
+      final current = groups[key];
+      if (current == null) {
+        groups[key] = {
+          ...item,
+          'quantity': quantity,
+          'remaining': quantity,
+          'unbundleBatchId': 'unbundle_${allocationId}_$sourceBatch',
+          'sourceBatchId': sourceBatch,
+        };
+      } else {
+        final total = bundleQuantity(current['quantity']) + quantity;
+        current['quantity'] = total;
+        current['remaining'] = total;
+      }
+    }
+  }
+  return groups.values.toList();
 }
 
 void _validateLooseSources(Map<String, dynamic> output) {

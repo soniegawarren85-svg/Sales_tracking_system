@@ -432,4 +432,53 @@ void main() {
     expect(find.text('Admin inventory activity'), findsNothing);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('unbundle activity appears in its branch staff performance', (
+    tester,
+  ) async {
+    final db = FakeFirebaseFirestore();
+    await db.doc('branches/branch-1').set({
+      'name': 'SM Dagupan',
+      'staffIds': ['cashier'],
+    });
+    await db.doc('staff_requests/cashier').set({
+      'staffId': 'STF-010',
+      'role': 'staff',
+      'status': 'accepted',
+      'firstName': 'Dagupan',
+      'lastName': 'Cashier',
+      'branchIds': ['branch-1'],
+    });
+    await db.doc('activity_logs/unbundle').set({
+      'action': 'bundle_unbundled',
+      'actorId': 'legacy-cashier-id',
+      'actorName': 'Dagupan Cashier',
+      'actorPublicId': 'STF-010',
+      'actorRole': 'staff',
+      'branchIds': ['branch-1'],
+      'description': 'Dagupan Cashier unbundled Cookies at SM Dagupan.',
+      'createdAt': Timestamp.now(),
+    });
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: StaffPerformancePanel(branchId: 'branch-1', firestore: db),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text('Dagupan Cashier unbundled Cookies at SM Dagupan.'),
+      findsOneWidget,
+    );
+    await tester.enterText(find.byType(TextField).first, 'Dagupan Cashier');
+    await tester.pumpAndSettle();
+    expect(
+      find.text('Dagupan Cashier unbundled Cookies at SM Dagupan.'),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+  });
 }

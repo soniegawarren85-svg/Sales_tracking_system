@@ -177,6 +177,7 @@ void main() {
     expect(find.text('Available Cashier • Cashier'), findsOneWidget);
     expect(find.text('Available Admin • Admin'), findsNothing);
     expect(find.text('Select role to assign'), findsOneWidget);
+    expect(find.text('Search cashier or admin'), findsOneWidget);
 
     await tester.tap(find.byType(DropdownButtonFormField<String>));
     await tester.pumpAndSettle();
@@ -187,7 +188,19 @@ void main() {
     expect(find.text('Warren Admin • Admin'), findsOneWidget);
     expect(find.text('Pending Admin • Admin'), findsNothing);
     expect(find.text('Available Cashier • Cashier'), findsNothing);
+    await tester.enterText(find.byType(TextField).last, 'Warren');
+    await tester.pumpAndSettle();
+    expect(find.text('Available Admin • Admin'), findsNothing);
+    expect(find.text('Warren Admin • Admin'), findsOneWidget);
     await tester.tap(find.text('Warren Admin • Admin'));
+    await tester.pumpAndSettle();
+    expect(find.text('Assign account?'), findsOneWidget);
+    expect(
+      (await db.collection('branches').doc('dagupan').get())
+          .data()?['staffIds'],
+      isEmpty,
+    );
+    await tester.tap(find.widgetWithText(FilledButton, 'Assign'));
     await tester.pumpAndSettle();
 
     expect(

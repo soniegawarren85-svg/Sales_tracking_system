@@ -38,6 +38,19 @@ double _parseAmount(dynamic value) {
   return double.tryParse(cleaned) ?? 0.0;
 }
 
+String? bundleSellingPriceValidationMessage(String rawPrice, num bundleCost) {
+  final priceText = rawPrice.trim();
+  if (priceText.isEmpty) return null;
+  final price = num.tryParse(priceText);
+  if (price == null || !price.isFinite || price < 0) {
+    return 'Enter a valid bundle price.';
+  }
+  if (price <= bundleCost) {
+    return 'Bundle price must be greater than ${formatMoney(bundleCost)}.';
+  }
+  return null;
+}
+
 // ──────────────────────────────────────────────────────────────────────────────
 
 // ─── REUSABLE ANIMATED LIST ITEM ──────────────────────────────────────────────
@@ -3718,6 +3731,14 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
                         entry.value,
         );
   });
+  String? get _bundlePriceValidationMessage {
+    if (_selectedVariantCount == 0) return null;
+    return bundleSellingPriceValidationMessage(
+      bundlePriceController.text,
+      _bundleCost,
+    );
+  }
+
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final List<Map<String, dynamic>> bundles = [];
   bool _isSaving = false;
@@ -3766,6 +3787,9 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
       if (matching.isNotEmpty) _showBundleInstancesDialog(matching.first);
     });
     bundleQuantityController.addListener(() {
+      if (mounted) setState(() {});
+    });
+    bundlePriceController.addListener(() {
       if (mounted) setState(() {});
     });
   }
@@ -4056,6 +4080,11 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
     }
     if (_selectedVariantCount == 0) {
       _showErrorSnack('Select at least one variant from inventory.');
+      return;
+    }
+    final priceValidation = _bundlePriceValidationMessage;
+    if (priceValidation != null) {
+      _showErrorSnack(priceValidation);
       return;
     }
     if (bundleQty < 1) {
@@ -5375,16 +5404,41 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
                       vertical: 12,
                     ),
                     decoration: BoxDecoration(
-                      color: PinkTheme.badgeBg,
+                      color: _bundlePriceValidationMessage == null
+                          ? PinkTheme.badgeBg
+                          : const Color(0xFFFFEBEE),
                       borderRadius: BorderRadius.circular(14),
-                      border: Border.all(color: PinkTheme.divider),
-                    ),
-                    child: Text(
-                      'Cost per bundle: ${formatMoney(_bundleCost)}',
-                      style: const TextStyle(
-                        color: PinkTheme.primary,
-                        fontWeight: FontWeight.w800,
+                      border: Border.all(
+                        color: _bundlePriceValidationMessage == null
+                            ? PinkTheme.divider
+                            : Colors.red.shade300,
                       ),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Cost per bundle: ${formatMoney(_bundleCost)}',
+                          style: TextStyle(
+                            color: _bundlePriceValidationMessage == null
+                                ? PinkTheme.primary
+                                : Colors.red.shade700,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                        if (_bundlePriceValidationMessage case final message?)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 5),
+                            child: Text(
+                              message,
+                              style: TextStyle(
+                                color: Colors.red.shade700,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                      ],
                     ),
                   ),
                 ),
@@ -5926,7 +5980,7 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
                                                     width: 76,
                                                     child: TextFormField(
                                                       key: ValueKey(
-                                                        '$itemId-$variantIndex',
+                                                        '$itemId-$variantIndex-$quantity',
                                                       ),
                                                       initialValue: quantity
                                                           .toString(),

@@ -518,6 +518,41 @@ Map<String, String> allocationBatchLabels(
   };
 }
 
+List<Map<String, dynamic>> aggregateInventoryHistoryEvents(
+  Iterable<Map<String, dynamic>> events,
+) {
+  DateTime eventDate(dynamic value) => value is Timestamp
+      ? value.toDate()
+      : value is DateTime
+      ? value
+      : DateTime.tryParse('$value') ?? DateTime(1970);
+
+  final grouped = <String, Map<String, dynamic>>{};
+  for (final event in events) {
+    final unbundle = event['activity'] == 'Unbundle';
+    final key = [
+      event['branchId'],
+      eventDate(event['time']).toIso8601String(),
+      event['itemName'],
+      event['activity'],
+      unbundle ? event['batchId'] ?? event['qty'] : event['qty'],
+    ].join('|');
+    final existing = grouped[key];
+    if (existing == null) {
+      grouped[key] = Map<String, dynamic>.from(event);
+    } else if (unbundle) {
+      existing['qty'] =
+          reportValue(existing['qty']) + reportValue(event['qty']);
+      final incomingBalance = reportValue(event['balance']);
+      if (event['balance'] != null &&
+          incomingBalance > reportValue(existing['balance'])) {
+        existing['balance'] = event['balance'];
+      }
+    }
+  }
+  return grouped.values.toList();
+}
+
 List<Map<String, dynamic>> aggregateCategoryAllocationItems(
   Iterable<Map<String, dynamic>> items,
 ) {
@@ -544,9 +579,12 @@ List<Map<String, dynamic>> aggregateCategoryAllocationItems(
             .firstWhere((value) => value.isNotEmpty, orElse: () => '');
     final name = '${item['name'] ?? ''}'.trim().toLowerCase();
     final variant = '${item['variant'] ?? ''}'.trim().toLowerCase();
+    final expiry = item['origin'] == 'unbundle'
+        ? '|${item['expirationDate'] ?? ''}'
+        : '';
     final key = id.isNotEmpty
-        ? '${id.toLowerCase()}|$variant'
-        : '$name|$variant';
+        ? '${id.toLowerCase()}|$variant$expiry'
+        : '$name|$variant$expiry';
     final current = aggregated[key];
     final stock = quantity(item['stock'] ?? item['startingStock']);
     if (current == null) {
@@ -1271,7 +1309,13 @@ class _BatchDialogState extends State<_BatchDialog> {
       final grouped = <String, Map<String, dynamic>>{};
       for (final row in rows) {
         final reconciliation = '${row['reconciliationId'] ?? ''}';
-        final key = row['origin'] == 'unbundle' && reconciliation.isNotEmpty
+        final unbundleBatch = '${row['batchId'] ?? ''}';
+        final key = row['origin'] == 'unbundle' && unbundleBatch.isNotEmpty
+            ? 'unbundle|${row['sourceBundleAllocationId'] ?? ''}|$unbundleBatch|${row['sourceInventoryId']}'
+            : row['origin'] == 'unbundle' &&
+                  '${row['bundleActionId'] ?? ''}'.isNotEmpty
+            ? 'unbundle-action|${row['bundleActionId']}|${row['sourceInventoryId']}'
+            : row['origin'] == 'unbundle' && reconciliation.isNotEmpty
             ? '$reconciliation|${row['sourceInventoryId']}'
             : '${row['_id']}';
         final previous = grouped[key];
@@ -1321,6 +1365,15 @@ class _BatchDialogState extends State<_BatchDialog> {
     ).add(const Duration(days: 1));
     final allocationRecords = records ?? const <Map<String, dynamic>>[];
     final source = allocationRecords.firstOrNull;
+    final catalogOnlyInventory = allocationRecords.any(
+      (record) => record['isCoffee'] == true || record['isAddon'] == true,
+    );
+    final bundleInventory = allocationRecords.any(
+      (record) => record['isBundle'] == true || record['type'] == 'Bundle',
+    );
+    final beverageInventory = allocationRecords.any(
+      (record) => record['isCoffee'] == true,
+    );
     final sourceIds = allocationRecords
         .map((record) => '${record['sourceInventoryId'] ?? ''}')
         .where((id) => id.isNotEmpty)
@@ -1355,6 +1408,11 @@ class _BatchDialogState extends State<_BatchDialog> {
         .map((id) => '$id')
         .toSet();
     bool matchesSelection(Map item) {
+      if (bundleInventory &&
+          item['isBundle'] != true &&
+          item['type'] != 'Bundle') {
+        return false;
+      }
       if (sourceIds.isEmpty && selectedIds.isEmpty && selectedNames.isEmpty) {
         return true;
       }
@@ -1386,6 +1444,10 @@ class _BatchDialogState extends State<_BatchDialog> {
           final at = date(event['time']);
           if (at.isBefore(start) || !at.isBefore(end)) continue;
           final activity = '${event['activity'] ?? 'Activity'}';
+          if (catalogOnlyInventory &&
+              activity.toLowerCase().contains('opening')) {
+            continue;
+          }
           final row = <String, dynamic>{
             ...event,
             'activity': activity.toLowerCase().startsWith('starting allocation')
@@ -1393,6 +1455,13 @@ class _BatchDialogState extends State<_BatchDialog> {
                 : activity,
             'itemName': event['name'] ?? item['name'] ?? 'Item',
             'branchId': branch,
+            if (catalogOnlyInventory) 'qty': reportValue(event['qty']).abs(),
+            if (beverageInventory)
+              'size':
+                  event['size'] ??
+                  event['coffeeSize'] ??
+                  event['variant'] ??
+                  '',
           };
           if (search.isEmpty ||
               '$row'.toLowerCase().contains(search) ||
@@ -1401,7 +1470,7 @@ class _BatchDialogState extends State<_BatchDialog> {
           }
         }
       }
-      if (DateUtils.isSameDay(start, today)) {
+      if (!catalogOnlyInventory && DateUtils.isSameDay(start, today)) {
         for (final current in data.currentInventory(branch, DateTime.now())) {
           if (!matchesSelection(current)) continue;
           final item = selectedInventoryItems
@@ -1448,13 +1517,14 @@ class _BatchDialogState extends State<_BatchDialog> {
         final details = log['details'] as Map? ?? const {};
         final action = '${log['action'] ?? ''}'.toLowerCase();
         final at = date(log['createdAt'] ?? log['timestamp']);
-        if ((!branches.contains(branch) &&
+        if (action.contains('unbundl') ||
+            (!branches.contains(branch) &&
                 '${details['branchId'] ?? details['branch'] ?? ''}' !=
                     branch) ||
             !allocationIds.contains('${details['allocationId'] ?? ''}') ||
             at.isBefore(start) ||
             !at.isBefore(end) ||
-            (!action.contains('return') && !action.contains('unbundl'))) {
+            !action.contains('return')) {
           continue;
         }
         final name =
@@ -1473,25 +1543,22 @@ class _BatchDialogState extends State<_BatchDialog> {
         });
       }
     }
-    final uniqueEvents = <String, Map<String, dynamic>>{};
-    for (final event in events) {
-      final key = [
-        event['branchId'],
-        date(event['time']).toIso8601String(),
-        event['itemName'],
-        event['activity'],
-        event['qty'],
-      ].join('|');
-      uniqueEvents.putIfAbsent(key, () => event);
-    }
+    final aggregatedEvents = aggregateInventoryHistoryEvents(events);
     events
       ..clear()
-      ..addAll(uniqueEvents.values);
+      ..addAll(aggregatedEvents);
     events.sort((a, b) => date(b['time']).compareTo(date(a['time'])));
     return events;
   }
 
   Widget _activityHistoryTable(List<Map<String, dynamic>> events) {
+    final allocationRecords = records ?? const <Map<String, dynamic>>[];
+    final catalogOnlyInventory = allocationRecords.any(
+      (record) => record['isCoffee'] == true || record['isAddon'] == true,
+    );
+    final beverageInventory = allocationRecords.any(
+      (record) => record['isCoffee'] == true,
+    );
     const rowHeight = 52.0;
     final tableHeight = 48.0 + rowHeight * events.length.clamp(1, 5);
     return Card(
@@ -1525,12 +1592,19 @@ class _BatchDialogState extends State<_BatchDialog> {
                         headingRowColor: const WidgetStatePropertyAll(
                           AppColors.blush,
                         ),
-                        columns: const [
-                          DataColumn(label: Text('Opening / time')),
+                        columns: [
+                          DataColumn(
+                            label: Text(
+                              catalogOnlyInventory ? 'Time' : 'Opening / time',
+                            ),
+                          ),
                           DataColumn(label: Text('Item')),
                           DataColumn(label: Text('Activity')),
                           DataColumn(label: Text('Qty')),
-                          DataColumn(label: Text('Balance')),
+                          if (beverageInventory)
+                            const DataColumn(label: Text('Size')),
+                          if (!catalogOnlyInventory)
+                            const DataColumn(label: Text('Balance')),
                         ],
                         rows: events
                             .map(
@@ -1555,14 +1629,19 @@ class _BatchDialogState extends State<_BatchDialog> {
                                           '—',
                                     ),
                                   ),
-                                  DataCell(
-                                    Text(
-                                      num.tryParse(
-                                            '${event['balance'] ?? ''}',
-                                          )?.toStringAsFixed(0) ??
-                                          '—',
+                                  if (beverageInventory)
+                                    DataCell(
+                                      Text(_beverageSizeLabel(event['size'])),
                                     ),
-                                  ),
+                                  if (!catalogOnlyInventory)
+                                    DataCell(
+                                      Text(
+                                        num.tryParse(
+                                              '${event['balance'] ?? ''}',
+                                            )?.toStringAsFixed(0) ??
+                                            '—',
+                                      ),
+                                    ),
                                 ],
                               ),
                             )
@@ -1574,6 +1653,19 @@ class _BatchDialogState extends State<_BatchDialog> {
               ),
       ),
     );
+  }
+
+  String _beverageSizeLabel(dynamic value) {
+    final size = '$value'.trim();
+    if (size.isEmpty) return '—';
+    const abbreviations = {
+      'small': 'S',
+      'medium': 'M',
+      'large': 'L',
+      'extra large': 'XL',
+      'xl': 'XL',
+    };
+    return abbreviations[size.toLowerCase()] ?? size;
   }
 
   Future<void> submit() async {
@@ -2686,7 +2778,7 @@ class _BatchDialogState extends State<_BatchDialog> {
                                               )
                                             else
                                               Text(
-                                                '${item['assignedStartingStock'] ?? item['startingStock'] ?? item['stock'] ?? 0} allocated · ${soldQuantityFor(item)} sold · ${item['stock'] ?? item['remaining'] ?? item['startingStock'] ?? 0} remaining',
+                                                '${item['assignedStartingStock'] ?? item['startingStock'] ?? item['stock'] ?? 0} ${record['origin'] == 'unbundle' ? 'unbundled' : 'allocated'} · ${soldQuantityFor(item)} sold · ${item['stock'] ?? item['remaining'] ?? item['startingStock'] ?? 0} remaining',
                                                 style: const TextStyle(
                                                   color: AppColors.textMuted,
                                                   fontSize: 12,

@@ -148,6 +148,7 @@ class _DailyStockPageState extends State<DailyStockPage>
   StreamSubscription<List<ConnectivityResult>>? _connectivitySubscription;
   bool? _hasNetwork;
   final Map<String, int> _cart = {};
+  final Set<String> _openingBundleOptions = {};
   final Map<String, Map<String, dynamic>> _cartItemLookup = {};
   final Map<String, TextEditingController> _qtyControllers = {};
   bool _largeOrderWarningSeen = false;
@@ -1506,29 +1507,35 @@ class _DailyStockPageState extends State<DailyStockPage>
       _addSingleItemToTicket(item, stock);
       return;
     }
+    final bundleKey = '${item['id'] ?? item['itemId'] ?? item['name']}';
+    if (!_openingBundleOptions.add(bundleKey)) return;
+    if (mounted) setState(() {});
     try {
-      final snapshot = await FirebaseFirestore.instance
-          .collection('coffee_addons')
-          .get();
-      final addons = snapshot.docs
-          .where((doc) {
-            final data = doc.data();
-            return data['isDeleted'] != true &&
-                data['isAvailable'] != false &&
-                !_isExpiredItem('${data['expirationDate'] ?? ''}');
-          })
-          .map(
-            (doc) => {
-              'id': doc.id,
-              'name': doc.data()['name'],
-              'priceDelta': doc.data()['priceDelta'] ?? 0,
-            },
-          )
-          .toList();
-      if (!mounted) return;
       final selected = await showDialog<Map<String, dynamic>>(
         context: context,
-        builder: (_) => BundleBeverageDialog(bundle: item, addons: addons),
+        builder: (_) => BundleBeverageDialog(
+          bundle: item,
+          addonsFuture: FirebaseFirestore.instance
+              .collection('coffee_addons')
+              .get()
+              .then(
+                (snapshot) => snapshot.docs
+                    .where((doc) {
+                      final data = doc.data();
+                      return data['isDeleted'] != true &&
+                          data['isAvailable'] != false &&
+                          !_isExpiredItem('${data['expirationDate'] ?? ''}');
+                    })
+                    .map(
+                      (doc) => {
+                        'id': doc.id,
+                        'name': doc.data()['name'],
+                        'priceDelta': doc.data()['priceDelta'] ?? 0,
+                      },
+                    )
+                    .toList(),
+              ),
+        ),
       );
       if (selected == null || !mounted) return;
       _addSingleItemToTicket(selected, _stockForItem(selected, 0));
@@ -1540,6 +1547,9 @@ class _DailyStockPageState extends State<DailyStockPage>
           isError: true,
         );
       }
+    } finally {
+      _openingBundleOptions.remove(bundleKey);
+      if (mounted) setState(() {});
     }
   }
 

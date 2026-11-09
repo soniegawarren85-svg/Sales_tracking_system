@@ -124,7 +124,7 @@ class _LowStockSelectionDialogState extends State<_LowStockSelectionDialog> {
       child: ConstrainedBox(
         constraints: BoxConstraints(
           maxWidth: 520,
-          maxHeight: MediaQuery.sizeOf(context).height * .82,
+          maxHeight: MediaQuery.sizeOf(context).height * .9,
         ),
         child: Padding(
           padding: const EdgeInsets.all(20),
@@ -198,19 +198,46 @@ class _LowStockSelectionDialogState extends State<_LowStockSelectionDialog> {
                 ),
               ),
               const SizedBox(height: 8),
-              CheckboxListTile(
-                value: _selectAllChecked,
-                onChanged: _saving
-                    ? null
-                    : (value) => _toggleAllVisible(value == true),
-                contentPadding: const EdgeInsets.symmetric(horizontal: 4),
-                controlAffinity: ListTileControlAffinity.leading,
-                title: const Text(
-                  'Select all',
-                  style: TextStyle(fontWeight: FontWeight.w800),
+              SizedBox(
+                height: 38,
+                child: Row(
+                  children: [
+                    Transform.scale(
+                      scale: .82,
+                      child: Checkbox(
+                        value: _selectAllChecked,
+                        visualDensity: VisualDensity.compact,
+                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        activeColor: AppColors.primaryDark,
+                        onChanged: _saving
+                            ? null
+                            : (value) => _toggleAllVisible(value == true),
+                      ),
+                    ),
+                    const SizedBox(width: 2),
+                    GestureDetector(
+                      onTap: _saving
+                          ? null
+                          : () => _toggleAllVisible(!_selectAllChecked),
+                      child: const Text(
+                        'Select all',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                    const Spacer(),
+                    Text(
+                      '${_selected.length} selected',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.blueGrey.shade600,
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                  ],
                 ),
-                subtitle: Text('${_selected.length} selected'),
-                activeColor: AppColors.primaryDark,
               ),
               const Divider(height: 1),
               Flexible(
@@ -255,6 +282,12 @@ class _LowStockSelectionDialogState extends State<_LowStockSelectionDialog> {
                               horizontal: 4,
                             ),
                             controlAffinity: ListTileControlAffinity.leading,
+                            dense: true,
+                            visualDensity: const VisualDensity(
+                              horizontal: -2,
+                              vertical: -2,
+                            ),
+                            minVerticalPadding: 4,
                             activeColor: AppColors.primaryDark,
                             title: Text(
                               '${item['name'] ?? 'Item'}',

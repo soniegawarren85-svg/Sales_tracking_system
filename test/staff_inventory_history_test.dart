@@ -56,6 +56,35 @@ void main() {
     },
   );
 
+  test('category sales history shows the sold variant name', () {
+    final entries = staffInventoryHistoryEntries(
+      staffId: 'staff-a',
+      kind: 'categories',
+      categoryId: 'category-1',
+      categoryName: 'Cookies',
+      itemIds: {'item-1'},
+      itemNames: {'Cookies'},
+      adjustments: const [],
+      sales: [
+        {
+          'userId': 'staff-a',
+          'timestamp': today,
+          'items': [
+            {
+              'itemId': 'item-1',
+              'name': 'Cookies',
+              'variant': 'Pistachio Dubai',
+              'quantity': 1,
+              'price': 240,
+            },
+          ],
+        },
+      ],
+    );
+
+    expect(entries.single['name'], 'Pistachio Dubai');
+  });
+
   test('offline history shows the saved item name and offline status', () {
     final entries = staffInventoryHistoryEntries(
       staffId: 'staff-a',

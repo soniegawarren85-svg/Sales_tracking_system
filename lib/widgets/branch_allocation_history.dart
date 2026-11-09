@@ -56,7 +56,11 @@ List<Map<String, dynamic>> groupAllocations(
   return groups.values.map((records) {
     final items = records.expand(allocationItems).toList();
     final complete = records.every(
-      (r) => ChecklistStatus.label(r) == ChecklistStatus.received,
+      (r) => [
+        ChecklistStatus.received,
+        ChecklistStatus.notReceivedRestored,
+        'Cancelled - Missing',
+      ].contains(ChecklistStatus.label(r)),
     );
     final allocatorNames = records
         .map((record) => '${record['allocatedByName'] ?? ''}'.trim())
@@ -195,9 +199,11 @@ class AllocationHistoryActions extends StatelessWidget {
     super.key,
     required this.branchId,
     this.database,
+    this.superAdmin = false,
   });
   final String branchId;
   final FirebaseFirestore? database;
+  final bool superAdmin;
   @override
   Widget build(BuildContext context) {
     final db = database ?? FirebaseFirestore.instance;
@@ -213,7 +219,11 @@ class AllocationHistoryActions extends StatelessWidget {
                   (doc) =>
                       doc.data()['kind'] != 'return' &&
                       doc.data()['isDeleted'] != true &&
-                      ChecklistStatus.incomingOpen(doc.data()),
+                      (ChecklistStatus.incomingOpen(doc.data()) ||
+                          (superAdmin &&
+                              ChecklistStatus.allocationNeedsSuperAdminReview(
+                                doc.data(),
+                              ))),
                 )
                 .map(
                   (doc) =>
@@ -232,6 +242,7 @@ class AllocationHistoryActions extends StatelessWidget {
                 builder: (_) => AllocationHistoryDialog(
                   branchId: branchId,
                   database: db,
+                  superAdmin: superAdmin,
                   pendingOnly: true,
                   initialRecords: snapshot.data?.docs
                       .where((doc) => doc.data()['kind'] != 'return')
@@ -265,11 +276,13 @@ class AllocationHistoryDialog extends StatefulWidget {
     required this.database,
     this.pendingOnly = false,
     this.initialRecords,
+    this.superAdmin = false,
   });
   final String branchId;
   final FirebaseFirestore database;
   final bool pendingOnly;
   final List<Map<String, dynamic>>? initialRecords;
+  final bool superAdmin;
   @override
   State<AllocationHistoryDialog> createState() =>
       _AllocationHistoryDialogState();
@@ -376,15 +389,29 @@ class _AllocationHistoryDialogState extends State<AllocationHistoryDialog> {
               }
               final hasIssues = snapshot.data!.any(
                 (record) =>
-                    ChecklistStatus.label(record) == ChecklistStatus.issue,
+                    ChecklistStatus.label(record) == ChecklistStatus.issue ||
+                    (widget.superAdmin &&
+                        ChecklistStatus.allocationNeedsSuperAdminReview(
+                          record,
+                        )),
               );
               final scoped = snapshot.data!
                   .where(
                     (record) => _showPending
-                        ? ChecklistStatus.incomingOpen(record) &&
+                        ? (ChecklistStatus.incomingOpen(record) ||
+                                  (widget.superAdmin &&
+                                      ChecklistStatus
+                                          .allocationNeedsSuperAdminReview(
+                                            record,
+                                          ))) &&
                               (!_issuesOnly ||
                                   ChecklistStatus.label(record) ==
-                                      ChecklistStatus.issue)
+                                      ChecklistStatus.issue ||
+                                  (widget.superAdmin &&
+                                      ChecklistStatus
+                                          .allocationNeedsSuperAdminReview(
+                                            record,
+                                          )))
                         : ChecklistStatus.label(record) ==
                               ChecklistStatus.received,
                   )
@@ -397,7 +424,7 @@ class _AllocationHistoryDialogState extends State<AllocationHistoryDialog> {
                       (_endDay ?? _day).add(const Duration(days: 1)),
                     );
                 final search =
-                    '${record['allocatedByName']} ${record['branchName']} ${record['staffName']} ${record['_items']}'
+                    '${record['allocatedByName']} ${record['branchName']} ${record['staffName']} ${record['issueItemName']} ${record['_items']}'
                         .toLowerCase();
                 return (_showPending || withinDate) && search.contains(_query);
               }).toList();

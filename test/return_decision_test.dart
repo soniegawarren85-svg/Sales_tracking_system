@@ -6,8 +6,11 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:sales_tracking/services/allocation_checklist_service.dart';
 import 'package:sales_tracking/services/checklist_status.dart';
 import 'package:sales_tracking/widgets/return_batch_cards.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+  setUp(() => SharedPreferences.setMockInitialValues({}));
   late FakeFirebaseFirestore db;
   late AllocationChecklistService service;
   setUp(() async {

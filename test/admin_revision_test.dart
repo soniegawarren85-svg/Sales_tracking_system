@@ -5,8 +5,29 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sales_tracking/widgets/admin_catalog.dart';
 import 'package:sales_tracking/widgets/admin_item_editor.dart';
 import 'package:sales_tracking/widgets/admin_sales_overview.dart';
+import 'package:sales_tracking/Super_admin_pages/InventoryPage.dart';
 
 void main() {
+  test('bundle price is validated against ingredient cost', () {
+    expect(
+      bundleSellingPriceValidationMessage('30', 160),
+      'Bundle price must be greater than ₱160.00.',
+    );
+    expect(
+      bundleSellingPriceValidationMessage('160', 160),
+      'Bundle price must be greater than ₱160.00.',
+    );
+    expect(bundleSellingPriceValidationMessage('160.01', 160), isNull);
+    expect(
+      bundleSellingPriceValidationMessage('not a price', 160),
+      'Enter a valid bundle price.',
+    );
+    expect(
+      bundleSellingPriceValidationMessage('NaN', 160),
+      'Enter a valid bundle price.',
+    );
+  });
+
   test(
     'Current categories omit expired, voided and empty records and group names',
     () {
@@ -89,7 +110,7 @@ void main() {
     expect(catalogItemActive(expiredToday, today), isFalse);
   });
 
-  test('Bundle expiry uses component snapshots or an unambiguous source', () {
+  test('Bundle expiry displays the earliest component date', () {
     final bundle = {
       'items': [
         {'name': 'Pistachio', 'parentName': 'Cookies', 'quantity': 2},
@@ -106,6 +127,24 @@ void main() {
     final items = catalogBundleContents(bundle, [source]);
     expect(items.first['expirationDate'], '2026-10-31');
     expect(items.last['expirationDate'], '2026-12-31');
+    final datedBundle = {
+      'items': [
+        {'name': 'Pistachio', 'expirationDate': '2026-10-31'},
+        {'name': 'Cake', 'expirationDate': '2026-12-31'},
+      ],
+    };
+    expect(
+      catalogExpiryLabel(
+        AdminCatalogEntry(
+          id: 'bundle',
+          name: 'Bundle',
+          type: 'Bundle',
+          source: datedBundle,
+          images: const [],
+        ),
+      ),
+      '2026-10-31',
+    );
     expect((bundle['items'] as List).first['expirationDate'], isNull);
     expect(
       catalogBundleContents(bundle, [
@@ -275,9 +314,9 @@ void main() {
     expect(item['publicId'], 'CO-001');
     expect(item['stock'], 12);
     expect(
-      DateUtils.dateOnly(DateTime.parse('${item['expirationDate']}')).isAfter(
-        DateUtils.dateOnly(DateTime.now()),
-      ),
+      DateUtils.dateOnly(
+        DateTime.parse('${item['expirationDate']}'),
+      ).isAfter(DateUtils.dateOnly(DateTime.now())),
       isTrue,
     );
     expect(

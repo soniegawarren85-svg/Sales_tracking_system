@@ -57,6 +57,25 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard>
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _allocationNotices;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _checklistUpdates;
   int _pendingReturnCount = 0;
+  final Stream<QuerySnapshot<Map<String, dynamic>>> _salesInventoryStats =
+      FirebaseFirestore.instance.collection('sales_inventory').snapshots();
+  final Stream<QuerySnapshot<Map<String, dynamic>>> _coffeeStats =
+      FirebaseFirestore.instance.collection('coffee_products').snapshots();
+  final _staffStatsByBranch =
+      <String, Stream<QuerySnapshot<Map<String, dynamic>>>>{};
+
+  Stream<QuerySnapshot<Map<String, dynamic>>> _staffStats(String? branchId) {
+    final key = branchId ?? '';
+    return _staffStatsByBranch.putIfAbsent(
+      key,
+      () => branchId == null
+          ? FirebaseFirestore.instance.collection('staff_requests').snapshots()
+          : FirebaseFirestore.instance
+                .collection('staff_requests')
+                .where('branchIds', arrayContains: branchId)
+                .snapshots(),
+    );
+  }
 
   static const String kShopLogoAsset = 'Assets/Image/ob.jpg';
   final _navItems = const [
@@ -870,10 +889,8 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard>
     final activeBranchId = BranchSession.instance.branchId;
     return LayoutBuilder(
       builder: (context, constraints) {
-        return StreamBuilder<QuerySnapshot>(
-          stream: FirebaseFirestore.instance
-              .collection('sales_inventory')
-              .snapshots(),
+        return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+          stream: _salesInventoryStats,
           builder: (context, salesSnapshot) {
             int totalStock = 0;
             int totalItems = 0;
@@ -905,15 +922,9 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard>
               }
             }
 
-            return StreamBuilder<QuerySnapshot>(
-              stream: activeBranchId == null
-                  ? FirebaseFirestore.instance
-                        .collection('staff_requests')
-                        .snapshots()
-                  : FirebaseFirestore.instance
-                        .collection('staff_requests')
-                        .where('branchIds', arrayContains: activeBranchId)
-                        .snapshots(),
+            return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+              key: ValueKey(activeBranchId ?? 'all-branches'),
+              stream: _staffStats(activeBranchId),
               builder: (context, staffSnapshot) {
                 final staffCount = staffSnapshot.hasData
                     ? staffSnapshot.data!.docs.where((doc) {
@@ -968,9 +979,7 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard>
                       Expanded(
                         child:
                             StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                              stream: FirebaseFirestore.instance
-                                  .collection('coffee_products')
-                                  .snapshots(),
+                              stream: _coffeeStats,
                               builder: (context, coffee) => _buildStatItem(
                                 Icons.coffee_rounded,
                                 coffee.hasData

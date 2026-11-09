@@ -246,6 +246,7 @@ class _BudgetPageState extends State<BudgetPage>
   final _currentAllocations = <String, double>{};
   final _inventorySources = <String, Map<String, dynamic>>{};
   final _expandedRevenueBreakdowns = <String>{};
+  final _expandedLossBreakdowns = <String>{};
   final _displaySubscriptions =
       <StreamSubscription<QuerySnapshot<Map<String, dynamic>>>>[];
   final _branchInventoryStreams =
@@ -5414,6 +5415,19 @@ class _BudgetPageState extends State<BudgetPage>
     };
   }
 
+  Widget _summaryBreakdownRow(String label, double value) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 3),
+    child: Row(
+      children: [
+        Expanded(child: Text(label)),
+        Text(
+          formatMoney(value),
+          style: const TextStyle(color: kDeep, fontWeight: FontWeight.w700),
+        ),
+      ],
+    ),
+  );
+
   Widget _buildBranchReportSummary(String branchId) =>
       StreamBuilder<BranchReportData>(
         stream: _reportStream,
@@ -5440,17 +5454,12 @@ class _BudgetPageState extends State<BudgetPage>
           final isRevenueExpanded = _expandedRevenueBreakdowns.contains(
             branchId,
           );
-          final reducedCount = reportData
-              .losses(branchId, range.$1, range.$2)
-              .fold<double>(
-                0,
-                (count, record) => count + _parsePrice(record['quantity']),
-              );
+          final isLossExpanded = _expandedLossBreakdowns.contains(branchId);
           final summaryTotals = totals.entries
               .where((entry) => entry.key != 'Total loss')
               .map(
                 (entry) => entry.key == 'Reduce'
-                    ? MapEntry('Reduced items', reducedCount)
+                    ? MapEntry('Reduced amount', entry.value)
                     : entry,
               )
               .toList();
@@ -5460,6 +5469,16 @@ class _BudgetPageState extends State<BudgetPage>
               (totals['Reduce'] ?? 0) + (totals['Refunds'] ?? 0),
             ),
           );
+          final lossIndex = summaryTotals.indexWhere(
+            (entry) => entry.key == 'Total loss',
+          );
+          final revenueIndex = summaryTotals.indexWhere(
+            (entry) => entry.key == 'Total revenue',
+          );
+          if (lossIndex >= 0 && revenueIndex >= 0) {
+            final loss = summaryTotals.removeAt(lossIndex);
+            summaryTotals.insert(revenueIndex + 1, loss);
+          }
           return Container(
             width: double.infinity,
             padding: const EdgeInsets.all(16),
@@ -5548,6 +5567,61 @@ class _BudgetPageState extends State<BudgetPage>
                         ],
                       ),
                     )
+                  else if (entry.key == 'Total loss')
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 5),
+                      child: Column(
+                        children: [
+                          InkWell(
+                            onTap: () => setState(() {
+                              if (!_expandedLossBreakdowns.add(branchId)) {
+                                _expandedLossBreakdowns.remove(branchId);
+                              }
+                            }),
+                            child: Row(
+                              children: [
+                                const Expanded(child: Text('Total loss')),
+                                Text(
+                                  formatMoney(entry.value),
+                                  style: const TextStyle(
+                                    color: kDeep,
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
+                                const SizedBox(width: 4),
+                                Icon(
+                                  isLossExpanded
+                                      ? Icons.expand_less
+                                      : Icons.expand_more,
+                                  color: kDeep,
+                                  size: 20,
+                                ),
+                              ],
+                            ),
+                          ),
+                          if (isLossExpanded)
+                            Padding(
+                              padding: const EdgeInsets.only(
+                                left: 16,
+                                top: 4,
+                                bottom: 4,
+                              ),
+                              child: Column(
+                                children: [
+                                  _summaryBreakdownRow(
+                                    'Reduce',
+                                    totals['Reduce'] ?? 0,
+                                  ),
+                                  _summaryBreakdownRow(
+                                    'Refunds',
+                                    totals['Refunds'] ?? 0,
+                                  ),
+                                ],
+                              ),
+                            ),
+                        ],
+                      ),
+                    )
                   else
                     Padding(
                       padding: const EdgeInsets.symmetric(vertical: 5),
@@ -5555,9 +5629,7 @@ class _BudgetPageState extends State<BudgetPage>
                         children: [
                           Expanded(child: Text(entry.key)),
                           Text(
-                            entry.key == 'Reduced items'
-                                ? entry.value.toStringAsFixed(0)
-                                : [
+                            [
                                     'Total sold',
                                     'Total transactions',
                                   ].contains(entry.key)
@@ -5726,7 +5798,12 @@ class _BudgetPageState extends State<BudgetPage>
                 0,
                 (sum, doc) => sum + _parsePrice(doc.data()['total']),
               );
-          final cashDrawer = openingCash + cashSales;
+          final drawerIsToday =
+              drawer['drawerDate'] == CashDrawerService.dayKey(now);
+          final recordedBalance = _parsePrice(drawer['balance']);
+          final cashDrawer = drawerIsToday && drawer['balance'] != null
+              ? recordedBalance
+              : openingCash + cashSales;
           return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -5804,6 +5881,7 @@ class _BudgetPageState extends State<BudgetPage>
                         branchId: branchId,
                         day: selectedDay,
                         compact: true,
+                        currentCashDrawer: cashDrawer,
                         onCashAction: () => _showBranchCashDrawerDialog(
                           branchId,
                           _activeBranchName,
