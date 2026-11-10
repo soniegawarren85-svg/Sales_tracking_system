@@ -269,7 +269,20 @@ class _BranchStaffSheetState extends State<_BranchStaffSheet> {
   Future<void> _confirmAndAssign(
     QueryDocumentSnapshot<Map<String, dynamic>> staff,
     bool assign,
+    int assignedRoleCount,
+    bool currentlyAssigned,
   ) async {
+    final role = _assignmentRole(staff.data());
+    final roleLimit = role == 'admin' ? 2 : 3;
+    if (assign && assignedRoleCount >= roleLimit && !currentlyAssigned) {
+      final message =
+          'Only $roleLimit ${role == 'admin' ? 'Admin accounts' : 'Cashier accounts'} can be assigned to this branch.';
+      setState(() => _error = null);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(message), behavior: SnackBarBehavior.floating),
+      );
+      return;
+    }
     final name = _staffName(staff.data());
     final confirmed = await showDialog<bool>(
       context: context,
@@ -333,6 +346,27 @@ class _BranchStaffSheetState extends State<_BranchStaffSheet> {
         final id = _staffKey(staff);
         final index = ids.indexOf(id);
         if (assign && index < 0) {
+          final accountsRef = widget.firestore.collection('staff_requests');
+          final role = _assignmentRole(data);
+          final roleLimit = role == 'admin' ? 2 : 3;
+          final assignedIds = ids.toSet();
+          var assignedCount = 0;
+          for (final assignedId in assignedIds) {
+            if (assignedId.isEmpty || assignedId.contains('/')) continue;
+            final assigned = await transaction.get(accountsRef.doc(assignedId));
+            final account = assigned.data();
+            if (account != null &&
+                _isActiveForAssignment(account, _assignmentRole(account)) &&
+                _assignmentRole(account) == role) {
+              assignedCount++;
+            }
+          }
+          if (branchIds.contains(widget.branch.id)) assignedCount++;
+          if (assignedCount >= roleLimit) {
+            throw StateError(
+              'A branch can have at most $roleLimit ${role == 'admin' ? 'admins' : 'cashiers'}.',
+            );
+          }
           ids.add(id);
           names.add(_staffName(data));
         }
@@ -352,12 +386,14 @@ class _BranchStaffSheetState extends State<_BranchStaffSheet> {
           if (assign) 'requiresBranchAssignment': false,
         });
       });
-    } catch (_) {
+    } catch (error) {
       if (mounted) {
-        setState(
-          () => _error =
-              'Unable to update assignment. The staff may be inactive or assigned elsewhere.',
-        );
+        final message = error is StateError
+            ? error.message
+            : error is FirebaseException
+            ? 'Unable to update assignment (${error.code}): ${error.message ?? 'Firebase rejected the request.'}'
+            : 'Unable to update assignment: $error';
+        setState(() => _error = message);
       }
     } finally {
       if (mounted) setState(() => _saving = false);
@@ -411,6 +447,19 @@ class _BranchStaffSheetState extends State<_BranchStaffSheet> {
                   .contains(query);
             })
             .toList();
+        final assignedRoleCounts = <String, int>{};
+        for (final doc in snapshot.data!.docs) {
+          final data = doc.data();
+          final role = _assignmentRole(data);
+          if (ids.contains(_staffKey(doc)) &&
+              _isActiveForAssignment(data, role)) {
+            assignedRoleCounts.update(
+              role,
+              (count) => count + 1,
+              ifAbsent: () => 1,
+            );
+          }
+        }
         staff.sort(
           (a, b) => (ids.contains(_staffKey(b)) ? 1 : 0).compareTo(
             ids.contains(_staffKey(a)) ? 1 : 0,
@@ -521,7 +570,13 @@ class _BranchStaffSheetState extends State<_BranchStaffSheet> {
                           ? null
                           : (value) {
                               if (value != null) {
-                                _confirmAndAssign(doc, value);
+                                _confirmAndAssign(
+                                  doc,
+                                  value,
+                                  assignedRoleCounts[_assignmentRole(data)] ??
+                                      0,
+                                  assigned,
+                                );
                               }
                             },
                     );

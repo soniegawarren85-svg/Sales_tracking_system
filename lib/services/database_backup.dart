@@ -124,6 +124,123 @@ class DatabaseBackup {
     return value;
   }
 
+  static String _normalizedKey(Object? key) =>
+      '$key'.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
+
+  static bool _branchValueMatches(
+    dynamic value,
+    Set<String> branchIds,
+    Set<String> branchNames,
+  ) {
+    if (value is List) {
+      return value.any(
+        (item) => _branchValueMatches(item, branchIds, branchNames),
+      );
+    }
+    if (value is String) {
+      final normalized = value.trim().toLowerCase();
+      return branchIds.contains(value.trim()) ||
+          branchNames.contains(normalized);
+    }
+    if (value is DocumentReference) {
+      return branchIds.contains(value.id) && value.parent.id == 'branches';
+    }
+    if (value is Map) {
+      if (value['__type'] == 'reference') {
+        final path = '${value['path'] ?? ''}'.split('/');
+        return path.length == 2 &&
+            path.first == 'branches' &&
+            branchIds.contains(path.last);
+      }
+      return value.entries.any((entry) {
+        final key = _normalizedKey(entry.key);
+        return const {
+              'id',
+              'branchid',
+              'branchids',
+              'name',
+              'branchname',
+              'branchref',
+              'branchreference',
+              'staffid',
+            }.contains(key) &&
+            _branchValueMatches(entry.value, branchIds, branchNames);
+      });
+    }
+    return false;
+  }
+
+  static bool _documentBelongsToBranches(
+    String path,
+    dynamic data,
+    Set<String> branchIds,
+    Set<String> branchNames,
+  ) {
+    final parts = path.split('/');
+    if (parts.length == 2 &&
+        parts.first == 'branches' &&
+        branchIds.contains(parts.last)) {
+      return true;
+    }
+    if (data is! Map) return false;
+    return data.entries.any((entry) {
+      final key = _normalizedKey(entry.key);
+      return const {
+            'branch',
+            'branchid',
+            'branchids',
+            'branchref',
+            'branchreference',
+            'branchname',
+            'staffid',
+          }.contains(key) &&
+          _branchValueMatches(entry.value, branchIds, branchNames);
+    });
+  }
+
+  static dynamic _limitBranchIds(dynamic value, Set<String> branchIds) {
+    if (value is Map) {
+      return value.map((key, item) {
+        final keyString = key.toString();
+        return MapEntry(
+          keyString,
+          _normalizedKey(keyString) == 'branchids' && item is List
+              ? item.where((id) => branchIds.contains('$id')).toList()
+              : _limitBranchIds(item, branchIds),
+        );
+      });
+    }
+    if (value is List) {
+      return value.map((item) => _limitBranchIds(item, branchIds)).toList();
+    }
+    return value;
+  }
+
+  static Set<String> _scopeDocumentsToBranches(
+    Map<dynamic, dynamic> documents,
+    Set<String> branchIds,
+    Set<String> branchNames,
+  ) {
+    final included = <String>{};
+    for (final entry in documents.entries) {
+      final path = entry.key.toString();
+      final parts = path.split('/');
+      final isMessageItem =
+          parts.length == 4 && parts.first == 'messages' && parts[2] == 'items';
+      final parentPath = isMessageItem ? '${parts[0]}/${parts[1]}' : '';
+      if (_documentBelongsToBranches(
+            path,
+            entry.value,
+            branchIds,
+            branchNames,
+          ) ||
+          (isMessageItem && included.contains(parentPath))) {
+        included.add(path);
+      }
+    }
+    return included;
+  }
+
   static dynamic decode(dynamic value, {FirebaseFirestore? firestore}) {
     final db = firestore ?? FirebaseFirestore.instance;
     if (value is List) {
@@ -159,9 +276,15 @@ class DatabaseBackup {
     FirebaseFirestore? firestore,
     String backupName = 'Manual backup',
     String? backupId,
+    Set<String>? branchIds,
+    Set<String> branchNames = const {},
     void Function(int completed, int total, String collection)? onProgress,
   }) async {
     final db = firestore ?? FirebaseFirestore.instance;
+    final scopedBranchIds = branchIds;
+    final scopedBranchNames = branchNames
+        .map((name) => name.trim().toLowerCase())
+        .toSet();
     final records = <String, dynamic>{};
     for (var index = 0; index < collections.length; index++) {
       final name = collections[index];
@@ -175,7 +298,22 @@ class DatabaseBackup {
               doc.data()['status'] == 'in_progress') {
             continue;
           }
+          if (scopedBranchIds != null &&
+              !_documentBelongsToBranches(
+                doc.reference.path,
+                doc.data(),
+                scopedBranchIds,
+                scopedBranchNames,
+              )) {
+            continue;
+          }
           records[doc.reference.path] = encode(_sanitize(doc.data()));
+          if (scopedBranchIds != null) {
+            records[doc.reference.path] = _limitBranchIds(
+              records[doc.reference.path],
+              scopedBranchIds,
+            );
+          }
           if (name == 'messages') {
             final messages = await doc.reference
                 .collection('items')
@@ -317,6 +455,46 @@ class DatabaseBackup {
       );
     }
     return result;
+  }
+
+  /// Produces a valid backup containing only documents associated with the
+  /// supplied branches. Unscoped and other-branch records are omitted.
+  static Uint8List restrictToBranches(
+    Uint8List bytes, {
+    required Set<String> branchIds,
+    Set<String> branchNames = const {},
+  }) {
+    if (branchIds.isEmpty) {
+      throw const FormatException(
+        'Your account has no assigned branch for this backup.',
+      );
+    }
+    inspect(bytes);
+    final data = jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>;
+    final sourceDocuments = data['documents'] as Map;
+    final included = _scopeDocumentsToBranches(
+      sourceDocuments,
+      branchIds,
+      branchNames.map((name) => name.trim().toLowerCase()).toSet(),
+    );
+    final documents = <String, dynamic>{};
+    for (final entry in sourceDocuments.entries) {
+      final path = entry.key.toString();
+      if (included.contains(path)) {
+        documents[path] = _limitBranchIds(entry.value, branchIds);
+      }
+    }
+    final counts = <String, int>{};
+    for (final path in documents.keys) {
+      final collection = path.split('/').first;
+      counts.update(collection, (total) => total + 1, ifAbsent: () => 1);
+    }
+    data['documents'] = documents;
+    data['documentCount'] = documents.length;
+    data['collectionCounts'] = counts;
+    data['scopeType'] = 'branch';
+    data['scopeBranchIds'] = branchIds.toList()..sort();
+    return Uint8List.fromList(utf8.encode(jsonEncode(data)));
   }
 
   /// Merges validated records by their original document paths in safe batches.

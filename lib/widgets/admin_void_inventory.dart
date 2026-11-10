@@ -300,6 +300,7 @@ class _AdminVoidInventoryState extends State<AdminVoidInventory> {
       padding: const EdgeInsets.all(20),
       children: [
         InventoryRecordsTable(
+          minWidth: widget.expired ? 1100 : 1260,
           headings: [
             'ID',
             'Item',
@@ -312,12 +313,14 @@ class _AdminVoidInventoryState extends State<AdminVoidInventory> {
             if (!widget.expired) 'Action',
           ],
           flex: {
-            0: 1.4,
-            1: 2.5,
-            2: .8,
-            3: 1.1,
-            4: 1.6,
-            if (!widget.expired) 5: 2.5,
+            0: 1.2,
+            1: 2.2,
+            2: 1.2,
+            3: .9,
+            4: 1.2,
+            if (!widget.expired) 5: 2.3,
+            if (!widget.expired) 6: 1.6,
+            if (!widget.expired) 7: 1.4,
           },
           rows: records.map((record) {
             final data = record.data;
@@ -371,6 +374,7 @@ class _AdminVoidInventoryState extends State<AdminVoidInventory> {
                     backgroundColor: Colors.amber,
                     foregroundColor: Colors.black87,
                     shape: const StadiumBorder(),
+                    padding: const EdgeInsets.symmetric(horizontal: 14),
                   ),
                   onPressed: _restoring.isNotEmpty
                       ? null
@@ -388,7 +392,11 @@ class _AdminVoidInventoryState extends State<AdminVoidInventory> {
           Padding(
             padding: const EdgeInsets.all(24),
             child: Text(
-              widget.expired
+              _query.isNotEmpty ||
+                      _endDay != null ||
+                      !DateUtils.isSameDay(_day, DateTime.now())
+                  ? 'No records match your filters.'
+                  : widget.expired
                   ? 'No expired records found.'
                   : 'No void records found.',
             ),

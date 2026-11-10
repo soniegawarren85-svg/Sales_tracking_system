@@ -448,10 +448,8 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard>
                 children: [
                   _buildStatsCard(),
                   const SizedBox(height: 16),
-                  if (MediaQuery.sizeOf(context).width >= 600) ...[
-                    const AdminSalesOverview(todayOnly: true),
-                    const SizedBox(height: 20),
-                  ],
+                  const AdminSalesOverview(todayOnly: true),
+                  const SizedBox(height: 20),
                   const SuperAdminTotals(),
                   const SizedBox(height: 20),
                   SizedBox(
@@ -923,16 +921,24 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard>
             }
 
             return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-              key: ValueKey(activeBranchId ?? 'all-branches'),
-              stream: _staffStats(activeBranchId),
+              key: const ValueKey('all-staff-accounts'),
+              stream: _staffStats(null),
               builder: (context, staffSnapshot) {
                 final staffCount = staffSnapshot.hasData
                     ? staffSnapshot.data!.docs.where((doc) {
-                        final data = doc.data() as Map<String, dynamic>;
-                        final role = (data['role'] as String?)
-                            ?.trim()
+                        final data = doc.data();
+                        final role = '${data['role'] ?? ''}'
+                            .trim()
                             .toLowerCase();
-                        return data['status'] == 'accepted' && role != 'admin';
+                        final status = '${data['status'] ?? ''}'
+                            .trim()
+                            .toLowerCase();
+                        return status == 'accepted' &&
+                            data['isDeleted'] != true &&
+                            data['isVoided'] != true &&
+                            (role == 'staff' ||
+                                role == 'cashier' ||
+                                role == 'admin');
                       }).length
                     : 0;
 

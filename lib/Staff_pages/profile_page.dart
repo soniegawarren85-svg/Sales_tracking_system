@@ -725,6 +725,10 @@ class _ProfilePageState extends State<ProfilePage>
     final lastName = staffData['lastName'] ?? 'Member';
     final email = _verifiedSessionEmail ?? confirmedProfileEmail(staffData);
     final staffId = publicItemId('${staffData['staffId'] ?? 'N/A'}');
+    final roleLabel =
+        '${staffData['role'] ?? 'staff'}'.trim().toLowerCase() == 'admin'
+        ? 'Admin'
+        : 'Cashier';
     final photoUrl =
         staffData['photoUrl']?.toString() ??
         staffData['profileImageUrl']?.toString() ??
@@ -830,8 +834,8 @@ class _ProfilePageState extends State<ProfilePage>
                                   width: 1,
                                 ),
                               ),
-                              child: const Text(
-                                'Staff Member',
+                              child: Text(
+                                roleLabel,
                                 style: TextStyle(
                                   fontSize: 11,
                                   color: _accentLight,
@@ -1247,7 +1251,10 @@ class _ProfilePageState extends State<ProfilePage>
           final phone = staffData['phone'] ?? 'N/A';
           final age = staffData['age'] ?? 'N/A';
           final staffId = publicItemId('${staffData['staffId'] ?? 'N/A'}');
-          final role = staffData['role'] ?? 'Staff Member';
+          final role =
+              '${staffData['role'] ?? 'staff'}'.trim().toLowerCase() == 'admin'
+              ? 'Admin'
+              : 'Cashier';
           final createdAt = staffData['createdAt'];
           final memberSince = createdAt is Timestamp
               ? _formatProfileDate(createdAt.toDate())

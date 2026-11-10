@@ -38,10 +38,39 @@ class DailySalesReport extends StatefulWidget {
 }
 
 class _DailySalesReportState extends State<DailySalesReport> {
-  late final source = widget.data ?? BranchReportData.watch();
   DateTime day = DateUtils.dateOnly(DateTime.now());
   String period = 'Day', search = '', type = 'All';
   DateTimeRange? customRange;
+  late Stream<BranchReportData> source;
+
+  @override
+  void initState() {
+    super.initState();
+    source = _createSource();
+  }
+
+  Stream<BranchReportData> _createSource() {
+    if (widget.data != null) return widget.data!;
+    final (start, end) = range;
+    final previousStart = start.subtract(end.difference(start));
+    return BranchReportData.watch(salesStart: previousStart, salesEnd: end);
+  }
+
+  @override
+  void didUpdateWidget(covariant DailySalesReport oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.data != widget.data) {
+      source = _createSource();
+    }
+  }
+
+  void _updatePeriod(VoidCallback update) {
+    setState(() {
+      update();
+      source = _createSource();
+    });
+  }
+
   Future<void> pickRange() async {
     final selected = await showDateRangePicker(
       context: context,
@@ -50,7 +79,7 @@ class _DailySalesReportState extends State<DailySalesReport> {
       lastDate: DateTime.now(),
     );
     if (selected != null && mounted) {
-      setState(() {
+      _updatePeriod(() {
         customRange = selected;
         period = 'Custom';
       });
@@ -765,7 +794,7 @@ class _DailySalesReportState extends State<DailySalesReport> {
                                   if (p == 'Custom') {
                                     pickRange();
                                   } else {
-                                    setState(() => period = p);
+                                    _updatePeriod(() => period = p);
                                   }
                                 },
                               ),

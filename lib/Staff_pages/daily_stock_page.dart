@@ -17,7 +17,6 @@ import 'dart:math';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -142,6 +141,8 @@ class _DailyStockPageState extends State<DailyStockPage>
   late TextEditingController _orderSearchController;
   late final Stream<QuerySnapshot<Map<String, dynamic>>>
   _rootSalesInventoryStream;
+  late final Future<QuerySnapshot<Map<String, dynamic>>>
+  _todayTransactionsFuture;
   Stream<QuerySnapshot<Map<String, dynamic>>>? _staffInventoryStreamCache;
   StreamSubscription? _pendingOrdersSubscription;
   StreamSubscription<void>? _pendingReductionsSubscription;
@@ -272,7 +273,6 @@ class _DailyStockPageState extends State<DailyStockPage>
   String _activeBranchAddress = '';
   StreamSubscription? _budgetSubscription;
   StreamSubscription? _cashDrawerSubscription;
-  bool _tabletOrientationLocked = false;
 
   // ─── Animation Controllers ──────────────────────────────────────────────
   late AnimationController _headerAnimCtrl;
@@ -337,6 +337,18 @@ class _DailyStockPageState extends State<DailyStockPage>
     _budgetRequestController = TextEditingController();
     _orderSearchController = TextEditingController();
     _currentUserId = FirebaseAuth.instance.currentUser?.uid;
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    _todayTransactionsFuture = FirebaseFirestore.instance
+        .collection('completed_sales')
+        .where('userId', isEqualTo: _currentUserId ?? '')
+        .where('timestamp', isGreaterThanOrEqualTo: Timestamp.fromDate(today))
+        .where(
+          'timestamp',
+          isLessThan: Timestamp.fromDate(today.add(const Duration(days: 1))),
+        )
+        .orderBy('timestamp', descending: true)
+        .get();
     unawaited(ThermalPrinterService.instance.initialize());
     _staffInventoryIds = const [];
     _applyInitialSalesTarget();
@@ -420,29 +432,6 @@ class _DailyStockPageState extends State<DailyStockPage>
     _showCoffeeView = view == 'coffee';
     _showCartReview = false;
     _selectedGroupName = (groupName ?? '').isEmpty ? null : groupName;
-  }
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    final shortestSide = MediaQuery.sizeOf(context).shortestSide;
-    final canLockOrientation =
-        !kIsWeb &&
-        (defaultTargetPlatform == TargetPlatform.android ||
-            defaultTargetPlatform == TargetPlatform.iOS);
-    if (!canLockOrientation && _tabletOrientationLocked) {
-      _tabletOrientationLocked = false;
-      SystemChrome.setPreferredOrientations(DeviceOrientation.values);
-    }
-    if (canLockOrientation &&
-        shortestSide >= 600 &&
-        !_tabletOrientationLocked) {
-      _tabletOrientationLocked = true;
-      SystemChrome.setPreferredOrientations(const [
-        DeviceOrientation.landscapeLeft,
-        DeviceOrientation.landscapeRight,
-      ]);
-    }
   }
 
   Future<void> _loadLocalOrderCache() async {
@@ -687,9 +676,6 @@ class _DailyStockPageState extends State<DailyStockPage>
     _qtyControllers.clear();
     _headerAnimCtrl.dispose();
     _budgetCardAnimCtrl.dispose();
-    if (_tabletOrientationLocked) {
-      SystemChrome.setPreferredOrientations(DeviceOrientation.values);
-    }
     super.dispose();
   }
 
@@ -1779,7 +1765,7 @@ class _DailyStockPageState extends State<DailyStockPage>
               if (dialogContext.mounted) {
                 Navigator.of(dialogContext).pop();
                 _showStyledSnackBar(
-                  '$quantity x ${chosenItem['name']} added to cart',
+                  '$quantity x ${_itemDisplayLabel(chosenItem)} added to order ticket',
                 );
               }
             }
@@ -3874,11 +3860,8 @@ class _DailyStockPageState extends State<DailyStockPage>
                 ),
                 // Today's transactions list
                 Expanded(
-                  child: FutureBuilder<QuerySnapshot>(
-                    future: FirebaseFirestore.instance
-                        .collection('completed_sales')
-                        .orderBy('timestamp', descending: true)
-                        .get(),
+                  child: FutureBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                    future: _todayTransactionsFuture,
                     builder: (context, snapshot) {
                       if (snapshot.connectionState == ConnectionState.waiting) {
                         return const Center(
@@ -3904,26 +3887,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                         );
                       }
 
-                      final userId = FirebaseAuth.instance.currentUser?.uid;
-                      final now = DateTime.now();
-                      final today = DateTime(now.year, now.month, now.day);
-
-                      final docs = snapshot.data!.docs.where((doc) {
-                        final data = doc.data() as Map<String, dynamic>;
-                        final timestamp = data['timestamp'] as Timestamp?;
-                        final docUserId = data['userId'];
-
-                        if (timestamp == null || docUserId != userId) {
-                          return false;
-                        }
-
-                        final docDate = DateTime(
-                          timestamp.toDate().year,
-                          timestamp.toDate().month,
-                          timestamp.toDate().day,
-                        );
-                        return docDate == today;
-                      }).toList();
+                      final docs = snapshot.data!.docs;
 
                       if (docs.isEmpty) {
                         return Center(
@@ -3944,8 +3908,7 @@ class _DailyStockPageState extends State<DailyStockPage>
                         padding: const EdgeInsets.symmetric(horizontal: 22),
                         itemCount: docs.length,
                         itemBuilder: (context, index) {
-                          final data =
-                              docs[index].data() as Map<String, dynamic>;
+                          final data = docs[index].data();
                           final timestamp = data['timestamp'] as Timestamp?;
                           final total =
                               (data['total'] as num?)?.toDouble() ?? 0;
@@ -4841,6 +4804,7 @@ class _DailyStockPageState extends State<DailyStockPage>
             },
             'isCoffee': item['isCoffee'] == true,
             'coffeeSize': item['coffeeSize'] ?? '',
+            'sugarLevel': item['sugarLevel'] ?? '',
             'publicId': item['publicId'],
             'coffeeId': item['coffeeId'] ?? '',
             'itemId': item['itemId'] ?? item['id'] ?? '',
@@ -5202,6 +5166,7 @@ class _DailyStockPageState extends State<DailyStockPage>
         },
         'isCoffee': item['isCoffee'] == true,
         'coffeeSize': item['coffeeSize']?.toString() ?? '',
+        'sugarLevel': item['sugarLevel']?.toString() ?? '',
         'coffeeId': item['coffeeId']?.toString() ?? '',
         'basePrice': _parsePrice(item['basePrice']),
         'sizePriceDelta': _parsePrice(item['sizePriceDelta']),
@@ -8885,6 +8850,29 @@ class _DailyStockPageState extends State<DailyStockPage>
             }
             final activeRootById = <String, Map<String, dynamic>>{};
             final activeRootByName = <String, Map<String, dynamic>>{};
+            final allocatedAddonOptions = docs
+                .where(
+                  (doc) =>
+                      doc.data()['isAddon'] == true &&
+                      doc.data()['isDeleted'] != true &&
+                      !_isExpiredItem(
+                        doc.data()['expirationDate']?.toString() ?? '',
+                      ),
+                )
+                .map((doc) {
+                  final addon = doc.data();
+                  return <String, dynamic>{
+                    ...addon,
+                    'id': doc.id,
+                    'name': addon['name']?.toString() ?? '',
+                    // Add-on allocations store the selling price in `price`;
+                    // coffee catalog options store the same amount as delta.
+                    'priceDelta': addon['priceDelta'] ?? addon['price'] ?? 0,
+                    'costPrice': addon['costPrice'] ?? 0,
+                  };
+                })
+                .where((addon) => '${addon['name']}'.trim().isNotEmpty)
+                .toList();
             final firestoreRootDocs = rootSnapshot.data?.docs
                 .map(_CachedDoc.fromFirestore)
                 .toList();
@@ -9031,6 +9019,11 @@ class _DailyStockPageState extends State<DailyStockPage>
                       () => Map<String, dynamic>.from(addon),
                     );
                   }
+                }
+                for (final addon in allocatedAddonOptions) {
+                  final name = addon['name']?.toString().trim() ?? '';
+                  if (name.isEmpty) continue;
+                  addonByName.putIfAbsent(name, () => addon);
                 }
                 final addonOptions = addonByName.values.toList();
                 final coffeeItems = <Map<String, dynamic>>[];
@@ -11852,18 +11845,19 @@ class _DailyStockPageState extends State<DailyStockPage>
     final addonName = item['addonName']?.toString() ?? '';
     final sugarLevel = item['sugarLevel']?.toString() ?? '';
     if (isCoffee) {
-      if (sugarLevel.isNotEmpty && variant.isNotEmpty && variant != name) {
-        return '$name ($variant)';
-      }
+      final size = coffeeSize.isNotEmpty
+          ? coffeeSize
+          : variant.replaceFirst(
+              RegExp(r'\s*[-–]\s*Sugar\s+.*$', caseSensitive: false),
+              '',
+            );
+      final details = <String>[
+        if (size.isNotEmpty && size != name) size,
+        if (addonName.isNotEmpty) addonName,
+        if (sugarLevel.isNotEmpty) '$sugarLevel sugar',
+      ];
+      if (details.isNotEmpty) return '$name (${details.join(', ')})';
       if (variant.isNotEmpty && variant != name) return '$name ($variant)';
-      if (coffeeSize.isNotEmpty && addonName.isNotEmpty) {
-        final sugar = sugarLevel.isEmpty ? '' : ', Sugar $sugarLevel';
-        return '$name ($coffeeSize + $addonName$sugar)';
-      }
-      if (coffeeSize.isNotEmpty) {
-        final sugar = sugarLevel.isEmpty ? '' : ', Sugar $sugarLevel';
-        return '$name ($coffeeSize$sugar)';
-      }
       if (flavor.isNotEmpty && flavor != name) return flavor;
       return name;
     }

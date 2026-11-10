@@ -115,4 +115,76 @@ void main() {
       );
     },
   );
+
+  test(
+    'branch backups contain and restore only assigned branch records',
+    () async {
+      final firestore = FakeFirebaseFirestore();
+      await firestore.collection('branches').doc('branch-001').set({
+        'name': 'Lingayen',
+      });
+      await firestore.collection('branches').doc('branch-002').set({
+        'name': 'Dagupan',
+      });
+      await firestore.collection('completed_sales').doc('sale-001').set({
+        'branchId': 'branch-001',
+        'total': 100,
+      });
+      await firestore.collection('completed_sales').doc('sale-002').set({
+        'branchId': 'branch-002',
+        'total': 200,
+      });
+      await firestore.collection('staff_inventory').doc('inventory-001').set({
+        'staffId': 'branch-001',
+        'items': ['one', 'two'],
+      });
+      await firestore.collection('staff_inventory').doc('inventory-002').set({
+        'staffId': 'branch-002',
+        'items': ['other branch'],
+      });
+      await firestore.collection('messages').doc('branch-message').set({
+        'branchIds': ['branch-001', 'branch-002'],
+        'subject': 'Branch conversation',
+      });
+      await firestore
+          .collection('messages')
+          .doc('branch-message')
+          .collection('items')
+          .doc('message-item')
+          .set({'text': 'branch item'});
+      await firestore.collection('coffee_products').doc('global-product').set({
+        'name': 'Shared catalog record',
+      });
+
+      final branchBackup = await DatabaseBackup.export(
+        firestore: firestore,
+        branchIds: {'branch-001'},
+        branchNames: {'lingayen'},
+      );
+      final manifest = DatabaseBackup.inspect(branchBackup);
+      final docs = DatabaseBackup.validate(branchBackup, firestore: firestore);
+
+      expect(manifest.documentCount, 5);
+      expect(docs.keys, contains('branches/branch-001'));
+      expect(docs.keys, contains('completed_sales/sale-001'));
+      expect(docs.keys, contains('staff_inventory/inventory-001'));
+      expect(docs.keys, contains('messages/branch-message/items/message-item'));
+      expect(docs.keys, isNot(contains('branches/branch-002')));
+      expect(docs.keys, isNot(contains('completed_sales/sale-002')));
+      expect(docs.keys, isNot(contains('coffee_products/global-product')));
+      expect(docs['messages/branch-message']!['branchIds'], ['branch-001']);
+
+      final globalBackup = await DatabaseBackup.export(firestore: firestore);
+      final restricted = DatabaseBackup.restrictToBranches(
+        globalBackup,
+        branchIds: {'branch-001'},
+        branchNames: {'lingayen'},
+      );
+      final restrictedDocs = DatabaseBackup.validate(
+        restricted,
+        firestore: firestore,
+      );
+      expect(restrictedDocs.keys, docs.keys);
+    },
+  );
 }

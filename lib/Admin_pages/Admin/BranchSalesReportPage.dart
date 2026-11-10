@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:sales_tracking/theme/app_colors.dart';
 import '../../services/number_format.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -54,6 +56,17 @@ class _BranchSalesReportPageState extends State<BranchSalesReportPage> {
   final String _activityFilter = 'Sales';
   DateTime _selectedDate = DateTime.now();
   final TextEditingController _searchController = TextEditingController();
+  late final Stream<QuerySnapshot<Map<String, dynamic>>> _branchesStream;
+  String? _salesStreamKey;
+  Stream<List<QueryDocumentSnapshot<Map<String, dynamic>>>>? _salesStream;
+
+  @override
+  void initState() {
+    super.initState();
+    _branchesStream = FirebaseFirestore.instance
+        .collection('branches')
+        .snapshots();
+  }
 
   @override
   void dispose() {
@@ -79,6 +92,100 @@ class _BranchSalesReportPageState extends State<BranchSalesReportPage> {
 
   String get _dateLabel =>
       '${_months[_selectedDate.month - 1]} ${_selectedDate.day}, ${_selectedDate.year}';
+
+  Stream<List<QueryDocumentSnapshot<Map<String, dynamic>>>> _salesStreamFor(
+    Set<String> branchIds,
+    Set<String> staffIds,
+  ) {
+    final day = DateTime(
+      _selectedDate.year,
+      _selectedDate.month,
+      _selectedDate.day,
+    );
+    String encodeIds(Set<String> ids) =>
+        (ids.toList()..sort()).map((id) => '${id.length}:$id').join();
+    final key =
+        '${day.millisecondsSinceEpoch}|${encodeIds(branchIds)}|${encodeIds(staffIds)}';
+    if (_salesStreamKey == key && _salesStream != null) return _salesStream!;
+
+    _salesStreamKey = key;
+    final collection = FirebaseFirestore.instance.collection('completed_sales');
+    final end = day.add(const Duration(days: 1));
+    final queries = <Query<Map<String, dynamic>>>[];
+
+    void addAlternatives(String field, Set<String> ids) {
+      final sortedIds = ids.toList()..sort();
+      for (var start = 0; start < sortedIds.length; start += 30) {
+        final endIndex = (start + 30).clamp(0, sortedIds.length);
+        queries.add(
+          collection
+              .where(field, whereIn: sortedIds.sublist(start, endIndex))
+              .where(
+                'timestamp',
+                isGreaterThanOrEqualTo: Timestamp.fromDate(day),
+              )
+              .where('timestamp', isLessThan: Timestamp.fromDate(end)),
+        );
+      }
+    }
+
+    addAlternatives('branchId', branchIds);
+    addAlternatives('userId', staffIds);
+
+    if (queries.isEmpty) {
+      _salesStream = Stream.value(
+        const <QueryDocumentSnapshot<Map<String, dynamic>>>[],
+      );
+      return _salesStream!;
+    }
+
+    final latest = <int, List<QueryDocumentSnapshot<Map<String, dynamic>>>>{};
+    var subscriptions =
+        <StreamSubscription<QuerySnapshot<Map<String, dynamic>>>>[];
+    late final StreamController<
+      List<QueryDocumentSnapshot<Map<String, dynamic>>>
+    >
+    controller;
+    controller = StreamController.broadcast(
+      onListen: () {
+        latest.clear();
+        subscriptions = [];
+        for (var index = 0; index < queries.length; index++) {
+          final queryIndex = index;
+          subscriptions.add(
+            queries[index].snapshots().listen(
+              (snapshot) {
+                latest[queryIndex] = snapshot.docs;
+                if (latest.length != queries.length) return;
+                final uniqueDocs =
+                    <String, QueryDocumentSnapshot<Map<String, dynamic>>>{};
+                for (final docs in latest.values) {
+                  for (final doc in docs) {
+                    uniqueDocs[doc.id] = doc;
+                  }
+                }
+                final docs = uniqueDocs.values.toList()
+                  ..sort((a, b) => a.id.compareTo(b.id));
+                controller.add(docs);
+              },
+              onError: (Object error, StackTrace stackTrace) {
+                controller.addError(error, stackTrace);
+              },
+            ),
+          );
+        }
+      },
+      onCancel: () async {
+        await Future.wait(
+          subscriptions.map((subscription) => subscription.cancel()),
+        );
+        subscriptions = [];
+        latest.clear();
+      },
+    );
+    _salesStream = controller.stream;
+    return _salesStream!;
+  }
 
   double _money(dynamic value) => value is num
       ? value.toDouble()
@@ -288,7 +395,7 @@ class _BranchSalesReportPageState extends State<BranchSalesReportPage> {
         ),
       ),
       body: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-        stream: FirebaseFirestore.instance.collection('branches').snapshots(),
+        stream: _branchesStream,
         builder: (context, branchSnapshot) {
           if (branchSnapshot.hasError) {
             return const _EmptyState(
@@ -323,23 +430,35 @@ class _BranchSalesReportPageState extends State<BranchSalesReportPage> {
               : (selected.data()['staffIds'] as List<dynamic>? ?? [])
                     .map((id) => id.toString())
                     .toSet();
+          final salesBranchIds = _branchId == null
+              ? {...activeBranchIds}
+              : {_branchId!};
+          final salesStaffIds = _branchId == null
+              ? {...activeStaffIds}
+              : {...staffIds};
 
-          return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-            stream: FirebaseFirestore.instance
-                .collection('completed_sales')
-                .snapshots(),
+          return StreamBuilder<
+            List<QueryDocumentSnapshot<Map<String, dynamic>>>
+          >(
+            stream: _salesStreamFor(salesBranchIds, salesStaffIds),
             builder: (context, salesSnapshot) {
-              final allTodaySales = (salesSnapshot.data?.docs ?? []).where((
-                doc,
-              ) {
-                final sale = doc.data();
-                return _isSelectedDate(sale['timestamp']) &&
-                    (activeBranchIds.contains('${sale['branchId'] ?? ''}') ||
-                        activeStaffIds.contains('${sale['userId'] ?? ''}')) &&
-                    (_branchId == null ||
-                        sale['branchId']?.toString() == _branchId ||
-                        staffIds.contains(sale['userId']?.toString()));
-              }).toList();
+              final allTodaySales =
+                  (salesSnapshot.data ??
+                          const <QueryDocumentSnapshot<Map<String, dynamic>>>[])
+                      .where((doc) {
+                        final sale = doc.data();
+                        return _isSelectedDate(sale['timestamp']) &&
+                            (activeBranchIds.contains(
+                                  '${sale['branchId'] ?? ''}',
+                                ) ||
+                                activeStaffIds.contains(
+                                  '${sale['userId'] ?? ''}',
+                                )) &&
+                            (_branchId == null ||
+                                sale['branchId']?.toString() == _branchId ||
+                                staffIds.contains(sale['userId']?.toString()));
+                      })
+                      .toList();
               final todaySales = allTodaySales.where((doc) {
                 if (_paymentFilter == 'All') return true;
                 final mode =

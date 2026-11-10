@@ -62,6 +62,28 @@ class AllocationChecklistService {
           'createdAt': FieldValue.serverTimestamp(),
         },
       });
+      if (admin && data['kind'] == 'return') {
+        final branchId = '${data['branchId'] ?? data['staffId']}';
+        tx.set(
+          db.collection('activity_logs').doc('return_report_${id}_$eventId'),
+          {
+            'action': 'return_issue_reported',
+            'description':
+                '$actorName reported an issue with the return of ${data['name'] ?? 'item'}.',
+            'actorId': actorId,
+            'actorName': actorName,
+            'actorRole': 'admin',
+            'branchIds': [branchId],
+            'details': {
+              'returnId': id,
+              'itemName': data['name'] ?? 'Item',
+              'quantity': data['quantity'] ?? 0,
+              'reason': reason.trim(),
+            },
+            'createdAt': FieldValue.serverTimestamp(),
+          },
+        );
+      }
       if (!admin) {
         tx.set(db.collection('admin_notifications').doc('allocation_issue_$id'), {
           'title': 'Allocation issue reported',
@@ -315,12 +337,29 @@ class AllocationChecklistService {
         throw StateError('A selected return is outside your assigned branch.');
       }
       for (final doc in pending) {
+        final data = doc.data()!;
+        final branchId = '${data['branchId'] ?? data['staffId']}';
         tx.update(doc.reference, {
           'status': ChecklistStatus.awaitingSuperAdmin,
           'forwardedBy': actorId,
           'forwardedByName': actorName,
           'forwardedAt': FieldValue.serverTimestamp(),
           'updatedAt': FieldValue.serverTimestamp(),
+        });
+        tx.set(db.collection('activity_logs').doc('return_forward_${doc.id}'), {
+          'action': 'return_forwarded',
+          'description':
+              '$actorName submitted ${data['quantity'] ?? 0} ${data['name'] ?? 'item'} return(s) for Super Admin review.',
+          'actorId': actorId,
+          'actorName': actorName,
+          'actorRole': 'admin',
+          'branchIds': [branchId],
+          'details': {
+            'returnId': doc.id,
+            'itemName': data['name'] ?? 'Item',
+            'quantity': data['quantity'] ?? 0,
+          },
+          'createdAt': FieldValue.serverTimestamp(),
         });
         tx.set(
           db.collection('admin_notifications').doc('return_forward_${doc.id}'),
@@ -331,7 +370,7 @@ class AllocationChecklistService {
             'type': 'allocation_return',
             'category': 'Inventory',
             'requestId': doc.id,
-            'branchId': doc.data()?['branchId'] ?? doc.data()?['staffId'],
+            'branchId': branchId,
             'isRead': false,
             'toastShown': false,
             'createdAt': FieldValue.serverTimestamp(),
@@ -633,9 +672,7 @@ class AllocationChecklistService {
           : null;
       final unreceivedInstances = issueType == 'Not received' && bundle
           ? rows(pending['bundleInstances'])
-                .skip(
-                  rows(pending['bundleInstances']).length - issueQuantity,
-                )
+                .skip(rows(pending['bundleInstances']).length - issueQuantity)
                 .toList()
           : const <Map<String, dynamic>>[];
       final payload = Map<String, dynamic>.from(pending)
@@ -833,7 +870,8 @@ class AllocationChecklistService {
               'allocatedByName': pending['allocatedByName'],
               'allocatedByAdminId': pending['allocatedByAdminId'],
               'sourceInventoryId': pending['sourceInventoryId'],
-              'sourceCollection': pending['sourceCollection'] ?? 'sales_inventory',
+              'sourceCollection':
+                  pending['sourceCollection'] ?? 'sales_inventory',
               'isBundle': bundle,
               'isCoffee': false,
               'isAddon': false,
@@ -977,7 +1015,8 @@ class AllocationChecklistService {
         return available;
       });
       tx.update(sourceRef, {
-        'bundleCount': quantity(source['bundleCount']) +
+        'bundleCount':
+            quantity(source['bundleCount']) +
             quantity(report['bundleCount'] ?? report['issueQuantity']),
         'bundleInstances': [...existing, ...restored],
         'updatedAt': FieldValue.serverTimestamp(),
@@ -990,18 +1029,23 @@ class AllocationChecklistService {
       }
       for (final reported in reportedItems) {
         final reportedId = '${reported['id'] ?? ''}';
-        final index = sourceItems.indexWhere((item) =>
-            reportedId.isNotEmpty
-                ? '${item['id'] ?? ''}' == reportedId
-                : '${item['name'] ?? ''}' == '${reported['name'] ?? ''}');
+        final index = sourceItems.indexWhere(
+          (item) => reportedId.isNotEmpty
+              ? '${item['id'] ?? ''}' == reportedId
+              : '${item['name'] ?? ''}' == '${reported['name'] ?? ''}',
+        );
         if (index < 0) {
           throw StateError(
             'The original variant ${reported['name'] ?? ''} could not be found.',
           );
         }
         final sourceItem = sourceItems[index];
-        final stock = quantity(sourceItem['stock'] ?? sourceItem['startingStock']);
-        final returned = quantity(reported['stock'] ?? reported['startingStock']);
+        final stock = quantity(
+          sourceItem['stock'] ?? sourceItem['startingStock'],
+        );
+        final returned = quantity(
+          reported['stock'] ?? reported['startingStock'],
+        );
         sourceItems[index] = {...sourceItem, 'stock': stock + returned};
       }
       tx.update(sourceRef, {

@@ -13,12 +13,57 @@ class _AllSalesAnalyticsPageState extends State<AllSalesAnalyticsPage> {
   String _period = 'Day';
   String _category = 'All';
   String _ranking = 'All';
+  late Stream<QuerySnapshot<Map<String, dynamic>>> _salesStream;
+  late final Stream<QuerySnapshot<Map<String, dynamic>>> _inventoryStream;
 
   static const _primary = AppColors.primaryDark;
   static const _primaryLight = AppColors.rose;
   static const _accent = AppColors.primary;
   static const _bg = Color(0xFFFFF3F7);
   static const _textDark = Color(0xFF7A1845);
+
+  @override
+  void initState() {
+    super.initState();
+    final firestore = FirebaseFirestore.instance;
+    _salesStream = _salesStreamFor(_period, DateTime.now());
+    _inventoryStream = firestore.collection('sales_inventory').snapshots();
+  }
+
+  Stream<QuerySnapshot<Map<String, dynamic>>> _salesStreamFor(
+    String period,
+    DateTime now,
+  ) {
+    final start = _rangeStart(period, now);
+    final end = _rangeEnd(period, now);
+    return FirebaseFirestore.instance
+        .collection('completed_sales')
+        .where('timestamp', isGreaterThanOrEqualTo: Timestamp.fromDate(start))
+        .where('timestamp', isLessThan: Timestamp.fromDate(end))
+        .snapshots();
+  }
+
+  DateTime _rangeStart(String period, DateTime now) {
+    if (period == 'Day') return DateTime(now.year, now.month, now.day);
+    if (period == 'Week') {
+      return DateTime(
+        now.year,
+        now.month,
+        now.day,
+      ).subtract(Duration(days: now.weekday - 1));
+    }
+    return DateTime(now.year, now.month - 11);
+  }
+
+  DateTime _rangeEnd(String period, DateTime now) {
+    if (period == 'Day') {
+      return DateTime(now.year, now.month, now.day + 1);
+    }
+    if (period == 'Week') {
+      return _rangeStart(period, now).add(const Duration(days: 7));
+    }
+    return DateTime(now.year, now.month + 1);
+  }
 
   double _money(dynamic value) => value is num
       ? value.toDouble()
@@ -116,17 +161,13 @@ class _AllSalesAnalyticsPageState extends State<AllSalesAnalyticsPage> {
       foregroundColor: Colors.white,
     ),
     body: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-      stream: FirebaseFirestore.instance
-          .collection('completed_sales')
-          .snapshots(),
+      stream: _salesStream,
       builder: (context, snapshot) {
         final sales =
             snapshot.data?.docs ??
             const <QueryDocumentSnapshot<Map<String, dynamic>>>[];
         return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-          stream: FirebaseFirestore.instance
-              .collection('sales_inventory')
-              .snapshots(),
+          stream: _inventoryStream,
           builder: (context, inventorySnapshot) {
             if (!snapshot.hasData || !inventorySnapshot.hasData) {
               return const Center(
@@ -195,11 +236,13 @@ class _AllSalesAnalyticsPageState extends State<AllSalesAnalyticsPage> {
                   spacing: 8,
                   children: ['Day', 'Week', 'Month']
                       .map(
-                        (p) => _chip(
-                          p,
-                          _period == p,
-                          () => setState(() => _period = p),
-                        ),
+                        (p) => _chip(p, _period == p, () {
+                          if (_period == p) return;
+                          setState(() {
+                            _period = p;
+                            _salesStream = _salesStreamFor(p, DateTime.now());
+                          });
+                        }),
                       )
                       .toList(),
                 ),
@@ -420,7 +463,9 @@ class _AllSalesAnalyticsPageState extends State<AllSalesAnalyticsPage> {
                         ),
                       ),
                       Text(
-                        formatMoney((_money(item['price']) * _money(item['quantity']))),
+                        formatMoney(
+                          (_money(item['price']) * _money(item['quantity'])),
+                        ),
                         style: TextStyle(
                           color: refunded > 0
                               ? Colors.red.shade700

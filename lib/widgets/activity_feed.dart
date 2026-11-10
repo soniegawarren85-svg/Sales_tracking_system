@@ -86,6 +86,7 @@ class _ActivityFeedState extends State<ActivityFeed> {
 
   IconData _iconFor(String action) {
     if (action == 'cashier_made_order') return Icons.point_of_sale_rounded;
+    if (action == 'cashier_refunded') return Icons.currency_exchange_rounded;
     if (action.startsWith('inventory') ||
         action.startsWith('bundle_') ||
         action == 'allocation_received') {
@@ -135,6 +136,7 @@ class _ActivityFeedState extends State<ActivityFeed> {
     Widget feed(
       List<QueryDocumentSnapshot<Map<String, dynamic>>> receipts,
       List<QueryDocumentSnapshot<Map<String, dynamic>>> sales,
+      List<QueryDocumentSnapshot<Map<String, dynamic>>> adjustments,
     ) => StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
       stream: query.snapshots(),
       builder: (context, snapshot) {
@@ -185,6 +187,9 @@ class _ActivityFeedState extends State<ActivityFeed> {
                       }),
                   ...sales.map((doc) {
                     final r = doc.data();
+                    final isRefund =
+                        '${r['type'] ?? ''}'.toLowerCase() == 'refund' ||
+                        '${r['status'] ?? ''}'.toLowerCase() == 'refund';
                     final items = (r['items'] as List? ?? [])
                         .whereType<Map>()
                         .map(
@@ -197,9 +202,11 @@ class _ActivityFeedState extends State<ActivityFeed> {
                         '${r['cashierName'] ?? r['staffName'] ?? r['userName'] ?? 'Cashier'}';
                     final total = reportValue(r['total']);
                     return <String, dynamic>{
-                      'action': 'cashier_made_order',
+                      'action': isRefund
+                          ? 'cashier_refunded'
+                          : 'cashier_made_order',
                       'description':
-                          'Cashier made order • Receipt $receipt${items.isEmpty ? '' : ' • Items: $items'} • Total: ₱${total.toStringAsFixed(2)}',
+                          'Cashier ${isRefund ? 'refunded' : 'made order'} • Receipt $receipt${items.isEmpty ? '' : ' • Items: $items'} • Total: ₱${total.abs().toStringAsFixed(2)}',
                       'actorId':
                           r['cashierId'] ??
                           r['staffUid'] ??
@@ -216,9 +223,36 @@ class _ActivityFeedState extends State<ActivityFeed> {
                       'createdAt': r['timestamp'] ?? r['createdAt'],
                     };
                   }),
+                  ...adjustments.map((doc) {
+                    final r = doc.data();
+                    final quantity = r['quantity'] ?? 0;
+                    final item = r['itemName'] ?? r['categoryName'] ?? 'Item';
+                    final reason = '${r['reason'] ?? ''}'.trim();
+                    final actorName =
+                        r['staffName'] ?? r['userName'] ?? 'Branch staff';
+                    return <String, dynamic>{
+                      'action': 'inventory_reduced',
+                      'description':
+                          '$actorName reduced $quantity x $item${reason.isEmpty ? '' : ' - $reason'}',
+                      'actorId': r['staffId'] ?? r['userId'],
+                      'actorName': actorName,
+                      'actorPublicId': r['staffPublicId'] ?? '',
+                      'actorRole': r['actorRole'] ?? 'Cashier',
+                      'branchIds': [r['branchId'] ?? branchId],
+                      'createdAt': r['createdAt'] ?? r['timestamp'],
+                    };
+                  }),
                 ]
                 .where(
                   (r) =>
+                      (branchId == null ||
+                          (!{'superadmin', 'owner'}.contains(
+                                '${r['actorRole'] ?? ''}'
+                                    .toLowerCase()
+                                    .replaceAll(RegExp(r'[^a-z]'), ''),
+                              ) &&
+                              '${r['actorId'] ?? ''}' != 'Spr-001' &&
+                              '${r['actorPublicId'] ?? ''}' != 'Spr-001')) &&
                       (!widget.hideSessionEvents ||
                           !{
                             'account_login',
@@ -460,7 +494,9 @@ class _ActivityFeedState extends State<ActivityFeed> {
         );
       },
     );
-    if (!includeReceipts || branchId == null) return feed(const [], const []);
+    if (!includeReceipts || branchId == null) {
+      return feed(const [], const [], const []);
+    }
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
       stream: db
           .collection('allocation_checklist')
@@ -472,10 +508,18 @@ class _ActivityFeedState extends State<ActivityFeed> {
                 .collection('completed_sales')
                 .where('branchId', isEqualTo: branchId)
                 .snapshots(),
-            builder: (context, sales) => feed(
-              receipts.data?.docs ?? const [],
-              sales.data?.docs ?? const [],
-            ),
+            builder: (context, sales) =>
+                StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                  stream: db
+                      .collection('stock_adjustments')
+                      .where('branchId', isEqualTo: branchId)
+                      .snapshots(),
+                  builder: (context, adjustments) => feed(
+                    receipts.data?.docs ?? const [],
+                    sales.data?.docs ?? const [],
+                    adjustments.data?.docs ?? const [],
+                  ),
+                ),
           ),
     );
   }

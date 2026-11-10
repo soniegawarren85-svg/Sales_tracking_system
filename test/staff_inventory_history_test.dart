@@ -85,6 +85,44 @@ void main() {
     expect(entries.single['name'], 'Pistachio Dubai');
   });
 
+  test('sales and refunds saved with legacy staffId appear in history', () {
+    final entries = staffInventoryHistoryEntries(
+      staffId: 'staff-a',
+      kind: 'categories',
+      categoryId: 'category-1',
+      categoryName: 'Cookies',
+      itemIds: {'item-1'},
+      itemNames: {'Cookie'},
+      adjustments: const [],
+      sales: [
+        {
+          'staffId': 'staff-a',
+          'timestamp': today,
+          'items': [
+            {'itemId': 'item-1', 'name': 'Cookie', 'quantity': 2, 'price': 25},
+          ],
+        },
+        {
+          'cashierId': 'staff-a',
+          'type': 'refund',
+          'timestamp': today,
+          'items': [
+            {'itemId': 'item-1', 'name': 'Cookie', 'quantity': 1, 'price': 25},
+          ],
+        },
+      ],
+    );
+
+    expect(entries.map((entry) => entry['activity']).toSet(), {
+      'Sold',
+      'Refund',
+    });
+    expect(
+      {for (final entry in entries) entry['activity']: entry['quantity']},
+      {'Sold': 2, 'Refund': 1},
+    );
+  });
+
   test('offline history shows the saved item name and offline status', () {
     final entries = staffInventoryHistoryEntries(
       staffId: 'staff-a',

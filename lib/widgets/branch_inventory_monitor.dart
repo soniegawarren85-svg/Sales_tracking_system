@@ -216,6 +216,7 @@ class _BranchInventoryMonitorState extends State<BranchInventoryMonitor> {
           showActions: widget.showActions,
           actions: (row) {
             if (widget.type == 'Beverages' &&
+                !widget.addons &&
                 !['S', 'Small'].contains('${row['_sizeLabel']}')) {
               return const SizedBox.shrink();
             }

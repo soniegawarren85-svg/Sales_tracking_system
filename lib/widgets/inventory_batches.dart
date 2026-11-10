@@ -91,7 +91,10 @@ class _MainInventoryBatchesDialog extends StatefulWidget {
 class _MainInventoryBatchesDialogState
     extends State<_MainInventoryBatchesDialog> {
   final _searchController = TextEditingController();
-  DateTimeRange? _dateRange;
+  late DateTimeRange? _dateRange = () {
+    final today = DateUtils.dateOnly(DateTime.now());
+    return DateTimeRange(start: today, end: today);
+  }();
 
   @override
   void dispose() {
@@ -208,54 +211,57 @@ class _MainInventoryBatchesDialogState
                 ],
               ),
               const SizedBox(height: 16),
-              TextField(
-                controller: _searchController,
-                onChanged: (_) => setState(() {}),
-                decoration: InputDecoration(
-                  hintText: 'Search batches',
-                  prefixIcon: const Icon(Icons.search_rounded),
-                  suffixIcon: _searchController.text.isEmpty
-                      ? null
-                      : IconButton(
-                          tooltip: 'Clear search',
-                          onPressed: () {
-                            _searchController.clear();
-                            setState(() {});
-                          },
-                          icon: const Icon(Icons.close_rounded),
-                        ),
-                  filled: true,
-                  fillColor: Colors.white,
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(16),
-                    borderSide: BorderSide.none,
-                  ),
-                ),
-              ),
-              const SizedBox(height: 10),
               Row(
                 children: [
                   Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: _pickDateRange,
-                      icon: const Icon(Icons.date_range_rounded),
-                      label: Text(
-                        _dateRange == null
-                            ? 'Filter by date'
-                            : '${_dateLabel(_dateRange!.start)} – ${_dateLabel(_dateRange!.end)}',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
+                    child: TextField(
+                      controller: _searchController,
+                      onChanged: (_) => setState(() {}),
+                      decoration: InputDecoration(
+                        hintText: 'Search batches',
+                        prefixIcon: const Icon(Icons.search_rounded),
+                        suffixIcon: _searchController.text.isEmpty
+                            ? null
+                            : IconButton(
+                                tooltip: 'Clear search',
+                                onPressed: () {
+                                  _searchController.clear();
+                                  setState(() {});
+                                },
+                                icon: const Icon(Icons.close_rounded),
+                              ),
+                        filled: true,
+                        fillColor: Colors.white,
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(16),
+                          borderSide: BorderSide.none,
+                        ),
                       ),
                     ),
                   ),
-                  if (_dateRange != null)
-                    IconButton(
-                      tooltip: 'Clear date filter',
-                      onPressed: () => setState(() => _dateRange = null),
-                      icon: const Icon(Icons.close_rounded),
-                    ),
+                  const SizedBox(width: 6),
+                  IconButton.filledTonal(
+                    tooltip: 'Filter batches by date range',
+                    onPressed: _pickDateRange,
+                    icon: const Icon(Icons.date_range_rounded),
+                  ),
                 ],
               ),
+              if (_dateRange != null)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Padding(
+                    padding: const EdgeInsets.only(top: 7),
+                    child: Text(
+                      'Date: ${_dateLabel(_dateRange!.start)} – ${_dateLabel(_dateRange!.end)}',
+                      style: const TextStyle(
+                        color: AppColors.primaryDark,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ),
               const SizedBox(height: 8),
               Expanded(
                 child: filteredBatches.isEmpty
@@ -1366,13 +1372,21 @@ class _BatchDialogState extends State<_BatchDialog> {
     final allocationRecords = records ?? const <Map<String, dynamic>>[];
     final source = allocationRecords.firstOrNull;
     final catalogOnlyInventory = allocationRecords.any(
-      (record) => record['isCoffee'] == true || record['isAddon'] == true,
+      (record) =>
+          record['isCoffee'] == true ||
+          record['isAddon'] == true ||
+          record['type'] == 'Beverages' ||
+          record['type'] == 'Add-ons' ||
+          record['sourceCollection'] == 'coffee_products' ||
+          record['sourceCollection'] == 'coffee_addons',
     );
     final bundleInventory = allocationRecords.any(
       (record) => record['isBundle'] == true || record['type'] == 'Bundle',
     );
     final beverageInventory = allocationRecords.any(
-      (record) => record['isCoffee'] == true,
+      (record) =>
+          record['isCoffee'] == true ||
+          record['sourceCollection'] == 'coffee_products',
     );
     final sourceIds = allocationRecords
         .map((record) => '${record['sourceInventoryId'] ?? ''}')
@@ -1440,12 +1454,17 @@ class _BatchDialogState extends State<_BatchDialog> {
           .where(matchesSelection)
           .toList();
       for (final item in selectedInventoryItems) {
+        final itemCatalogOnly =
+            catalogOnlyInventory ||
+            item['type'] == 'Beverages' ||
+            item['type'] == 'Add-ons' ||
+            item['isCoffee'] == true ||
+            item['isAddon'] == true;
         for (final event in (item['history'] as List? ?? []).whereType<Map>()) {
           final at = date(event['time']);
           if (at.isBefore(start) || !at.isBefore(end)) continue;
           final activity = '${event['activity'] ?? 'Activity'}';
-          if (catalogOnlyInventory &&
-              activity.toLowerCase().contains('opening')) {
+          if (itemCatalogOnly && activity.toLowerCase().contains('opening')) {
             continue;
           }
           final row = <String, dynamic>{
@@ -1455,7 +1474,7 @@ class _BatchDialogState extends State<_BatchDialog> {
                 : activity,
             'itemName': event['name'] ?? item['name'] ?? 'Item',
             'branchId': branch,
-            if (catalogOnlyInventory) 'qty': reportValue(event['qty']).abs(),
+            if (itemCatalogOnly) 'qty': reportValue(event['qty']).abs(),
             if (beverageInventory)
               'size':
                   event['size'] ??
@@ -1518,6 +1537,7 @@ class _BatchDialogState extends State<_BatchDialog> {
         final action = '${log['action'] ?? ''}'.toLowerCase();
         final at = date(log['createdAt'] ?? log['timestamp']);
         if (action.contains('unbundl') ||
+            action.contains('approv') ||
             (!branches.contains(branch) &&
                 '${details['branchId'] ?? details['branch'] ?? ''}' !=
                     branch) ||

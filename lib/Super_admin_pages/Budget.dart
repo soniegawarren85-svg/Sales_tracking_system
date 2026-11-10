@@ -5080,10 +5080,7 @@ class _BudgetPageState extends State<BudgetPage>
               ),
               const SizedBox(width: 8),
               StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                stream: _firestore
-                    .collection('branches')
-                    .where('isVoided', isEqualTo: true)
-                    .snapshots(),
+                stream: _firestore.collection('branches').snapshots(),
                 builder: (context, voidedSnapshot) {
                   final count = voidedSnapshot.data?.docs.length ?? 0;
                   return IconButton(
@@ -8199,6 +8196,13 @@ class _BudgetPageState extends State<BudgetPage>
   }
 
   Future<void> _showVoidedBranchesDialog() async {
+    DateTimeRange? selectedRange;
+    String searchQuery = '';
+    final screenSize = MediaQuery.sizeOf(context);
+    final voidedBranchesStream = _firestore
+        .collection('branches')
+        .where('isVoided', isEqualTo: true)
+        .snapshots();
     await showDialog<void>(
       context: context,
       builder: (dialogContext) {
@@ -8208,105 +8212,297 @@ class _BudgetPageState extends State<BudgetPage>
             borderRadius: BorderRadius.circular(22),
           ),
           child: SizedBox(
-            width: 520,
-            child: Padding(
-              padding: const EdgeInsets.all(20),
-              child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                stream: _firestore
-                    .collection('branches')
-                    .where('isVoided', isEqualTo: true)
-                    .snapshots(),
-                builder: (context, snapshot) {
-                  final docs = snapshot.data?.docs ?? [];
-                  return Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
+            width: screenSize.width < 760 ? screenSize.width * .9 : 680,
+            child: ConstrainedBox(
+              constraints: BoxConstraints(maxHeight: screenSize.height * .82),
+              child: Padding(
+                padding: EdgeInsets.all(screenSize.width < 600 ? 16 : 22),
+                child: StatefulBuilder(
+                  builder: (context, setDialogState) => StreamBuilder<
+                    QuerySnapshot<Map<String, dynamic>>
+                  >(
+                    stream: voidedBranchesStream,
+                    builder: (context, snapshot) {
+                      final docs = snapshot.data?.docs ?? [];
+                      final filteredDocs = docs.where((doc) {
+                        final data = doc.data();
+                        final name = data['name']?.toString() ?? '';
+                        final code =
+                            data['branchCode']?.toString() ??
+                            _branchCode(doc.id);
+                        final matchesSearch =
+                            '$name $code ${doc.id}'.toLowerCase().contains(
+                              searchQuery,
+                            );
+                        final range = selectedRange;
+                        if (range == null) return matchesSearch;
+                        final rawDate = data['voidedAt'];
+                        final voidedAt = rawDate is Timestamp
+                            ? rawDate.toDate()
+                            : rawDate is DateTime
+                            ? rawDate
+                            : DateTime.tryParse('$rawDate');
+                        if (voidedAt == null) return false;
+                        final date = DateUtils.dateOnly(voidedAt);
+                        return matchesSearch &&
+                            !date.isBefore(DateUtils.dateOnly(range.start)) &&
+                            date.isBefore(
+                              DateUtils.dateOnly(
+                                range.end,
+                              ).add(const Duration(days: 1)),
+                            );
+                      }).toList()
+                        ..sort((a, b) {
+                          final aDate = a.data()['voidedAt'];
+                          final bDate = b.data()['voidedAt'];
+                          final aValue = aDate is Timestamp
+                              ? aDate.toDate()
+                              : DateTime.tryParse('$aDate') ?? DateTime(0);
+                          final bValue = bDate is Timestamp
+                              ? bDate.toDate()
+                              : DateTime.tryParse('$bDate') ?? DateTime(0);
+                          return bValue.compareTo(aValue);
+                        });
+                      return Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const Icon(Icons.inventory_2_outlined, color: kDeep),
-                          const SizedBox(width: 10),
-                          const Expanded(
-                            child: Text(
-                              'Voided Branches',
-                              style: TextStyle(
-                                fontSize: 18,
-                                fontWeight: FontWeight.w900,
-                                color: kBannerTop,
+                          Row(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.all(10),
+                                decoration: BoxDecoration(
+                                  color: AppColors.rose,
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: const Icon(
+                                  Icons.inventory_2_outlined,
+                                  color: kDeep,
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              const Expanded(
+                                child: Text(
+                                  'Voided Branches',
+                                  style: TextStyle(
+                                    fontSize: 20,
+                                    fontWeight: FontWeight.w900,
+                                    color: kBannerTop,
+                                  ),
+                                ),
+                              ),
+                              IconButton(
+                                tooltip: 'Close',
+                                onPressed: () =>
+                                    Navigator.pop(dialogContext),
+                                icon: const Icon(Icons.close_rounded),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 16),
+                          TextField(
+                            onChanged: (value) => setDialogState(
+                              () => searchQuery = value.trim().toLowerCase(),
+                            ),
+                            decoration: InputDecoration(
+                              hintText: 'Search voided branches',
+                              prefixIcon: const Icon(Icons.search_rounded),
+                              suffixIcon: IconButton(
+                                tooltip: 'Filter by date',
+                                icon: const Icon(Icons.calendar_month),
+                                onPressed: () async {
+                                  final today = DateUtils.dateOnly(
+                                    DateTime.now(),
+                                  );
+                                  final range = await showDateRangePicker(
+                                    context: dialogContext,
+                                    initialDateRange:
+                                        selectedRange ??
+                                        DateTimeRange(
+                                          start: today,
+                                          end: today,
+                                        ),
+                                    firstDate: DateTime(2000),
+                                    lastDate: DateTime(2100),
+                                  );
+                                  if (range != null) {
+                                    setDialogState(
+                                      () => selectedRange = range,
+                                    );
+                                  }
+                                },
+                              ),
+                              filled: true,
+                              fillColor: Colors.white,
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(14),
+                                borderSide: BorderSide(
+                                  color: Colors.orange.shade100,
+                                ),
+                              ),
+                              enabledBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(14),
+                                borderSide: BorderSide(
+                                  color: Colors.orange.shade100,
+                                ),
                               ),
                             ),
                           ),
-                          IconButton(
-                            onPressed: () => Navigator.pop(dialogContext),
-                            icon: const Icon(Icons.close_rounded),
+                          const SizedBox(height: 8),
+                          Row(
+                            children: [
+                              Icon(
+                                Icons.calendar_today_outlined,
+                                size: 15,
+                                color: Colors.grey.shade600,
+                              ),
+                              const SizedBox(width: 6),
+                              Expanded(
+                                child: Text(
+                                  selectedRange == null
+                                      ? 'All void dates'
+                                      : '${MaterialLocalizations.of(context).formatShortDate(selectedRange!.start)} – ${MaterialLocalizations.of(context).formatShortDate(selectedRange!.end)}',
+                                  style: TextStyle(
+                                    color: Colors.grey.shade700,
+                                    fontSize: 12,
+                                  ),
+                                ),
+                              ),
+                              if (selectedRange != null)
+                                TextButton(
+                                  onPressed: () => setDialogState(
+                                    () => selectedRange = null,
+                                  ),
+                                  child: const Text('Clear date'),
+                                ),
+                            ],
                           ),
+                          const SizedBox(height: 8),
+                          if (snapshot.hasError)
+                            Padding(
+                              padding: const EdgeInsets.all(20),
+                              child: Center(
+                                child: Text(
+                                  'Unable to load voided branches: ${snapshot.error}',
+                                ),
+                              ),
+                            )
+                          else if (!snapshot.hasData)
+                            const SizedBox(
+                              height: 160,
+                              child: Center(
+                                child: CircularProgressIndicator(),
+                              ),
+                            )
+                          else if (filteredDocs.isEmpty)
+                            SizedBox(
+                              height: 150,
+                              child: Center(
+                                child: Text(
+                                  docs.isEmpty
+                                      ? 'No voided branches.'
+                                      : 'No voided branches match these filters.',
+                                  style: TextStyle(
+                                    color: Colors.grey.shade700,
+                                  ),
+                                ),
+                              ),
+                            )
+                          else
+                            SizedBox(
+                              height: (screenSize.height * .48).clamp(
+                                180.0,
+                                440.0,
+                              ),
+                              child: ListView.separated(
+                                itemCount: filteredDocs.length,
+                                separatorBuilder: (_, _) =>
+                                    const SizedBox(height: 10),
+                                itemBuilder: (context, index) {
+                                  final doc = filteredDocs[index];
+                                  final data = doc.data();
+                                  final name =
+                                      data['name']?.toString() ?? 'Branch';
+                                  final code =
+                                      data['branchCode']?.toString().trim();
+                                  final rawDate = data['voidedAt'];
+                                  final voidedAt = rawDate is Timestamp
+                                      ? rawDate.toDate()
+                                      : rawDate is DateTime
+                                      ? rawDate
+                                      : DateTime.tryParse('$rawDate');
+                                  return Container(
+                                    padding: const EdgeInsets.all(14),
+                                    decoration: BoxDecoration(
+                                      color: Colors.white,
+                                      borderRadius: BorderRadius.circular(16),
+                                      border: Border.all(
+                                        color: Colors.orange.shade100,
+                                      ),
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        CircleAvatar(
+                                          backgroundColor: Colors.orange.shade50,
+                                          foregroundColor:
+                                              Colors.orange.shade800,
+                                          child: const Icon(
+                                            Icons.storefront_rounded,
+                                          ),
+                                        ),
+                                        const SizedBox(width: 12),
+                                        Expanded(
+                                          child: Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              Text(
+                                                name,
+                                                style: const TextStyle(
+                                                  color: kBannerTop,
+                                                  fontWeight: FontWeight.w800,
+                                                ),
+                                              ),
+                                              const SizedBox(height: 3),
+                                              Text(
+                                                'ID: ${code?.isNotEmpty == true ? code : _branchCode(doc.id)}',
+                                                style: TextStyle(
+                                                  color: Colors.grey.shade700,
+                                                  fontSize: 12,
+                                                ),
+                                              ),
+                                              if (voidedAt != null)
+                                                Text(
+                                                  'Voided ${MaterialLocalizations.of(context).formatShortDate(voidedAt)}',
+                                                  style: TextStyle(
+                                                    color: Colors.grey.shade600,
+                                                    fontSize: 11,
+                                                  ),
+                                                ),
+                                            ],
+                                          ),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        OutlinedButton.icon(
+                                          onPressed: () =>
+                                              _restoreBranch(doc.id, name),
+                                          icon: const Icon(
+                                            Icons.restore_rounded,
+                                            size: 17,
+                                          ),
+                                          label: const Text('Restore'),
+                                        ),
+                                      ],
+                                    ),
+                                  );
+                                },
+                              ),
+                            ),
                         ],
-                      ),
-                      const SizedBox(height: 12),
-                      if (docs.isEmpty)
-                        const Padding(
-                          padding: EdgeInsets.symmetric(vertical: 24),
-                          child: Center(child: Text('No voided branches.')),
-                        )
-                      else
-                        ...docs.map((doc) {
-                          final data = doc.data();
-                          final name = data['name']?.toString() ?? 'Branch';
-                          final branchCode = data['branchCode']
-                              ?.toString()
-                              .trim();
-                          return Container(
-                            margin: const EdgeInsets.only(bottom: 10),
-                            padding: const EdgeInsets.all(12),
-                            decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius: BorderRadius.circular(14),
-                              border: Border.all(color: Colors.orange.shade200),
-                            ),
-                            child: Row(
-                              children: [
-                                Icon(
-                                  Icons.store_mall_directory_rounded,
-                                  color: Colors.orange.shade800,
-                                ),
-                                const SizedBox(width: 10),
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      Text(
-                                        name,
-                                        style: const TextStyle(
-                                          color: kBannerTop,
-                                          fontWeight: FontWeight.w800,
-                                        ),
-                                      ),
-                                      Text(
-                                        'ID: ${branchCode?.isNotEmpty == true ? branchCode : _branchCode(doc.id)}',
-                                        style: const TextStyle(
-                                          color: Color(0xFF777777),
-                                          fontSize: 11,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                                OutlinedButton.icon(
-                                  onPressed: () => _restoreBranch(doc.id, name),
-                                  icon: const Icon(
-                                    Icons.restore_rounded,
-                                    size: 17,
-                                  ),
-                                  label: const Text('Restore'),
-                                ),
-                              ],
-                            ),
-                          );
-                        }),
-                    ],
-                  );
-                },
+                      );
+                    },
+                  ),
+                ),
               ),
             ),
           ),

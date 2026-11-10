@@ -57,6 +57,22 @@ class _InventoryActivityHistoryDialogState
     final today = DateUtils.dateOnly(DateTime.now());
     return DateTimeRange(start: today, end: today);
   }();
+  late final Future<List<String>> _branchStaffIds = widget.database
+      .collection('staff_requests')
+      .where('branchIds', arrayContains: widget.branchId)
+      .get()
+      .then(
+        (snapshot) => snapshot.docs
+            .expand((doc) {
+              final data = doc.data();
+              return [doc.id, data['uid'], data['userId'], data['staffId']];
+            })
+            .map((id) => '${id ?? ''}'.trim())
+            .where((id) => id.isNotEmpty)
+            .toSet()
+            .take(30)
+            .toList(),
+      );
 
   @override
   void dispose() {
@@ -78,8 +94,8 @@ class _InventoryActivityHistoryDialogState
         '${item['type'] ?? ''}'.toLowerCase().contains('add-on');
     final beverage =
         item['isCoffee'] == true ||
-        item['coffeeSize'] != null ||
-        item['size'] != null;
+        '${item['coffeeSize'] ?? ''}'.trim().isNotEmpty ||
+        '${item['size'] ?? ''}'.trim().isNotEmpty;
     if (widget.addons) return addon;
     switch (widget.type) {
       case 'Categories':
@@ -99,6 +115,11 @@ class _InventoryActivityHistoryDialogState
     final rows = <Map<String, dynamic>>[];
     for (final doc in docs) {
       final sale = doc.data();
+      final status = '${sale['status'] ?? ''}'.toLowerCase();
+      if (sale['isVoided'] == true ||
+          {'void', 'voided', 'cancelled', 'canceled'}.contains(status)) {
+        continue;
+      }
       final items = (sale['items'] as List? ?? const [])
           .whereType<Map>()
           .map((item) => Map<String, dynamic>.from(item))
@@ -383,127 +404,215 @@ class _InventoryActivityHistoryDialogState
                 ),
               const SizedBox(height: 10),
               Expanded(
-                child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                  stream: db
-                      .collection('completed_sales')
-                      .where('branchId', isEqualTo: widget.branchId)
-                      .snapshots(),
-                  builder: (context, salesSnapshot) =>
-                      StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                        stream: db
-                            .collection('activity_logs')
-                            .where('branchIds', arrayContains: widget.branchId)
-                            .snapshots(),
-                        builder: (context, activitySnapshot) =>
-                            StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                              stream: db
-                                  .collection('stock_adjustments')
-                                  .where('branchId', isEqualTo: widget.branchId)
-                                  .snapshots(),
-                              builder: (context, adjustmentSnapshot) {
-                                if (salesSnapshot.hasError ||
-                                    activitySnapshot.hasError ||
-                                    adjustmentSnapshot.hasError) {
-                                  return const Center(
-                                    child: Text(
-                                      'Unable to load inventory history.',
-                                    ),
-                                  );
-                                }
-                                if (!salesSnapshot.hasData ||
-                                    !activitySnapshot.hasData ||
-                                    !adjustmentSnapshot.hasData) {
-                                  return const Center(
-                                    child: CircularProgressIndicator(),
-                                  );
-                                }
-                                final query = _search.text.trim().toLowerCase();
-                                final rows =
-                                    [
-                                      ..._salesRows(salesSnapshot.data!.docs),
-                                      ..._activityRows(
-                                        activitySnapshot.data!.docs,
-                                      ),
-                                      ..._adjustmentRows(
-                                        adjustmentSnapshot.data!.docs,
-                                      ),
-                                    ]..sort((a, b) {
-                                      final left =
-                                          _date(a['createdAt']) ??
-                                          DateTime.fromMillisecondsSinceEpoch(
-                                            0,
-                                          );
-                                      final right =
-                                          _date(b['createdAt']) ??
-                                          DateTime.fromMillisecondsSinceEpoch(
-                                            0,
-                                          );
-                                      return right.compareTo(left);
-                                    });
-                                final filtered = rows.where((row) {
-                                  final date = _date(row['createdAt']);
-                                  if (_dateRange != null &&
-                                      (date == null ||
-                                          date.isBefore(
-                                            DateUtils.dateOnly(
-                                              _dateRange!.start,
-                                            ),
-                                          ) ||
-                                          date.isAfter(
-                                            DateUtils.dateOnly(_dateRange!.end)
-                                                .add(const Duration(days: 1))
-                                                .subtract(
-                                                  const Duration(
-                                                    microseconds: 1,
+                child: FutureBuilder<List<String>>(
+                  future: _branchStaffIds,
+                  builder: (context, staffIdsSnapshot) {
+                    if (staffIdsSnapshot.hasError) {
+                      return const Center(
+                        child: Text('Unable to load branch staff history.'),
+                      );
+                    }
+                    if (!staffIdsSnapshot.hasData) {
+                      return const Center(child: CircularProgressIndicator());
+                    }
+                    final staffIds = staffIdsSnapshot.data!;
+                    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                      stream: db
+                          .collection('completed_sales')
+                          .where(
+                            'userId',
+                            whereIn: staffIds.isEmpty
+                                ? const ['__no_branch_staff__']
+                                : staffIds,
+                          )
+                          .snapshots(),
+                      builder: (context, userSalesSnapshot) {
+                        if (userSalesSnapshot.hasError) {
+                          return const Center(
+                            child: Text('Unable to load branch sales history.'),
+                          );
+                        }
+                        if (!userSalesSnapshot.hasData) {
+                          return const Center(
+                            child: CircularProgressIndicator(),
+                          );
+                        }
+                        return StreamBuilder<
+                          QuerySnapshot<Map<String, dynamic>>
+                        >(
+                          stream: db
+                              .collection('completed_sales')
+                              .where('branchId', isEqualTo: widget.branchId)
+                              .snapshots(),
+                          builder: (context, salesSnapshot) => StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                            stream: db
+                                .collection('completed_sales')
+                                .where('staffId', isEqualTo: widget.branchId)
+                                .snapshots(),
+                            builder: (context, legacySalesSnapshot) =>
+                                StreamBuilder<
+                                  QuerySnapshot<Map<String, dynamic>>
+                                >(
+                                  stream: db
+                                      .collection('activity_logs')
+                                      .where(
+                                        'branchIds',
+                                        arrayContains: widget.branchId,
+                                      )
+                                      .snapshots(),
+                                  builder: (context, activitySnapshot) =>
+                                      StreamBuilder<
+                                        QuerySnapshot<Map<String, dynamic>>
+                                      >(
+                                        stream: db
+                                            .collection('stock_adjustments')
+                                            .where(
+                                              'branchId',
+                                              isEqualTo: widget.branchId,
+                                            )
+                                            .snapshots(),
+                                        builder: (context, adjustmentSnapshot) {
+                                          if (salesSnapshot.hasError ||
+                                              legacySalesSnapshot.hasError ||
+                                              activitySnapshot.hasError ||
+                                              adjustmentSnapshot.hasError) {
+                                            return const Center(
+                                              child: Text(
+                                                'Unable to load inventory history.',
+                                              ),
+                                            );
+                                          }
+                                          if (!salesSnapshot.hasData ||
+                                              !legacySalesSnapshot.hasData ||
+                                              !activitySnapshot.hasData ||
+                                              !adjustmentSnapshot.hasData) {
+                                            return const Center(
+                                              child:
+                                                  CircularProgressIndicator(),
+                                            );
+                                          }
+                                          final query = _search.text
+                                              .trim()
+                                              .toLowerCase();
+                                          final salesDocs = {
+                                            for (final doc
+                                                in salesSnapshot.data!.docs)
+                                              doc.id: doc,
+                                            for (final doc
+                                                in userSalesSnapshot.data!.docs)
+                                              doc.id: doc,
+                                            for (final doc
+                                                in legacySalesSnapshot
+                                                    .data!
+                                                    .docs)
+                                              doc.id: doc,
+                                          }.values;
+                                          final rows =
+                                              [
+                                                ..._salesRows(salesDocs),
+                                                ..._activityRows(
+                                                  activitySnapshot.data!.docs,
+                                                ),
+                                                ..._adjustmentRows(
+                                                  adjustmentSnapshot.data!.docs,
+                                                ),
+                                              ]..sort((a, b) {
+                                                final left =
+                                                    _date(a['createdAt']) ??
+                                                    DateTime.fromMillisecondsSinceEpoch(
+                                                      0,
+                                                    );
+                                                final right =
+                                                    _date(b['createdAt']) ??
+                                                    DateTime.fromMillisecondsSinceEpoch(
+                                                      0,
+                                                    );
+                                                return right.compareTo(left);
+                                              });
+                                          final filtered = rows.where((row) {
+                                            final date = _date(
+                                              row['createdAt'],
+                                            );
+                                            if (_dateRange != null &&
+                                                (date == null ||
+                                                    date.isBefore(
+                                                      DateUtils.dateOnly(
+                                                        _dateRange!.start,
+                                                      ),
+                                                    ) ||
+                                                    date.isAfter(
+                                                      DateUtils.dateOnly(
+                                                            _dateRange!.end,
+                                                          )
+                                                          .add(
+                                                            const Duration(
+                                                              days: 1,
+                                                            ),
+                                                          )
+                                                          .subtract(
+                                                            const Duration(
+                                                              microseconds: 1,
+                                                            ),
+                                                          ),
+                                                    ))) {
+                                              return false;
+                                            }
+                                            return '${row['title']} ${row['description']} ${row['actor']}'
+                                                .toLowerCase()
+                                                .contains(query);
+                                          }).toList();
+                                          if (filtered.isEmpty) {
+                                            return const Center(
+                                              child: Text(
+                                                'No activity records found.',
+                                              ),
+                                            );
+                                          }
+                                          return ListView.separated(
+                                            itemCount: filtered.length,
+                                            separatorBuilder: (_, _) =>
+                                                const Divider(height: 1),
+                                            itemBuilder: (context, index) {
+                                              final row = filtered[index];
+                                              final date = _date(
+                                                row['createdAt'],
+                                              );
+                                              final dateText = date == null
+                                                  ? 'Date not recorded'
+                                                  : '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')} ${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')}';
+                                              final amount =
+                                                  (row['amount'] as num?)
+                                                      ?.toDouble() ??
+                                                  0;
+                                              return ListTile(
+                                                contentPadding: EdgeInsets.zero,
+                                                leading: CircleAvatar(
+                                                  child: Icon(
+                                                    row['title'] == 'Sold'
+                                                        ? Icons
+                                                              .point_of_sale_rounded
+                                                        : Icons
+                                                              .assignment_return_rounded,
                                                   ),
                                                 ),
-                                          ))) {
-                                    return false;
-                                  }
-                                  return '${row['title']} ${row['description']} ${row['actor']}'
-                                      .toLowerCase()
-                                      .contains(query);
-                                }).toList();
-                                if (filtered.isEmpty) {
-                                  return const Center(
-                                    child: Text('No activity records found.'),
-                                  );
-                                }
-                                return ListView.separated(
-                                  itemCount: filtered.length,
-                                  separatorBuilder: (_, _) =>
-                                      const Divider(height: 1),
-                                  itemBuilder: (context, index) {
-                                    final row = filtered[index];
-                                    final date = _date(row['createdAt']);
-                                    final dateText = date == null
-                                        ? 'Date not recorded'
-                                        : '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')} ${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')}';
-                                    final amount =
-                                        (row['amount'] as num?)?.toDouble() ??
-                                        0;
-                                    return ListTile(
-                                      contentPadding: EdgeInsets.zero,
-                                      leading: CircleAvatar(
-                                        child: Icon(
-                                          row['title'] == 'Sold'
-                                              ? Icons.point_of_sale_rounded
-                                              : Icons.assignment_return_rounded,
-                                        ),
+                                                title: Text(
+                                                  '${row['title']} · ${row['description']}',
+                                                ),
+                                                subtitle: Text(
+                                                  '$dateText · ${row['actor']} · Qty ${row['quantity']}'
+                                                  '${amount > 0 ? ' · ₱${amount.toStringAsFixed(2)}' : ''}',
+                                                ),
+                                              );
+                                            },
+                                          );
+                                        },
                                       ),
-                                      title: Text(
-                                        '${row['title']} · ${row['description']}',
-                                      ),
-                                      subtitle: Text(
-                                        '$dateText · ${row['actor']} · Qty ${row['quantity']}'
-                                        '${amount > 0 ? ' · ₱${amount.toStringAsFixed(2)}' : ''}',
-                                      ),
-                                    );
-                                  },
-                                );
-                              },
-                            ),
-                      ),
+                                ),
+                          ),
+                        );
+                      },
+                    );
+                  },
                 ),
               ),
             ],

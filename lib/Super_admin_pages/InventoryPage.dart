@@ -3114,7 +3114,11 @@ class _InventoryPageState extends State<InventoryPage>
       showBundleDetails(context, entry);
 
   Future<void> _voidCatalogEntry(AdminCatalogEntry entry) async {
-    final reason = await showVoidReasonDialog(context, entry.name);
+    final reason = await showVoidReasonDialog(
+      context,
+      entry.name,
+      allowExpiredReason: false,
+    );
     if (reason == null) return;
     try {
       final ref = _firestore
@@ -4277,6 +4281,7 @@ class _BulkInventoryPageState extends State<BulkInventoryPage>
     final reason = await showVoidReasonDialog(
       context,
       '${bundle['name'] ?? 'Bundle'}',
+      allowExpiredReason: false,
     );
     if (reason != null && bundle['id'] != null) {
       try {

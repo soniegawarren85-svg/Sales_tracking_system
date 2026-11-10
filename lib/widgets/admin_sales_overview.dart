@@ -46,6 +46,23 @@ List<Map<String, dynamic>> salesForDay(
   }).toList();
 }
 
+double _profitForSales(Iterable<Map<String, dynamic>> sales) =>
+    sales.where(validReportSale).fold<double>(0, (total, sale) {
+      final refund = reportRefund(sale);
+      final cost = (sale['items'] as List? ?? []).whereType<Map>().fold<double>(
+        0,
+        (subtotal, item) =>
+            subtotal +
+            reportValue(item['quantity']).abs() *
+                reportValue(item['costPrice']),
+      );
+      return total +
+          (refund
+              ? -reportValue(sale['total']).abs()
+              : reportValue(sale['total'])) -
+          (!refund || sale['refundMethod'] == 'inventory' ? cost : 0);
+    });
+
 class AdminSalesOverview extends StatefulWidget {
   const AdminSalesOverview({
     super.key,
@@ -70,7 +87,8 @@ class _AdminSalesOverviewState extends State<AdminSalesOverview> {
   Timer? _midnight;
   DateTime _day = DateUtils.dateOnly(DateTime.now());
   late Stream<QuerySnapshot<Map<String, dynamic>>> _sales;
-  late final _reports = BranchReportData.watch();
+  late final Stream<QuerySnapshot<Map<String, dynamic>>> _branchStream =
+      FirebaseFirestore.instance.collection('branches').snapshots();
 
   @override
   void initState() {
@@ -118,7 +136,7 @@ class _AdminSalesOverviewState extends State<AdminSalesOverview> {
   Widget build(BuildContext context) {
     if (!branches) return _totals(null);
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-      stream: FirebaseFirestore.instance.collection('branches').snapshots(),
+      stream: _branchStream,
       builder: (context, snapshot) {
         if (snapshot.hasError) {
           return const Text('Unable to load branch totals.');
@@ -136,20 +154,10 @@ class _AdminSalesOverviewState extends State<AdminSalesOverview> {
     );
   }
 
-  Widget _totals(Set<String>? branchIds) => StreamBuilder<BranchReportData>(
-    stream: _reports,
-    builder: (context, snapshot) {
-      if (snapshot.hasError) return const Text('Unable to load sales totals.');
-      if (!snapshot.hasData) {
-        return const Center(child: ScreenLoadingIndicator());
-      }
-      return _totalsContent(branchIds, snapshot.data);
-    },
-  );
+  Widget _totals(Set<String>? branchIds) => _totalsContent(branchIds);
 
   Widget _totalsContent(
     Set<String>? branchIds,
-    BranchReportData? report,
   ) => StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
     stream: _sales,
     builder: (context, snapshot) {
@@ -191,9 +199,7 @@ class _AdminSalesOverviewState extends State<AdminSalesOverview> {
         ('Total sold', sold.toStringAsFixed(0), Icons.shopping_bag_outlined),
         (
           'Total profit',
-          report == null
-              ? 'Loading…'
-              : '₱${report.profitForSales(salesForBranch(records.where((r) => branchIds == null || branchIds.contains(r['branchId'])), widget.branchId)).toStringAsFixed(2)}',
+          '₱${_profitForSales(sales).toStringAsFixed(2)}',
           Icons.trending_up,
         ),
         ...widget.additionalTotals,

@@ -31,6 +31,8 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
   String _role = '';
   String _userId = '';
   String _actorName = '';
+  Set<String> _assignedBranchIds = {};
+  Set<String> _assignedBranchNames = {};
   String? _currentHistoryId;
   Uint8List? _createdBytes;
   BackupManifest? _createdManifest;
@@ -79,15 +81,39 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
             (await _database.collection('staff_requests').doc(_userId).get())
                 .data();
       }
+      final branchIds = _role == 'admin'
+          ? (profile?['branchIds'] as List? ?? const [])
+                .map((id) => '$id'.trim())
+                .where((id) => id.isNotEmpty)
+                .toSet()
+          : <String>{};
+      final branchSnapshots = await Future.wait(
+        branchIds.map((id) => _database.collection('branches').doc(id).get()),
+      );
+      final branchNames = branchSnapshots
+          .map(
+            (snapshot) =>
+                '${snapshot.data()?['name'] ?? snapshot.data()?['branchName'] ?? ''}'
+                    .trim(),
+          )
+          .where((name) => name.isNotEmpty)
+          .map((name) => name.toLowerCase())
+          .toSet();
       if (!mounted) return;
       setState(() {
+        _assignedBranchIds = branchIds;
+        _assignedBranchNames = branchNames;
         _actorName =
             _fullName(profile) ?? (_isSuperAdmin ? 'Super Admin' : 'Admin');
       });
     } catch (error) {
       debugPrint('Backup creator name could not be loaded: $error');
       if (mounted) {
-        setState(() => _actorName = _isSuperAdmin ? 'Super Admin' : 'Admin');
+        setState(() {
+          _assignedBranchIds = {};
+          _assignedBranchNames = {};
+          _actorName = _isSuperAdmin ? 'Super Admin' : 'Admin';
+        });
       }
     }
   }
@@ -103,21 +129,14 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
   }
 
   Future<String> _nextBackupCode() async {
-    final existing = await _history.get();
-    var highest = existing.docs.length;
-    for (final doc in existing.docs) {
-      final code = '${doc.data()['backupCode'] ?? ''}';
-      final match = RegExp(r'^Bkp-(\d+)$').firstMatch(code);
-      if (match != null) {
-        final value = int.tryParse(match.group(1)!) ?? 0;
-        if (value > highest) highest = value;
-      }
-    }
-    final counter = _database.collection('system_counters').doc('public_Bkp');
+    final counterId = _isSuperAdmin
+        ? 'public_Bkp'
+        : 'branch_Bkp_${Uri.encodeComponent((_assignedBranchIds.toList()..sort()).join('_'))}';
+    final counter = _database.collection('system_counters').doc(counterId);
     return _database.runTransaction((transaction) async {
       final snapshot = await transaction.get(counter);
       final current = (snapshot.data()?['count'] as num?)?.toInt() ?? 0;
-      final next = (current > highest ? current : highest) + 1;
+      final next = current + 1;
       transaction.set(counter, {'count': next});
       return 'Bkp-${next.toString().padLeft(4, '0')}';
     });
@@ -144,6 +163,10 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
   Future<void> _createBackup() async {
     if (!_canUseManualBackup) {
       _showMessage('Only Admin and Super Admin accounts can create backups.');
+      return;
+    }
+    if (!_isSuperAdmin && _assignedBranchIds.isEmpty) {
+      _showMessage('Your Admin account has no assigned branch to back up.');
       return;
     }
     final details = await _requestBackupDetails();
@@ -179,11 +202,16 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
         'createdById': _userId,
         'createdByRole': _role,
         'createdByName': _actorName,
+        'scopeType': _isSuperAdmin ? 'global' : 'branch',
+        if (!_isSuperAdmin)
+          'scopeBranchIds': _assignedBranchIds.toList()..sort(),
       });
       final clearBytes = await DatabaseBackup.export(
         firestore: _database,
         backupName: backupName,
         backupId: historyRef.id,
+        branchIds: _isSuperAdmin ? null : _assignedBranchIds,
+        branchNames: _assignedBranchNames,
         onProgress: (completed, total, collection) {
           if (mounted) {
             setState(
@@ -225,6 +253,9 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
         'completedAt': FieldValue.serverTimestamp(),
         'createdById': _userId,
         'createdByRole': _role,
+        'scopeType': _isSuperAdmin ? 'global' : 'branch',
+        if (!_isSuperAdmin)
+          'scopeBranchIds': _assignedBranchIds.toList()..sort(),
         'fileName': 'sales-tracking-$backupCode.stbackup',
         'fileSizeBytes': bytes.length,
         'backupVersion': 1,
@@ -265,6 +296,9 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
           'createdAt': Timestamp.fromDate(startedAt),
           'createdById': _userId,
           'createdByRole': _role,
+          'scopeType': _isSuperAdmin ? 'global' : 'branch',
+          if (!_isSuperAdmin)
+            'scopeBranchIds': _assignedBranchIds.toList()..sort(),
           'result':
               'Export failed. Check connection and Firestore permissions.',
         }, SetOptions(merge: true));
@@ -342,22 +376,41 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
     }
     try {
       final selected = await FilePicker.platform.pickFiles(
-        type: FileType.custom,
-        allowedExtensions: const ['stbackup'],
+        type: FileType.any,
         withData: true,
       );
       if (selected == null) return;
-      final bytes = selected.files.single.bytes;
+      final file = selected.files.single;
+      if (!file.name.toLowerCase().endsWith('.stbackup')) {
+        _showMessage('Choose an encrypted .stbackup file.');
+        return;
+      }
+      final bytes = file.bytes;
       if (bytes == null) {
         _showMessage('The selected file could not be read.');
+        return;
+      }
+      if (!_isSuperAdmin && _assignedBranchIds.isEmpty) {
+        _showMessage('Your Admin account has no assigned branch to restore.');
         return;
       }
       final password = await _requestBackupPassword();
       if (password == null || !mounted) return;
       final clearBytes = await EncryptedBackup.decrypt(bytes, password);
       final manifest = DatabaseBackup.inspect(clearBytes);
+      final scopedClearBytes = _isSuperAdmin
+          ? clearBytes
+          : DatabaseBackup.restrictToBranches(
+              clearBytes,
+              branchIds: _assignedBranchIds,
+              branchNames: _assignedBranchNames,
+            );
+      final scopedBytes = _isSuperAdmin
+          ? bytes
+          : await EncryptedBackup.encrypt(scopedClearBytes, password);
+      final scopedManifest = DatabaseBackup.inspect(scopedClearBytes);
       final documents = DatabaseBackup.validate(
-        clearBytes,
+        scopedClearBytes,
         firestore: _database,
       );
       final importedId = _history.doc().id;
@@ -365,7 +418,7 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
       String? storagePath;
       String? archiveError;
       try {
-        storagePath = await _archiveBackup(importedId, backupCode, bytes);
+        storagePath = await _archiveBackup(importedId, backupCode, scopedBytes);
       } catch (error) {
         archiveError = '$error';
         debugPrint('Imported backup archive failed: $error');
@@ -381,23 +434,29 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
         'importedAt': FieldValue.serverTimestamp(),
         'importedById': _userId,
         'importedByRole': _role,
+        'createdById': _userId,
+        'createdByRole': _role,
+        'createdByName': _actorName,
+        'scopeType': _isSuperAdmin ? 'global' : 'branch',
+        if (!_isSuperAdmin)
+          'scopeBranchIds': _assignedBranchIds.toList()..sort(),
         'backupVersion': 1,
         'applicationVersion': manifest.applicationVersion,
-        'documentCount': manifest.documentCount,
-        'fileSizeBytes': bytes.length,
+        'documentCount': scopedManifest.documentCount,
+        'collectionCounts': scopedManifest.collectionCounts,
+        'fileSizeBytes': scopedBytes.length,
         'fileAvailable': storagePath != null,
         'fileName': 'sales-tracking-$backupCode.stbackup',
         'storageLocation': storagePath == null
             ? 'local-only'
             : 'firebase-storage',
         'storagePath': storagePath,
-        'createdByName': _actorName,
       });
       await _writeAudit('backup_imported', importedId, {
-        'documentCount': manifest.documentCount,
+        'documentCount': scopedManifest.documentCount,
       });
-      _importedClearBytes = clearBytes;
-      _importedEncryptedBytes = bytes;
+      _importedClearBytes = scopedClearBytes;
+      _importedEncryptedBytes = scopedBytes;
       _importedManifest = manifest;
       _importedHistoryId = importedId;
       if (archiveError != null) {
@@ -407,8 +466,9 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
       await showDialog<void>(
         context: context,
         builder: (context) => _RestorePreviewDialog(
-          manifest: manifest,
-          fileIntegrityValid: documents.length == manifest.documentCount,
+          manifest: scopedManifest,
+          fileIntegrityValid: documents.length == scopedManifest.documentCount,
+          branchScoped: !_isSuperAdmin,
           onRestore: _restoreImportedBackup,
         ),
       );
@@ -530,13 +590,28 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
 
   Future<void> _restoreImportedBackup() async {
     final manifest = _importedManifest;
-    final clearBytes = _importedClearBytes;
-    if (!_canManageBackup || manifest == null || clearBytes == null) {
+    final importedClearBytes = _importedClearBytes;
+    if (!_canManageBackup || manifest == null || importedClearBytes == null) {
       _showMessage(
         'Only Admin and Super Admin accounts can restore a validated backup.',
       );
       return;
     }
+    if (!_isSuperAdmin && _assignedBranchIds.isEmpty) {
+      _showMessage('Your Admin account has no assigned branch to restore.');
+      return;
+    }
+    final clearBytes = _isSuperAdmin
+        ? importedClearBytes
+        : DatabaseBackup.restrictToBranches(
+            importedClearBytes,
+            branchIds: _assignedBranchIds,
+            branchNames: _assignedBranchNames,
+          );
+    final restoreDocuments = DatabaseBackup.validate(
+      clearBytes,
+      firestore: _database,
+    );
     if (_restoreRunning || _busy) return;
     final password = await _requestCurrentPassword();
     if (password == null || !mounted) return;
@@ -545,7 +620,10 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
       return;
     }
 
-    final lockRef = _database.collection('backup_restore_locks').doc('system');
+    final lockId = _isSuperAdmin
+        ? 'system'
+        : 'branch_${Uri.encodeComponent((_assignedBranchIds.toList()..sort()).join('_'))}';
+    final lockRef = _database.collection('backup_restore_locks').doc(lockId);
     final owner = '$_userId-${DateTime.now().microsecondsSinceEpoch}';
     var acquired = false;
     setState(() {
@@ -577,6 +655,8 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
       final safetyClear = await DatabaseBackup.export(
         firestore: _database,
         backupName: 'Before restore ${DateTime.now().toIso8601String()}',
+        branchIds: _isSuperAdmin ? null : _assignedBranchIds,
+        branchNames: _assignedBranchNames,
       );
       final safetyManifest = DatabaseBackup.inspect(safetyClear);
       final safetyFile = await EncryptedBackup.encrypt(safetyClear, password);
@@ -618,6 +698,9 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
         'createdAt': Timestamp.fromDate(safetyManifest.createdAt),
         'createdById': _userId,
         'createdByRole': _role,
+        'scopeType': _isSuperAdmin ? 'global' : 'branch',
+        if (!_isSuperAdmin)
+          'scopeBranchIds': _assignedBranchIds.toList()..sort(),
         'fileName': safetyName,
         'fileSizeBytes': safetyFile.length,
         'backupVersion': 1,
@@ -633,10 +716,7 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
         'documentCount': safetyManifest.documentCount,
       });
 
-      final documents = DatabaseBackup.validate(
-        clearBytes,
-        firestore: _database,
-      );
+      final documents = restoreDocuments;
       final total = documents.length;
       await DatabaseBackup.restoreMerge(
         documents,
@@ -723,7 +803,29 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
   }
 
   Query<Map<String, dynamic>> _historyQuery() {
-    return _history.limit(100);
+    if (_isSuperAdmin) return _history.limit(100);
+    final branchIds = _assignedBranchIds.toList()..sort();
+    return _history
+        .where(
+          'scopeBranchIds',
+          arrayContainsAny: branchIds.isEmpty
+              ? const ['__no_assigned_branch__']
+              : branchIds.take(30).toList(),
+        )
+        .limit(100);
+  }
+
+  bool _historyEntryVisible(Map<String, dynamic> entry) {
+    if (_isSuperAdmin) return true;
+    if (_role != 'admin' ||
+        entry['scopeType'] != 'branch' ||
+        _assignedBranchIds.isEmpty) {
+      return false;
+    }
+    final scopedIds = (entry['scopeBranchIds'] as List? ?? const [])
+        .map((id) => '$id')
+        .toSet();
+    return scopedIds.intersection(_assignedBranchIds).isNotEmpty;
   }
 
   Future<bool> _reauthenticate(String password) async {
@@ -1033,8 +1135,9 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
         _actionCard(
           icon: Icons.add_to_drive_rounded,
           title: 'Create Backup',
-          description:
-              'Verify your password, export supported Firestore data, and encrypt a new backup file.',
+          description: _isSuperAdmin
+              ? 'Verify your password, export supported Firestore data, and encrypt a new backup file.'
+              : 'Create an encrypted backup containing only data linked to your assigned branch(es).',
           buttonLabel: 'Create backup',
           onPressed: _busy ? null : _createBackup,
           color: AppColors.primary,
@@ -1052,8 +1155,9 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
         _actionCard(
           icon: Icons.restore_rounded,
           title: 'Import Backup',
-          description:
-              'Select an encrypted backup, enter its original password, validate it, then preview a merge restore.',
+          description: _isSuperAdmin
+              ? 'Select an encrypted backup, enter its original password, validate it, then preview a merge restore.'
+              : 'Import a backup; only records linked to your assigned branch(es) will be previewed and restored.',
           buttonLabel: 'Import and preview',
           onPressed: _busy ? null : _selectBackupForPreview,
           color: const Color(0xFF00897B),
@@ -1134,6 +1238,7 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
   Widget _buildHistory(List<Map<String, dynamic>> entries) {
     final filtered =
         entries.where((entry) {
+          if (!_historyEntryVisible(entry)) return false;
           final query = _historySearch.trim().toLowerCase();
           final date = _dateOf(entry['createdAt']);
           final searchable = [
@@ -1240,13 +1345,15 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
           child: SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: SizedBox(
-              width: 1100,
+              width: 1380,
               child: InventoryRecordsTable(
                 headings: const [
                   'Backup ID',
+                  'Backup Name',
                   'Date Created',
                   'Time Created',
                   'Created By',
+                  'Creator Role',
                   'File Size',
                   'Version',
                   'Status',
@@ -1254,13 +1361,15 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
                 ],
                 flex: const {
                   0: 1,
-                  1: .8,
-                  2: .7,
-                  3: 1,
-                  4: .7,
-                  5: .5,
+                  1: 1.2,
+                  2: .8,
+                  3: .7,
+                  4: 1,
+                  5: .65,
                   6: .7,
-                  7: 1,
+                  7: .5,
+                  8: .7,
+                  9: 1,
                 },
                 rows: filtered.map((entry) {
                   final status = '${entry['status'] ?? 'unknown'}';
@@ -1284,6 +1393,11 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
                       '${entry['backupCode'] ?? entry['backupId'] ?? '—'}',
                     ),
                     Text(
+                      '${entry['backupName'] ?? '—'}',
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    Text(
                       hasDate
                           ? MaterialLocalizations.of(
                               context,
@@ -1298,6 +1412,7 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
                           : '—',
                     ),
                     Text(_createdByLabel(entry)),
+                    Text(_createdByRoleLabel(entry)),
                     Text(bytes is num ? _formatBytes(bytes.toInt()) : '—'),
                     Text('${entry['backupVersion'] ?? '1'}'),
                     _statusPill(status),
@@ -1336,7 +1451,7 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
     Uint8List? bytes,
     String storagePath,
   ) async {
-    if (!_canManageBackup) return;
+    if (!_canManageBackup || !_historyEntryVisible(entry)) return;
     try {
       bytes ??= storagePath.isEmpty
           ? null
@@ -1374,6 +1489,7 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
   }
 
   Future<void> _showBackupDetails(Map<String, dynamic> entry) async {
+    if (!_historyEntryVisible(entry)) return;
     await showDialog<void>(
       context: context,
       builder: (context) => AlertDialog(
@@ -1387,8 +1503,10 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
               for (final row in <String, String>{
                 'Backup ID':
                     '${entry['backupCode'] ?? entry['backupId'] ?? '—'}',
+                'Backup name': '${entry['backupName'] ?? '—'}',
                 'Created': _formatDate(entry['createdAt']),
                 'Created by': _createdByLabel(entry),
+                'Creator role': _createdByRoleLabel(entry),
                 'Size': entry['fileSizeBytes'] is num
                     ? _formatBytes((entry['fileSizeBytes'] as num).toInt())
                     : '—',
@@ -1538,15 +1656,21 @@ class _BackupRestoreDialogState extends State<BackupRestoreDialog> {
     final name = '${entry['createdByName'] ?? entry['importedByName'] ?? ''}'
         .trim();
     if (name.isNotEmpty) return name;
+    final creatorId = '${entry['createdById'] ?? entry['importedById'] ?? ''}';
+    final role = _createdByRoleLabel(entry);
+    if (creatorId == _userId && _actorName.isNotEmpty) return _actorName;
+    if (role == 'Super Admin') return 'Super Admin';
+    if (role == 'Admin') return 'Admin';
+    return '—';
+  }
+
+  String _createdByRoleLabel(Map<String, dynamic> entry) {
     final role = '${entry['createdByRole'] ?? entry['importedByRole'] ?? ''}'
         .trim()
         .toLowerCase();
-    final creatorId = '${entry['createdById'] ?? entry['importedById'] ?? ''}';
-    if (creatorId == _userId && _actorName.isNotEmpty) return _actorName;
-    if (role == 'super_admin' && _actorName.isNotEmpty) return _actorName;
     if (role == 'super_admin') return 'Super Admin';
     if (role == 'admin') return 'Admin';
-    return '—';
+    return role.isEmpty ? '—' : role;
   }
 }
 
@@ -1554,11 +1678,13 @@ class _RestorePreviewDialog extends StatelessWidget {
   const _RestorePreviewDialog({
     required this.manifest,
     required this.fileIntegrityValid,
+    required this.branchScoped,
     required this.onRestore,
   });
 
   final BackupManifest manifest;
   final bool fileIntegrityValid;
+  final bool branchScoped;
   final Future<void> Function() onRestore;
 
   @override
@@ -1582,6 +1708,8 @@ class _RestorePreviewDialog extends StatelessWidget {
             _previewLine('Backup version', '1'),
             _previewLine('App version', manifest.applicationVersion),
             _previewLine('Total records', '${manifest.documentCount}'),
+            if (branchScoped)
+              _previewLine('Restore scope', 'Assigned branch(es) only'),
             _previewLine('File size', '${manifest.byteLength} bytes'),
             _previewLine('Collections', '${manifest.collectionCounts.length}'),
             _previewLine(

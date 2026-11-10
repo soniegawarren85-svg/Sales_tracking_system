@@ -214,4 +214,87 @@ void main() {
     expect(warren['branchIds'], contains('dagupan'));
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('branch assignment enforces cashier and admin limits', (
+    tester,
+  ) async {
+    for (final config in [
+      (role: 'staff', currentCount: 3, limit: 3, label: 'Cashier'),
+      (role: 'admin', currentCount: 2, limit: 2, label: 'Admin'),
+    ]) {
+      final db = FakeFirebaseFirestore();
+      final assignedIds = List.generate(
+        config.currentCount,
+        (index) => '${config.role}-$index',
+      );
+      await db.collection('branches').doc('branch').set({
+        'name': 'Branch',
+        'staffIds': assignedIds,
+        'staffNames': assignedIds,
+      });
+      for (final id in assignedIds) {
+        await db.collection('staff_requests').doc(id).set({
+          'uid': id,
+          'role': config.role,
+          if (config.role == 'admin') 'adminId': 'ADM-${id.hashCode}',
+          'status': 'accepted',
+          'firstName': 'Assigned',
+          'lastName': id,
+          'branchIds': ['branch'],
+        });
+      }
+      await db.collection('staff_requests').doc('candidate').set({
+        'uid': 'candidate',
+        'role': config.role,
+        if (config.role == 'admin') 'adminId': 'ADM-999',
+        'status': 'accepted',
+        'firstName': 'Candidate',
+        'lastName': config.label,
+        'branchIds': <String>[],
+      });
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: AdminStaffBranches(firestore: db, includeAdmins: true),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Staff in Branch'));
+      await tester.pumpAndSettle();
+      if (config.role == 'admin') {
+        await tester.tap(find.byType(DropdownButtonFormField<String>));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Admin').last);
+        await tester.pumpAndSettle();
+      }
+
+      final candidate = find.text(
+        'Candidate ${config.label} • ${config.label}',
+      );
+      await tester.scrollUntilVisible(
+        candidate,
+        250,
+        scrollable: find.byType(Scrollable).last,
+      );
+      await tester.tap(candidate);
+      await tester.pumpAndSettle();
+
+      expect(
+        find.text(
+          'Only ${config.limit} ${config.label} accounts can be assigned to this branch.',
+        ),
+        findsOneWidget,
+      );
+      expect(find.text('Assign account?'), findsNothing);
+      expect(
+        (await db.collection('branches').doc('branch').get())
+            .data()?['staffIds'],
+        hasLength(config.currentCount),
+      );
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    }
+  });
 }

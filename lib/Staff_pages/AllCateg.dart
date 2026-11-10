@@ -83,6 +83,8 @@ class _AllCategPageState extends State<AllCategPage>
   StreamSubscription<void>? _offlineReductionsSubscription;
   StreamSubscription<StaffAllocationScope>? _allocationScopeSubscription;
   StreamSubscription<List<ConnectivityResult>>? _connectivitySubscription;
+  Stream<QuerySnapshot<Map<String, dynamic>>>? _todaySalesStream;
+  Timer? _todaySalesRefreshTimer;
   List<Map<String, dynamic>> _pendingOfflineSales = const [];
   List<Map<String, dynamic>> _pendingOfflineReductions = const [];
   bool _inventoryOnline = false;
@@ -107,6 +109,7 @@ class _AllCategPageState extends State<AllCategPage>
     _rootInventoryStream = FirebaseFirestore.instance
         .collection('sales_inventory')
         .snapshots();
+    _watchTodaySales();
     _offlineSalesSubscription = LocalDatabaseSyncService().collectionUpdates
         .where((collection) => collection == 'completed_sales')
         .listen((_) => _loadPendingOfflineSales());
@@ -140,6 +143,22 @@ class _AllCategPageState extends State<AllCategPage>
           CurvedAnimation(parent: _headerAnimController, curve: Curves.easeOut),
         );
     _headerAnimController.forward();
+  }
+
+  void _watchTodaySales() {
+    _todaySalesRefreshTimer?.cancel();
+    final now = DateTime.now();
+    final start = DateTime(now.year, now.month, now.day);
+    final end = start.add(const Duration(days: 1));
+    _todaySalesStream = FirebaseFirestore.instance
+        .collection('completed_sales')
+        .where('timestamp', isGreaterThanOrEqualTo: Timestamp.fromDate(start))
+        .where('timestamp', isLessThan: Timestamp.fromDate(end))
+        .snapshots();
+    _todaySalesRefreshTimer = Timer(end.difference(now), () {
+      if (!mounted) return;
+      setState(_watchTodaySales);
+    });
   }
 
   Future<void> _initStaffIdentity() async {
@@ -266,6 +285,7 @@ class _AllCategPageState extends State<AllCategPage>
     _offlineReductionsSubscription?.cancel();
     _allocationScopeSubscription?.cancel();
     _connectivitySubscription?.cancel();
+    _todaySalesRefreshTimer?.cancel();
     _headerAnimController.dispose();
     super.dispose();
   }
@@ -5273,9 +5293,7 @@ class _AllCategPageState extends State<AllCategPage>
         }).toList();
 
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-      stream: FirebaseFirestore.instance
-          .collection('completed_sales')
-          .snapshots(),
+      stream: _todaySalesStream,
       builder: (context, salesSnapshot) {
         final totalSold = beverageSalesToday(
           sales: [

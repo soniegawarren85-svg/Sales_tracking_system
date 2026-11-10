@@ -23,6 +23,7 @@ import '../../services/session_actor.dart';
 import '../../services/inventory_service.dart';
 import '../../services/expiry_notification_service.dart';
 import '../../services/branch_session.dart';
+import '../../services/branch_report_data.dart';
 import '../../services/checklist_status.dart';
 
 import 'InventoryPage.dart';
@@ -265,29 +266,6 @@ class _AdminDashboardState extends State<AdminDashboard>
     BranchSession.instance.removeListener(_onBranchChanged);
     _entranceController.dispose();
     super.dispose();
-  }
-
-  bool _isExpired(String? expirationDateString) {
-    if (expirationDateString == null || expirationDateString.trim().isEmpty) {
-      return false;
-    }
-
-    final expirationDate = DateTime.tryParse(expirationDateString);
-    if (expirationDate == null) {
-      return false;
-    }
-
-    final now = DateTime.now();
-    return expirationDate.isBefore(now) || expirationDate.isAtSameMomentAs(now);
-  }
-
-  List<Map<String, dynamic>> _activeItemVariants(
-    List<Map<String, dynamic>> items,
-  ) {
-    return items.where((item) {
-      if (item['isDeleted'] == true) return false;
-      return !_isExpired(item['expirationDate']?.toString());
-    }).toList();
   }
 
   @override
@@ -986,41 +964,25 @@ class _AdminDashboardState extends State<AdminDashboard>
     final activeBranchId = BranchSession.instance.branchId;
     return LayoutBuilder(
       builder: (context, constraints) {
-        return StreamBuilder<QuerySnapshot>(
-          stream: FirebaseFirestore.instance
-              .collection('sales_inventory')
-              .snapshots(),
-          builder: (context, salesSnapshot) {
-            int totalStock = 0;
-            int totalItems = 0;
-            if (salesSnapshot.hasData) {
-              final activeSalesDocs = salesSnapshot.data!.docs.where((doc) {
-                final data = doc.data() as Map<String, dynamic>;
-                if (data['isDeleted'] == true) return false;
-                if (data['isBundle'] == true) {
-                  return true;
-                }
-                final items =
-                    (data['items'] as List?)?.cast<Map<String, dynamic>>() ??
-                    [];
-                final activeItems = _activeItemVariants(items);
-                return activeItems.isNotEmpty;
-              }).toList();
-
-              for (var doc in activeSalesDocs) {
-                final data = doc.data() as Map<String, dynamic>;
-                if (data['isBundle'] == true) {
-                  totalStock += 1;
-                  continue;
-                }
-                final items =
-                    (data['items'] as List?)?.cast<Map<String, dynamic>>() ??
-                    [];
-                final activeItems = _activeItemVariants(items);
-                totalItems += activeItems.length;
-              }
-            }
-
+        return StreamBuilder<BranchReportData>(
+          stream: BranchReportData.watch(),
+          builder: (context, inventorySnapshot) {
+            final branchInventory =
+                inventorySnapshot.hasData && activeBranchId != null
+                ? inventorySnapshot.data!.currentInventory(
+                    activeBranchId,
+                    DateTime.now(),
+                  )
+                : const <Map<String, dynamic>>[];
+            final totalItems = branchInventory
+                .where((item) => item['type'] == 'Categories')
+                .length;
+            final totalStock = branchInventory
+                .where((item) => item['type'] == 'Bundle')
+                .length;
+            final totalBeverages = branchInventory
+                .where((item) => item['type'] == 'Beverages')
+                .length;
             return StreamBuilder<QuerySnapshot>(
               stream: activeBranchId == null
                   ? FirebaseFirestore.instance
@@ -1037,7 +999,14 @@ class _AdminDashboardState extends State<AdminDashboard>
                         final role = (data['role'] as String?)
                             ?.trim()
                             .toLowerCase();
-                        return data['status'] == 'accepted' && role != 'admin';
+                        final staffId =
+                            '${data['staffId'] ?? data['username'] ?? ''}'
+                                .trim();
+                        // Match Staff Management: count accepted cashier
+                        // accounts and do not count this branch's admin.
+                        return data['status'] == 'accepted' &&
+                            staffId.isNotEmpty &&
+                            (role == 'staff' || role == 'cashier');
                       }).length
                     : 0;
 
@@ -1082,24 +1051,11 @@ class _AdminDashboardState extends State<AdminDashboard>
                       ),
                       _buildStatDivider(),
                       Expanded(
-                        child:
-                            StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                              stream: FirebaseFirestore.instance
-                                  .collection('coffee_products')
-                                  .snapshots(),
-                              builder: (context, coffee) => _buildStatItem(
-                                Icons.coffee_rounded,
-                                coffee.hasData
-                                    ? coffee.data!.docs
-                                          .where(
-                                            (doc) =>
-                                                doc.data()['isDeleted'] != true,
-                                          )
-                                          .length
-                                    : null,
-                                'Beverages',
-                              ),
-                            ),
+                        child: _buildStatItem(
+                          Icons.coffee_rounded,
+                          inventorySnapshot.hasData ? totalBeverages : null,
+                          'Beverages',
+                        ),
                       ),
                       _buildStatDivider(),
                       Expanded(

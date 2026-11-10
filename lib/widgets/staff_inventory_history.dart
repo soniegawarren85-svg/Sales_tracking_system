@@ -181,7 +181,15 @@ List<Map<String, dynamic>> staffInventoryHistoryEntries({
   }
 
   for (final sale in sales) {
-    if (sale['userId'] != staffId || sale['isVoided'] == true) continue;
+    if (![
+          sale['userId'],
+          sale['staffId'],
+          sale['cashierId'],
+          sale['staffUid'],
+        ].any((id) => '$id' == staffId) ||
+        sale['isVoided'] == true) {
+      continue;
+    }
     final saleType = '${sale['type'] ?? 'sale'}'.toLowerCase();
     final saleStatus = '${sale['status'] ?? ''}'.toLowerCase();
     if (['void', 'voided', 'cancelled', 'canceled'].contains(saleStatus)) {
@@ -189,7 +197,11 @@ List<Map<String, dynamic>> staffInventoryHistoryEntries({
     }
     final date = _historyDate(sale['timestamp'] ?? sale['createdAt']);
     if (date == null) continue;
-    final refund = saleType == 'refund' || saleStatus == 'refund';
+    final refund =
+        saleType == 'refund' ||
+        saleStatus == 'refund' ||
+        (num.tryParse('${sale['total']}') ?? 0) < 0 ||
+        '${sale['salesId'] ?? ''}'.toUpperCase().startsWith('R-');
     for (final raw in (sale['items'] as List? ?? const []).whereType<Map>()) {
       final item = Map<String, dynamic>.from(raw);
       final isBundle = item['isBundle'] == true;
@@ -357,7 +369,14 @@ class _StaffInventoryHistoryDialogState
           .snapshots();
   late final Stream<QuerySnapshot<Map<String, dynamic>>> salesStream = widget.db
       .collection('completed_sales')
-      .where('userId', isEqualTo: widget.staffId)
+      .where(
+        Filter.or(
+          Filter('userId', isEqualTo: widget.staffId),
+          Filter('staffId', isEqualTo: widget.staffId),
+          Filter('cashierId', isEqualTo: widget.staffId),
+          Filter('staffUid', isEqualTo: widget.staffId),
+        ),
+      )
       .snapshots();
   late final Stream<QuerySnapshot<Map<String, dynamic>>> returnStream = widget
       .db

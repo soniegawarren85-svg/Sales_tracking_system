@@ -133,12 +133,10 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
   late final Stream<QuerySnapshot<Map<String, dynamic>>> _staffStream;
 
   bool _matchesAccountSearch(AdminModel member) {
-    final terms = _accountSearch.trim().toLowerCase().split(
-      RegExp(r'\s+'),
-    )..removeWhere((term) => term.isEmpty);
+    final terms = _accountSearch.trim().toLowerCase().split(RegExp(r'\s+'))
+      ..removeWhere((term) => term.isEmpty);
     if (terms.isEmpty) return true;
-    final inactive =
-        member.status == 'deactivated' || member.isInactiveByLogin;
+    final inactive = member.status == 'deactivated' || member.isInactiveByLogin;
     final searchable = [
       member.id,
       member.publicId,
@@ -440,6 +438,10 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                     ),
                   ),
                 ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+                  child: _buildRoleFilter(),
+                ),
                 if (accountRows.isEmpty)
                   const Padding(
                     padding: EdgeInsets.all(24),
@@ -460,6 +462,7 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                           _updateAdminStatus(entry.value, 'deactivated'),
                       onActivate: () =>
                           _updateAdminStatus(entry.value, 'accepted'),
+                      onChangeRole: () => _changeAccountRole(entry.value),
                     ),
                   ),
                 ),
@@ -568,6 +571,10 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                       ),
                     ),
                   ),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                    child: _buildRoleFilter(),
+                  ),
 
                   // Section label
                   Padding(
@@ -638,6 +645,8 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
                                   accountRows[index],
                                   'accepted',
                                 ),
+                                onChangeRole: () =>
+                                    _changeAccountRole(accountRows[index]),
                               );
                             },
                           ),
@@ -650,6 +659,23 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
       ),
     );
   }
+
+  Widget _buildRoleFilter() => DropdownButtonFormField<String>(
+    initialValue: _roleFilter,
+    decoration: const InputDecoration(
+      labelText: 'Filter by role',
+      border: OutlineInputBorder(),
+      prefixIcon: Icon(Icons.filter_list_rounded),
+    ),
+    items: const [
+      DropdownMenuItem(value: 'all', child: Text('All roles')),
+      DropdownMenuItem(value: 'admin', child: Text('Admin')),
+      DropdownMenuItem(value: 'staff', child: Text('Cashier')),
+    ],
+    onChanged: (value) {
+      if (value != null) setState(() => _roleFilter = value);
+    },
+  );
 
   Widget _buildAdminHeader(BuildContext context) {
     final topPadding = MediaQuery.of(context).padding.top;
@@ -1166,6 +1192,141 @@ class _StaffPageState extends State<StaffPage> with TickerProviderStateMixin {
           content: Text('Failed to update staff status.'),
           behavior: SnackBarBehavior.floating,
           backgroundColor: AppColors.primaryDark,
+        ),
+      );
+    }
+  }
+
+  Future<void> _changeAccountRole(AdminModel account) async {
+    final oldRole = account.role.toLowerCase().trim();
+    final newRole = oldRole == 'admin' ? 'staff' : 'admin';
+    final oldLabel = oldRole == 'admin' ? 'Admin' : 'Cashier';
+    final newLabel = newRole == 'admin' ? 'Admin' : 'Cashier';
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Change account to $newLabel?'),
+        content: Text(
+          '${account.firstName} ${account.lastName} will be converted from $oldLabel to $newLabel. Their public ID will use the $newLabel prefix, and all signed-in devices will be logged out.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: Text('Change to $newLabel'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    final db = widget.firestore ?? FirebaseFirestore.instance;
+    final accountsRef = db.collection('staff_requests');
+    final accountRef = accountsRef.doc(account.id);
+    final isAdmin = newRole == 'admin';
+    final idField = isAdmin ? 'adminId' : 'staffId';
+    final prefix = isAdmin ? 'ADM' : 'STF';
+    final counterRef = db
+        .collection('counters')
+        .doc(isAdmin ? 'admin' : 'staff');
+
+    try {
+      final allAccounts = await accountsRef.get();
+      final accountData = allAccounts.docs
+          .map((doc) => <String, dynamic>{...doc.data(), '_docId': doc.id})
+          .toList();
+      final publicId = await db.runTransaction<String>((transaction) async {
+        final current = await transaction.get(accountRef);
+        final counter = await transaction.get(counterRef);
+        final currentData = current.data();
+        if (currentData == null ||
+            '${currentData['role'] ?? ''}'.trim().toLowerCase() != oldRole) {
+          throw StateError('The account no longer exists.');
+        }
+
+        final reusableId = '${currentData[idField] ?? ''}'.trim().toUpperCase();
+        final reusableIdAvailable =
+            RegExp('^$prefix-\\d{3,}\$').hasMatch(reusableId) &&
+            !accountData.any(
+              (data) =>
+                  data['_docId'] != account.id &&
+                  ('${data[idField] ?? ''}'.trim().toUpperCase() == reusableId),
+            );
+
+        var highest = (counter.data()?['count'] as num?)?.toInt() ?? 0;
+        for (final data in accountData) {
+          final id = '${data[idField] ?? ''}'.trim().toUpperCase();
+          if (!id.startsWith('$prefix-')) continue;
+          final sequence = int.tryParse(id.substring(prefix.length + 1));
+          if (sequence != null && sequence > highest) highest = sequence;
+        }
+        final assignedId = reusableIdAvailable
+            ? reusableId
+            : '$prefix-${(highest + 1).toString().padLeft(3, '0')}';
+        final assignedSequence = int.parse(
+          assignedId.substring(prefix.length + 1),
+        );
+        transaction.set(counterRef, {
+          'count': assignedSequence > highest ? assignedSequence : highest,
+          'lastUpdated': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+        transaction.update(accountRef, {
+          'role': newRole,
+          idField: assignedId,
+          'username': assignedId,
+          'sessionLogoutVersion': FieldValue.increment(1),
+          'sessionsLoggedOutAt': FieldValue.serverTimestamp(),
+          'roleChangedAt': FieldValue.serverTimestamp(),
+          'roleChangedFrom': oldRole,
+        });
+        return assignedId;
+      });
+
+      try {
+        final sessions = await db
+            .collection('staff_login_sessions')
+            .where('userId', isEqualTo: account.id)
+            .get();
+        final batch = db.batch();
+        for (final session in sessions.docs) {
+          if (session.data()['logoutAt'] == null) {
+            batch.update(session.reference, {
+              'logoutAt': FieldValue.serverTimestamp(),
+              'logoutReason': 'role_changed',
+            });
+          }
+        }
+        await batch.commit();
+      } catch (error) {
+        debugPrint('Unable to close prior-role login records: $error');
+      }
+
+      await ActivityLog.record(
+        'account_role_changed',
+        'Changed ${account.firstName} ${account.lastName} from $oldLabel to $newLabel.',
+        details: {
+          'accountId': account.id,
+          'previousRole': oldRole,
+          'role': newRole,
+          'publicId': publicId,
+        },
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Account changed to $newLabel ($publicId).'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Unable to change account role: $error'),
+          behavior: SnackBarBehavior.floating,
         ),
       );
     }
@@ -2961,6 +3122,7 @@ class _AnimatedAdminCard extends StatefulWidget {
   final FirebaseFirestore? firestore;
   final VoidCallback onDeactivate;
   final VoidCallback onActivate;
+  final VoidCallback onChangeRole;
 
   const _AnimatedAdminCard({
     required this.index,
@@ -2969,6 +3131,7 @@ class _AnimatedAdminCard extends StatefulWidget {
     this.firestore,
     required this.onDeactivate,
     required this.onActivate,
+    required this.onChangeRole,
   });
 
   @override
@@ -3322,6 +3485,16 @@ class _AnimatedAdminCardState extends State<_AnimatedAdminCard>
                               ),
                             ),
                           ),
+                        if (widget.admin.status == 'accepted') ...[
+                          const SizedBox(height: 8),
+                          OutlinedButton.icon(
+                            onPressed: widget.onChangeRole,
+                            icon: const Icon(Icons.swap_horiz_rounded),
+                            label: Text(
+                              'Change to ${widget.admin.role.toLowerCase() == 'admin' ? 'Cashier' : 'Admin'}',
+                            ),
+                          ),
+                        ],
                       ],
                     ),
                   ),

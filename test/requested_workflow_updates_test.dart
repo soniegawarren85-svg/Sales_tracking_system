@@ -6,6 +6,44 @@ import 'package:sales_tracking/widgets/top_edge_refresh.dart';
 import 'package:sales_tracking/widgets/branch_editor_dialog.dart';
 
 void main() {
+  testWidgets('category manager searches categories by name', (tester) async {
+    final db = FakeFirebaseFirestore();
+    await db.doc('sales_inventory/cakes').set({
+      'name': 'Cakes',
+      'items': [
+        {'name': 'Vanilla', 'stock': 2},
+      ],
+    });
+    await db.doc('sales_inventory/cookies').set({
+      'name': 'Cookies',
+      'items': [
+        {'name': 'Choco Chip', 'stock': 2},
+      ],
+    });
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Builder(
+            builder: (context) => TextButton(
+              onPressed: () => showCategoryManager(context, database: db),
+              child: const Text('Open'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('Open'));
+    await tester.pumpAndSettle();
+    expect(find.text('Cakes'), findsOneWidget);
+    expect(find.text('Cookies'), findsOneWidget);
+    await tester.enterText(find.byType(TextField), 'cookie');
+    await tester.pumpAndSettle();
+    expect(find.text('Cookies'), findsOneWidget);
+    expect(find.text('Cakes'), findsNothing);
+    expect(find.text('1 category'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('category rename persists and archived categories stay hidden', (
     tester,
   ) async {

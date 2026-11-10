@@ -38,7 +38,7 @@ class AllocationChecklistButton extends StatelessWidget {
       return _BranchAdminAwareChecklistButton(database: db, scopeIds: ids);
     }
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-      stream: checklistQuery(db, ids, isAdmin).snapshots(),
+      stream: checklistQuery(db, ids, isAdmin || isSuperAdmin).snapshots(),
       builder: (context, snapshot) {
         final records =
             snapshot.data?.docs.map((doc) => doc.data()).toList() ?? [];
@@ -106,7 +106,7 @@ class AllocationChecklistButton extends StatelessWidget {
           );
         }
 
-        if (isAdmin) return button(returns: true);
+        if (isAdmin || isSuperAdmin) return button(returns: true);
         return Flex(
           direction: Axis.horizontal,
           mainAxisSize: MainAxisSize.min,
@@ -270,11 +270,11 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
   }
 
   dynamic _checklistDate(Map<String, dynamic> data) {
-    if (data['kind'] == 'return' &&
+    if (ChecklistStatus.isReturnRecord(data) &&
         ChecklistStatus.label(data) == ChecklistStatus.awaitingSuperAdmin) {
       return data['forwardedAt'] ?? data['createdAt'];
     }
-    if (data['kind'] == 'return' &&
+    if (ChecklistStatus.isReturnRecord(data) &&
         ChecklistStatus.label(data) == ChecklistStatus.completed) {
       return data['confirmedAt'] ?? data['decidedAt'] ?? data['createdAt'];
     }
@@ -882,7 +882,7 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
 
   Widget record(QueryDocumentSnapshot<Map<String, dynamic>> doc) {
     final data = doc.data();
-    final returned = data['kind'] == 'return';
+    final returned = ChecklistStatus.isReturnRecord(data);
     if (returned) {
       return ReturnItemCard(
         key: ValueKey(doc.id),
@@ -1266,12 +1266,24 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
                                   : ChecklistStatus.returnOpen(d)
                             : ChecklistStatus.pending(d, admin: widget.admin);
                         return isPending &&
-                            (!widget.returnsOnly || d['kind'] == 'return') &&
+                            (!widget.returnsOnly ||
+                                ChecklistStatus.isReturnRecord(d)) &&
                             '${d['name']} ${d['items']} ${d['branchName']} ${d['staffName']}'
                                 .toLowerCase()
                                 .contains(search);
                       }
-                      final rawDate = _checklistDate(d);
+                      final superAdminCompletedTab =
+                          widget.returnsOnly && widget.superAdmin && tab == 1;
+                      final superAdminAcceptedReturn =
+                          superAdminCompletedTab &&
+                          ChecklistStatus.isReturnRecord(d) &&
+                          ChecklistStatus.label(d) == ChecklistStatus.completed;
+                      final rawDate = superAdminAcceptedReturn
+                          ? (d['confirmedAt'] ??
+                                d['decidedAt'] ??
+                                d['completedAt'] ??
+                                d['createdAt'])
+                          : _checklistDate(d);
                       final at = rawDate is Timestamp
                           ? rawDate.toDate()
                           : DateTime.tryParse('$rawDate');
@@ -1280,35 +1292,38 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
                                 ChecklistStatus.completed
                           : ChecklistStatus.label(d) ==
                                 ChecklistStatus.received;
+                      final filterCompletedSuperAdminTab =
+                          superAdminCompletedTab && selectedEnd != null;
+                      final filterSubmittedAdminTab =
+                          widget.returnsOnly &&
+                          widget.admin &&
+                          !widget.superAdmin &&
+                          tab > 0 &&
+                          selectedEnd != null;
                       final shouldFilterDate =
-                          widget.returnsOnly && widget.admin
-                          ? tab > 0 && selectedEnd != null
-                          : filterDate;
+                          filterCompletedSuperAdminTab ||
+                          filterSubmittedAdminTab ||
+                          filterDate;
+                      final localDate = at?.toLocal();
+                      final rangeEnd = (selectedEnd ?? selectedDay).add(
+                        const Duration(days: 1),
+                      );
                       if (shouldFilterDate &&
-                          (at == null ||
-                              at.toLocal().isBefore(selectedDay) ||
-                              !at.toLocal().isBefore(
-                                (selectedEnd ?? selectedDay).add(
-                                  const Duration(days: 1),
-                                ),
-                              ))) {
+                          (localDate == null ||
+                              localDate.isBefore(selectedDay) ||
+                              !localDate.isBefore(rangeEnd))) {
                         return false;
                       }
                       final inTab = widget.returnsOnly
-                          ? d['kind'] == 'return' &&
-                                (widget.admin
+                          ? ChecklistStatus.isReturnRecord(d) &&
+                                ((widget.admin || widget.superAdmin)
                                     ? widget.superAdmin
                                           ? (tab == 0
                                                 ? ChecklistStatus.returnPendingForSuperAdmin(
                                                     d,
                                                   )
-                                                : [
-                                                    ChecklistStatus.completed,
-                                                    ChecklistStatus
-                                                        .returnDeclined,
-                                                  ].contains(
-                                                    ChecklistStatus.label(d),
-                                                  ))
+                                                : ChecklistStatus.label(d) ==
+                                                      ChecklistStatus.completed)
                                           : (tab == 0
                                                 ? ChecklistStatus.returnPendingForAdmin(
                                                     d,
@@ -1329,7 +1344,7 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
                                                 ChecklistStatus.completed
                                           : ChecklistStatus.label(d) !=
                                                 ChecklistStatus.completed))
-                          : d['kind'] != 'return' &&
+                          : !ChecklistStatus.isReturnRecord(d) &&
                                 (tab == 1
                                     ? ChecklistStatus.label(d) ==
                                           ChecklistStatus.received
@@ -1354,9 +1369,7 @@ class _ChecklistDialogState extends State<_ChecklistDialog> {
                 return Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    if (widget.admin &&
-                        tab == 0 &&
-                        (!widget.returnsOnly || widget.pendingOnly))
+                    if (widget.admin && widget.returnsOnly && tab == 0)
                       Padding(
                         padding: const EdgeInsets.all(12),
                         child: FilledButton.icon(

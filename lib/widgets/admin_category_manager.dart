@@ -22,6 +22,8 @@ class _CategoryManager extends StatefulWidget {
 class _CategoryManagerState extends State<_CategoryManager> {
   late final db = widget.database ?? FirebaseFirestore.instance;
   bool busy = false;
+  String _query = '';
+
   Future<void> change(String name, bool voidCategory) async {
     String? value;
     if (voidCategory) {
@@ -152,58 +154,295 @@ class _CategoryManagerState extends State<_CategoryManager> {
   }
 
   @override
-  Widget build(BuildContext context) => AlertDialog(
-    title: Row(
-      children: [
-        const Expanded(child: Text('Manage categories')),
-        IconButton(
-          onPressed: busy ? null : () => Navigator.pop(context),
-          icon: const Icon(Icons.close),
+  Widget build(BuildContext context) {
+    final size = MediaQuery.sizeOf(context);
+    final compact = size.width < 600;
+    return Dialog(
+      insetPadding: EdgeInsets.symmetric(
+        horizontal: compact ? 16 : 32,
+        vertical: 24,
+      ),
+      backgroundColor: Colors.transparent,
+      child: Container(
+        width: compact ? size.width : 620,
+        height: (size.height * .72).clamp(360.0, 620.0),
+        decoration: BoxDecoration(
+          color: const Color(0xFFFFF8F8),
+          borderRadius: BorderRadius.circular(26),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: .16),
+              blurRadius: 28,
+              offset: const Offset(0, 12),
+            ),
+          ],
         ),
-      ],
-    ),
-    content: SizedBox(
-      width: 560,
-      height: 400,
-      child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-        stream: db.collection('sales_inventory').snapshots(),
-        builder: (context, snapshot) {
-          if (snapshot.hasError) {
-            return const Text('Unable to load categories.');
-          }
-          if (!snapshot.hasData) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          final categories = <String, String>{};
-          for (final data in currentCatalogCategories(
-            snapshot.data!.docs.map((d) => d.data()).toList(),
-          )) {
-            categories[catalogCategoryKey(data)] = '${data['name']}';
-          }
-          return ListView(
-            children: [
-              for (final name in categories.values)
-                ListTile(
-                  title: Text(name),
-                  trailing: Wrap(
+        clipBehavior: Clip.antiAlias,
+        child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+          stream: db.collection('sales_inventory').snapshots(),
+          builder: (context, snapshot) {
+            final categories = <String, String>{};
+            if (snapshot.hasData) {
+              for (final data in currentCatalogCategories(
+                snapshot.data!.docs.map((d) => d.data()).toList(),
+              )) {
+                categories[catalogCategoryKey(data)] = '${data['name']}';
+              }
+            }
+            final filtered =
+                categories.values
+                    .where((name) => name.toLowerCase().contains(_query))
+                    .toList()
+                  ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Container(
+                  padding: EdgeInsets.fromLTRB(
+                    compact ? 20 : 26,
+                    compact ? 18 : 24,
+                    compact ? 12 : 18,
+                    compact ? 18 : 22,
+                  ),
+                  decoration: const BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [Color(0xFFFFF0F1), Color(0xFFFFF8F8)],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                  ),
+                  child: Row(
                     children: [
-                      IconButton(
-                        tooltip: 'Rename category',
-                        onPressed: busy ? null : () => change(name, false),
-                        icon: const Icon(Icons.edit_outlined),
+                      Container(
+                        width: 46,
+                        height: 46,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFF9DDE3),
+                          borderRadius: BorderRadius.circular(15),
+                        ),
+                        child: const Icon(
+                          Icons.category_rounded,
+                          color: Color(0xFF8F123D),
+                        ),
+                      ),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'Manage categories',
+                              style: TextStyle(
+                                color: Color(0xFF45101F),
+                                fontSize: 20,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                            const SizedBox(height: 3),
+                            Text(
+                              'Search, rename, or remove inventory categories',
+                              style: TextStyle(
+                                color: Colors.brown.shade500,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                       IconButton(
-                        tooltip: 'Void category and all items',
-                        onPressed: busy ? null : () => change(name, true),
-                        icon: const Icon(Icons.block),
+                        tooltip: 'Close',
+                        onPressed: busy ? null : () => Navigator.pop(context),
+                        icon: const Icon(Icons.close_rounded),
                       ),
                     ],
                   ),
                 ),
-            ],
-          );
-        },
+                Padding(
+                  padding: EdgeInsets.fromLTRB(
+                    compact ? 18 : 24,
+                    4,
+                    compact ? 18 : 24,
+                    12,
+                  ),
+                  child: TextField(
+                    onChanged: (value) =>
+                        setState(() => _query = value.trim().toLowerCase()),
+                    decoration: InputDecoration(
+                      hintText: 'Search categories',
+                      prefixIcon: const Icon(Icons.search_rounded),
+                      suffixIcon: _query.isEmpty
+                          ? null
+                          : IconButton(
+                              tooltip: 'Clear search',
+                              onPressed: () => setState(() => _query = ''),
+                              icon: const Icon(Icons.close_rounded),
+                            ),
+                      filled: true,
+                      fillColor: Colors.white,
+                      contentPadding: const EdgeInsets.symmetric(vertical: 14),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(16),
+                        borderSide: const BorderSide(color: Color(0xFFF0D7DC)),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(16),
+                        borderSide: const BorderSide(color: Color(0xFFF0D7DC)),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(16),
+                        borderSide: const BorderSide(
+                          color: Color(0xFF9A1747),
+                          width: 1.5,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                Padding(
+                  padding: EdgeInsets.fromLTRB(compact ? 20 : 28, 0, 24, 10),
+                  child: Row(
+                    children: [
+                      const Expanded(
+                        child: Text(
+                          'INVENTORY CATEGORIES',
+                          style: TextStyle(
+                            color: Color(0xFF8A6570),
+                            fontSize: 11,
+                            letterSpacing: 1,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                      if (snapshot.hasData)
+                        Text(
+                          '${filtered.length} ${filtered.length == 1 ? 'category' : 'categories'}',
+                          style: const TextStyle(
+                            color: Color(0xFF8A6570),
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+                Expanded(
+                  child: snapshot.hasError
+                      ? const Center(child: Text('Unable to load categories.'))
+                      : !snapshot.hasData
+                      ? const Center(child: CircularProgressIndicator())
+                      : filtered.isEmpty
+                      ? Center(
+                          child: Padding(
+                            padding: const EdgeInsets.all(24),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  _query.isEmpty
+                                      ? Icons.inventory_2_outlined
+                                      : Icons.search_off_rounded,
+                                  size: 38,
+                                  color: const Color(0xFFB98896),
+                                ),
+                                const SizedBox(height: 10),
+                                Text(
+                                  _query.isEmpty
+                                      ? 'No categories yet'
+                                      : 'No categories match "$_query"',
+                                  textAlign: TextAlign.center,
+                                  style: const TextStyle(
+                                    color: Color(0xFF704B56),
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        )
+                      : ListView.separated(
+                          padding: EdgeInsets.fromLTRB(
+                            compact ? 16 : 22,
+                            0,
+                            compact ? 16 : 22,
+                            20,
+                          ),
+                          itemCount: filtered.length,
+                          separatorBuilder: (_, _) => const SizedBox(height: 9),
+                          itemBuilder: (context, index) {
+                            final name = filtered[index];
+                            return Container(
+                              padding: EdgeInsets.symmetric(
+                                horizontal: compact ? 13 : 16,
+                                vertical: 8,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(
+                                  color: const Color(0xFFF1E1E4),
+                                ),
+                              ),
+                              child: Row(
+                                children: [
+                                  Container(
+                                    width: 38,
+                                    height: 38,
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFFFFF0F2),
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                    child: const Icon(
+                                      Icons.folder_outlined,
+                                      color: Color(0xFF9A1747),
+                                      size: 20,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: Text(
+                                      name,
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                        color: Color(0xFF3D2930),
+                                        fontSize: 15,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                  ),
+                                  IconButton(
+                                    tooltip: 'Rename category',
+                                    onPressed: busy
+                                        ? null
+                                        : () => change(name, false),
+                                    icon: const Icon(Icons.edit_outlined),
+                                    color: const Color(0xFF72515B),
+                                  ),
+                                  IconButton(
+                                    tooltip: 'Void category and all items',
+                                    onPressed: busy
+                                        ? null
+                                        : () => change(name, true),
+                                    icon: const Icon(Icons.block_rounded),
+                                    color: const Color(0xFF9A1747),
+                                  ),
+                                ],
+                              ),
+                            );
+                          },
+                        ),
+                ),
+                if (busy)
+                  const LinearProgressIndicator(
+                    minHeight: 3,
+                    color: Color(0xFF9A1747),
+                  ),
+              ],
+            );
+          },
+        ),
       ),
-    ),
-  );
+    );
+  }
 }

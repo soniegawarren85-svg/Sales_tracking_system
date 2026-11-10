@@ -1,22 +1,30 @@
 import 'package:flutter/material.dart';
 
-Future<String?> showVoidReasonDialog(BuildContext context, String name) =>
-    showDialog<String>(
-      context: context,
-      builder: (_) => _VoidReasonDialog(name: name),
-    );
+Future<String?> showVoidReasonDialog(
+  BuildContext context,
+  String name, {
+  bool allowExpiredReason = true,
+}) => showDialog<String>(
+  context: context,
+  builder: (_) =>
+      _VoidReasonDialog(name: name, allowExpiredReason: allowExpiredReason),
+);
 
 class _VoidReasonDialog extends StatefulWidget {
-  const _VoidReasonDialog({required this.name});
+  const _VoidReasonDialog({
+    required this.name,
+    required this.allowExpiredReason,
+  });
   final String name;
+  final bool allowExpiredReason;
   @override
   State<_VoidReasonDialog> createState() => _VoidReasonDialogState();
 }
 
 class _VoidReasonDialogState extends State<_VoidReasonDialog> {
-  static const _reasons = [
+  List<String> get _reasons => [
     'Damaged item',
-    'Expired item',
+    if (widget.allowExpiredReason) 'Expired item',
     'Lost or missing',
     'Incorrect item/entry',
     'Others',

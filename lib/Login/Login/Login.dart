@@ -19,7 +19,6 @@ import 'dart:convert';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:crypto/crypto.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -178,24 +177,6 @@ class _LoginScreenState extends State<LoginScreen>
     _initializeAnimations();
     _animController.forward();
     unawaited(_restoreLoginPreferences());
-  }
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    final shortestSide = MediaQuery.sizeOf(context).shortestSide;
-    final canLockOrientation =
-        !kIsWeb &&
-        (defaultTargetPlatform == TargetPlatform.android ||
-            defaultTargetPlatform == TargetPlatform.iOS);
-    if (canLockOrientation && shortestSide >= 600) {
-      SystemChrome.setPreferredOrientations(const [
-        DeviceOrientation.landscapeLeft,
-        DeviceOrientation.landscapeRight,
-      ]);
-    } else if (canLockOrientation) {
-      SystemChrome.setPreferredOrientations(DeviceOrientation.values);
-    }
   }
 
   @override
@@ -1390,129 +1371,131 @@ class _LoginScreenState extends State<LoginScreen>
   Widget _buildForm() {
     return AutofillGroup(
       child: Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        _buildInputField(
-          label: 'Email Address',
-          controller: _usernameController,
-          icon: Icons.badge_outlined,
-          keyboardType: TextInputType.emailAddress,
-          autofillHints: const [AutofillHints.username],
-        ),
-        const SizedBox(height: 18),
-        _buildInputField(
-          label: 'Password',
-          controller: _passwordController,
-          icon: Icons.lock_outline_rounded,
-          obscureText: _obscurePassword,
-          isPasswordField: true,
-          suffixIcon: IconButton(
-            icon: Icon(
-              _obscurePassword
-                  ? Icons.visibility_off_outlined
-                  : Icons.visibility_outlined,
-              color: AppColors.rose,
-              size: 20,
-            ),
-            onPressed: () =>
-                setState(() => _obscurePassword = !_obscurePassword),
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _buildInputField(
+            label: 'Email Address',
+            controller: _usernameController,
+            icon: Icons.badge_outlined,
+            keyboardType: TextInputType.emailAddress,
+            autofillHints: const [AutofillHints.username],
           ),
-          autofillHints: const [AutofillHints.password],
-        ),
-        const SizedBox(height: 8),
-        Row(
-          children: [
-            SizedBox(
-              height: 36,
-              child: Checkbox.adaptive(
-                value: _rememberMe,
-                activeColor: AppColors.primary,
-                onChanged: (value) => _setRememberMe(value ?? false),
+          const SizedBox(height: 18),
+          _buildInputField(
+            label: 'Password',
+            controller: _passwordController,
+            icon: Icons.lock_outline_rounded,
+            obscureText: _obscurePassword,
+            isPasswordField: true,
+            suffixIcon: IconButton(
+              icon: Icon(
+                _obscurePassword
+                    ? Icons.visibility_off_outlined
+                    : Icons.visibility_outlined,
+                color: AppColors.rose,
+                size: 20,
               ),
+              onPressed: () =>
+                  setState(() => _obscurePassword = !_obscurePassword),
             ),
-            GestureDetector(
-              onTap: () => _setRememberMe(!_rememberMe),
-              child: Text(
-                'Remember me',
-                style: GoogleFonts.dmSans(
-                  fontSize: 13,
-                  color: AppColors.primaryDark,
-                  fontWeight: FontWeight.w600,
+            autofillHints: const [AutofillHints.password],
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              SizedBox(
+                height: 36,
+                child: Checkbox.adaptive(
+                  value: _rememberMe,
+                  activeColor: AppColors.primary,
+                  onChanged: (value) => _setRememberMe(value ?? false),
                 ),
               ),
-            ),
-            const Spacer(),
-            TextButton(
-              onPressed: () => Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const ForgotPasswordScreen()),
-              ),
-              style: TextButton.styleFrom(
-                padding: EdgeInsets.zero,
-                minimumSize: Size.zero,
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              ),
-              child: Text(
-                'Forgot password?',
-                style: GoogleFonts.dmSans(
-                  fontSize: 13,
-                  color: AppColors.primary,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
-          ],
-        ),
-        if (_loginCooldownUntil != null &&
-            DateTime.now().isBefore(_loginCooldownUntil!)) ...[
-          const SizedBox(height: 6),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-            decoration: BoxDecoration(
-              color: AppColors.blush.withOpacity(.7),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Row(
-              children: [
-                const Icon(
-                  Icons.lock_clock_rounded,
-                  size: 17,
-                  color: AppColors.primary,
-                ),
-                const SizedBox(width: 8),
-                Text(
-                  'Too many attempts. Try again in ${_cooldownRemainingLabel()}.',
+              GestureDetector(
+                onTap: () => _setRememberMe(!_rememberMe),
+                child: Text(
+                  'Remember me',
                   style: GoogleFonts.dmSans(
+                    fontSize: 13,
                     color: AppColors.primaryDark,
-                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
-              ],
-            ),
-          ),
-        ],
-        const SizedBox(height: 32),
-        _buildSignInButton(),
-        const SizedBox(height: 24),
-        Row(
-          children: [
-            Expanded(
-              child: Divider(
-                thickness: 1,
-                color: AppColors.brand.withOpacity(0.25),
               ),
-            ),
-
-            Expanded(
-              child: Divider(
-                thickness: 1,
-                color: AppColors.brand.withOpacity(0.25),
+              const Spacer(),
+              TextButton(
+                onPressed: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => const ForgotPasswordScreen(),
+                  ),
+                ),
+                style: TextButton.styleFrom(
+                  padding: EdgeInsets.zero,
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child: Text(
+                  'Forgot password?',
+                  style: GoogleFonts.dmSans(
+                    fontSize: 13,
+                    color: AppColors.primary,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          if (_loginCooldownUntil != null &&
+              DateTime.now().isBefore(_loginCooldownUntil!)) ...[
+            const SizedBox(height: 6),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+              decoration: BoxDecoration(
+                color: AppColors.blush.withOpacity(.7),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                children: [
+                  const Icon(
+                    Icons.lock_clock_rounded,
+                    size: 17,
+                    color: AppColors.primary,
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Too many attempts. Try again in ${_cooldownRemainingLabel()}.',
+                    style: GoogleFonts.dmSans(
+                      color: AppColors.primaryDark,
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
               ),
             ),
           ],
-        ),
-        const SizedBox(height: 16),
-      ],
+          const SizedBox(height: 32),
+          _buildSignInButton(),
+          const SizedBox(height: 24),
+          Row(
+            children: [
+              Expanded(
+                child: Divider(
+                  thickness: 1,
+                  color: AppColors.brand.withOpacity(0.25),
+                ),
+              ),
+
+              Expanded(
+                child: Divider(
+                  thickness: 1,
+                  color: AppColors.brand.withOpacity(0.25),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+        ],
       ),
     );
   }

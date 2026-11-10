@@ -111,6 +111,17 @@ void main() {
         (await db.doc('allocation_checklist/return').get()).data()!['status'],
         ChecklistStatus.discrepancy,
       );
+      final reportActivity =
+          (await db
+                  .collection('activity_logs')
+                  .where('action', isEqualTo: 'return_issue_reported')
+                  .get())
+              .docs
+              .single
+              .data();
+      expect(reportActivity['actorId'], 'admin');
+      expect(reportActivity['actorRole'], 'admin');
+      expect(reportActivity['action'], 'return_issue_reported');
       expect(
         await service.confirmReturn(
           'return',
@@ -206,6 +217,12 @@ void main() {
             .data()?['type'],
         'allocation_return',
       );
+      final activity =
+          (await db.doc('activity_logs/return_forward_return').get()).data()!;
+      expect(activity['actorId'], 'admin');
+      expect(activity['actorRole'], 'admin');
+      expect(activity['branchIds'], ['branch']);
+      expect(activity['action'], 'return_forwarded');
       expect(
         await service.forwardReturns(
           ['return'],
@@ -229,6 +246,24 @@ void main() {
       );
     },
   );
+
+  test('legacy forwarded return statuses remain visible to Super Admin', () {
+    final forwarded = {
+      'status': 'awaiting_super_admin',
+      'returnSourceCollection': 'completed_sales',
+      'returnSourceId': 'sale',
+      'forwardedBy': 'admin',
+      'forwardedAt': Timestamp.now(),
+    };
+
+    expect(ChecklistStatus.isReturnRecord(forwarded), isTrue);
+    expect(
+      ChecklistStatus.label(forwarded),
+      ChecklistStatus.awaitingSuperAdmin,
+    );
+    expect(ChecklistStatus.returnPendingForSuperAdmin(forwarded), isTrue);
+  });
+
   test(
     'received timestamp records staff acceptance, not allocation date',
     () async {

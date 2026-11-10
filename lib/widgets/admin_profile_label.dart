@@ -35,6 +35,7 @@ class AdminProfileLabel extends StatelessWidget {
           data['lastName'],
         ].where((s) => s != null && '$s'.trim().isNotEmpty).join(' ');
         final label = name.isEmpty ? 'Admin' : name;
+        final adminId = '${data['adminId'] ?? ''}'.trim();
         final firstName = '${data['firstName'] ?? ''}'.trim();
         final photo = '${data['photoUrl'] ?? data['profileImageUrl'] ?? ''}';
         ImageProvider? image;
@@ -70,14 +71,31 @@ class AdminProfileLabel extends StatelessWidget {
             ),
             const SizedBox(width: 10),
             Expanded(
-              child: Text(
-                label,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w600,
-                ),
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    label,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w600,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  if (adminId.isNotEmpty)
+                    Text(
+                      adminId,
+                      style: const TextStyle(
+                        color: Colors.white70,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w500,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                ],
               ),
             ),
           ],

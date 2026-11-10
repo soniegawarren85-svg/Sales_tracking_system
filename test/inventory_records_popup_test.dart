@@ -4,8 +4,53 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sales_tracking/widgets/admin_addons.dart';
 import 'package:sales_tracking/widgets/admin_void_inventory.dart';
+import 'package:sales_tracking/widgets/void_reason_dialog.dart';
 
 void main() {
+  testWidgets('add-on table shows one header row', (tester) async {
+    final db = FakeFirebaseFirestore();
+    await db.collection('coffee_addons').doc('cream').set({
+      'name': 'Cream',
+      'priceDelta': 20,
+    });
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: AdminAddonsTable(firestore: db)),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Add-ons'), findsNothing);
+    expect(find.text('Add-on'), findsOneWidget);
+    expect(find.text('Price'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('bundle void reasons omit expired item', (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: TextButton(
+              onPressed: () => showVoidReasonDialog(
+                context,
+                'Box of Cookies',
+                allowExpiredReason: false,
+              ),
+              child: const Text('Void bundle'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('Void bundle'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byType(DropdownButtonFormField<String>));
+    await tester.pumpAndSettle();
+    expect(find.text('Expired item'), findsNothing);
+    expect(find.text('Damaged item').last, findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+  });
+
   testWidgets('void reason dropdown supports a custom reason', (tester) async {
     final db = FakeFirebaseFirestore();
     final ref = db.collection('coffee_addons').doc('cream');
@@ -210,7 +255,9 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   });
 
-  testWidgets('expired inventory includes items expiring today', (tester) async {
+  testWidgets('expired inventory includes items expiring today', (
+    tester,
+  ) async {
     final db = FakeFirebaseFirestore();
     final today = DateUtils.dateOnly(DateTime.now());
     final expiry = [

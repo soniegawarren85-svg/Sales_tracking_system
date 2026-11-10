@@ -155,7 +155,11 @@ class BranchReportData {
     return controller.stream;
   }
 
-  static Stream<BranchReportData> watch({FirebaseFirestore? firestore}) {
+  static Stream<BranchReportData> watch({
+    FirebaseFirestore? firestore,
+    DateTime? salesStart,
+    DateTime? salesEnd,
+  }) {
     const names = [
       'branches',
       'completed_sales',
@@ -177,23 +181,27 @@ class BranchReportData {
     controller = StreamController<BranchReportData>(
       onListen: () {
         for (final name in names) {
+          Query<Map<String, dynamic>> query =
+              (firestore ?? FirebaseFirestore.instance).collection(name);
+          if (name == 'completed_sales' &&
+              salesStart != null &&
+              salesEnd != null) {
+            query = query
+                .where(
+                  'timestamp',
+                  isGreaterThanOrEqualTo: Timestamp.fromDate(salesStart),
+                )
+                .where('timestamp', isLessThan: Timestamp.fromDate(salesEnd));
+          }
           subscriptions.add(
-            (firestore ?? FirebaseFirestore.instance)
-                .collection(name)
-                .snapshots()
-                .listen((snapshot) {
-                  values[name] = snapshot.docs
-                      .map(
-                        (doc) => <String, dynamic>{
-                          ...doc.data(),
-                          '_id': doc.id,
-                        },
-                      )
-                      .toList();
-                  if (values.length == names.length) {
-                    controller.add(BranchReportData(Map.from(values)));
-                  }
-                }, onError: controller.addError),
+            query.snapshots().listen((snapshot) {
+              values[name] = snapshot.docs
+                  .map((doc) => <String, dynamic>{...doc.data(), '_id': doc.id})
+                  .toList();
+              if (values.length == names.length) {
+                controller.add(BranchReportData(Map.from(values)));
+              }
+            }, onError: controller.addError),
           );
         }
       },
