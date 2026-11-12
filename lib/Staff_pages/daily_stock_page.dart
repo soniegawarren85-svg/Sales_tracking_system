@@ -987,7 +987,13 @@ class _DailyStockPageState extends State<DailyStockPage>
 
   String _cartKey(Map<String, dynamic> item) {
     final source = item['sourceInventoryId']?.toString() ?? '';
-    final itemId = item['itemId']?.toString() ?? item['id']?.toString() ?? '';
+    final id = item['id']?.toString() ?? '';
+    final sugarLevel = item['sugarLevel']?.toString().trim() ?? '';
+    // Sugar-customized beverage choices share an inventory itemId, but each
+    // choice must retain its own cart details and receipt line.
+    final itemId = sugarLevel.isNotEmpty && id.isNotEmpty
+        ? id
+        : item['itemId']?.toString() ?? id;
     final name = item['name']?.toString() ?? '';
     final variant = item['variant']?.toString() ?? '';
     if (itemId.isNotEmpty) {
@@ -4712,6 +4718,10 @@ class _DailyStockPageState extends State<DailyStockPage>
           'name': item.isEmpty
               ? _displayName(entry.key)
               : _itemDisplayLabel(item),
+          if (item['sugarLevel'] != null) 'sugarLevel': item['sugarLevel'],
+          if (item['coffeeSize'] != null) 'coffeeSize': item['coffeeSize'],
+          if (item['addonName'] != null) 'addonName': item['addonName'],
+          'isCoffee': item['isCoffee'] == true,
           'quantity': entry.value,
           'price': price,
           'lineTotal': price * entry.value,
@@ -13758,7 +13768,42 @@ class _ReceiptGenerationDialogState extends State<_ReceiptGenerationDialog> {
     final variant = (item['variant'] ?? item['coffeeSize'] ?? '')
         .toString()
         .trim();
-    final displayName = variant.isEmpty ? name : '$name ($variant)';
+    final isCoffee = item['isCoffee'] == true;
+    final details = <String>[];
+    if (isCoffee) {
+      final size = (item['coffeeSize'] ?? variant).toString().trim();
+      if (size.isNotEmpty && !name.toLowerCase().contains(size.toLowerCase())) {
+        details.add(size);
+      }
+      final addon = item['addonName']?.toString().trim() ?? '';
+      if (addon.isNotEmpty &&
+          !name.toLowerCase().contains(addon.toLowerCase())) {
+        details.add(addon);
+      }
+      final sugar = item['sugarLevel']?.toString().trim() ?? '';
+      if (sugar.isNotEmpty &&
+          !name.toLowerCase().contains(sugar.toLowerCase())) {
+        details.add('Sugar $sugar');
+      }
+    } else if (variant.isNotEmpty &&
+        !name.toLowerCase().contains(variant.toLowerCase())) {
+      details.add(variant);
+    }
+    var displayName = name;
+    if (details.isNotEmpty) {
+      final closingParen = displayName.endsWith(')')
+          ? displayName.lastIndexOf(')')
+          : -1;
+      final openingParen = closingParen > 0
+          ? displayName.lastIndexOf('(', closingParen)
+          : -1;
+      if (openingParen >= 0) {
+        displayName =
+            '${displayName.substring(0, closingParen)}, ${details.join(', ')}${displayName.substring(closingParen)}';
+      } else {
+        displayName = '$displayName (${details.join(', ')})';
+      }
+    }
     final lineTotal = item['lineTotal'] is num
         ? (item['lineTotal'] as num).toDouble()
         : quantity *

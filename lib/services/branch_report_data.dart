@@ -1101,9 +1101,12 @@ class BranchReportData {
           'qty': refund && sale['refundMethod'] != 'inventory' ? 0.0 : -qty,
           if (item['type'] == 'Beverages')
             'size': raw['coffeeSize'] ?? raw['variant'] ?? 'Regular',
+          if (raw['sugarLevel'] != null) 'sugarLevel': raw['sugarLevel'],
+          if (addonName.isNotEmpty) 'addonName': addonName,
           'sales':
               qty *
-              reportValue(raw['price'] ?? raw['unitPrice'] ?? item['price']),
+              (reportValue(raw['price'] ?? raw['unitPrice'] ?? item['price']) -
+                  (item['type'] == 'Beverages' ? addonPrice : 0)),
         });
         if (!reportInRange(
           sale['timestamp'] ?? sale['createdAt'],

@@ -554,11 +554,22 @@ class ReceiptInlineDetails extends StatelessWidget {
                 item['isBundle'] == true ||
                 item['isCoffee'] == true)
               _line(
-                'Variant',
-                (item['variant']?.toString().trim().isNotEmpty ?? false)
+                item['isCoffee'] == true ? 'Size' : 'Variant',
+                item['isCoffee'] == true
+                    ? ((item['coffeeSize']?.toString().trim().isNotEmpty ??
+                              false)
+                          ? item['coffeeSize']
+                          : (item['variant']?.toString().trim().isNotEmpty ??
+                                false)
+                          ? item['variant']
+                          : 'Not recorded')
+                    : (item['variant']?.toString().trim().isNotEmpty ?? false)
                     ? item['variant']
                     : item['name'],
               ),
+            if (item['isCoffee'] == true &&
+                '${item['sugarLevel'] ?? ''}'.trim().isNotEmpty)
+              _line('Sugar level', item['sugarLevel']),
             _ReceiptItemId(item: Map<String, dynamic>.from(item)),
             _line(
               'Quantity × unit price',

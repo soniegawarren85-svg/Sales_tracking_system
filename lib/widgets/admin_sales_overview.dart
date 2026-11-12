@@ -46,7 +46,7 @@ List<Map<String, dynamic>> salesForDay(
   }).toList();
 }
 
-double _profitForSales(Iterable<Map<String, dynamic>> sales) =>
+double salesProfit(Iterable<Map<String, dynamic>> sales) =>
     sales.where(validReportSale).fold<double>(0, (total, sale) {
       final refund = reportRefund(sale);
       final cost = (sale['items'] as List? ?? []).whereType<Map>().fold<double>(
@@ -199,7 +199,7 @@ class _AdminSalesOverviewState extends State<AdminSalesOverview> {
         ('Total sold', sold.toStringAsFixed(0), Icons.shopping_bag_outlined),
         (
           'Total profit',
-          '₱${_profitForSales(sales).toStringAsFixed(2)}',
+          '₱${salesProfit(sales).toStringAsFixed(2)}',
           Icons.trending_up,
         ),
         ...widget.additionalTotals,
@@ -214,11 +214,7 @@ class _AdminSalesOverviewState extends State<AdminSalesOverview> {
                 .map(
                   (value) => SizedBox(
                     width:
-                        columns == 2 &&
-                            value == values.last &&
-                            widget.additionalTotals.isEmpty
-                        ? constraints.maxWidth
-                        : (constraints.maxWidth - (columns - 1) * 12) / columns,
+                        (constraints.maxWidth - (columns - 1) * 12) / columns,
                     child: Container(
                       padding: const EdgeInsets.all(18),
                       decoration: BoxDecoration(

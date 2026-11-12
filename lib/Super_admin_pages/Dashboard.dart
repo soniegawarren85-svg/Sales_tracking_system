@@ -6,7 +6,6 @@ import 'dart:async';
 import 'package:sales_tracking/theme/app_colors.dart';
 import '../services/short_id_service.dart';
 import '../Login/Login/Login.dart';
-import '../widgets/admin_sales_overview.dart';
 import '../widgets/activity_feed.dart';
 import '../widgets/admin_page_skeleton.dart';
 import '../widgets/login_session_alert_watcher.dart';
@@ -448,9 +447,7 @@ class _SuperAdminDashboardState extends State<SuperAdminDashboard>
                 children: [
                   _buildStatsCard(),
                   const SizedBox(height: 16),
-                  const AdminSalesOverview(todayOnly: true),
-                  const SizedBox(height: 20),
-                  const SuperAdminTotals(),
+                  const SuperAdminDashboardMetrics(),
                   const SizedBox(height: 20),
                   SizedBox(
                     width: double.infinity,

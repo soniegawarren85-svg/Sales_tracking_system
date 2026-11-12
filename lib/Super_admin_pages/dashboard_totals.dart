@@ -86,14 +86,88 @@ int allocatedQuantityFromHistory(
       return total;
     });
 
-class SuperAdminTotals extends StatefulWidget {
-  const SuperAdminTotals({super.key});
+typedef DashboardMetric = (String, String, IconData);
+
+class DashboardMetricGrid extends StatelessWidget {
+  const DashboardMetricGrid({
+    super.key,
+    required this.values,
+    this.columns,
+    this.todayLabel = 'Today',
+  });
+
+  final List<DashboardMetric> values;
+  final int? columns;
+  final String todayLabel;
 
   @override
-  State<SuperAdminTotals> createState() => _SuperAdminTotalsState();
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) {
+      final columnCount = columns ?? (constraints.maxWidth < 600 ? 2 : 3);
+      final width =
+          (constraints.maxWidth - (columnCount - 1) * 12) / columnCount;
+      return Wrap(
+        spacing: 12,
+        runSpacing: 12,
+        children: values
+            .map(
+              (value) => SizedBox(
+                key: ValueKey('dashboard-metric-${value.$1}'),
+                width: width,
+                child: Container(
+                  constraints: const BoxConstraints(minHeight: 148),
+                  padding: const EdgeInsets.all(18),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: AppColors.blush),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(value.$3, color: AppColors.primary),
+                      const SizedBox(height: 10),
+                      FittedBox(
+                        fit: BoxFit.scaleDown,
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          value.$2,
+                          style: const TextStyle(
+                            fontSize: 24,
+                            fontWeight: FontWeight.w800,
+                            color: AppColors.primaryDark,
+                          ),
+                        ),
+                      ),
+                      Text(value.$1),
+                      Text(
+                        todayLabel,
+                        style: const TextStyle(
+                          fontSize: 11,
+                          color: Colors.black45,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            )
+            .toList(),
+      );
+    },
+  );
 }
 
-class _SuperAdminTotalsState extends State<SuperAdminTotals> {
+class SuperAdminDashboardMetrics extends StatefulWidget {
+  const SuperAdminDashboardMetrics({super.key});
+
+  @override
+  State<SuperAdminDashboardMetrics> createState() =>
+      _SuperAdminDashboardMetricsState();
+}
+
+class _SuperAdminDashboardMetricsState
+    extends State<SuperAdminDashboardMetrics> {
   late DateTime _today;
   late Stream<QuerySnapshot<Map<String, dynamic>>> _sales;
   late Stream<QuerySnapshot<Map<String, dynamic>>> _allocations;
@@ -169,78 +243,62 @@ class _SuperAdminTotalsState extends State<SuperAdminTotals> {
               if (!allocationsSnapshot.hasData) {
                 return _totalsSkeleton(context);
               }
-              final sales = completedReceipts(
-                salesSnapshot.data!.docs
-                    .map((doc) => doc.data())
-                    .where((sale) => branchIds.contains(sale['branchId'])),
+              final allSales = completedReceipts(
+                salesSnapshot.data!.docs.map((doc) => doc.data()),
+              );
+              final activeBranchSales = allSales
+                  .where((sale) => branchIds.contains(sale['branchId']))
+                  .toList();
+              final salesAmount = allSales.fold<double>(
+                0,
+                (total, sale) => total + reportValue(sale['total']),
+              );
+              final sold = allSales.fold<double>(
+                0,
+                (total, sale) =>
+                    total +
+                    ((sale['items'] as List?) ?? []).whereType<Map>().fold(
+                      0.0,
+                      (subtotal, item) =>
+                          subtotal + reportValue(item['quantity']),
+                    ),
               );
               final allocated = allocatedQuantityFromHistory(
                 allocationsSnapshot.data!.docs.map((doc) => doc.data()),
                 branchIds,
               );
-              final values = <(String, String, IconData)>[
+              final values = <DashboardMetric>[
+                (
+                  'Total sales',
+                  '₱${salesAmount.toStringAsFixed(2)}',
+                  Icons.payments_outlined,
+                ),
+                (
+                  'Total sold',
+                  sold.toStringAsFixed(0),
+                  Icons.shopping_bag_outlined,
+                ),
+                (
+                  'Total profit',
+                  '₱${salesProfit(allSales).toStringAsFixed(2)}',
+                  Icons.trending_up,
+                ),
                 ('Total allocated', '$allocated', Icons.inventory_2_outlined),
-                ('Total transactions', '${sales.length}', Icons.receipt_long),
+                (
+                  'Total transactions',
+                  '${activeBranchSales.length}',
+                  Icons.receipt_long,
+                ),
                 (
                   'Total branches',
                   '${branchIds.length}',
                   Icons.storefront_outlined,
                 ),
               ];
-              return LayoutBuilder(
-                builder: (context, constraints) {
-                  final columns = constraints.maxWidth < 600
-                      ? 2
-                      : values.length;
-                  return Wrap(
-                    spacing: 12,
-                    runSpacing: 12,
-                    children: values
-                        .map(
-                          (value) => SizedBox(
-                            width:
-                                (constraints.maxWidth - (columns - 1) * 12) /
-                                columns,
-                            child: Container(
-                              padding: const EdgeInsets.all(18),
-                              decoration: BoxDecoration(
-                                color: Colors.white,
-                                borderRadius: BorderRadius.circular(20),
-                                border: Border.all(color: AppColors.blush),
-                              ),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Icon(value.$3, color: AppColors.primary),
-                                  const SizedBox(height: 10),
-                                  FittedBox(
-                                    fit: BoxFit.scaleDown,
-                                    alignment: Alignment.centerLeft,
-                                    child: Text(
-                                      value.$2,
-                                      style: const TextStyle(
-                                        fontSize: 24,
-                                        fontWeight: FontWeight.w800,
-                                        color: AppColors.primaryDark,
-                                      ),
-                                    ),
-                                  ),
-                                  Text(value.$1),
-                                  const Text(
-                                    'Today',
-                                    style: TextStyle(
-                                      fontSize: 11,
-                                      color: Colors.black45,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        )
-                        .toList(),
-                  );
-                },
+              return DashboardMetricGrid(
+                values: values,
+                todayLabel:
+                    'Today · ${MaterialLocalizations.of(context).formatShortDate(_today)}',
               );
             },
           );
@@ -257,11 +315,11 @@ class _SuperAdminTotalsState extends State<SuperAdminTotals> {
         spacing: 12,
         runSpacing: 12,
         children: List.generate(
-          3,
+          6,
           (_) => SizedBox(
             width: width,
             child: Container(
-              height: 128,
+              height: 148,
               padding: const EdgeInsets.all(18),
               decoration: BoxDecoration(
                 color: Colors.white,

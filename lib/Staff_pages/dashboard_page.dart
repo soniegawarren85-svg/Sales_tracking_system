@@ -2609,17 +2609,39 @@ class _ReceiptCard extends StatelessWidget {
               child: Column(
                 children: [
                   ...items.map((item) {
-                    final name = item['variant']?.toString().isNotEmpty == true
-                        ? '${item['name']} (${item['variant']})'
-                        : item['name']?.toString() ?? 'Item';
+                    final itemName = item['name']?.toString() ?? 'Item';
+                    final variant = item['variant']?.toString().trim() ?? '';
+                    final coffeeSize =
+                        item['coffeeSize']?.toString().trim() ?? '';
+                    final addonName =
+                        item['addonName']?.toString().trim() ?? '';
                     final itemKind = item['isBundle'] == true
                         ? 'Bundle'
                         : item['isCoffee'] == true
                         ? 'Beverages'
                         : '';
+                    final coffeeDetails = <String>[
+                      if (coffeeSize.isNotEmpty) coffeeSize,
+                      if (addonName.isNotEmpty) addonName,
+                    ];
+                    final displayVariant = item['isCoffee'] == true
+                        ? coffeeDetails.isNotEmpty
+                              ? coffeeDetails.join(' + ')
+                              : variant == itemName
+                              ? ''
+                              : variant
+                        : variant;
+                    final name = displayVariant.isEmpty
+                        ? itemName
+                        : '$itemName ($displayVariant)';
                     final displayName = itemKind.isNotEmpty
                         ? '$name • $itemKind'
                         : name;
+                    final sugarLevel =
+                        item['sugarLevel']?.toString().trim() ?? '';
+                    final receiptItemName = sugarLevel.isEmpty
+                        ? displayName
+                        : '$displayName • Sugar $sugarLevel';
                     final qty = _qty(item['quantity']);
                     final price = _money(item['price']);
                     return Padding(
@@ -2628,7 +2650,7 @@ class _ReceiptCard extends StatelessWidget {
                         children: [
                           Expanded(
                             child: Text(
-                              '${qty}x $displayName',
+                              '${qty}x $receiptItemName',
                               style: const TextStyle(
                                 color: _C.primaryDark,
                                 fontSize: 13,

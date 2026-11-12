@@ -789,17 +789,29 @@ num? allocationCurrentCatalogPrice(
 }
 
 num? allocationSaleUnitPrice(Map<String, dynamic> sale) {
+  num? unitPrice;
   for (final key in ['unitPrice', 'price', 'salePrice']) {
     final value = num.tryParse('${sale[key] ?? ''}');
-    if (value != null) return value;
+    if (value != null) {
+      unitPrice = value;
+      break;
+    }
   }
   final quantity = int.tryParse('${sale['quantity'] ?? 0}') ?? 0;
-  if (quantity <= 0) return null;
-  for (final key in ['lineTotal', 'subtotal', 'total', 'amount']) {
-    final value = num.tryParse('${sale[key] ?? ''}');
-    if (value != null) return value / quantity;
+  if (unitPrice == null && quantity > 0) {
+    for (final key in ['lineTotal', 'subtotal', 'total', 'amount']) {
+      final value = num.tryParse('${sale[key] ?? ''}');
+      if (value != null) {
+        unitPrice = value / quantity;
+        break;
+      }
+    }
   }
-  return null;
+  if (unitPrice == null) return null;
+  if (sale['isCoffee'] == true) {
+    unitPrice -= num.tryParse('${sale['addonPriceDelta'] ?? 0}') ?? 0;
+  }
+  return unitPrice < 0 ? 0 : unitPrice;
 }
 
 bool allocationSaleInDateRange(
@@ -1298,6 +1310,8 @@ class _BatchDialogState extends State<_BatchDialog> {
               final addonSaleLine = {
                 ...saleLine,
                 'name': addon['name'] ?? line['addonName'],
+                'isCoffee': false,
+                'isAddon': true,
                 'price': addonPrice,
                 'unitPrice': addonPrice,
                 'salePrice': addonPrice,
@@ -2699,6 +2713,37 @@ class _BatchDialogState extends State<_BatchDialog> {
                                   (int.tryParse('${sale['quantity'] ?? 0}') ??
                                       0),
                         );
+                        final soldBySize = <String, int>{};
+                        final salesBySize = <String, num>{};
+                        if (isCoffee) {
+                          for (final sale in saleLines) {
+                            final size =
+                                '${sale['coffeeSize'] ?? sale['size'] ?? (sale['variant'] == record['name'] ? 'Size' : sale['variant'] ?? 'Size')}'
+                                    .trim();
+                            final quantity =
+                                int.tryParse('${sale['quantity'] ?? 0}') ?? 0;
+                            soldBySize[size] =
+                                (soldBySize[size] ?? 0) + quantity;
+                            salesBySize[size] =
+                                (salesBySize[size] ?? 0) +
+                                (allocationSaleUnitPrice(sale) ?? 0) * quantity;
+                          }
+                        }
+                        final sizeOrder = ['small', 'medium', 'large'];
+                        final sizeEntries = soldBySize.keys.toList()
+                          ..sort((a, b) {
+                            int rank(String value) {
+                              final index = sizeOrder.indexOf(
+                                value.toLowerCase(),
+                              );
+                              return index < 0 ? sizeOrder.length : index;
+                            }
+
+                            final byCommonSize = rank(a).compareTo(rank(b));
+                            return byCommonSize == 0
+                                ? a.compareTo(b)
+                                : byCommonSize;
+                          });
                         return Card(
                           color: Colors.white,
                           elevation: 0,
@@ -2833,9 +2878,41 @@ class _BatchDialogState extends State<_BatchDialog> {
                                     ],
                                   ),
                                 ),
-                              if (saleLines.isNotEmpty)
+                              if (saleLines.isNotEmpty) ...[
+                                if (sizeEntries.isNotEmpty)
+                                  Padding(
+                                    padding: const EdgeInsets.only(top: 12),
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        const Text(
+                                          'Total sold',
+                                          style: TextStyle(
+                                            fontWeight: FontWeight.w800,
+                                            color: AppColors.primaryDark,
+                                          ),
+                                        ),
+                                        for (final size in sizeEntries)
+                                          Padding(
+                                            padding: const EdgeInsets.only(
+                                              top: 4,
+                                            ),
+                                            child: Text(
+                                              '$size · ${soldBySize[size]} sold · ${formatMoney(salesBySize[size] ?? 0)}',
+                                              style: const TextStyle(
+                                                fontWeight: FontWeight.w800,
+                                                color: AppColors.primaryDark,
+                                              ),
+                                            ),
+                                          ),
+                                      ],
+                                    ),
+                                  ),
                                 Padding(
-                                  padding: const EdgeInsets.only(top: 12),
+                                  padding: EdgeInsets.only(
+                                    top: sizeEntries.isEmpty ? 12 : 8,
+                                  ),
                                   child: Text(
                                     'Sales total: $totalSold sold · ${formatMoney(totalSaleValue)}',
                                     style: const TextStyle(
@@ -2844,6 +2921,7 @@ class _BatchDialogState extends State<_BatchDialog> {
                                     ),
                                   ),
                                 ),
+                              ],
                               for (final sale in saleLines)
                                 for (
                                   var soldUnit = 0;
@@ -2858,7 +2936,7 @@ class _BatchDialogState extends State<_BatchDialog> {
                                     title: Text(
                                       [
                                         if (isCoffee)
-                                          '${record['name'] ?? 'Beverage'} - ${sale['coffeeSize'] ?? sale['variant'] ?? sale['size'] ?? 'Size'}'
+                                          '${record['name'] ?? 'Beverage'} - ${sale['coffeeSize'] ?? sale['size'] ?? (sale['variant'] == record['name'] ? 'Size' : sale['variant'] ?? 'Size')}${'${sale['addonName'] ?? ''}'.trim().isEmpty ? '' : ' + ${sale['addonName']}'}${'${sale['sugarLevel'] ?? ''}'.trim().isEmpty ? '' : ' · Sugar ${sale['sugarLevel']}'}'
                                         else
                                           '${sale['name'] ?? record['name'] ?? 'Item'}'
                                               '${'${sale['variant'] ?? ''}'.trim().isEmpty ? '' : ' (${sale['variant']})'}',

@@ -1,9 +1,70 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sales_tracking/Super_admin_pages/dashboard_totals.dart';
 import 'package:sales_tracking/services/branch_report_data.dart';
 
 void main() {
+  testWidgets('Super Admin mobile dashboard metrics stay in pairs', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(390, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(
+          body: Padding(
+            padding: EdgeInsets.all(16),
+            child: DashboardMetricGrid(
+              values: [
+                ('Total sales', '₱100.00', Icons.payments_outlined),
+                ('Total sold', '2', Icons.shopping_bag_outlined),
+                ('Total profit', '₱50.00', Icons.trending_up),
+                ('Total allocated', '10', Icons.inventory_2_outlined),
+                ('Total transactions', '2', Icons.receipt_long),
+                ('Total branches', '3', Icons.storefront_outlined),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+
+    final salesY = tester
+        .getTopLeft(find.byKey(const ValueKey('dashboard-metric-Total sales')))
+        .dy;
+    final soldY = tester
+        .getTopLeft(find.byKey(const ValueKey('dashboard-metric-Total sold')))
+        .dy;
+    final profitY = tester
+        .getTopLeft(find.byKey(const ValueKey('dashboard-metric-Total profit')))
+        .dy;
+    final allocatedY = tester
+        .getTopLeft(
+          find.byKey(const ValueKey('dashboard-metric-Total allocated')),
+        )
+        .dy;
+    final transactionsY = tester
+        .getTopLeft(
+          find.byKey(const ValueKey('dashboard-metric-Total transactions')),
+        )
+        .dy;
+    final branchesY = tester
+        .getTopLeft(
+          find.byKey(const ValueKey('dashboard-metric-Total branches')),
+        )
+        .dy;
+    expect(soldY, salesY);
+    expect(allocatedY, profitY);
+    expect(branchesY, transactionsY);
+    expect(profitY, greaterThan(salesY));
+    expect(transactionsY, greaterThan(allocatedY));
+    expect(tester.takeException(), isNull);
+  });
+
   test('Super Admin staff total counts every active cashier account once', () {
     final accounts = [
       {
