@@ -46,6 +46,7 @@ void main() {
     };
     expect(offlineUsernameMatches(admin, 'ADM-001'), isTrue);
     expect(offlineAccountAllowed(admin), isTrue);
+    expect(offlineStoredPasswordMatches(admin, 'Secret123'), isTrue);
     expect(offlineAccountAllowed({...admin, 'status': 'deactivated'}), isFalse);
   });
 

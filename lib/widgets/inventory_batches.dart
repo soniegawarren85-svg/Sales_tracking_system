@@ -10,6 +10,7 @@ import '../services/number_format.dart';
 import '../services/sale_stock.dart';
 import '../services/local_database_sync_service.dart';
 import '../services/branch_report_data.dart';
+import '../services/inventory_display_ids.dart';
 
 Future<void> showMainInventoryBatches(
   BuildContext context,
@@ -561,70 +562,7 @@ List<Map<String, dynamic>> aggregateInventoryHistoryEvents(
 
 List<Map<String, dynamic>> aggregateCategoryAllocationItems(
   Iterable<Map<String, dynamic>> items,
-) {
-  int quantity(dynamic value) =>
-      value is num ? value.toInt() : int.tryParse('$value') ?? 0;
-  DateTime? date(dynamic value) => value is Timestamp
-      ? value.toDate()
-      : value is DateTime
-      ? value
-      : DateTime.tryParse('$value');
-
-  final aggregated = <String, Map<String, dynamic>>{};
-  for (final item in items) {
-    final id =
-        [
-              item['publicId'],
-              item['itemPublicId'],
-              item['id'],
-              item['itemId'],
-              item['variantId'],
-              item['sourceItemId'],
-            ]
-            .map((value) => '${value ?? ''}'.trim())
-            .firstWhere((value) => value.isNotEmpty, orElse: () => '');
-    final name = '${item['name'] ?? ''}'.trim().toLowerCase();
-    final variant = '${item['variant'] ?? ''}'.trim().toLowerCase();
-    final expiry = item['origin'] == 'unbundle'
-        ? '|${item['expirationDate'] ?? ''}'
-        : '';
-    final key = id.isNotEmpty
-        ? '${id.toLowerCase()}|$variant$expiry'
-        : '$name|$variant$expiry';
-    final current = aggregated[key];
-    final stock = quantity(item['stock'] ?? item['startingStock']);
-    if (current == null) {
-      final copy = Map<String, dynamic>.from(item)..['stock'] = stock;
-      aggregated[key] = copy;
-      continue;
-    }
-
-    current['stock'] = quantity(current['stock']) + stock;
-    current['startingStock'] =
-        quantity(current['startingStock']) + quantity(item['startingStock']);
-    current['assignedStartingStock'] =
-        quantity(current['assignedStartingStock']) +
-        quantity(item['assignedStartingStock']);
-    final existingDate = date(current['allocatedAt'] ?? current['assignedAt']);
-    final incomingDate = date(item['allocatedAt'] ?? item['assignedAt']);
-    if (incomingDate != null &&
-        (existingDate == null || incomingDate.isAfter(existingDate))) {
-      current['allocatedAt'] = incomingDate;
-    }
-    if (current['origin'] == 'unbundle' && item['origin'] != 'unbundle') {
-      for (final key in ['sourceDocId', 'price', 'imageUrl']) {
-        if (item[key] != null) current[key] = item[key];
-      }
-    }
-  }
-  return aggregated.values
-      .map(
-        (item) => Map<String, dynamic>.from(item)
-          ..remove('origin')
-          ..remove('unbundledQuantity'),
-      )
-      .toList();
-}
+) => aggregateInventoryAllocationItems(items);
 
 bool allocationItemMatchesSale(
   Map<String, dynamic> item,

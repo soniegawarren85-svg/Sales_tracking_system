@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sales_tracking/services/cash_drawer_service.dart';
 import 'package:sales_tracking/services/allocation_checklist_service.dart';
+import 'package:sales_tracking/services/checklist_status.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -306,17 +307,31 @@ void main() {
       issueQuantity: 1,
       issueItemId: 'cookie',
       issueItemName: 'Cookie',
+      reason: 'One unit was missing from the shipment.',
     );
 
     final stock =
         (await db.collection('staff_inventory').doc('branch_source').get())
             .data()!;
     expect((stock['items'] as List).single['stock'], 4);
+    final checklist =
+        (await db.collection('allocation_checklist').doc('delivery').get())
+            .data()!;
+    expect(checklist['reason'], 'Missing');
+    expect(checklist['issueReason'], 'Missing - 1');
+    expect(checklist['issueAllocatedQuantity'], 5);
+    expect(checklist['issueReceivedQuantity'], 4);
+    expect(
+      checklist['issueDetails'],
+      'One unit was missing from the shipment.',
+    );
     final history = (await db.collection('staff_inventory_history').get())
         .docs
         .single
         .data();
     expect((history['items'] as List).single['quantity'], 4);
+    expect(history['issueAllocatedQuantity'], 5);
+    expect(history['issueReceivedQuantity'], 4);
     expect(
       (await db.collection('allocation_checklist').doc('delivery').get())
           .data()!['status'],
@@ -348,12 +363,62 @@ void main() {
         (await db.collection('staff_inventory').doc('branch_source').get())
             .data()!;
     expect((stock['items'] as List).single['stock'], 6);
+    final checklist =
+        (await db.collection('allocation_checklist').doc('delivery').get())
+            .data()!;
+    expect(checklist['reason'], 'Extra');
+    expect(checklist['issueReason'], 'Extra - 1');
+    expect(checklist['issueAllocatedQuantity'], 5);
+    expect(checklist['issueReceivedQuantity'], 6);
     final history = (await db.collection('staff_inventory_history').get())
         .docs
         .single
         .data();
     expect((history['items'] as List).single['quantity'], 6);
   });
+
+  test(
+    'not received completes checklist without adding branch stock',
+    () async {
+      final db = await fixture();
+      await db.collection('allocation_checklist').doc('delivery').update({
+        'items': [
+          {'id': 'cookie', 'name': 'Cookie', 'stock': 5, 'startingStock': 5},
+        ],
+      });
+
+      await AllocationChecklistService(db).decide(
+        'delivery',
+        accept: true,
+        staffId: 'staff',
+        actorName: 'Mia',
+        scopeIds: ['branch'],
+        issueType: 'Not received',
+        issueQuantity: 5,
+        issueItemId: 'cookie',
+        issueItemName: 'Cookie',
+      );
+
+      expect(
+        (await db.collection('staff_inventory').doc('branch_source').get())
+            .exists,
+        isFalse,
+      );
+      final completed =
+          (await db.collection('allocation_checklist').doc('delivery').get())
+              .data()!;
+      expect(completed['status'], 'Received');
+      expect((completed['items'] as List).single['stock'], 0);
+      final notReceived =
+          (await db
+                  .collection('allocation_checklist')
+                  .doc('delivery_not_received')
+                  .get())
+              .data()!;
+      expect(notReceived['status'], ChecklistStatus.notReceivedPending);
+      expect((notReceived['items'] as List).single['stock'], 5);
+    },
+  );
 
   test(
     'damaged and incorrect quantities are withheld for Admin return review',
@@ -393,6 +458,73 @@ void main() {
         expect(returnRecord['quantity'], 1);
         expect(returnRecord['issueType'], issueType);
       }
+    },
+  );
+
+  test(
+    'checklist accepts different issue reasons and comments per item',
+    () async {
+      final db = await fixture();
+      await db.collection('allocation_checklist').doc('delivery').update({
+        'items': [
+          {'id': 'cookie', 'name': 'Cookie', 'stock': 5, 'startingStock': 5},
+          {'id': 'cake', 'name': 'Cake', 'stock': 8, 'startingStock': 8},
+        ],
+      });
+
+      await AllocationChecklistService(db).decide(
+        'delivery',
+        accept: true,
+        staffId: 'staff',
+        actorName: 'Mia',
+        scopeIds: ['branch'],
+        issueType: 'Damaged',
+        issueQuantity: 1,
+        issueItemId: 'cookie',
+        issueItemName: 'Cookie',
+        issueReports: [
+          {
+            'itemId': 'cookie',
+            'itemName': 'Cookie',
+            'issueType': 'Damaged',
+            'quantity': 2,
+            'comment': 'Packaging torn',
+          },
+          {
+            'itemId': 'cake',
+            'itemName': 'Cake',
+            'issueType': 'Missing',
+            'quantity': 3,
+            'comment': 'Short count',
+          },
+        ],
+      );
+
+      final savedChecklist =
+          (await db.collection('allocation_checklist').doc('delivery').get())
+              .data()!;
+      final savedReports = savedChecklist['issueReports'] as List;
+      expect(savedReports[0]['issueType'], 'Damaged');
+      expect(savedReports[0]['quantity'], 2);
+      expect(savedReports[0]['comment'], 'Packaging torn');
+      expect(savedReports[1]['issueType'], 'Missing');
+      expect(savedReports[1]['quantity'], 3);
+      expect(savedReports[1]['comment'], 'Short count');
+
+      final branchItems =
+          (await db.collection('staff_inventory').doc('branch_source').get())
+                  .data()!['items']
+              as List;
+      expect(branchItems[0]['stock'], 3);
+      expect(branchItems[1]['stock'], 5);
+      final returnRecord =
+          (await db
+                  .collection('allocation_checklist')
+                  .doc('delivery_issue_return_cookie')
+                  .get())
+              .data()!;
+      expect(returnRecord['quantity'], 2);
+      expect(returnRecord['returnReason'], 'Packaging torn');
     },
   );
 }

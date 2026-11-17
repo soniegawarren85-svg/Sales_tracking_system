@@ -175,7 +175,11 @@ void main() {
       'staffId': 'branch',
       'status': 'Issue Reported',
       'name': 'Cookies',
-      'issueReason': 'Five units arrived damaged',
+      'issueType': 'Damaged',
+      'issueQuantity': 5,
+      'issueItemName': 'Chocolate cookie',
+      'issueReason': 'Damaged - 5',
+      'issueDetails': 'Five units arrived damaged.',
       'reportedBy': 'staff-1',
       'reportedByName': 'Mia Staff',
       'reportedAt': Timestamp.now(),
@@ -193,18 +197,135 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Pending'), findsWidgets);
-    expect(find.text('Issue Reported'), findsOneWidget);
+    expect(find.text('1 item reported'), findsOneWidget);
     expect(find.byTooltip('Expand items'), findsOneWidget);
-    expect(
-      tester.getCenter(find.byTooltip('Expand items')).dx,
-      greaterThan(tester.getCenter(find.text('View issue report')).dx),
-    );
-    await tester.ensureVisible(find.text('View issue report'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('View issue report'));
-    await tester.pumpAndSettle();
-    expect(find.textContaining('Five units arrived damaged'), findsOneWidget);
+    expect(find.text('View issue report'), findsNothing);
+    expect(find.text('REPORTED'), findsOneWidget);
+    expect(find.text('Chocolate cookie'), findsOneWidget);
+    expect(find.text('−5 Damaged'), findsOneWidget);
+    expect(find.text('Five units arrived damaged.'), findsOneWidget);
     expect(find.text('Reported by: Mia Staff'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'completed allocation shows allocated and received quantities and comment',
+    (tester) async {
+      final db = FakeFirebaseFirestore();
+      await db.doc('allocation_checklist/received-with-issue').set({
+        'staffId': 'branch',
+        'status': 'Received',
+        'name': 'Cookies',
+        'issueType': 'Missing',
+        'issueItemId': 'cookie-1',
+        'issueItemName': 'Chocolate cookie',
+        'issueAllocatedQuantity': 15,
+        'issueReceivedQuantity': 15,
+        'issueReason': 'Missing - 5',
+        'issueQuantity': 5,
+        'issueDetails': 'One cookie was missing.',
+        'reportedByName': 'Mia Staff',
+        'reportedAt': Timestamp.now(),
+        'createdAt': Timestamp.now(),
+        'items': [
+          {'id': 'cookie-1', 'name': 'Chocolate cookie', 'stock': 15},
+        ],
+      });
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: AllocationHistoryDialog(branchId: 'branch', database: db),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Complete'));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.text('Qty: 20 allocated units · 15 received units'),
+        findsOneWidget,
+      );
+      expect(find.text('Chocolate cookie'), findsOneWidget);
+      expect(find.text('REPORTED'), findsOneWidget);
+      expect(find.text('−5 Missing'), findsOneWidget);
+      expect(find.text('Allocated'), findsWidgets);
+      expect(find.text('Received'), findsWidgets);
+      expect(find.text('View issue report'), findsNothing);
+      expect(find.text('One cookie was missing.'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('completed allocation displays every per-item report', (
+    tester,
+  ) async {
+    final db = FakeFirebaseFirestore();
+    await db.doc('allocation_checklist/multi-item-report').set({
+      'staffId': 'branch',
+      'status': 'Received',
+      'deliveryId': 'delivery-multi',
+      'name': 'Cookies',
+      'reportedByName': 'Jomalyn Ignacio',
+      'reportedAt': Timestamp.now(),
+      'createdAt': Timestamp.now(),
+      'items': [
+        {'id': 'matcha', 'name': 'Matcha Cookies', 'stock': 20},
+        {'id': 'red-velvet', 'name': 'Red Velvet', 'stock': 25},
+        {'id': 'og', 'name': 'Og Cookies', 'stock': 15},
+      ],
+      'issueReports': [
+        {
+          'itemId': 'matcha',
+          'itemName': 'Matcha Cookies',
+          'issueType': 'Missing',
+          'quantity': 20,
+          'allocatedQuantity': 40,
+          'receivedQuantity': 20,
+          'comment': 'Short count',
+        },
+        {
+          'itemId': 'red-velvet',
+          'itemName': 'Red Velvet',
+          'issueType': 'Extra',
+          'quantity': 5,
+          'allocatedQuantity': 20,
+          'receivedQuantity': 25,
+          'comment': 'Five extra',
+        },
+        {
+          'itemId': 'og',
+          'itemName': 'Og Cookies',
+          'issueType': 'Incorrect',
+          'quantity': 10,
+          'allocatedQuantity': 25,
+          'receivedQuantity': 15,
+          'comment': 'Wrong variant',
+        },
+      ],
+      'issueReason': 'Missing - 20; Extra - 5; Incorrect - 10',
+    });
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: AllocationHistoryDialog(branchId: 'branch', database: db),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Complete'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('3 items reported'), findsOneWidget);
+    expect(find.text('3 reports'), findsOneWidget);
+    expect(find.text('Matcha Cookies'), findsOneWidget);
+    expect(find.text('Red Velvet'), findsOneWidget);
+    expect(find.text('Og Cookies'), findsOneWidget);
+    expect(find.text('−20 Missing'), findsOneWidget);
+    expect(find.text('+5 Extra'), findsOneWidget);
+    expect(find.text('−10 Incorrect'), findsOneWidget);
+    expect(find.text('Short count'), findsOneWidget);
+    expect(find.text('Five extra'), findsOneWidget);
+    expect(find.text('Wrong variant'), findsOneWidget);
+    expect(find.text('Qty: 85 allocated units · 60 received units'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 

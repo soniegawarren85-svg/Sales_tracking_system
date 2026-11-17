@@ -633,6 +633,7 @@ class BranchReportData {
   List<Map<String, dynamic>> currentInventory(String branch, DateTime day) {
     final start = DateUtils.dateOnly(day);
     final active = <String, Map<String, dynamic>>{};
+    final latestAssignmentAt = <String, DateTime?>{};
     bool usable(Map value) {
       final expiry = cashRecordDate(value['expirationDate']);
       return value['isDeleted'] != true &&
@@ -652,20 +653,36 @@ class BranchReportData {
         ...rows('coffee_products'),
         ...rows('coffee_addons'),
       ];
-      final source =
-          sources.where((r) => r['_id'] == sourceId).firstOrNull ??
-          (sourceId.isEmpty
-              ? sources
-                    .where(
-                      (r) =>
-                          r['isBundle'] != true &&
-                          '${r['name'] ?? ''}'.trim().toLowerCase() ==
-                              '${allocation['categoryName'] ?? allocation['parentName'] ?? allocation['name'] ?? ''}'
-                                  .trim()
-                                  .toLowerCase(),
-                    )
-                    .firstOrNull
-              : null);
+      final sourceById = sources
+          .where((row) => row['_id'] == sourceId)
+          .firstOrNull;
+      Map<String, dynamic>? latestCategorySource;
+      if (allocation['isBundle'] != true &&
+          allocation['isCoffee'] != true &&
+          allocation['isAddon'] != true) {
+        final categoryName =
+            '${allocation['categoryName'] ?? allocation['parentName'] ?? allocation['name'] ?? ''}'
+                .trim()
+                .toLowerCase();
+        if (categoryName.isNotEmpty) {
+          for (final candidate in rows('sales_inventory').where(
+            (row) =>
+                row['isBundle'] != true &&
+                '${row['name'] ?? ''}'.trim().toLowerCase() == categoryName &&
+                usable(row),
+          )) {
+            if (latestCategorySource == null ||
+                inventoryCatalogIsNewer(candidate, latestCategorySource)) {
+              latestCategorySource = candidate;
+            }
+          }
+        }
+      }
+      // An allocation's source ID is the authoritative catalog link. Falling
+      // back to the newest category with the same name can silently discard
+      // variants when two distinct categories share a name (for example,
+      // Cakes CAT-003 and Cakes CAT-018).
+      final source = sourceById ?? latestCategorySource;
       // Allocations with a deleted source must not resurrect old catalog items.
       if (sourceId.isNotEmpty && (source == null || !usable(source))) continue;
       final variants =
@@ -676,18 +693,33 @@ class BranchReportData {
           : (allocation['items'] as List? ?? []).whereType<Map>();
       for (final variant in variants) {
         if (!usable(variant)) continue;
+        final removedItems = (source?['removedItems'] as List? ?? [])
+            .whereType<Map>()
+            .toList();
+        if (removedItems.any(
+          (removed) =>
+              inventoryCatalogVariantMatches(removed, variant, removedItems),
+        )) {
+          continue;
+        }
         Map? currentVariant;
         if (source?['items'] is List && source?['isBundle'] != true) {
-          currentVariant = (source!['items'] as List)
+          final sourceItems = (source!['items'] as List)
               .whereType<Map>()
+              .toList();
+          final matchingVariants = sourceItems
               .where(
-                (v) =>
-                    (variant['id'] != null && v['id'] == variant['id']) ||
-                    (variant['publicId'] != null &&
-                        v['publicId'] == variant['publicId']),
+                (catalogItem) => inventoryCatalogVariantMatches(
+                  catalogItem,
+                  variant,
+                  sourceItems,
+                ),
               )
-              .firstOrNull;
-          if (currentVariant == null || !usable(currentVariant)) continue;
+              .toList();
+          if (matchingVariants.isNotEmpty) {
+            currentVariant = matchingVariants.first;
+            if (!usable(currentVariant)) continue;
+          }
         }
         final catalogItem = currentVariant ?? source;
         final allocatedCost = variant['costPrice'];
@@ -702,6 +734,7 @@ class BranchReportData {
         final resolvedItem = resolveItem({
           ...variant,
           'sourceInventoryId': sourceId,
+          if (source?['publicId'] != null) 'categoryId': source!['publicId'],
           if (catalogItem != null) ...{
             'costPrice': costPrice,
             'price':
@@ -709,8 +742,13 @@ class BranchReportData {
                 variant['priceDelta'] ??
                 catalogItem['price'] ??
                 catalogItem['priceDelta'],
-            if (catalogItem['imageUrl'] != null)
-              'imageUrl': catalogItem['imageUrl'],
+            if (currentVariant?['imageUrl'] != null ||
+                ((allocation['isBundle'] == true ||
+                        allocation['isCoffee'] == true ||
+                        allocation['isAddon'] == true) &&
+                    catalogItem?['imageUrl'] != null))
+              'imageUrl':
+                  currentVariant?['imageUrl'] ?? catalogItem?['imageUrl'],
           },
         }, sourceId);
         final resolved = {
@@ -723,13 +761,34 @@ class BranchReportData {
         };
         final id = inventoryDisplayId(resolved);
         final previous = active[id];
+        final assignedAt = cashRecordDate(
+          allocation['assignedAt'] ??
+              allocation['createdAt'] ??
+              allocation['timestamp'],
+        );
+        final previousAssignedAt = latestAssignmentAt[id];
+        final useLatestAllocation =
+            previous == null ||
+            (assignedAt != null &&
+                (previousAssignedAt == null ||
+                    assignedAt.isAfter(previousAssignedAt)));
+        final selectedAllocation = useLatestAllocation
+            ? allocation
+            : previous!;
+        if (useLatestAllocation) latestAssignmentAt[id] = assignedAt;
         final legacyStaffLowStock =
-            allocation['lowStockReportStatus'] == null &&
-            allocation['isLowStock'] == true &&
-            allocation['lowStockMarkedBy'] != null;
+            selectedAllocation['lowStockReportStatus'] == null &&
+            selectedAllocation['isLowStock'] == true &&
+            selectedAllocation['lowStockMarkedBy'] != null;
         final staffLowStockPendingAdmin =
-            allocation['staffLowStockPendingAdmin'] == true ||
+            selectedAllocation['staffLowStockPendingAdmin'] == true ||
             legacyStaffLowStock;
+        final allocatedStock =
+            allocation['isCoffee'] == true || allocation['isAddon'] == true
+            ? null
+            : allocation['isBundle'] == true
+            ? availableBundleStock(allocation, now: start)
+            : reportValue(variant['stock'] ?? variant['startingStock']);
         active[id] = {
           ...resolved,
           'id': id,
@@ -739,40 +798,41 @@ class BranchReportData {
             'costPrice': source['costPrice'] ?? resolved['costPrice'],
           },
           'costRecorded': resolved['costPrice'] != null,
-          'allocationId': allocation['_id'],
+          'allocationId':
+              selectedAllocation['_id'] ?? selectedAllocation['allocationId'],
           'allocationItemId':
-              allocation['isBundle'] == true ||
-                  allocation['isCoffee'] == true ||
-                  allocation['isAddon'] == true
+              selectedAllocation['isBundle'] == true ||
+                  selectedAllocation['isCoffee'] == true ||
+                  selectedAllocation['isAddon'] == true
               ? null
-              : variant['id'] ?? variant['itemId'],
+              : selectedAllocation['allocationItemId'] ??
+                    (useLatestAllocation
+                        ? variant['id'] ?? variant['itemId']
+                        : previous?['allocationItemId']),
           'isLowStock': staffLowStockPendingAdmin
               ? false
-              : allocation['isLowStock'] == true,
+              : selectedAllocation['isLowStock'] == true,
           'staffLowStockPendingAdmin': staffLowStockPendingAdmin,
           'lowStockReportStatus':
-              allocation['lowStockReportStatus'] ??
+              selectedAllocation['lowStockReportStatus'] ??
               (legacyStaffLowStock ? 'pending_admin' : null),
-          if (allocation['lowStockMarkedAt'] != null)
-            'lowStockMarkedAt': allocation['lowStockMarkedAt'],
-          if (allocation['lowStockMarkedBy'] != null)
-            'lowStockMarkedBy': allocation['lowStockMarkedBy'],
+          if (selectedAllocation['lowStockMarkedAt'] != null)
+            'lowStockMarkedAt': selectedAllocation['lowStockMarkedAt'],
+          if (selectedAllocation['lowStockMarkedBy'] != null)
+            'lowStockMarkedBy': selectedAllocation['lowStockMarkedBy'],
+          if (selectedAllocation['assignedAt'] != null)
+            'assignedAt': selectedAllocation['assignedAt'],
           'categoryName':
               source?['name'] ??
-              allocation['categoryName'] ??
-              allocation['parentName'] ??
+              selectedAllocation['categoryName'] ??
+              selectedAllocation['parentName'] ??
               '',
-          'remaining':
-              allocation['isCoffee'] == true || allocation['isAddon'] == true
+          'remaining': allocatedStock == null
               ? null
-              : reportValue(previous?['remaining']) +
-                    (allocation['isBundle'] == true
-                        ? availableBundleStock(allocation, now: start)
-                        : reportValue(
-                            variant['stock'] ?? variant['startingStock'],
-                          )),
+              : reportValue(previous?['remaining']) + allocatedStock,
           'status':
-              allocation['isLowStock'] == true && !staffLowStockPendingAdmin
+              selectedAllocation['isLowStock'] == true &&
+                      !staffLowStockPendingAdmin
               ? 'Low stock'
               : 'Available',
         };

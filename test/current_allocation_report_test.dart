@@ -320,6 +320,122 @@ void main() {
     expect(unbundle['balance'], 176);
   });
 
+  test('branch monitor keeps all active items from a replacement category', () {
+    final catalogItems = [
+      for (var index = 1; index <= 4; index++)
+        {
+          'id': 'catalog-$index',
+          'publicId': 'CAKE-$index',
+          'name': 'Cake $index',
+          'stock': 100,
+          'price': 100,
+        },
+    ];
+    final data = BranchReportData({
+      'sales_inventory': [
+        {
+          '_id': 'cakes-003',
+          'publicId': 'CAT-003',
+          'name': 'Cakes',
+          'timestamp': DateTime(2026, 11, 10),
+          'items': [
+            {'id': 'old-cake-1', 'name': 'Cake 1'},
+            {'id': 'old-cake-2', 'name': 'Cake 2'},
+            {'id': 'old-cake-3', 'name': 'Cake 3'},
+          ],
+        },
+        {
+          '_id': 'cakes-018',
+          'publicId': 'CAT-018',
+          'categoryId': 'CAT-018',
+          'name': 'Cakes',
+          'timestamp': DateTime(2026, 11, 14),
+          'items': catalogItems,
+        },
+      ],
+      'staff_inventory': [
+        {
+          '_id': 'old-allocation',
+          'staffId': 'b',
+          'sourceInventoryId': 'cakes-003',
+          'categoryName': 'Cakes',
+          'name': 'Cakes',
+          'items': [
+            for (var index = 1; index <= 3; index++)
+              {'id': 'old-cake-$index', 'name': 'Cake $index', 'stock': 2},
+            {'id': 'legacy-cake', 'name': 'Legacy Cake', 'stock': 1},
+          ],
+        },
+      ],
+    });
+
+    final rows = data.currentInventory('b', day);
+    expect(rows, hasLength(4));
+    expect(rows.map((row) => row['name']).toSet(), {
+      'Cake 1',
+      'Cake 2',
+      'Cake 3',
+      'Legacy Cake',
+    });
+    expect(rows.map((row) => row['remaining']).toSet(), {1, 2});
+  });
+
+  test(
+    'branch monitor keeps allocated items missing from the current catalog',
+    () {
+      final catalogItems = [
+        for (var index = 1; index <= 3; index++)
+          {
+            'id': 'catalog-$index',
+            'publicId': 'CAKE-$index',
+            'name': 'Cake $index',
+            'stock': 100,
+            'price': 100,
+          },
+      ];
+      final allocatedItems = [
+        ...catalogItems.map((item) => {...item, 'stock': 2}),
+        {
+          'id': 'branch-only-cake',
+          'publicId': 'CAKE-004',
+          'name': 'Blueberry Cheesecakes',
+          'stock': 1,
+        },
+      ];
+      final data = BranchReportData({
+        'sales_inventory': [
+          {
+            '_id': 'cakes',
+            'publicId': 'CAT-018',
+            'name': 'Cakes',
+            'items': catalogItems,
+          },
+        ],
+        'staff_inventory': [
+          {
+            '_id': 'cakes-allocation',
+            'staffId': 'b',
+            'sourceInventoryId': 'cakes',
+            'categoryName': 'Cakes',
+            'name': 'Cakes',
+            'items': allocatedItems,
+          },
+        ],
+      });
+
+      final rows = data.currentInventory('b', day);
+
+      expect(rows, hasLength(4));
+      expect(rows.map((row) => row['name']), contains('Blueberry Cheesecakes'));
+      expect(
+        rows.singleWhere(
+          (row) => row['name'] == 'Blueberry Cheesecakes',
+        )['remaining'],
+        1,
+      );
+    },
+  );
+
   test('branch table cost is cost price multiplied by sold quantity', () {
     expect(
       branchStockCost({

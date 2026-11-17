@@ -3171,6 +3171,13 @@ class _InventoryPageState extends State<InventoryPage>
     final createdCategory = await showAdminCategorySheet(
       context,
       save: (name) async {
+        final existing = catalogCategoryByName(
+          (await _firestore.collection('sales_inventory').get()).docs
+              .map((doc) => {...doc.data(), 'id': doc.id})
+              .toList(),
+          name,
+        );
+        if (existing != null) return {...existing, '_alreadyExists': true};
         final categoryRef = _firestore.collection('sales_inventory').doc();
         final counterRef = _firestore
             .collection('system_counters')
@@ -3228,16 +3235,26 @@ class _InventoryPageState extends State<InventoryPage>
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const Text(
-                'Category saved',
+              Text(
+                createdCategory['_alreadyExists'] == true
+                    ? 'Category already exists'
+                    : 'Category saved',
                 style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
               ),
               const SizedBox(height: 8),
-              const Text('Would you like to add its first item now?'),
+              Text(
+                createdCategory['_alreadyExists'] == true
+                    ? 'Add this item to the existing category instead of creating a duplicate?'
+                    : 'Would you like to add its first item now?',
+              ),
               const SizedBox(height: 20),
               FilledButton(
                 onPressed: () => Navigator.pop(dialogContext, true),
-                child: const Text('Add first item'),
+                child: Text(
+                  createdCategory['_alreadyExists'] == true
+                      ? 'Add item'
+                      : 'Add first item',
+                ),
               ),
               TextButton(
                 onPressed: () => Navigator.pop(dialogContext, false),

@@ -135,6 +135,126 @@ void main() {
     },
   );
 
+  testWidgets('return card uses the submitter identity, not branch metadata', (
+    tester,
+  ) async {
+    final db = FakeFirebaseFirestore();
+    await db.doc('staff_requests/admin-auth').set({
+      'adminId': 'ADM-007',
+      'firstName': 'Jomalyn',
+      'lastName': 'Ignacio',
+    });
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ReturnItemCard(
+            data: {
+              'name': 'Cheese Cakes',
+              'quantity': 1,
+              'itemDisplayId': 'CA-006',
+              'submittedBy': 'admin-auth',
+              'submittedByName': 'Jomalyn Ignacio',
+              'sourceStaffName': 'Lingayen',
+              'branchName': 'Lingayen',
+            },
+            db: db,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Staff: Jomalyn Ignacio'), findsOneWidget);
+    expect(find.text('Staff ID: ADM-007'), findsOneWidget);
+    expect(find.text('Branch: Lingayen'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  test('Super Admin issue report completes return with details', () async {
+    final changed = await service.reportReturnIssue(
+      id: 'r0',
+      actorId: 'super-admin',
+      actorName: 'Super Admin',
+      issueType: 'Damaged',
+      issueQuantity: 1,
+      comment: 'Packaging was open.',
+    );
+
+    expect(changed, isTrue);
+    final record = (await db.doc('allocation_checklist/r0').get()).data()!;
+    expect(record['status'], ChecklistStatus.completed);
+    expect(record['confirmedByName'], 'Super Admin');
+    expect(record['superAdminIssueType'], 'Damaged');
+    expect(record['superAdminIssueQuantity'], 1);
+    expect(record['superAdminIssueComment'], 'Packaging was open.');
+    expect(record['declineReason'], isNull);
+    expect(
+      (await db.doc('activity_logs/return_issue_r0').get()).data()?['action'],
+      'return_issue_reported',
+    );
+    expect(
+      await service.reportReturnIssue(
+        id: 'r0',
+        actorId: 'super-admin',
+        actorName: 'Super Admin',
+        issueType: 'Damaged',
+        issueQuantity: 1,
+      ),
+      isFalse,
+    );
+  });
+
+  test(
+    'Super Admin can report different issues for multiple returned items',
+    () async {
+      await db.doc('allocation_checklist/r0').update({'quantity': 15});
+      await db.doc('allocation_checklist/r1').update({'quantity': 49});
+
+      expect(
+        await service.reportReturnIssues(
+          actorId: 'super-admin',
+          actorName: 'Super Admin',
+          reports: [
+            {
+              'returnId': 'r0',
+              'issueType': 'Missing',
+              'issueQuantity': 5,
+              'comment': 'Five missing.',
+            },
+            {
+              'returnId': 'r1',
+              'issueType': 'Damaged',
+              'issueQuantity': 10,
+              'comment': 'Damaged packaging.',
+            },
+          ],
+        ),
+        2,
+      );
+
+      final first = (await db.doc('allocation_checklist/r0').get()).data()!;
+      final second = (await db.doc('allocation_checklist/r1').get()).data()!;
+      expect(first['superAdminIssueType'], 'Missing');
+      expect(first['superAdminIssueQuantity'], 5);
+      expect(first['superAdminIssueComment'], 'Five missing.');
+      expect(first['status'], ChecklistStatus.completed);
+      expect(second['superAdminIssueType'], 'Damaged');
+      expect(second['superAdminIssueQuantity'], 10);
+      expect(second['superAdminIssueComment'], 'Damaged packaging.');
+      expect(second['status'], ChecklistStatus.completed);
+      expect(
+        (await db.doc('activity_logs/return_issue_r0').get())
+            .data()?['details']['issueQuantity'],
+        5,
+      );
+      expect(
+        (await db.doc('activity_logs/return_issue_r1').get())
+            .data()?['details']['issueQuantity'],
+        10,
+      );
+    },
+  );
+
   testWidgets('decision buttons show progress and prevent duplicate taps', (
     tester,
   ) async {

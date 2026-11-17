@@ -16,6 +16,12 @@ bool saleBelongsToStaff(
   });
 }
 
+bool saleBelongsToBranches(Map<String, dynamic> sale, Set<String> branchIds) {
+  if (branchIds.isEmpty) return true;
+  final branchId = '${sale['branchId'] ?? ''}'.trim();
+  return branchId.isNotEmpty && branchIds.contains(branchId);
+}
+
 DateTime? staffReceiptDate(Map<String, dynamic> sale) {
   for (final key in [
     'timestamp',

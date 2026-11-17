@@ -169,9 +169,11 @@ Map<String, dynamic> applySaleStock(
         }
       }
     }
-    for (var index = 0;
-        selectedIndexes.length < quantity && index < instances.length;
-        index++) {
+    for (
+      var index = 0;
+      selectedIndexes.length < quantity && index < instances.length;
+      index++
+    ) {
       if (isAvailable(instances[index])) selectedIndexes.add(index);
     }
     if (instances.isNotEmpty && selectedIndexes.length < quantity) {
@@ -180,11 +182,7 @@ Map<String, dynamic> applySaleStock(
     result['bundleInstances'] = [
       for (var index = 0; index < instances.length; index++)
         if (selectedIndexes.contains(index))
-          {
-            ...instances[index],
-            'status': 'sold',
-            'salesId': saleId,
-          }
+          {...instances[index], 'status': 'sold', 'salesId': saleId}
         else
           instances[index],
     ];
@@ -206,17 +204,81 @@ Map<String, dynamic> applySaleStock(
           items[index]['stock'] ?? items[index]['startingStock'],
         );
         final quantity = stockNumber(line['quantity']);
-        items[index]['stock'] =
-            (available - quantity).clamp(0, 1 << 31);
+        items[index]['stock'] = (available - quantity).clamp(0, 1 << 31);
       } else if (data['isCoffee'] == true && data.containsKey('stock')) {
         final available = stockNumber(result['stock']);
         final quantity = stockNumber(line['quantity']);
-        result['stock'] =
-            (available - quantity).clamp(0, 1 << 31);
+        result['stock'] = (available - quantity).clamp(0, 1 << 31);
       }
     }
     result['items'] = items;
   }
   result['appliedSaleIds'] = [...applied, saleId];
+  return result;
+}
+
+Map<String, dynamic> restoreSaleStock(
+  Map<String, dynamic> data,
+  String saleId,
+  List<Map<String, dynamic>> lines,
+) {
+  final restored = List<String>.from(data['restoredSaleIds'] as List? ?? []);
+  if (restored.contains(saleId)) return data;
+  final applied = List<String>.from(data['appliedSaleIds'] as List? ?? []);
+  if (!applied.contains(saleId) || lines.isEmpty) return data;
+
+  final result = Map<String, dynamic>.from(data);
+  if (data['isBundle'] == true) {
+    final quantity = lines.fold<int>(
+      0,
+      (total, line) => total + stockNumber(line['quantity']),
+    );
+    result['bundleCount'] = stockNumber(data['bundleCount']) + quantity;
+    final selectedInstances = lines
+        .expand((line) => line['bundleInstanceIds'] as List? ?? const [])
+        .map((id) => '$id')
+        .toSet();
+    final instances = (data['bundleInstances'] as List? ?? [])
+        .whereType<Map>()
+        .map((raw) => Map<String, dynamic>.from(raw))
+        .toList();
+    final restoredInstances = <Map<String, dynamic>>[];
+    for (final instance in instances) {
+      if (selectedInstances.contains('${instance['id']}') &&
+          instance['salesId'] == saleId) {
+        instance['status'] = 'available';
+        instance.remove('salesId');
+      }
+      restoredInstances.add(instance);
+    }
+    result['bundleInstances'] = restoredInstances;
+  } else {
+    final items = (data['items'] as List? ?? [])
+        .whereType<Map>()
+        .map((raw) => Map<String, dynamic>.from(raw))
+        .toList();
+    for (final line in lines) {
+      final wantedId = '${line['itemId'] ?? ''}';
+      final index = items.indexWhere(
+        (item) => wantedId.isNotEmpty
+            ? '${item['id'] ?? item['itemId'] ?? ''}' == wantedId
+            : item['name'] == line['variant'] ||
+                  item['variant'] == line['variant'],
+      );
+      if (index >= 0) {
+        items[index]['stock'] =
+            stockNumber(
+              items[index]['stock'] ?? items[index]['startingStock'],
+            ) +
+            stockNumber(line['quantity']);
+      } else if (data['isCoffee'] == true && data.containsKey('stock')) {
+        result['stock'] =
+            stockNumber(result['stock']) + stockNumber(line['quantity']);
+      }
+    }
+    result['items'] = items;
+  }
+  result['appliedSaleIds'] = applied.where((id) => id != saleId).toList();
+  result['restoredSaleIds'] = [...restored, saleId];
   return result;
 }

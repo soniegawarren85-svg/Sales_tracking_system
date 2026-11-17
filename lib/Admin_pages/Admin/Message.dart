@@ -5,6 +5,7 @@ import 'dart:typed_data';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../services/account_presence.dart';
@@ -12,6 +13,7 @@ import '../../services/message_account_status.dart';
 import '../../services/message_delivery.dart';
 import '../../services/super_admin.dart';
 import '../../widgets/cash_float_conversation_card.dart';
+import '../../widgets/low_stock_report_message_card.dart';
 
 const _chatPink = AppColors.primary;
 const _chatDeep = AppColors.primaryDark;
@@ -30,7 +32,7 @@ class _MessagePageState extends State<MessagePage> {
   Map<String, String>? _me;
   Set<String> _myIds = {};
   Set<String> _pinnedIds = {};
-  String _search = '';
+  final ValueNotifier<String> _search = ValueNotifier('');
   String? _selectedId;
   final TextEditingController _searchController = TextEditingController();
   final FocusNode _searchFocusNode = FocusNode();
@@ -127,7 +129,7 @@ class _MessagePageState extends State<MessagePage> {
   }
 
   void _handleSearchChanged(String value) {
-    setState(() => _search = value);
+    _search.value = value;
   }
 
   Future<void> _togglePinned(String id) async {
@@ -212,6 +214,7 @@ class _MessagePageState extends State<MessagePage> {
   void dispose() {
     _searchController.dispose();
     _searchFocusNode.dispose();
+    _search.dispose();
     super.dispose();
   }
 
@@ -419,24 +422,16 @@ class _MessagePageState extends State<MessagePage> {
                               pinned: _pinnedIds.contains(id),
                             );
                           }
-                          final items =
-                              rows.values.where((row) {
-                                final query = _search.trim().toLowerCase();
-                                return query.isEmpty ||
-                                    row.name.toLowerCase().contains(query) ||
-                                    row.role.toLowerCase().contains(query) ||
-                                    row.lastMessage.toLowerCase().contains(
-                                      query,
-                                    );
-                              }).toList()..sort((a, b) {
-                                if (a.pinned != b.pinned)
-                                  return a.pinned ? -1 : 1;
-                                final unreadCompare = b.unread.compareTo(
-                                  a.unread,
-                                );
-                                if (unreadCompare != 0) return unreadCompare;
-                                return a.name.compareTo(b.name);
-                              });
+                          final items = rows.values.toList()
+                            ..sort((a, b) {
+                              if (a.pinned != b.pinned)
+                                return a.pinned ? -1 : 1;
+                              final unreadCompare = b.unread.compareTo(
+                                a.unread,
+                              );
+                              if (unreadCompare != 0) return unreadCompare;
+                              return a.name.compareTo(b.name);
+                            });
                           final selected = _selectedId == null
                               ? null
                               : rows[_selectedId];
@@ -552,7 +547,7 @@ class _InboxRow {
 class _ContactsPanel extends StatelessWidget {
   final List<_InboxRow> items;
   final String? selectedId;
-  final String search;
+  final ValueListenable<String> search;
   final TextEditingController searchController;
   final FocusNode searchFocusNode;
   final ValueChanged<String> onSearchChanged;
@@ -599,23 +594,36 @@ class _ContactsPanel extends StatelessWidget {
           ),
         ),
         Expanded(
-          child: items.isEmpty
-              ? const Center(child: Text('No matching conversations.'))
-              : ListView.separated(
-                  padding: const EdgeInsets.fromLTRB(10, 2, 10, 10),
-                  itemCount: items.length,
-                  separatorBuilder: (_, _) => const SizedBox(height: 6),
-                  itemBuilder: (context, index) {
-                    final row = items[index];
-                    return _InboxTile(
-                      row: row,
-                      selected: row.id == selectedId,
-                      compact: true,
-                      onPin: () => onPin(row.id),
-                      onTap: () => onSelect(row),
-                    );
-                  },
-                ),
+          child: ValueListenableBuilder<String>(
+            valueListenable: search,
+            builder: (context, value, _) {
+              final query = value.trim().toLowerCase();
+              final visibleItems = items.where((row) {
+                return query.isEmpty ||
+                    row.name.toLowerCase().contains(query) ||
+                    row.role.toLowerCase().contains(query) ||
+                    row.lastMessage.toLowerCase().contains(query);
+              }).toList();
+              if (visibleItems.isEmpty) {
+                return const Center(child: Text('No matching conversations.'));
+              }
+              return ListView.separated(
+                padding: const EdgeInsets.fromLTRB(10, 2, 10, 10),
+                itemCount: visibleItems.length,
+                separatorBuilder: (_, _) => const SizedBox(height: 6),
+                itemBuilder: (context, index) {
+                  final row = visibleItems[index];
+                  return _InboxTile(
+                    row: row,
+                    selected: row.id == selectedId,
+                    compact: true,
+                    onPin: () => onPin(row.id),
+                    onTap: () => onSelect(row),
+                  );
+                },
+              );
+            },
+          ),
         ),
       ],
     ),
@@ -983,14 +991,25 @@ class _ConversationPanelState extends State<_ConversationPanel> {
                                   chatId: widget.chatId,
                                   role: widget.me['role'] ?? 'admin',
                                 )
-                              else
+                              else ...[
                                 Text(
-                                  data['text']?.toString() ?? '',
+                                  data['type'] == 'low_stock_report'
+                                      ? (data['text']?.toString() ?? '')
+                                            .split('\n')
+                                            .take(3)
+                                            .join('\n')
+                                      : data['text']?.toString() ?? '',
                                   style: TextStyle(
                                     color: mine ? Colors.white : Colors.black87,
                                     fontWeight: FontWeight.w600,
                                   ),
                                 ),
+                                if (data['type'] == 'low_stock_report')
+                                  LowStockReportMessageCard(
+                                    items: data['items'] as List? ?? const [],
+                                    mine: mine,
+                                  ),
+                              ],
                               messageMetadata(context, data, mine: mine),
                             ],
                           ),

@@ -353,7 +353,6 @@ class _LoginScreenState extends State<LoginScreen>
       return true;
     }
     if (!offlineAccountAllowed(account)) return false;
-    if (account['role'] == 'admin') return false;
     final role = '${account['role'] ?? 'staff'}'.trim().toLowerCase();
     final publicId =
         (account[role == 'admin' ? 'adminId' : 'staffId'] ?? username)
@@ -528,29 +527,26 @@ class _LoginScreenState extends State<LoginScreen>
     final normalized = _normalizeUsername(username);
     final idField = normalized.startsWith('ADM-') ? 'adminId' : 'staffId';
     final idNumber = normalized.split('-').last;
-    final matches = <QueryDocumentSnapshot<Map<String, dynamic>>>[];
-
     final idFields = normalized.startsWith('ADM-')
         ? const ['adminId', 'staffId']
         : const ['staffId'];
-    for (final field in idFields) {
-      final byId = await FirebaseFirestore.instance
-          .collection('staff_requests')
-          .where(field, whereIn: accountUsernameAliases(normalized))
-          .get(const GetOptions(source: Source.server));
-      matches.addAll(byId.docs);
-    }
+    final collection = FirebaseFirestore.instance.collection('staff_requests');
+    final directQueries = <Future<QuerySnapshot<Map<String, dynamic>>>>[
+      for (final field in idFields)
+        collection
+            .where(field, whereIn: accountUsernameAliases(normalized))
+            .get(const GetOptions(source: Source.server)),
+      collection
+          .where('username', whereIn: accountUsernameAliases(normalized))
+          .get(const GetOptions(source: Source.server)),
+    ];
+    final matches = (await Future.wait(
+      directQueries,
+    )).expand((result) => result.docs).toList();
 
-    final byUsername = await FirebaseFirestore.instance
-        .collection('staff_requests')
-        .where('username', whereIn: accountUsernameAliases(normalized))
-        .get(const GetOptions(source: Source.server));
-    matches.addAll(byUsername.docs);
-
-    if (RegExp(r'^\d+$').hasMatch(idNumber)) {
+    if (matches.isEmpty && RegExp(r'^\d+$').hasMatch(idNumber)) {
       final role = normalized.startsWith('ADM-') ? 'admin' : 'staff';
-      final byRole = await FirebaseFirestore.instance
-          .collection('staff_requests')
+      final byRole = await collection
           .where('role', isEqualTo: role)
           .get(const GetOptions(source: Source.server));
 
@@ -1066,12 +1062,13 @@ class _LoginScreenState extends State<LoginScreen>
     try {
       if (await _tryOfflineSignIn(username, password)) return;
       _showMessage(
-        'Offline login unavailable. Check your password or connect to sync this account first.',
+        'The internet connection is weak or unstable. Please try again when the connection improves.',
         isError: true,
       );
-    } catch (_) {
+    } catch (error) {
+      debugPrint('Unable to verify saved login data: $error');
       _showMessage(
-        'Unable to read saved login data. Please reconnect and try again.',
+        'The internet connection is weak or unstable. Please try again when the connection improves.',
         isError: true,
       );
     }

@@ -318,7 +318,7 @@ void main() {
     expect(find.text('Accept'), findsNothing);
     expect(tester.takeException(), isNull);
   });
-  testWidgets('Super Admin rejection terminally declines a return', (
+  testWidgets('Super Admin reports return issue and completes with details', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(800, 1200);
@@ -333,13 +333,39 @@ void main() {
     final db = FakeFirebaseFirestore();
     await db.doc('allocation_checklist/returned').set({
       'kind': 'return',
-      'createdAt': Timestamp.now(),
+      'createdAt': Timestamp.fromDate(DateTime(2026, 11, 16, 21, 0)),
       'status': 'Awaiting Super Admin Confirmation',
-      'name': 'Cookie',
-      'quantity': 2,
+      'name': 'Cheese Cakes',
+      'quantity': 15,
       'staffId': 'branch',
       'branchId': 'branch',
       'batchId': 'batch',
+      'submittedBy': 'admin',
+      'submittedByName': 'Jomalyn',
+    });
+    await db.doc('allocation_checklist/returned-49').set({
+      'kind': 'return',
+      'createdAt': Timestamp.fromDate(DateTime(2026, 11, 16, 21, 0)),
+      'status': 'Awaiting Super Admin Confirmation',
+      'name': 'Cheese Cakes',
+      'quantity': 49,
+      'staffId': 'branch',
+      'branchId': 'branch',
+      'batchId': 'batch',
+      'submittedBy': 'admin',
+      'submittedByName': 'Jomalyn',
+    });
+    await db.doc('allocation_checklist/returned-1').set({
+      'kind': 'return',
+      'createdAt': Timestamp.fromDate(DateTime(2026, 11, 16, 21, 0)),
+      'status': 'Awaiting Super Admin Confirmation',
+      'name': 'Red Velvet',
+      'quantity': 1,
+      'staffId': 'branch',
+      'branchId': 'branch',
+      'batchId': 'batch',
+      'submittedBy': 'admin',
+      'submittedByName': 'Jomalyn',
     });
     await tester.pumpWidget(
       MaterialApp(
@@ -358,31 +384,108 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.byType(ExpansionTile).first);
     await tester.pumpAndSettle();
-    expect(find.text('Return records • 1 item'), findsOneWidget);
-    await tester.ensureVisible(find.text('Reject'));
+    expect(find.text('Return records • 3 items'), findsOneWidget);
+    expect(find.text('Reject'), findsNothing);
+    await tester.ensureVisible(find.text('Report Issue'));
     await tester.pump();
-    await tester.tap(find.text('Reject'));
+    await tester.tap(find.text('Report Issue'));
     await tester.pump();
-    expect(find.text('Reject this return'), findsOneWidget);
+    expect(find.text('Report issue with return'), findsOneWidget);
+    await tester.tap(find.byType(DropdownButtonFormField<String>).last);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.tap(find.text('Damaged').last);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.enterText(find.byType(TextFormField).first, '1');
     await tester.enterText(
-      find.byType(TextFormField),
-      'Items were not delivered.',
+      find.byType(TextFormField).last,
+      'Packaging was open.',
     );
-    await tester.tap(find.widgetWithText(FilledButton, 'Reject Return'));
-    await tester.pumpAndSettle();
-    expect(find.text('Return rejected'), findsOneWidget);
+    await tester.tap(
+      find.widgetWithText(OutlinedButton, 'Add this item report'),
+    );
+    await tester.pump(const Duration(milliseconds: 300));
+
+    await tester.tap(find.byType(DropdownButtonFormField<String>).first);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.tap(find.text('Cheese Cakes · Qty 49').last);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.tap(find.byType(DropdownButtonFormField<String>).last);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.tap(find.text('Extra').last);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.enterText(find.byType(TextFormField).first, '10');
+    await tester.enterText(find.byType(TextFormField).last, 'Ten are damaged.');
+    await tester.tap(
+      find.widgetWithText(OutlinedButton, 'Add this item report'),
+    );
+    await tester.pump(const Duration(milliseconds: 300));
+
+    await tester.tap(find.byType(DropdownButtonFormField<String>).first);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.tap(find.text('Red Velvet · Qty 1').last);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.tap(find.byType(DropdownButtonFormField<String>).last);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.tap(find.text('Damaged').last);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.enterText(find.byType(TextFormField).first, '1');
+    await tester.enterText(find.byType(TextFormField).last, 'One missing.');
+    await tester.tap(
+      find.widgetWithText(OutlinedButton, 'Add this item report'),
+    );
+    await tester.pump(const Duration(milliseconds: 300));
+
+    await tester.ensureVisible(
+      find.widgetWithText(FilledButton, 'Submit all reports'),
+    );
+    await tester.pump();
+    await tester.tap(find.widgetWithText(FilledButton, 'Submit all reports'));
+    await tester.pumpAndSettle(const Duration(milliseconds: 100));
+    expect(find.text('Issue reported'), findsOneWidget);
 
     final saved = (await db.doc('allocation_checklist/returned').get()).data()!;
-    expect(saved['status'], 'Return Declined');
-    expect(saved['declineReason'], 'Items were not delivered.');
-    expect(saved['reportedBy'], isNull);
+    expect(saved['status'], 'Return Completed');
+    expect(saved['superAdminIssueType'], 'Damaged');
+    expect(saved['superAdminIssueQuantity'], 1);
+    expect(saved['superAdminIssueComment'], 'Packaging was open.');
+    expect(saved['declineReason'], isNull);
+    final saved49 = (await db.doc('allocation_checklist/returned-49').get())
+        .data()!;
+    expect(saved49['status'], 'Return Completed');
+    expect(saved49['superAdminIssueType'], 'Extra');
+    expect(saved49['superAdminIssueQuantity'], 10);
+    expect(saved49['superAdminIssueComment'], 'Ten are damaged.');
+    final saved1 = (await db.doc('allocation_checklist/returned-1').get())
+        .data()!;
+    expect(saved1['status'], 'Return Completed');
+    expect(saved1['superAdminIssueType'], 'Damaged');
+    expect(saved1['superAdminIssueQuantity'], 1);
+    expect(saved1['superAdminIssueComment'], 'One missing.');
     expect(
-      (await db.doc('activity_logs/return_returned').get()).data()?['action'],
-      'return_rejected',
+      (await db.doc('activity_logs/return_issue_returned').get())
+          .data()?['action'],
+      'return_issue_reported',
     );
     await tester.tap(find.text('Done'));
     await tester.pumpAndSettle();
-    expect(find.text('Reject'), findsNothing);
+    await tester.tap(find.text('Completed'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('branch').first);
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Done · Issue reported'), findsOneWidget);
+    expect(find.text('Issue reported'), findsNWidgets(3));
+    expect(find.textContaining('Damaged · 1 of 15 returned'), findsOneWidget);
+    expect(find.textContaining('Packaging was open.'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
   for (final width in [360.0, 768.0]) {
@@ -481,100 +584,151 @@ void main() {
     });
   }
 
-  testWidgets('branch checklist count, search and required issue quantity', (
-    tester,
-  ) async {
-    final db = FakeFirebaseFirestore();
-    for (final row in [
-      {
-        'staffId': 'branch',
-        'status': 'pending',
-        'name': 'Cookies',
-        'targetDocId': 'target',
-        'items': [
-          {'id': 'chocolate', 'name': 'Chocolate', 'stock': 3},
-        ],
-      },
-      {
-        'staffId': 'branch',
-        'status': 'pending',
-        'name': 'Latte',
-        'isCoffee': true,
-      },
-      {'staffId': 'other', 'status': 'pending', 'name': 'Other branch'},
-      {'staffId': 'branch', 'status': 'accepted', 'name': 'Old delivery'},
-    ]) {
-      await db.collection('allocation_checklist').add({
-        ...row,
-        'createdAt': Timestamp.fromDate(DateUtils.dateOnly(DateTime.now())),
+  testWidgets(
+    'branch checklist records a separate reason and quantity per item',
+    (tester) async {
+      final db = FakeFirebaseFirestore();
+      for (final row in [
+        {
+          'staffId': 'branch',
+          'status': 'pending',
+          'name': 'Cookies',
+          'targetDocId': 'target',
+          'items': [
+            {'id': 'chocolate', 'name': 'Chocolate', 'stock': 3},
+            {'id': 'red-velvet', 'name': 'Red Velvet', 'stock': 2},
+          ],
+        },
+        {
+          'staffId': 'branch',
+          'status': 'pending',
+          'name': 'Latte',
+          'isCoffee': true,
+        },
+        {'staffId': 'other', 'status': 'pending', 'name': 'Other branch'},
+        {'staffId': 'branch', 'status': 'accepted', 'name': 'Old delivery'},
+      ]) {
+        await db.collection('allocation_checklist').add({
+          ...row,
+          'createdAt': Timestamp.fromDate(DateUtils.dateOnly(DateTime.now())),
+        });
+      }
+      await db.doc('staff_requests/staff-one').set({
+        'role': 'staff',
+        'status': 'accepted',
+        'staffId': 'STF-001',
+        'firstName': 'Test',
+        'lastName': 'Staff',
+        'branchIds': ['branch'],
       });
-    }
-    await db.doc('staff_requests/staff-one').set({
-      'role': 'staff',
-      'status': 'accepted',
-      'staffId': 'STF-001',
-      'firstName': 'Test',
-      'lastName': 'Staff',
-      'branchIds': ['branch'],
-    });
-    await db.doc('staff_inventory/target').set({
-      'staffId': 'branch',
-      'items': [
-        {'id': 'chocolate', 'name': 'Chocolate', 'stock': 0},
-      ],
-    });
-    final preferences = await SharedPreferences.getInstance();
-    await preferences.setString('lastRole', 'staff');
-    await preferences.setString('lastUserId', 'staff-one');
-    await tester.binding.setSurfaceSize(const Size(420, 780));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: AllocationChecklistButton(
-            scopeIds: const ['branch'],
-            database: db,
+      await db.doc('staff_inventory/target').set({
+        'staffId': 'branch',
+        'items': [
+          {'id': 'chocolate', 'name': 'Chocolate', 'stock': 0},
+          {'id': 'red-velvet', 'name': 'Red Velvet', 'stock': 0},
+        ],
+      });
+      final preferences = await SharedPreferences.getInstance();
+      await preferences.setString('lastRole', 'staff');
+      await preferences.setString('lastUserId', 'staff-one');
+      await tester.binding.setSurfaceSize(const Size(420, 780));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: AllocationChecklistButton(
+              scopeIds: const ['branch'],
+              database: db,
+            ),
           ),
         ),
-      ),
-    );
-    await tester.pumpAndSettle();
-    expect(find.text('Checklist'), findsOneWidget);
-    expect(find.text('Returns'), findsOneWidget);
-    await tester.tap(find.text('Checklist'));
-    await tester.pumpAndSettle();
-    expect(find.textContaining('Chocolate'), findsOneWidget);
-    expect(find.text('Other branch'), findsNothing);
-    expect(find.text('All items'), findsNothing);
-    expect(find.text('Bundle'), findsNothing);
-    await tester.enterText(find.byType(TextField).first, 'Chocolate');
-    await tester.pumpAndSettle();
-    expect(find.text('Chocolate — 3'), findsOneWidget);
-    await tester.ensureVisible(find.text('Confirm Received'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Confirm Received'));
-    await tester.pumpAndSettle();
-    expect(find.text('Receive allocated items?'), findsOneWidget);
-    await tester.tap(find.text('Cancel'));
-    await tester.pumpAndSettle();
-    expect(find.text('Confirm Received'), findsOneWidget);
-    await tester.ensureVisible(find.text('Report Issue'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Report Issue'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Continue'));
-    await tester.pumpAndSettle();
-    expect(find.text('Enter a whole number greater than zero'), findsOneWidget);
-    await tester.enterText(find.byType(TextFormField).first, '1');
-    await tester.tap(find.text('Continue'));
-    await tester.pumpAndSettle();
-    expect(find.text('Confirm Issue Report'), findsOneWidget);
-    expect(find.textContaining('Only 2 Chocolate'), findsOneWidget);
-    await tester.tap(find.text('Confirm and receive'));
-    await tester.pumpAndSettle();
-    expect(tester.takeException(), isNull);
-    final received = (await db.doc('staff_inventory/target').get()).data()!;
-    expect((received['items'] as List).single['stock'], 2);
-    expect(tester.takeException(), isNull);
-  });
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Checklist'), findsOneWidget);
+      expect(find.text('Returns'), findsOneWidget);
+      await tester.tap(find.text('Checklist'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('Chocolate'), findsOneWidget);
+      expect(find.text('Other branch'), findsNothing);
+      expect(find.text('All items'), findsNothing);
+      expect(find.text('Bundle'), findsNothing);
+      await tester.enterText(find.byType(TextField).first, 'Chocolate');
+      await tester.pumpAndSettle();
+      expect(find.text('Chocolate — 3'), findsOneWidget);
+      await tester.ensureVisible(find.text('Confirm Received'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Confirm Received'));
+      await tester.pumpAndSettle();
+      expect(find.text('Receive allocated items?'), findsOneWidget);
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+      expect(find.text('Confirm Received'), findsOneWidget);
+      await tester.ensureVisible(find.text('Report Issue'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Report Issue'));
+      await tester.pumpAndSettle();
+      expect(find.byType(CheckboxListTile), findsNothing);
+      expect(find.text('Add this item report'), findsOneWidget);
+      await tester.enterText(find.byType(TextFormField).first, '1');
+      await tester.enterText(find.byType(TextFormField).last, 'One missing.');
+      await tester.tap(find.text('Add this item report'));
+      await tester.pumpAndSettle();
+      expect(find.text('Reports added: 1'), findsOneWidget);
+
+      await tester.tap(find.byKey(const ValueKey('incoming-item-chocolate-0')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Red Velvet · Qty 2').last);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byType(DropdownButtonFormField<String>).last);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Damaged').last);
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextFormField).first, '1');
+      await tester.enterText(find.byType(TextFormField).last, 'Sira ang box.');
+      await tester.tap(find.text('Add this item report'));
+      await tester.pumpAndSettle();
+      expect(find.text('Reports added: 2'), findsOneWidget);
+      await tester.tap(find.text('Submit all reports'));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      final received =
+          (await db.doc('staff_inventory/target').get()).data()!['items']
+              as List;
+      expect(received[0]['stock'], 2);
+      expect(received[1]['stock'], 1);
+      final deliveryDoc =
+          (await db
+                  .collection('allocation_checklist')
+                  .where('name', isEqualTo: 'Cookies')
+                  .get())
+              .docs
+              .single;
+      final savedChecklist = deliveryDoc.data();
+      final reports = savedChecklist['issueReports'] as List;
+      expect(reports[0]['issueType'], 'Missing');
+      expect(reports[0]['comment'], 'One missing.');
+      expect(reports[1]['issueType'], 'Damaged');
+      expect(reports[1]['comment'], 'Sira ang box.');
+      final returnRecord =
+          (await db
+                  .doc(
+                    'allocation_checklist/${deliveryDoc.id}_issue_return_red-velvet',
+                  )
+                  .get())
+              .data()!;
+      expect(returnRecord['quantity'], 1);
+      expect(returnRecord['returnReason'], 'Sira ang box.');
+      await tester.tap(find.text('Complete Items'));
+      await tester.pumpAndSettle();
+      expect(find.text('Received inventory details'), findsOneWidget);
+      expect(find.text('REPORTED'), findsNWidgets(2));
+      expect(find.text('−1 Missing'), findsOneWidget);
+      expect(find.text('−1 Damaged'), findsOneWidget);
+      expect(find.text('Allocated'), findsNWidgets(2));
+      expect(find.text('Received'), findsNWidgets(2));
+      expect(find.text('One missing.'), findsOneWidget);
+      expect(find.text('Sira ang box.'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
 }

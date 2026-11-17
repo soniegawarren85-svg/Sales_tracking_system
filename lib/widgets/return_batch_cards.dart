@@ -216,11 +216,11 @@ class _ReturnItemContent extends StatelessWidget {
           ),
           const SizedBox(height: 5),
           Text(
-            'Staff: ${returnText([data['sourceStaffName'], data['staffName'], data['submittedByName']])}',
+            'Staff: ${returnText([data['submittedByName'], data['sourceStaffName'], data['staffName']])}',
             style: const TextStyle(fontSize: 13),
           ),
           Text(
-            'Staff ID: ${returnText([data['sourceStaffId'], data['staffPublicId'], data['submittedByStaffId']])}',
+            'Staff ID: ${returnText([data['submittedByStaffId'], data['sourceStaffId'], data['staffPublicId']])}',
             style: const TextStyle(fontSize: 12, color: AppColors.textMuted),
           ),
           Text(
@@ -260,6 +260,31 @@ class _ReturnItemContent extends StatelessWidget {
                 color: AppColors.primaryDeep,
               ),
             ),
+          if ('${data['superAdminIssueType'] ?? ''}'.trim().isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Chip(
+              avatar: const Icon(Icons.report_outlined, size: 18),
+              label: const Text('Issue reported'),
+              side: BorderSide(color: Colors.orange.shade300),
+            ),
+            Text(
+              'Super Admin report: ${data['superAdminIssueType']} · ${data['superAdminIssueQuantity'] ?? 0} of ${data['quantity'] ?? data['returnQuantity'] ?? 1} returned',
+              style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+                color: AppColors.primaryDeep,
+              ),
+            ),
+            if ('${data['superAdminIssueComment'] ?? ''}'.trim().isNotEmpty)
+              Text(
+                'Comment: ${data['superAdminIssueComment']}',
+                style: const TextStyle(fontSize: 13),
+              ),
+            Text(
+              'Reported by ${returnText([data['superAdminReportedByName'], data['superAdminReportedBy']])} · ${returnDateLabel(data['superAdminReportedAt'])}',
+              style: const TextStyle(fontSize: 12, color: AppColors.textMuted),
+            ),
+          ],
           if (data['unitPrice'] != null)
             Text(
               'Unit price: ₱${data['unitPrice']}',
@@ -281,7 +306,7 @@ class _ReturnItemContent extends StatelessWidget {
             Padding(
               padding: const EdgeInsets.only(top: 8),
               child: Text(
-                'Declined by ${returnText([data['declinedByName']])}\nReason: ${returnText([data['declineReason']])}',
+                'Declined by ${returnText([data['declinedByName']])}',
                 style: TextStyle(
                   color: Colors.red.shade800,
                   fontWeight: FontWeight.w600,
@@ -408,6 +433,10 @@ class _ReturnBatchListState extends State<ReturnBatchList> {
                   ChecklistStatus.completed,
             )
             .length;
+        final hasReportedIssue = batch.any(
+          (doc) =>
+              '${doc.data()['superAdminIssueType'] ?? ''}'.trim().isNotEmpty,
+        );
         final declined = batch
             .where(
               (doc) =>
@@ -424,7 +453,9 @@ class _ReturnBatchListState extends State<ReturnBatchList> {
               : ChecklistStatus.returnOpen(data);
         }).toList();
         final status = completed == batch.length
-            ? 'Done · Return accepted'
+            ? hasReportedIssue
+                  ? 'Done · Issue reported'
+                  : 'Done · Return accepted'
             : pending.isEmpty && declined.isNotEmpty
             ? (declined.length == batch.length
                   ? 'Return declined'
@@ -721,7 +752,7 @@ class _ReturnDecisionButtonsState extends State<ReturnDecisionButtons> {
       OutlinedButton.icon(
         onPressed: saving ? null : () => decide(false),
         icon: const Icon(Icons.report_problem_outlined, size: 18),
-        label: Text(widget.superAdmin ? 'Reject' : 'Report Issue'),
+        label: const Text('Report Issue'),
       ),
       if (saving && !confirming)
         const Row(

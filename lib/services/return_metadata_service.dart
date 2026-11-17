@@ -57,12 +57,13 @@ class ReturnMetadataService {
         if (!identity.contains('@')) {
           data = (await collection.doc(identity).get()).data();
         }
-        if (data == null) {
+        final identityFields = identity.contains('@')
+            ? ['email']
+            : ['adminId', 'staffId', 'publicId', 'uid', 'userId'];
+        for (final field in identityFields) {
+          if (data != null) break;
           final results = await collection
-              .where(
-                identity.contains('@') ? 'email' : 'staffId',
-                isEqualTo: identity,
-              )
+              .where(field, isEqualTo: identity)
               .limit(2)
               .get();
           if (results.docs.length == 1) data = results.docs.single.data();
@@ -76,7 +77,11 @@ class ReturnMetadataService {
         return {
           'name': returnText([name, data['fullName'], data['name']], ''),
           'staffId': publicItemId(
-            returnText([data['staffId'], data['publicId']], ''),
+            returnText([
+              data['adminId'],
+              data['staffId'],
+              data['publicId'],
+            ], ''),
           ),
         };
       });
@@ -225,12 +230,12 @@ class ReturnMetadataService {
         resolved['expirationDate'];
     Map<String, dynamic> staff = {};
     for (final id in [
+      record['submittedBy'],
+      record['sourceStaffUid'],
+      record['userId'],
       source['userId'],
       original['userId'],
       source['staffId'],
-      record['sourceStaffUid'],
-      record['userId'],
-      record['submittedBy'],
       record['sourceStaffName'],
       record['staffName'],
       record['submittedByName'],
@@ -269,15 +274,15 @@ class ReturnMetadataService {
       'itemDisplayId': code,
       'sourceStaffName': returnText([
         staff['name'],
+        record['submittedByName'],
         record['sourceStaffName'],
         record['staffName'],
-        record['submittedByName'],
       ]),
       'sourceStaffId': returnText([
         staff['staffId'],
+        record['submittedByStaffId'],
         record['sourceStaffId'],
         record['staffPublicId'],
-        record['submittedByStaffId'],
       ]),
       'expirationDate': expiry,
       for (final flag in ['isBundle', 'isCoffee', 'isAddon'])

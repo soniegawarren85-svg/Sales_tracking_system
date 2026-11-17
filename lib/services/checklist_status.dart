@@ -38,7 +38,21 @@ class ChecklistStatus {
     return rawStatus.isEmpty ? 'Unknown' : rawStatus;
   }
 
+  static bool isExpiredInventoryRecord(Map<String, dynamic> data) {
+    final rawFlags = [
+      data['isExpiredInventory'],
+      data['expiredInventory'],
+      data['expired'],
+    ];
+    final matchesFlag = rawFlags.any((value) => value == true || '${value ?? ''}'.toLowerCase() == 'true');
+    if (matchesFlag) return true;
+    final reason = '${data['reason'] ?? ''}'.trim().toLowerCase();
+    final source = '${data['returnSourceCollection'] ?? ''}'.trim().toLowerCase();
+    return reason == 'expired item' && source == 'staff_inventory';
+  }
+
   static bool isReturnRecord(Map<String, dynamic> data) {
+    if (isExpiredInventoryRecord(data)) return false;
     final kind = '${data['kind'] ?? ''}'.trim().toLowerCase();
     return kind == 'return' ||
         kind.startsWith('return_') ||

@@ -67,6 +67,7 @@ void main() {
       });
       final scope = await resolved.future.timeout(const Duration(seconds: 3));
       expect(scopes.first.targets, contains('user-a'));
+      expect(scope.branchIds, contains('branch-a'));
       final items = await db
           .collection('staff_inventory')
           .where('staffId', whereIn: scope.targets)
@@ -113,6 +114,42 @@ void main() {
         (await updated.future.timeout(const Duration(seconds: 3))).targets,
         contains('new-branch'),
       );
+    },
+  );
+
+  test(
+    'moving staff removes the previous branch from live history scope',
+    () async {
+      final db = FakeFirebaseFirestore();
+      await db.collection('staff_requests').doc('user-a').set({
+        'staffId': 'STF-002',
+      });
+      await db.collection('branches').doc('lingayen').set({
+        'staffIds': ['user-a'],
+      });
+      final moved = Completer<StaffAllocationScope>();
+      final subscription =
+          watchStaffAllocationScope(
+            'user-a',
+            firestore: db,
+            readCachedProfiles: () async => [],
+          ).listen((scope) {
+            if (scope.branchIds.contains('sm-dagupan') &&
+                !scope.branchIds.contains('lingayen') &&
+                !moved.isCompleted) {
+              moved.complete(scope);
+            }
+          });
+      addTearDown(subscription.cancel);
+
+      await db.collection('branches').doc('lingayen').update({'staffIds': []});
+      await db.collection('branches').doc('sm-dagupan').set({
+        'staffIds': ['user-a'],
+      });
+      final scope = await moved.future.timeout(const Duration(seconds: 3));
+      expect(scope.branchIds, ['sm-dagupan']);
+      expect(scope.targets, contains('sm-dagupan'));
+      expect(scope.targets, isNot(contains('lingayen')));
     },
   );
 

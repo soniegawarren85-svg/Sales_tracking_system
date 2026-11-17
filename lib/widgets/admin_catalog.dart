@@ -15,8 +15,10 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
 
-String catalogCategoryKey(Map data) =>
-    '${data['name'] ?? ''}'.trim().toLowerCase();
+String catalogCategoryKey(Map data) {
+  final raw = '${data['name'] ?? ''}';
+  return raw.trim().replaceAll(RegExp(r'\s+'), ' ').toLowerCase();
+}
 
 bool catalogItemActive(Map item, DateTime now) {
   final raw = item['expirationDate'] ?? item['expiryDate'];
@@ -55,6 +57,17 @@ List<Map<String, dynamic>> currentCatalogCategories(
     categories.putIfAbsent(catalogCategoryKey(product), () => product);
   }
   return categories.values.toList();
+}
+
+Map<String, dynamic>? catalogCategoryByName(
+  List<Map<String, dynamic>> products,
+  String name,
+) {
+  final key = name.trim().toLowerCase();
+  if (key.isEmpty) return null;
+  return currentCatalogCategories(products)
+      .where((product) => catalogCategoryKey(product) == key)
+      .firstOrNull;
 }
 
 List<Map<String, dynamic>> catalogBundleContents(
@@ -487,6 +500,7 @@ class _AdminCatalogState extends State<AdminCatalog> {
             AllocationHistoryActions(
               branchId: _branch,
               database: widget.firestore,
+              superAdmin: widget.allowLowStockVoids,
             ),
             InventoryActivityHistoryButton(
               branchId: _branch,

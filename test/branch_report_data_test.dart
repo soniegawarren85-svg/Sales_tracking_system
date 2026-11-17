@@ -1,3 +1,4 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sales_tracking/services/branch_report_data.dart';
 import 'package:sales_tracking/widgets/admin_sales_overview.dart';
@@ -153,6 +154,81 @@ void main() {
     expect(inventory.map((row) => row['remaining']), contains(5));
     expect(inventory.map((row) => row['remaining']), contains(3));
   });
+
+  test('category artwork is not used as a fallback for allocated items', () {
+    final data = BranchReportData({
+      'sales_inventory': [
+        {
+          '_id': 'cakes',
+          'name': 'Cakes',
+          'imageUrl': 'category.jpg',
+          'items': [
+            {'id': 'test-item', 'name': 'Test item', 'stock': 20},
+          ],
+        },
+      ],
+      'staff_inventory': [
+        {
+          '_id': 'branch-allocation',
+          'staffId': 'branch',
+          'sourceInventoryId': 'cakes',
+          'items': [
+            {'id': 'test-item', 'name': 'Test item', 'stock': 15},
+          ],
+        },
+      ],
+    });
+
+    final item = data.currentInventory('branch', DateTime.now()).single;
+    expect(item['name'], 'Test item');
+    expect(item['imageUrl'], isNull);
+  });
+
+  test(
+    'new allocation refreshes the low-stock request state for the same item',
+    () {
+      final data = BranchReportData({
+        'sales_inventory': [
+          {
+            '_id': 'cakes',
+            'name': 'Cakes',
+            'publicId': 'CAT-001',
+            'items': [
+              {'id': 'cake-1', 'name': 'Pistachio', 'stock': 100},
+            ],
+          },
+        ],
+        'staff_inventory': [
+          {
+            '_id': 'older-allocation',
+            'staffId': 'branch',
+            'sourceInventoryId': 'cakes',
+            'assignedAt': Timestamp.fromDate(DateTime(2026, 11, 1)),
+            'isLowStock': true,
+            'lowStockReportStatus': 'reported',
+            'items': [
+              {'id': 'cake-1', 'name': 'Pistachio', 'stock': 15},
+            ],
+          },
+          {
+            '_id': 'newer-allocation',
+            'staffId': 'branch',
+            'sourceInventoryId': 'cakes',
+            'assignedAt': Timestamp.fromDate(DateTime(2026, 11, 2)),
+            'items': [
+              {'id': 'cake-1', 'name': 'Pistachio', 'stock': 30},
+            ],
+          },
+        ],
+      });
+
+      final item = data.currentInventory('branch', DateTime(2026, 11, 3)).single;
+      expect(item['remaining'], 45);
+      expect(item['allocationId'], 'newer-allocation');
+      expect(item['lowStockReportStatus'], isNull);
+    },
+  );
+
   test(
     'branch summary profit matches itemized profit when a sale has no items',
     () {

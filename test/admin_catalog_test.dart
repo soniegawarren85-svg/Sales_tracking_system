@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:sales_tracking/services/checklist_status.dart';
 import 'package:sales_tracking/widgets/admin_catalog.dart';
 import 'package:fake_cloud_firestore/fake_cloud_firestore.dart';
 import 'package:flutter/gestures.dart';
@@ -127,6 +128,45 @@ void main() {
     expect(entries, hasLength(1));
     expect(entries.single.type, 'Categories');
     expect(entries.single.stock, 0);
+  });
+
+  test('category lookup reuses an existing case-insensitive category', () {
+    final existing = {
+      'id': 'cakes-source',
+      'name': 'Cakes',
+      'items': [
+        {'id': 'cake-item', 'name': 'Pistachio', 'stock': 3},
+      ],
+    };
+
+    expect(
+      catalogCategoryByName([
+        existing,
+        {
+          'id': 'duplicate-cakes',
+          'name': ' cakes ',
+          'items': [
+            {'id': 'other-item', 'name': 'Biscoff', 'stock': 2},
+          ],
+        },
+      ], 'CAKES'),
+      same(existing),
+    );
+    expect(catalogCategoryByName([existing], 'Cookies'), isNull);
+  });
+
+  test('expired inventory records are not treated as returns', () {
+    final expired = {
+      'kind': 'return',
+      'reason': 'Expired item',
+      'returnSourceCollection': 'staff_inventory',
+      'isExpiredInventory': true,
+      'status': 'Awaiting Admin Confirmation',
+    };
+
+    expect(ChecklistStatus.isReturnRecord(expired), isFalse);
+    expect(ChecklistStatus.returnPendingForAdmin(expired), isFalse);
+    expect(ChecklistStatus.returnOpen(expired), isFalse);
   });
 
   test('Home groups active variants and includes their carousel images', () {

@@ -4,6 +4,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'activity_log.dart';
 import 'session_actor.dart';
 import 'super_admin.dart';
+import 'bundle_stock_service.dart';
+import 'branch_identity.dart';
 
 Future<void> markStaffInventoryLowStock({
   required FirebaseFirestore firestore,
@@ -11,6 +13,7 @@ Future<void> markStaffInventoryLowStock({
   required List<String> branchIds,
   required String staffId,
   required String staffName,
+  String staffPublicId = '',
 }) async {
   if (items.isEmpty) return;
   if (items.length > 450) {
@@ -21,11 +24,15 @@ Future<void> markStaffInventoryLowStock({
     branchIds: branchIds,
   );
   final branchNames = <String>[];
+  final branchCodes = <String>[];
   if (!branchAdminExists) {
     for (final branchId in branchIds) {
       final branch = await firestore.collection('branches').doc(branchId).get();
-      final name = '${branch.data()?['name'] ?? ''}'.trim();
+      final data = branch.data();
+      final name = '${data?['name'] ?? ''}'.trim();
       if (name.isNotEmpty) branchNames.add(name);
+      final code = '${data?['branchCode'] ?? data?['publicId'] ?? ''}'.trim();
+      branchCodes.add(code.isEmpty ? publicBranchCode(branchId) : code);
     }
   }
   final allocationRefs = <DocumentReference<Map<String, dynamic>>>[];
@@ -96,7 +103,8 @@ Future<void> markStaffInventoryLowStock({
         firestore: firestore,
         senderId: staffId,
         senderName: staffName,
-        branchId: branchIds.firstOrNull ?? '',
+        senderPublicId: staffPublicId,
+        branchId: branchCodes.firstOrNull ?? '',
         branchName: branchNames.join(', '),
         items: markedItems,
         type: 'staff_low_stock_report',
@@ -163,6 +171,7 @@ void _writeLowStockConversation({
   required FirebaseFirestore firestore,
   required String senderId,
   required String senderName,
+  required String senderPublicId,
   required String branchId,
   required String branchName,
   required List<Map<String, dynamic>> items,
@@ -178,7 +187,8 @@ void _writeLowStockConversation({
       .join('\n');
   final text =
       'Low stock report — ${branchName.isEmpty ? branchId : branchName}\n'
-      'Submitted by: $senderName\n'
+      'Branch ID: $branchId\n'
+      'Submitted by: $senderName • ID: ${senderPublicId.trim().isEmpty ? senderId : senderPublicId}\n'
       '$itemLines';
   transaction.set(chatRef, {
     'participantIds': participantIds,
@@ -195,6 +205,7 @@ void _writeLowStockConversation({
   transaction.set(messageRef, {
     'senderId': senderId,
     'senderName': senderName,
+    'senderPublicId': senderPublicId,
     'text': text,
     'type': type,
     'branchId': branchId,
@@ -224,6 +235,16 @@ Future<void> submitLowStockReportToSuperAdmin({
     throw StateError('Unable to identify the signed-in branch admin.');
   }
 
+  final branchSnapshot = await firestore
+      .collection('branches')
+      .doc(branchId)
+      .get();
+  final storedBranchCode =
+      '${branchSnapshot.data()?['branchCode'] ?? branchSnapshot.data()?['publicId'] ?? ''}'
+          .trim();
+  final resolvedBranchId = storedBranchCode.isEmpty
+      ? publicBranchCode(branchId)
+      : storedBranchCode;
   final recipientId = SuperAdmin.id;
   final participantIds = [senderId, recipientId]..sort();
   final chatId = participantIds.join('_');
@@ -235,19 +256,35 @@ Future<void> submitLowStockReportToSuperAdmin({
           'name': item['name'] ?? '',
           'type': item['type'] ?? '',
           'id': item['id'] ?? '',
-          'allocationId': item['allocationId'] ?? '',
+          'categoryName': item['categoryName'] ?? item['type'] ?? '',
+          'currentStock': item['remaining'] ?? item['stock'],
+          if (item['requestedQuantity'] != null)
+            'requestedQuantity': item['requestedQuantity'],
+          'allocationId':
+              item['allocationId'] ??
+              item['staffInventoryDocId'] ??
+              item['_id'] ??
+              '',
           'allocationItemId': item['allocationItemId'] ?? '',
         },
       )
       .toList();
   final itemLines = reportedItems
-      .map((item) => '• ${item['type']}: ${item['name']} (${item['id']})')
+      .map((item) {
+        final requested = item['requestedQuantity'];
+        final madeToOrder = ['Beverages', 'Add-ons'].contains(item['type']);
+        return '• ${item['categoryName']}: ${item['name']} (${item['id']})'
+            ' — Current: ${item['currentStock'] ?? 'N/A'}'
+            ' — Request: ${madeToOrder ? 'Made to order' : requested ?? 'Not specified'}';
+      })
       .join('\n');
   final text =
       'Low stock report — $branchName\n'
-      'Submitted by: $adminName\n'
+      'Branch ID: $resolvedBranchId\n'
+      'Submitted by: $adminName • ID: $senderId\n'
       '$itemLines';
-  final allocationRefs = <DocumentReference<Map<String, dynamic>>>[];
+  final allocationRefsById =
+      <String, DocumentReference<Map<String, dynamic>>>{};
   for (final item in reportedItems) {
     final allocationId = '${item['allocationId'] ?? ''}'.trim();
     if (allocationId.isEmpty) {
@@ -255,33 +292,50 @@ Future<void> submitLowStockReportToSuperAdmin({
         'Unable to identify ${item['name'] ?? 'an item'} in branch inventory.',
       );
     }
-    allocationRefs.add(
-      firestore.collection('staff_inventory').doc(allocationId),
+    allocationRefsById.putIfAbsent(
+      allocationId,
+      () => firestore.collection('staff_inventory').doc(allocationId),
     );
   }
-  await firestore.runTransaction((transaction) async {
+  final allocationRefs = allocationRefsById.values.toList();
+  final validationError = await firestore.runTransaction<String?>((
+    transaction,
+  ) async {
     final allocations = <DocumentSnapshot<Map<String, dynamic>>>[];
     for (final ref in allocationRefs) {
       allocations.add(await transaction.get(ref));
     }
-    for (var index = 0; index < allocations.length; index++) {
-      final allocation = allocations[index].data();
+    final allocationById = {
+      for (var index = 0; index < allocationRefs.length; index++)
+        allocationRefs[index].id: allocations[index].data(),
+    };
+    for (var index = 0; index < reportedItems.length; index++) {
       final item = reportedItems[index];
+      final selectedItem = items[index];
+      final allocation = allocationById['${item['allocationId']}'];
       final legacyStaffMark =
           allocation?['lowStockReportStatus'] == null &&
           allocation?['isLowStock'] == true &&
           allocation?['lowStockMarkedBy'] != null;
-      if (allocation == null ||
-          (allocation['staffLowStockPendingAdmin'] != true &&
-              !legacyStaffMark)) {
+      final pendingAdminReport =
+          allocation?['staffLowStockPendingAdmin'] == true ||
+          allocation?['lowStockReportStatus'] == 'pending_admin';
+      final currentlyLow =
+          selectedItem['autoLowStock'] == true &&
+          inventoryLowStock(
+            selectedItem['remaining'],
+            type: '${selectedItem['type'] ?? ''}',
+          );
+      if (allocation == null) {
+        return '${item['name'] ?? 'This item'} could not be found in branch inventory.';
+      }
+      if (allocation['lowStockReportStatus'] == 'reported' ||
+          allocation['lowStockReportStatus'] == 'requested') {
+        return '${item['name'] ?? 'This item'} has already been requested.';
+      }
+      if ((!pendingAdminReport && !legacyStaffMark && !currentlyLow)) {
         final itemName = '${item['name'] ?? 'This item'}';
-        final alreadyReported =
-            allocation?['lowStockReportStatus'] == 'reported';
-        throw StateError(
-          alreadyReported
-              ? '$itemName is already reported.'
-              : '$itemName is no longer waiting for an Admin report.',
-        );
+        return '$itemName is no longer waiting for an Admin report.';
       }
     }
     for (final ref in allocationRefs) {
@@ -307,14 +361,17 @@ Future<void> submitLowStockReportToSuperAdmin({
     transaction.set(messageRef, {
       'senderId': senderId,
       'senderName': adminName,
+      'senderPublicId': senderId,
       'text': text,
       'type': 'low_stock_report',
-      'branchId': branchId,
+      'branchId': resolvedBranchId,
       'branchName': branchName,
       'items': reportedItems,
       'createdAt': FieldValue.serverTimestamp(),
     });
+    return null;
   });
+  if (validationError != null) throw StateError(validationError);
 
   await ActivityLog.record(
     'low_stock_report_submitted',

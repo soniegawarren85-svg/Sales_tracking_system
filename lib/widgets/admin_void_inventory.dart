@@ -156,6 +156,27 @@ class _AdminVoidInventoryState extends State<AdminVoidInventory> {
       ? value
       : DateTime.tryParse('$value');
 
+  DateTime? _bundleExpiry(Map<String, dynamic> instance, Map bundle) {
+    final instanceExpiry = _date(instance['expirationDate']);
+    if (instanceExpiry != null) return instanceExpiry;
+
+    final dates = <DateTime>[];
+    void add(dynamic value) {
+      final date = _date(value);
+      if (date != null) dates.add(date);
+    }
+
+    for (final item in (instance['items'] as List? ?? []).whereType<Map>()) {
+      add(item['expirationDate']);
+    }
+    add(bundle['expirationDate']);
+    for (final item in (bundle['items'] as List? ?? []).whereType<Map>()) {
+      add(item['expirationDate']);
+    }
+    dates.sort();
+    return dates.isEmpty ? null : dates.first;
+  }
+
   Widget _table(List<QueryDocumentSnapshot<Map<String, dynamic>>> docs) {
     final records =
         <
@@ -225,19 +246,10 @@ class _AdminVoidInventoryState extends State<AdminVoidInventory> {
             .toList();
         for (final instance in instances) {
           final item = Map<String, dynamic>.from(instance);
-          if (widget.expired && '${item['expirationDate'] ?? ''}'.isEmpty) {
-            final dates =
-                ((item['items'] ?? data['items']) as List? ?? [])
-                    .whereType<Map>()
-                    .map((row) => _date(row['expirationDate']))
-                    .whereType<DateTime>()
-                    .toList()
-                  ..sort();
-            if (dates.isNotEmpty) {
-              item['expirationDate'] = dates.first
-                  .toIso8601String()
-                  .split('T')
-                  .first;
+          if (widget.expired) {
+            final expiry = _bundleExpiry(item, data);
+            if (expiry != null) {
+              item['expirationDate'] = expiry.toIso8601String();
             }
           }
           if (widget.expired

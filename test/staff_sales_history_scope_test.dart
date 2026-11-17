@@ -15,6 +15,19 @@ void main() {
     expect(saleBelongsToStaff({'userId': 'cashier-a'}, ''), isFalse);
   });
 
+  test('sales history is scoped to the cashier current branch', () {
+    final oldBranchSale = {'userId': 'cashier-a', 'branchId': 'lingayen'};
+    final currentBranchSale = {'userId': 'cashier-a', 'branchId': 'sm-dagupan'};
+
+    expect(saleBelongsToBranches(oldBranchSale, {'sm-dagupan'}), isFalse);
+    expect(saleBelongsToBranches(currentBranchSale, {'sm-dagupan'}), isTrue);
+    expect(saleBelongsToBranches(oldBranchSale, {'lingayen'}), isTrue);
+    expect(
+      saleBelongsToBranches({'userId': 'cashier-a'}, {'sm-dagupan'}),
+      isFalse,
+    );
+  });
+
   test('legacy staff identifiers are included without matching coworkers', () {
     expect(
       saleBelongsToStaff(

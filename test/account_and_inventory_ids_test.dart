@@ -34,6 +34,64 @@ void main() {
       containsAll(['STF-001', 'STF-0001', 'stf-001', 'stf-0001']),
     );
   });
+  test('stale allocation category identity follows its active catalog', () {
+    expect(
+      inventoryCategoryIdentity(
+        {'name': 'Cakes', 'categoryId': 'CAT-003'},
+        catalog: {'name': 'Cakes', 'publicId': 'CAT-018'},
+      ),
+      inventoryCategoryIdentity({'name': 'Cakes', 'categoryId': 'CAT-018'}),
+    );
+  });
+  test('latest same-name catalog category wins over older public ID', () {
+    final old = {
+      'name': 'Cakes',
+      'publicId': 'CAT-003',
+      'timestamp': DateTime(2026, 11, 10),
+    };
+    final current = {
+      'name': 'Cakes',
+      'publicId': 'CAT-018',
+      'timestamp': DateTime(2026, 11, 14),
+    };
+    expect(inventoryCatalogIsNewer(current, old), isTrue);
+    expect(inventoryCatalogIsNewer(old, current), isFalse);
+    expect(
+      inventoryCategoryIdentity(current),
+      inventoryCategoryIdentity({'name': 'Cakes', 'publicId': 'CAT-018'}),
+    );
+  });
+  test(
+    'legacy category item allocations combine by current catalog identity',
+    () {
+      final merged = aggregateInventoryAllocationItems([
+        {
+          'id': 'legacy-item',
+          'name': 'Pistachio',
+          'publicId': 'PISTACHIO',
+          'stock': 2,
+        },
+        {
+          'id': 'current-item',
+          'name': 'New Cake',
+          'publicId': 'NEW-CAKE',
+          'stock': 1,
+        },
+        {
+          'id': 'another-item',
+          'name': 'Biscoff',
+          'publicId': 'BISCOFF',
+          'stock': 3,
+        },
+      ]);
+
+      expect(merged, hasLength(3));
+      expect(
+        merged.fold<int>(0, (total, item) => total + (item['stock'] as int)),
+        6,
+      );
+    },
+  );
   test(
     'allocation shows central item codes without changing stock references',
     () {

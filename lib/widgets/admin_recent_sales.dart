@@ -8,6 +8,9 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import '../services/receipt_tax.dart';
 import 'package:flutter/material.dart';
 import '../services/branch_session.dart';
+import '../services/branch_identity.dart';
+
+export '../services/branch_identity.dart' show publicBranchCode;
 
 double saleNumber(dynamic value) => num.tryParse('$value')?.toDouble() ?? 0;
 List<Map> saleItems(Map sale) =>
@@ -352,15 +355,6 @@ class ReceiptDetails extends StatelessWidget {
       ),
     ],
   );
-}
-
-String publicBranchCode(String id) {
-  var value = 0;
-  for (final unit in id.codeUnits) {
-    value = (value * 31 + unit) % 10000000000;
-  }
-  final digits = value.toString().padLeft(10, '0');
-  return 'BR-${digits.substring(0, 5)}-${digits.substring(5, 9)}-${digits.substring(9)}';
 }
 
 class _ReceiptItemId extends StatefulWidget {

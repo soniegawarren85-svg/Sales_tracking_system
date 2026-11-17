@@ -51,6 +51,7 @@ void main() {
         branchIds: ['branch-one'],
         staffId: 'staff-one',
         staffName: 'Staff One',
+        staffPublicId: 'STF-026',
       );
 
       final beverage =
@@ -108,6 +109,7 @@ void main() {
         branchIds: ['branch-one'],
         staffId: 'staff-one',
         staffName: 'Staff One',
+        staffPublicId: 'STF-026',
       );
 
       final allocation =
@@ -152,6 +154,7 @@ void main() {
       branchIds: ['branch-one'],
       staffId: 'staff-one',
       staffName: 'Staff One',
+      staffPublicId: 'STF-026',
     );
 
     final allocation =
@@ -168,6 +171,7 @@ void main() {
       final firestore = FakeFirebaseFirestore();
       await firestore.collection('branches').doc('branch-one').set({
         'name': 'Dagupan',
+        'branchCode': 'BR-00001-0001-1',
         'staffIds': ['staff-one'],
       });
       await firestore.collection('staff_inventory').doc('coffee').set({
@@ -189,6 +193,7 @@ void main() {
         branchIds: ['branch-one'],
         staffId: 'staff-one',
         staffName: 'Staff One',
+        staffPublicId: 'STF-026',
       );
 
       final allocation =
@@ -201,6 +206,11 @@ void main() {
           .doc('Spr-001_staff-one')
           .get();
       expect(chat.data()?['lastMessage'], contains('Iced Latte'));
+      expect(
+        chat.data()?['lastMessage'],
+        contains('Branch ID: BR-00001-0001-1'),
+      );
+      expect(chat.data()?['lastMessage'], contains('ID: STF-026'));
       final messages = await chat.reference.collection('items').get();
       expect(messages.docs.single.data()['type'], 'staff_low_stock_report');
     },
@@ -262,6 +272,14 @@ void main() {
             'id': 'COF-1',
             'allocationId': 'coffee-allocation',
           },
+          {
+            'name': 'Mocha',
+            'type': 'Categories',
+            'id': 'COF-2',
+            'remaining': 4,
+            'requestedQuantity': 20,
+            'allocationId': 'coffee-allocation',
+          },
         ],
       );
 
@@ -271,6 +289,8 @@ void main() {
       expect(chat['participantIds'], ['ADM-0001', 'Spr-001']);
       expect(chat['lastMessage'], contains('Dagupan'));
       expect(chat['lastMessage'], contains('Iced Latte'));
+      expect(chat['lastMessage'], contains('Current: 4'));
+      expect(chat['lastMessage'], contains('Request: 20'));
 
       final messages = await firestore
           .collection('messages')
@@ -279,7 +299,9 @@ void main() {
           .get();
       expect(messages.docs, hasLength(1));
       expect(messages.docs.single.data()['type'], 'low_stock_report');
-      expect(messages.docs.single.data()['items'], hasLength(1));
+      expect(messages.docs.single.data()['items'], hasLength(2));
+      expect(messages.docs.single.data()['items'][1]['currentStock'], 4);
+      expect(messages.docs.single.data()['items'][1]['requestedQuantity'], 20);
       final allocation =
           (await firestore
                   .collection('staff_inventory')
@@ -291,6 +313,101 @@ void main() {
       expect(allocation['lowStockReportStatus'], 'reported');
     },
   );
+
+  test('pending-admin reports accept inventory document ID aliases', () async {
+    final firestore = FakeFirebaseFirestore();
+    await firestore.collection('staff_inventory').doc('coffee-allocation').set({
+      'isLowStock': false,
+      'staffLowStockPendingAdmin': false,
+      'lowStockReportStatus': 'pending_admin',
+    });
+
+    await submitLowStockReportToSuperAdmin(
+      firestore: firestore,
+      adminId: 'ADM-0001',
+      adminName: 'Branch Admin',
+      branchId: 'branch-one',
+      branchName: 'Dagupan',
+      items: [
+        {
+          'name': 'Iced Latte',
+          'type': 'Beverages',
+          'id': 'CF-004',
+          'staffInventoryDocId': 'coffee-allocation',
+        },
+      ],
+    );
+
+    final allocation =
+        (await firestore
+                .collection('staff_inventory')
+                .doc('coffee-allocation')
+                .get())
+            .data()!;
+    expect(allocation['lowStockReportStatus'], 'reported');
+    expect(
+      (await firestore
+              .collection('messages')
+              .doc('ADM-0001_Spr-001')
+              .collection('items')
+              .get())
+          .docs,
+      hasLength(1),
+    );
+  });
+
+  test('admin can report currently low inventory items', () async {
+    final firestore = FakeFirebaseFirestore();
+    await firestore.collection('branches').doc('branch-one').set({
+      'name': 'Lingayen',
+      'branchCode': 'BR-00042-0180-7',
+    });
+    await firestore.collection('staff_inventory').doc('cookie-allocation').set({
+      'staffId': 'branch-one',
+      'items': [
+        {'id': 'CO-020', 'name': 'TESTTT', 'stock': 20},
+      ],
+    });
+
+    await submitLowStockReportToSuperAdmin(
+      firestore: firestore,
+      adminId: 'ADM-0001',
+      adminName: 'Branch Admin',
+      branchId: 'branch-one',
+      branchName: 'Lingayen',
+      items: [
+        {
+          'name': 'TESTTT',
+          'type': 'Categories',
+          'id': 'CO-020',
+          'allocationId': 'cookie-allocation',
+          'allocationItemId': 'CO-020',
+          'autoLowStock': true,
+          'remaining': 20,
+        },
+      ],
+    );
+
+    final allocation =
+        (await firestore
+                .collection('staff_inventory')
+                .doc('cookie-allocation')
+                .get())
+            .data()!;
+    expect(allocation['lowStockReportStatus'], 'reported');
+    final chat = await firestore
+        .collection('messages')
+        .doc('ADM-0001_Spr-001')
+        .get();
+    expect(chat.data()?['lastMessage'], contains('Branch ID: BR-00042-0180-7'));
+    final messages = await firestore
+        .collection('messages')
+        .doc('ADM-0001_Spr-001')
+        .collection('items')
+        .get();
+    expect(messages.docs, hasLength(1));
+    expect(messages.docs.single.data()['branchId'], 'BR-00042-0180-7');
+  });
 
   test('an already reported item cannot be submitted again', () async {
     final firestore = FakeFirebaseFirestore();
@@ -315,7 +432,7 @@ void main() {
         isA<StateError>().having(
           (error) => error.message,
           'message',
-          contains('already reported'),
+          contains('already been requested'),
         ),
       ),
     );

@@ -3133,6 +3133,13 @@ class _InventoryPageState extends State<InventoryPage>
     final createdCategory = await showAdminCategorySheet(
       context,
       save: (name) async {
+        final existing = catalogCategoryByName(
+          (await _firestore.collection('sales_inventory').get()).docs
+              .map((doc) => {...doc.data(), 'id': doc.id})
+              .toList(),
+          name,
+        );
+        if (existing != null) return {...existing, '_alreadyExists': true};
         final data = <String, dynamic>{
           'name': name,
           'publicId': await ShortIdService.next('CAT'),
@@ -3150,8 +3157,16 @@ class _InventoryPageState extends State<InventoryPage>
       final addFirst = await showDialog<bool>(
         context: context,
         builder: (dialogContext) => AlertDialog(
-          title: const Text('Category saved'),
-          content: const Text('Would you like to add its first item now?'),
+          title: Text(
+            createdCategory['_alreadyExists'] == true
+                ? 'Category already exists'
+                : 'Category saved',
+          ),
+          content: Text(
+            createdCategory['_alreadyExists'] == true
+                ? 'Add this item to the existing category instead of creating a duplicate?'
+                : 'Would you like to add its first item now?',
+          ),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(dialogContext, false),
@@ -3159,7 +3174,11 @@ class _InventoryPageState extends State<InventoryPage>
             ),
             FilledButton(
               onPressed: () => Navigator.pop(dialogContext, true),
-              child: const Text('Add first item'),
+              child: Text(
+                createdCategory['_alreadyExists'] == true
+                    ? 'Add item'
+                    : 'Add first item',
+              ),
             ),
           ],
         ),

@@ -4958,7 +4958,10 @@ class _DailyStockPageState extends State<DailyStockPage>
         paymentMode: paymentMode,
         paymentReference: gcashTransactionId,
         providerPaymentId: providerPaymentId,
-        onRetryPrint: () => _printSavedReceipt(receipt),
+        onCancelSale: () => LocalDatabaseSyncService().cancelCompletedSale(
+          salesId: salesId,
+          reason: 'Cashier cancelled the sale from the receipt dialog.',
+        ),
       );
     } catch (e) {
       if (processingDialogVisible && mounted) {
@@ -5086,7 +5089,7 @@ class _DailyStockPageState extends State<DailyStockPage>
     required String paymentMode,
     required String paymentReference,
     required String providerPaymentId,
-    required Future<bool> Function() onRetryPrint,
+    required Future<void> Function() onCancelSale,
   }) async {
     if (!mounted) return;
     await showDialog<void>(
@@ -5116,7 +5119,7 @@ class _DailyStockPageState extends State<DailyStockPage>
           paymentMode: paymentMode,
           paymentReference: paymentReference,
           providerPaymentId: providerPaymentId,
-          onRetryPrint: onRetryPrint,
+          onCancelSale: onCancelSale,
         );
       },
     );
@@ -8940,9 +8943,6 @@ class _DailyStockPageState extends State<DailyStockPage>
                     final currentItemImage = rootItem?['imageUrl']
                         ?.toString()
                         .trim();
-                    final categoryImage = rootData['imageUrl']
-                        ?.toString()
-                        .trim();
                     return {
                       ...item,
                       if (rootItem?['price'] != null)
@@ -8953,12 +8953,6 @@ class _DailyStockPageState extends State<DailyStockPage>
                           currentItemImage != null &&
                           currentItemImage.isNotEmpty)
                         'imageUrl': currentItemImage,
-                      if ((allocatedImage == null || allocatedImage.isEmpty) &&
-                          (currentItemImage == null ||
-                              currentItemImage.isEmpty) &&
-                          categoryImage != null &&
-                          categoryImage.isNotEmpty)
-                        'imageUrl': categoryImage,
                     };
                   })
                   .toList();
@@ -13265,11 +13259,11 @@ class _MiniTag extends StatelessWidget {
 
 class _ReceiptPrintActions extends StatefulWidget {
   final Future<bool> initialResult;
-  final Future<bool> Function() onRetry;
+  final Future<bool> Function() onCancel;
 
   const _ReceiptPrintActions({
     required this.initialResult,
-    required this.onRetry,
+    required this.onCancel,
   });
 
   @override
@@ -13295,10 +13289,10 @@ class _ReceiptPrintActionsState extends State<_ReceiptPrintActions> {
     });
   }
 
-  Future<void> _retry() async {
+  Future<void> _cancel() async {
     setState(() => _printing = true);
     try {
-      _printed = await widget.onRetry();
+      await widget.onCancel();
     } finally {
       if (mounted) setState(() => _printing = false);
     }
@@ -13322,25 +13316,22 @@ class _ReceiptPrintActionsState extends State<_ReceiptPrintActions> {
         SizedBox(
           width: double.infinity,
           child: OutlinedButton(
-            onPressed: _printing ? null : _retry,
+            onPressed: _printing ? null : _cancel,
             style: OutlinedButton.styleFrom(
-              foregroundColor: const Color(0xFF4A2300),
-              disabledForegroundColor: const Color(0xFF4A2300),
-              backgroundColor: const Color(0xFFFFB020),
-              side: const BorderSide(color: Color(0xFFFFCB62)),
+              foregroundColor: Colors.white,
+              disabledForegroundColor: Colors.white70,
+              backgroundColor: const Color(0xFFC62828),
+              side: const BorderSide(color: Color(0xFFEF9A9A)),
               padding: const EdgeInsets.symmetric(vertical: 12),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
               ),
             ),
-            child: ValueListenableBuilder<ThermalPrinterStatus>(
-              valueListenable: ThermalPrinterService.instance.status,
-              builder: (context, status, _) => Text(
-                status.isConnected ? 'Reprint' : 'Retry Print',
-                style: const TextStyle(
-                  color: Color(0xFF4A2300),
-                  fontWeight: FontWeight.w700,
-                ),
+            child: const Text(
+              'Cancel',
+              style: TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w700,
               ),
             ),
           ),
@@ -13418,7 +13409,7 @@ class _ReceiptGenerationDialog extends StatefulWidget {
     required this.paymentMode,
     required this.paymentReference,
     required this.providerPaymentId,
-    required this.onRetryPrint,
+    required this.onCancelSale,
   });
 
   final String salesId;
@@ -13443,7 +13434,7 @@ class _ReceiptGenerationDialog extends StatefulWidget {
   final String paymentMode;
   final String paymentReference;
   final String providerPaymentId;
-  final Future<bool> Function() onRetryPrint;
+  final Future<void> Function() onCancelSale;
 
   @override
   State<_ReceiptGenerationDialog> createState() =>
@@ -13451,6 +13442,47 @@ class _ReceiptGenerationDialog extends StatefulWidget {
 }
 
 class _ReceiptGenerationDialogState extends State<_ReceiptGenerationDialog> {
+  Future<bool> _cancelSale() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      useRootNavigator: true,
+      builder: (dialogContext) => AlertDialog(
+        icon: const Icon(Icons.warning_amber_rounded, color: Colors.red),
+        title: const Text('Cancel this sale?'),
+        content: const Text(
+          'This removes the receipt from the Sales list, restores the sold stock, and reverses the cash drawer entry. This action cannot be undone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Keep sale'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red.shade700),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Confirm cancel'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return false;
+    try {
+      await widget.onCancelSale();
+      if (!mounted) return true;
+      Navigator.of(context, rootNavigator: true).pop();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Sale cancelled and stock restored.')),
+      );
+      return true;
+    } catch (error) {
+      if (!mounted) return false;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Unable to cancel sale: $error')));
+      return false;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final screen = MediaQuery.sizeOf(context);
@@ -13595,7 +13627,7 @@ class _ReceiptGenerationDialogState extends State<_ReceiptGenerationDialog> {
                     const SizedBox(height: 7),
                     _ReceiptPrintActions(
                       initialResult: widget.printResult,
-                      onRetry: widget.onRetryPrint,
+                      onCancel: _cancelSale,
                     ),
                   ],
                 ),

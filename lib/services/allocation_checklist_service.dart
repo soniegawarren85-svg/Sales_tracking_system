@@ -550,6 +550,124 @@ class AllocationChecklistService {
     );
   }
 
+  Future<bool> reportReturnIssue({
+    required String id,
+    required String actorId,
+    required String actorName,
+    required String issueType,
+    required int issueQuantity,
+    String comment = '',
+  }) async =>
+      await reportReturnIssues(
+        actorId: actorId,
+        actorName: actorName,
+        reports: [
+          {
+            'returnId': id,
+            'issueType': issueType,
+            'issueQuantity': issueQuantity,
+            'comment': comment,
+          },
+        ],
+      ) ==
+      1;
+
+  Future<int> reportReturnIssues({
+    required String actorId,
+    required String actorName,
+    required List<Map<String, dynamic>> reports,
+  }) async {
+    await BranchPermissions.require('adminAllowReturnApproval', database: db);
+    const issueTypes = {'Missing', 'Extra', 'Incorrect', 'Damaged', 'Others'};
+    if (actorId.trim().isEmpty || reports.isEmpty || reports.length > 200) {
+      throw ArgumentError('Choose up to 200 return issue reports.');
+    }
+    final reportIds = <String>{};
+    for (final report in reports) {
+      final id = '${report['returnId'] ?? ''}'.trim();
+      final issueType = '${report['issueType'] ?? ''}';
+      final issueQuantity = quantity(report['issueQuantity']);
+      if (id.isEmpty ||
+          !reportIds.add(id) ||
+          !issueTypes.contains(issueType) ||
+          issueQuantity <= 0) {
+        throw ArgumentError('Choose an issue and enter a valid quantity.');
+      }
+    }
+
+    return db.runTransaction<int>((tx) async {
+      final records =
+          <
+            ({
+              DocumentReference<Map<String, dynamic>> ref,
+              Map<String, dynamic> data,
+              int returnedQuantity,
+            })
+          >[];
+      for (final report in reports) {
+        final ref = db
+            .collection('allocation_checklist')
+            .doc('${report['returnId']}');
+        final data = (await tx.get(ref)).data();
+        if (data == null || !ChecklistStatus.returnOpen(data)) return 0;
+        final returnedQuantity = quantity(
+          data['quantity'] ?? data['returnQuantity'] ?? 1,
+        );
+        if (quantity(report['issueQuantity']) > returnedQuantity) {
+          throw ArgumentError(
+            'Issue quantity cannot exceed the returned quantity ($returnedQuantity).',
+          );
+        }
+        records.add((ref: ref, data: data, returnedQuantity: returnedQuantity));
+      }
+
+      final now = FieldValue.serverTimestamp();
+      for (var index = 0; index < reports.length; index++) {
+        final report = reports[index];
+        final record = records[index];
+        final id = '${report['returnId']}';
+        final issueType = '${report['issueType']}';
+        final issueQuantity = quantity(report['issueQuantity']);
+        final comment = '${report['comment'] ?? ''}'.trim();
+        tx.update(record.ref, {
+          'status': ChecklistStatus.completed,
+          'confirmedBy': actorId,
+          'confirmedByName': actorName,
+          'confirmedAt': now,
+          'superAdminIssueType': issueType,
+          'superAdminIssueQuantity': issueQuantity,
+          'superAdminIssueComment': comment,
+          'superAdminReportedBy': actorId,
+          'superAdminReportedByName': actorName,
+          'superAdminReportedAt': now,
+          'updatedAt': now,
+        });
+        tx.set(db.collection('activity_logs').doc('return_issue_$id'), {
+          'action': 'return_issue_reported',
+          'description':
+              '$actorName reported $issueType on ${record.data['name'] ?? 'returned item'} and completed the return review.',
+          'actorId': actorId,
+          'actorName': actorName,
+          'actorRole': 'super_admin',
+          'branchIds': [record.data['branchId'] ?? record.data['staffId']],
+          'details': {
+            'returnId': id,
+            'itemName':
+                record.data['name'] ??
+                record.data['itemName'] ??
+                'Inventory item',
+            'returnedQuantity': record.returnedQuantity,
+            'issueType': issueType,
+            'issueQuantity': issueQuantity,
+            'comment': comment,
+          },
+          'createdAt': now,
+        });
+      }
+      return reports.length;
+    });
+  }
+
   Future<bool> decide(
     String id, {
     required bool accept,
@@ -559,6 +677,7 @@ class AllocationChecklistService {
     int issueQuantity = 0,
     String issueItemId = '',
     String issueItemName = '',
+    List<Map<String, dynamic>> issueReports = const [],
     String actorName = '',
     String actorPublicId = '',
     String actorRole = '',
@@ -574,16 +693,39 @@ class AllocationChecklistService {
       'Incorrect',
       'Damaged',
       'Not received',
+      'Others',
     };
-    if (issueType != null &&
+    final selectedIssues = issueReports.isNotEmpty
+        ? issueReports
+        : issueType == null
+        ? const <Map<String, dynamic>>[]
+        : [
+            {
+              'itemId': issueItemId,
+              'itemName': issueItemName,
+              'quantity': issueQuantity,
+            },
+          ];
+    String reportType(Map<String, dynamic> issue) =>
+        '${issue['issueType'] ?? issueType ?? ''}';
+    final hasIssues = selectedIssues.isNotEmpty;
+    if (hasIssues &&
         (!accept ||
-            !quantityIssues.contains(issueType) ||
-            issueQuantity <= 0)) {
+            selectedIssues.any(
+              (issue) =>
+                  !quantityIssues.contains(reportType(issue)) ||
+                  quantity(issue['quantity']) <= 0,
+            ))) {
       throw ArgumentError('Choose a valid issue and positive quantity.');
     }
-    final savedIssueReason = issueType != null && reason.trim().isEmpty
-        ? issueType
-        : reason.trim();
+    final savedIssueReason = issueReports.isEmpty
+        ? issueType ?? reason.trim()
+        : selectedIssues
+              .map(
+                (issue) =>
+                    '${reportType(issue)} - ${quantity(issue['quantity'])}',
+              )
+              .join('; ');
     return db.runTransaction<bool>((tx) async {
       final ref = db.collection('allocation_checklist').doc(id);
       final snap = await tx.get(ref);
@@ -607,39 +749,53 @@ class AllocationChecklistService {
       final bundle = pending['isBundle'] == true;
       final beverage = type(pending).startsWith('Beverages');
       final incoming = rows(pending['items']);
-      final issueItemIndex = issueType == null || bundle
-          ? -1
-          : incoming.indexWhere(
-              (item) => issueItemId.isNotEmpty
-                  ? '${item['id'] ?? ''}' == issueItemId
-                  : '${item['name'] ?? ''}' == issueItemName,
-            );
-      if (issueType != null && beverage) {
+      if (bundle && selectedIssues.length > 1) {
+        throw ArgumentError('A bundle issue can only be reported once.');
+      }
+      final issueIndexes = <int>[];
+      final issueBaseQuantities = <int>[];
+      final seenIssueIndexes = <int>{};
+      for (final issue in selectedIssues) {
+        final itemId = '${issue['itemId'] ?? ''}';
+        final itemName = '${issue['itemName'] ?? ''}';
+        final itemIndex = !hasIssues || bundle
+            ? -1
+            : incoming.indexWhere(
+                (item) => itemId.isNotEmpty
+                    ? '${item['id'] ?? ''}' == itemId
+                    : '${item['name'] ?? ''}' == itemName,
+              );
+        if (hasIssues && !bundle && itemIndex < 0) {
+          throw ArgumentError('Select an item from this allocation.');
+        }
+        if (itemIndex >= 0 && !seenIssueIndexes.add(itemIndex)) {
+          throw ArgumentError('Report each item only once.');
+        }
+        final baseQuantity = !hasIssues
+            ? 0
+            : bundle
+            ? quantity(pending['bundleCount'])
+            : quantity(
+                incoming[itemIndex]['stock'] ??
+                    incoming[itemIndex]['startingStock'],
+              );
+        final requestedQuantity = quantity(issue['quantity']);
+        if (hasIssues &&
+            reportType(issue) != 'Extra' &&
+            requestedQuantity > baseQuantity) {
+          throw ArgumentError(
+            'Issue quantity cannot exceed the allocated quantity.',
+          );
+        }
+        issueIndexes.add(itemIndex);
+        issueBaseQuantities.add(baseQuantity);
+      }
+      if (hasIssues && beverage) {
         throw ArgumentError(
           'Beverage allocations do not track physical stock.',
         );
       }
-      if (issueType != null && !bundle && issueItemIndex < 0) {
-        throw ArgumentError('Select an item from this allocation.');
-      }
-      final issueBaseQuantity = issueType == null
-          ? 0
-          : bundle
-          ? quantity(pending['bundleCount'])
-          : quantity(
-              incoming[issueItemIndex]['stock'] ??
-                  incoming[issueItemIndex]['startingStock'],
-            );
-      if (issueType != null &&
-          issueType != 'Extra' &&
-          issueQuantity > issueBaseQuantity) {
-        throw ArgumentError(
-          'Issue quantity cannot exceed the allocated quantity.',
-        );
-      }
-      final fullyMissing =
-          (issueType == 'Missing' || issueType == 'Not received') &&
-          issueQuantity >= issueBaseQuantity;
+      final issueBaseQuantity = issueBaseQuantities.firstOrNull ?? 0;
       if (!accept && !target.exists) {
         throw StateError(
           'Source inventory is missing. Ask the administrator to restore it before declining.',
@@ -648,33 +804,43 @@ class AllocationChecklistService {
       final resolvedIncoming = incoming
           .map((item) => Map<String, dynamic>.from(item))
           .toList();
-      if (issueType != null && !bundle) {
-        final item = resolvedIncoming[issueItemIndex];
-        final oldQuantity = quantity(item['stock'] ?? item['startingStock']);
-        final adjustedQuantity = issueType == 'Extra'
-            ? oldQuantity + issueQuantity
-            : oldQuantity - issueQuantity;
-        item['stock'] = adjustedQuantity;
-        item['startingStock'] = adjustedQuantity;
-        item['assignedStartingStock'] = adjustedQuantity;
+      if (hasIssues && !bundle) {
+        for (var index = 0; index < selectedIssues.length; index++) {
+          final item = resolvedIncoming[issueIndexes[index]];
+          final reportedQuantity = quantity(selectedIssues[index]['quantity']);
+          final itemIssueType = reportType(selectedIssues[index]);
+          if (itemIssueType == 'Others') continue;
+          final oldQuantity = quantity(item['stock'] ?? item['startingStock']);
+          final adjustedQuantity = itemIssueType == 'Extra'
+              ? oldQuantity + reportedQuantity
+              : oldQuantity - reportedQuantity;
+          item['stock'] = adjustedQuantity;
+          item['startingStock'] = adjustedQuantity;
+          item['assignedStartingStock'] = adjustedQuantity;
+        }
       }
-      final resolvedBundleCount = issueType == null
+      final bundleIssueType = selectedIssues.isEmpty
+          ? ''
+          : reportType(selectedIssues.first);
+      final resolvedBundleCount = !hasIssues
           ? quantity(pending['bundleCount'])
-          : issueType == 'Extra'
-          ? issueBaseQuantity + issueQuantity
-          : issueBaseQuantity - issueQuantity;
-      final unreceivedItem = issueType == 'Not received' && !bundle
-          ? {
-              ...incoming[issueItemIndex],
-              'stock': issueQuantity,
-              'startingStock': issueQuantity,
-            }
-          : null;
-      final unreceivedInstances = issueType == 'Not received' && bundle
-          ? rows(pending['bundleInstances'])
-                .skip(rows(pending['bundleInstances']).length - issueQuantity)
-                .toList()
-          : const <Map<String, dynamic>>[];
+          : bundleIssueType == 'Extra'
+          ? issueBaseQuantity + quantity(selectedIssues.first['quantity'])
+          : bundleIssueType == 'Others'
+          ? issueBaseQuantity
+          : issueBaseQuantity - quantity(selectedIssues.first['quantity']);
+      final fullyMissing =
+          hasIssues &&
+          selectedIssues.every((issue) => reportType(issue) == 'Missing') &&
+          selectedIssues.every(
+            (issue) =>
+                quantity(issue['quantity']) >=
+                issueBaseQuantities[selectedIssues.indexOf(issue)],
+          ) &&
+          (bundle ||
+              resolvedIncoming.every(
+                (item) => quantity(item['stock'] ?? item['startingStock']) == 0,
+              ));
       final payload = Map<String, dynamic>.from(pending)
         ..remove('targetDocId')
         ..remove('status')
@@ -684,6 +850,12 @@ class AllocationChecklistService {
         ..remove('reportedBy')
         ..remove('reportedByName')
         ..remove('reportedAt');
+      // Carry the root category identity through to branch inventory. The
+      // cashier uses this ID to join allocated stock to the source category.
+      payload['categoryId'] =
+          pending['categoryId'] ??
+          pending['sourceInventoryId'] ??
+          pending['sourceCategoryId'];
       final result = <String, dynamic>{
         if (accept) ...payload,
         ...current,
@@ -699,19 +871,23 @@ class AllocationChecklistService {
               },
             )
             .toList();
-        if (issueType != null && instances.length != issueBaseQuantity) {
+        if (hasIssues && instances.length != issueBaseQuantity) {
           throw StateError(
             'Bundle instance records do not match the allocated quantity. Ask the administrator to review this allocation.',
           );
         }
-        if (issueType == 'Extra') {
+        if (bundleIssueType == 'Extra') {
           if (instances.isEmpty) {
             throw StateError(
               'Bundle details are unavailable. Ask the administrator to review this allocation.',
             );
           }
           final template = Map<String, dynamic>.from(instances.first);
-          for (var index = 0; index < issueQuantity; index++) {
+          for (
+            var index = 0;
+            index < quantity(selectedIssues.first['quantity']);
+            index++
+          ) {
             instances.add({
               ...template,
               'id': db.collection('allocation_checklist').doc().id,
@@ -720,18 +896,21 @@ class AllocationChecklistService {
               'extraReported': true,
             });
           }
-        } else if (issueType != null && issueQuantity > 0) {
+        } else if (hasIssues &&
+            bundleIssueType != 'Others' &&
+            quantity(selectedIssues.first['quantity']) > 0) {
+          final reportedQuantity = quantity(selectedIssues.first['quantity']);
           instances.removeRange(
-            instances.length - issueQuantity,
+            instances.length - reportedQuantity,
             instances.length,
           );
         }
-        result['bundleCount'] =
-            quantity(current['bundleCount']) + resolvedBundleCount;
         result['bundleInstances'] = [
           ...rows(current['bundleInstances']),
           ...instances,
         ];
+        result['bundleCount'] =
+            quantity(current['bundleCount']) + resolvedBundleCount;
         if (accept) {
           result['assignedStartingStock'] =
               quantity(
@@ -778,6 +957,8 @@ class AllocationChecklistService {
         result['items'] = items;
       } else if (accept) {
         result.addAll(payload);
+      }
+      if (accept) {
         result.addAll({
           'isLowStock': false,
           'staffLowStockPendingAdmin': false,
@@ -787,21 +968,45 @@ class AllocationChecklistService {
           'lowStockMarkedByName': FieldValue.delete(),
           'lowStockReportedAt': FieldValue.delete(),
         });
-      }
-      if (accept) {
         result['assignedAt'] = FieldValue.serverTimestamp();
         result['updatedAt'] = FieldValue.serverTimestamp();
       }
-      // Beverages/add-ons are catalog permissions; no physical stock was reserved.
-      if (accept || !beverage) {
+      // An entirely unreceived allocation is held for review instead of being
+      // added to branch stock. Mixed reports still receive their unaffected
+      // quantities.
+      final onlyNotReceived =
+          hasIssues &&
+          selectedIssues.every((issue) => reportType(issue) == 'Not received');
+      if (!(accept && onlyNotReceived) && (accept || !beverage)) {
         tx.set(destination, result, SetOptions(merge: true));
       }
+      final firstIssue = selectedIssues.firstOrNull;
+      final firstIssueType = firstIssue == null ? '' : reportType(firstIssue);
+      final firstIssueQuantity = firstIssue == null
+          ? 0
+          : quantity(firstIssue['quantity']);
+      int receivedQuantity(Map<String, dynamic> issue, int allocated) {
+        final type = reportType(issue);
+        final issueQuantity = quantity(issue['quantity']);
+        if (type == 'Extra') return allocated + issueQuantity;
+        if (type == 'Others') return allocated;
+        return allocated - issueQuantity;
+      }
+
+      final issueDetails = selectedIssues
+          .where((issue) => '${issue['comment'] ?? ''}'.trim().isNotEmpty)
+          .map(
+            (issue) =>
+                '${issue['itemName'] ?? 'Item'}: ${'${issue['comment']}'.trim()}',
+          )
+          .join('; ');
       tx.update(ref, {
-        'status': fullyMissing
-            ? 'Cancelled - Missing'
-            : accept
-            ? ChecklistStatus.received
-            : 'declined',
+        'status': accept ? ChecklistStatus.received : 'declined',
+        if (accept && !bundle) 'items': resolvedIncoming,
+        if (accept && bundle) ...{
+          'bundleCount': resolvedBundleCount,
+          'bundleInstances': result['bundleInstances'],
+        },
         if (accept) 'confirmedBy': staffId,
         if (accept) 'confirmedByName': actorName,
         if (accept && actorPublicId.isNotEmpty)
@@ -809,12 +1014,35 @@ class AllocationChecklistService {
         if (accept && actorRole.isNotEmpty)
           'confirmedByRole': actorRole == 'staff' ? 'Cashier' : 'Admin',
         if (accept) 'confirmedAt': FieldValue.serverTimestamp(),
-        if (issueType != null) ...{
-          'issueType': issueType,
-          'issueQuantity': issueQuantity,
-          'issueItemId': issueItemId,
-          'issueItemName': issueItemName,
-          'issueReason': savedIssueReason,
+        if (hasIssues) ...{
+          'issueType': firstIssueType,
+          'issueQuantity': firstIssueQuantity,
+          'issueItemId': firstIssue?['itemId'] ?? issueItemId,
+          'issueItemName': firstIssue?['itemName'] ?? issueItemName,
+          'issueAllocatedQuantity': issueBaseQuantity,
+          'issueReceivedQuantity': receivedQuantity(
+            firstIssue!,
+            issueBaseQuantity,
+          ),
+          'issueReports': [
+            for (var index = 0; index < selectedIssues.length; index++)
+              {
+                ...selectedIssues[index],
+                'issueType': reportType(selectedIssues[index]),
+                'allocatedQuantity': issueBaseQuantities[index],
+                'receivedQuantity': receivedQuantity(
+                  selectedIssues[index],
+                  issueBaseQuantities[index],
+                ),
+              },
+          ],
+          'issueReason': selectedIssues
+              .map(
+                (issue) =>
+                    '${reportType(issue)} - ${quantity(issue['quantity'])}',
+              )
+              .join('; '),
+          'issueDetails': issueDetails.isEmpty ? reason.trim() : issueDetails,
           'reportedBy': staffId,
           'reportedByName': actorName,
           'reportedAt': FieldValue.serverTimestamp(),
@@ -834,8 +1062,26 @@ class AllocationChecklistService {
           'allocatedByName': pending['allocatedByName'],
           'allocatedByAdminId': pending['allocatedByAdminId'],
           'createdAt': FieldValue.serverTimestamp(),
-          'issueType': issueType,
-          'issueQuantity': issueType == null ? null : issueQuantity,
+          'issueType': hasIssues ? firstIssueType : null,
+          'issueQuantity': !hasIssues ? null : firstIssueQuantity,
+          'issueAllocatedQuantity': !hasIssues ? null : issueBaseQuantity,
+          'issueReceivedQuantity': !hasIssues
+              ? null
+              : receivedQuantity(firstIssue!, issueBaseQuantity),
+          if (hasIssues)
+            'issueReports': [
+              for (var index = 0; index < selectedIssues.length; index++)
+                {
+                  ...selectedIssues[index],
+                  'issueType': reportType(selectedIssues[index]),
+                  'allocatedQuantity': issueBaseQuantities[index],
+                  'receivedQuantity': receivedQuantity(
+                    selectedIssues[index],
+                    issueBaseQuantities[index],
+                  ),
+                },
+            ],
+          'issueDetails': hasIssues ? issueDetails : null,
           'items': bundle || beverage
               ? [
                   {...payload, 'quantity': bundle ? resolvedBundleCount : 1},
@@ -854,53 +1100,20 @@ class AllocationChecklistService {
                     )
                     .toList(),
         });
-        if (issueType == 'Not received') {
-          tx.set(
-            db.collection('allocation_checklist').doc('${id}_not_received'),
-            {
-              'kind': 'not_received',
-              'status': ChecklistStatus.notReceivedPending,
-              'deliveryId': pending['deliveryId'] ?? id,
-              'originalAllocationId': id,
-              'staffId': pending['staffId'],
-              'branchId': pending['staffId'],
-              'staffName': pending['staffName'],
-              'branchName': pending['branchName'] ?? pending['staffName'],
-              'allocatedBy': pending['allocatedBy'],
-              'allocatedByName': pending['allocatedByName'],
-              'allocatedByAdminId': pending['allocatedByAdminId'],
-              'sourceInventoryId': pending['sourceInventoryId'],
-              'sourceCollection':
-                  pending['sourceCollection'] ?? 'sales_inventory',
-              'isBundle': bundle,
-              'isCoffee': false,
-              'isAddon': false,
-              'name': pending['name'] ?? issueItemName,
-              'issueType': 'Not received',
-              'issueQuantity': issueQuantity,
-              'issueItemId': issueItemId,
-              'issueItemName': issueItemName,
-              'issueReason': savedIssueReason,
-              'reportedBy': staffId,
-              'reportedByName': actorName,
-              'reportedAt': FieldValue.serverTimestamp(),
-              if (bundle) ...{
-                'bundleCount': issueQuantity,
-                'bundleInstances': unreceivedInstances,
-              } else
-                'items': [unreceivedItem],
-              'createdAt': FieldValue.serverTimestamp(),
-            },
-          );
-        }
-        if (issueType != null) {
-          final issueDescription =
-              '$issueType: $issueItemName × $issueQuantity';
+        if (hasIssues) {
+          final issueDescriptions = selectedIssues
+              .map(
+                (issue) =>
+                    '${issue['itemName'] ?? pending['name'] ?? 'Item'}: ${reportType(issue)} × ${quantity(issue['quantity'])}',
+              )
+              .toList();
+          final issueDescription = issueDescriptions.join('; ');
           final eventId = ref.collection('events').doc().id;
           tx.update(ref, {
             'reports.$eventId': {
               'status': ChecklistStatus.received,
               'reason': issueDescription,
+              'details': issueDetails,
               'actorId': staffId,
               'actorName': actorName,
               'createdAt': FieldValue.serverTimestamp(),
@@ -909,11 +1122,10 @@ class AllocationChecklistService {
           tx.set(
             db.collection('admin_notifications').doc('allocation_issue_$id'),
             {
-              'title': fullyMissing
-                  ? 'Allocation cancelled - all items missing'
-                  : 'Allocation discrepancy reported',
+              'title': 'Allocation discrepancy reported',
               'message':
-                  '${pending['staffName'] ?? 'Branch'} reported $issueDescription for ${pending['name'] ?? 'allocated items'}.${fullyMissing ? ' The allocation was cancelled and excluded from staff inventory.' : ''}',
+                  '${pending['staffName'] ?? 'Branch'} reported '
+                  '$issueDescription. The received quantities are recorded in the completed checklist.',
               'type': 'allocation_issue',
               'category': 'Inventory',
               'allocationId': id,
@@ -923,41 +1135,115 @@ class AllocationChecklistService {
                   pending['staffName'] ?? pending['branchName'] ?? 'Branch',
               'reportedByName': actorName,
               'reportedByRole': actorRole,
-              'issueType': issueType,
-              'issueQuantity': issueQuantity,
-              'issueItemName': issueItemName,
-              'allocationStatus': fullyMissing
-                  ? 'Cancelled - Missing'
-                  : ChecklistStatus.received,
+              'issueType': firstIssueType,
+              'issueQuantity': firstIssueQuantity,
+              'issueItemName': firstIssue?['itemName'] ?? issueItemName,
+              'issueReports': selectedIssues,
+              'allocationStatus': ChecklistStatus.received,
               'reason': savedIssueReason,
+              'details': issueDetails,
               'isRead': false,
               'toastShown': false,
               'createdAt': FieldValue.serverTimestamp(),
             },
           );
-          if (issueType == 'Damaged' || issueType == 'Incorrect') {
-            final returnId = '${id}_issue_return';
-            tx.set(db.collection('allocation_checklist').doc(returnId), {
-              'kind': 'return',
-              'status': ChecklistStatus.awaitingAdmin,
-              'staffId': pending['staffId'],
-              'branchId': pending['staffId'],
-              'staffName': pending['staffName'],
-              'branchName': pending['branchName'] ?? pending['staffName'],
-              'name': issueItemName,
-              'itemName': issueItemName,
-              'quantity': issueQuantity,
-              'returnQuantity': issueQuantity,
-              'returnSourceCollection': 'allocation_checklist',
-              'returnSourceId': id,
-              'returnReason': savedIssueReason,
-              'issueType': issueType,
-              'allocationId': id,
-              'submittedBy': staffId,
-              'submittedByName': actorName,
-              'createdAt': FieldValue.serverTimestamp(),
-              'updatedAt': FieldValue.serverTimestamp(),
-            });
+          for (var index = 0; index < selectedIssues.length; index++) {
+            final issue = selectedIssues[index];
+            final itemIssueType = reportType(issue);
+            final itemName =
+                '${issue['itemName'] ?? pending['name'] ?? 'Item'}';
+            final itemId = '${issue['itemId'] ?? ''}';
+            final reportedQuantity = quantity(issue['quantity']);
+            final issueIndex = issueIndexes[index];
+            if (itemIssueType == 'Not received') {
+              final unreceivedInstances = bundle
+                  ? rows(pending['bundleInstances'])
+                        .skip(
+                          rows(pending['bundleInstances']).length -
+                              reportedQuantity,
+                        )
+                        .toList()
+                  : const <Map<String, dynamic>>[];
+              final reportId = issueReports.isEmpty
+                  ? '${id}_not_received'
+                  : '${id}_not_received_${itemId.isEmpty ? index : itemId}'
+                        .replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
+              tx.set(db.collection('allocation_checklist').doc(reportId), {
+                'kind': 'not_received',
+                'status': ChecklistStatus.notReceivedPending,
+                'deliveryId': pending['deliveryId'] ?? id,
+                'originalAllocationId': id,
+                'staffId': pending['staffId'],
+                'branchId': pending['staffId'],
+                'staffName': pending['staffName'],
+                'branchName': pending['branchName'] ?? pending['staffName'],
+                'allocatedBy': pending['allocatedBy'],
+                'allocatedByName': pending['allocatedByName'],
+                'allocatedByAdminId': pending['allocatedByAdminId'],
+                'sourceInventoryId': pending['sourceInventoryId'],
+                'sourceCollection':
+                    pending['sourceCollection'] ?? 'sales_inventory',
+                'isBundle': bundle,
+                'isCoffee': false,
+                'isAddon': false,
+                'name': itemName,
+                'issueType': itemIssueType,
+                'issueQuantity': reportedQuantity,
+                'issueItemId': itemId,
+                'issueItemName': itemName,
+                'issueReason': '$itemIssueType - $reportedQuantity',
+                if ('${issue['comment'] ?? ''}'.trim().isNotEmpty)
+                  'issueDetails': '${issue['comment']}'.trim(),
+                'reportedBy': staffId,
+                'reportedByName': actorName,
+                'reportedAt': FieldValue.serverTimestamp(),
+                if (bundle) ...{
+                  'bundleCount': reportedQuantity,
+                  'bundleInstances': unreceivedInstances,
+                } else
+                  'items': [
+                    {
+                      ...incoming[issueIndex],
+                      'stock': reportedQuantity,
+                      'startingStock': reportedQuantity,
+                    },
+                  ],
+                'createdAt': FieldValue.serverTimestamp(),
+              });
+            }
+            if (itemIssueType == 'Damaged' || itemIssueType == 'Incorrect') {
+              final safeItemId = itemId.isEmpty
+                  ? index.toString()
+                  : itemId.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
+              final returnId = issueReports.isEmpty
+                  ? '${id}_issue_return'
+                  : '${id}_issue_return_$safeItemId';
+              tx.set(db.collection('allocation_checklist').doc(returnId), {
+                'kind': 'return',
+                'status': ChecklistStatus.awaitingAdmin,
+                'staffId': pending['staffId'],
+                'branchId': pending['staffId'],
+                'staffName': pending['staffName'],
+                'branchName': pending['branchName'] ?? pending['staffName'],
+                'name': itemName,
+                'itemName': itemName,
+                'itemId': itemId,
+                'quantity': reportedQuantity,
+                'returnQuantity': reportedQuantity,
+                'returnSourceCollection': 'allocation_checklist',
+                'returnSourceId': id,
+                'returnLineKey': itemId.isEmpty ? itemName : itemId,
+                'returnReason': '${issue['comment'] ?? ''}'.trim().isEmpty
+                    ? '$itemIssueType × $reportedQuantity'
+                    : '${issue['comment']}'.trim(),
+                'issueType': itemIssueType,
+                'allocationId': id,
+                'submittedBy': staffId,
+                'submittedByName': actorName,
+                'createdAt': FieldValue.serverTimestamp(),
+                'updatedAt': FieldValue.serverTimestamp(),
+              });
+            }
           }
         }
       } else {

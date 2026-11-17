@@ -40,9 +40,14 @@ bool allocationBelongsTo(
 ) => targets.contains(record['staffId']?.toString());
 
 class StaffAllocationScope {
-  const StaffAllocationScope(this.targets, this.profile);
+  const StaffAllocationScope(
+    this.targets,
+    this.profile, {
+    this.branchIds = const [],
+  });
   final List<String> targets;
   final Map<String, dynamic> profile;
+  final List<String> branchIds;
 }
 
 /// Keeps listening after empty cache snapshots, delayed internet, and changes
@@ -78,6 +83,7 @@ Stream<StaffAllocationScope> watchStaffAllocationScope(
       StaffAllocationScope(
         staffAllocationTargets(uid, profile, branches),
         profile,
+        branchIds: branches,
       ),
     );
     if (branchServerSeen && profileServerSeen) {

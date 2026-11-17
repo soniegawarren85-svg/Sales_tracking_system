@@ -5,6 +5,7 @@ import '../services/allocation_checklist_service.dart';
 import '../services/checklist_status.dart';
 import '../services/allocation_history_metadata.dart';
 import '../services/inventory_display_ids.dart';
+import '../services/session_actor.dart';
 import '../theme/app_colors.dart';
 
 DateTime allocationDate(Map<String, dynamic> data) {
@@ -86,9 +87,58 @@ List<Map<String, dynamic>> groupAllocations(
         (total, item) =>
             total + AllocationChecklistService.quantity(item['_quantity']),
       ),
+      '_allocatedQuantity': _allocatedQuantity(items, records),
       '_catalogCount': items.where((item) => item['_quantity'] == null).length,
     };
   }).toList()..sort((a, b) => allocationDate(b).compareTo(allocationDate(a)));
+}
+
+int _allocatedQuantity(
+  List<Map<String, dynamic>> items,
+  List<Map<String, dynamic>> records,
+) {
+  var total = items.fold<int>(
+    0,
+    (sum, item) => sum + AllocationChecklistService.quantity(item['_quantity']),
+  );
+  for (final record in records) {
+    final itemReports = AllocationChecklistService.rows(record['issueReports']);
+    if (itemReports.isNotEmpty) {
+      for (final report in itemReports) {
+        final allocated = AllocationChecklistService.quantity(
+          report['allocatedQuantity'],
+        );
+        final received = AllocationChecklistService.quantity(
+          report['receivedQuantity'],
+        );
+        if (allocated > 0) total += allocated - received;
+      }
+      continue;
+    }
+    final allocated = AllocationChecklistService.quantity(
+      record['issueAllocatedQuantity'],
+    );
+    final received = AllocationChecklistService.quantity(
+      record['issueReceivedQuantity'],
+    );
+    var adjustment = allocated > 0 ? allocated - received : 0;
+    if (adjustment == 0) {
+      final issueQuantity = AllocationChecklistService.quantity(
+        record['issueQuantity'],
+      );
+      if (issueQuantity > 0) {
+        final issueType =
+            '${record['issueType'] ?? record['issueReason'] ?? ''}'
+                .split(RegExp(r'[-:]'))
+                .first
+                .trim()
+                .toLowerCase();
+        adjustment = issueType == 'extra' ? -issueQuantity : issueQuantity;
+      }
+    }
+    total += adjustment;
+  }
+  return total < 0 ? 0 : total;
 }
 
 final _historyCache = Expando<Map<String, List<Map<String, dynamic>>>>();
@@ -400,18 +450,16 @@ class _AllocationHistoryDialogState extends State<AllocationHistoryDialog> {
                     (record) => _showPending
                         ? (ChecklistStatus.incomingOpen(record) ||
                                   (widget.superAdmin &&
-                                      ChecklistStatus
-                                          .allocationNeedsSuperAdminReview(
-                                            record,
-                                          ))) &&
+                                      ChecklistStatus.allocationNeedsSuperAdminReview(
+                                        record,
+                                      ))) &&
                               (!_issuesOnly ||
                                   ChecklistStatus.label(record) ==
                                       ChecklistStatus.issue ||
                                   (widget.superAdmin &&
-                                      ChecklistStatus
-                                          .allocationNeedsSuperAdminReview(
-                                            record,
-                                          )))
+                                      ChecklistStatus.allocationNeedsSuperAdminReview(
+                                        record,
+                                      )))
                         : ChecklistStatus.label(record) ==
                               ChecklistStatus.received,
                   )
@@ -470,8 +518,10 @@ class _AllocationHistoryDialogState extends State<AllocationHistoryDialog> {
     final received = records
         .where((r) => ChecklistStatus.label(r) == ChecklistStatus.received)
         .length;
-    final issueReports = records
-        .where((r) => ChecklistStatus.label(r) == ChecklistStatus.issue)
+    final issueRecords = records.where(_hasIssueReport).toList();
+    final issueReports = _reportedItemDetails(records);
+    final notReceivedReports = records
+        .where(ChecklistStatus.allocationNeedsSuperAdminReview)
         .toList();
     return Card(
       color: Colors.white,
@@ -501,9 +551,25 @@ class _AllocationHistoryDialogState extends State<AllocationHistoryDialog> {
                     runSpacing: 4,
                     children: [
                       if (issueReports.isNotEmpty)
+                        Chip(
+                          avatar: const Icon(
+                            Icons.report_outlined,
+                            size: 18,
+                            color: Color(0xFF9B2525),
+                          ),
+                          backgroundColor: const Color(0xFFFFE8E8),
+                          label: Text(
+                            '${issueReports.length} item${issueReports.length == 1 ? '' : 's'} reported',
+                            style: const TextStyle(
+                              color: Color(0xFF8F1D2C),
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ),
+                      if (notReceivedReports.isNotEmpty)
                         const Chip(
-                          avatar: Icon(Icons.report_outlined, size: 18),
-                          label: Text('Issue Reported'),
+                          avatar: Icon(Icons.block_outlined, size: 18),
+                          label: Text('Not received'),
                         ),
                       Chip(
                         avatar: Icon(
@@ -552,60 +618,65 @@ class _AllocationHistoryDialogState extends State<AllocationHistoryDialog> {
               Text(
                 '$received of ${records.length} allocation records received',
               ),
+            if (issueReports.isNotEmpty) ...[
+              const SizedBox(height: 14),
+              _reportedItemsSection(issueReports),
+              const SizedBox(height: 6),
+              Text(
+                'Reported by: ${issueRecords.first['reportedByName'] ?? issueRecords.first['reportedBy'] ?? 'Not recorded'}',
+                style: const TextStyle(
+                  color: AppColors.textMuted,
+                  fontSize: 12,
+                ),
+              ),
+              if (_reportedDate(issueRecords.first['reportedAt'])
+                  case final date?)
+                Text(
+                  'Reported: ${_date(context, date, time: true)}',
+                  style: const TextStyle(
+                    color: AppColors.textMuted,
+                    fontSize: 12,
+                  ),
+                ),
+            ],
             for (final record in records)
               if (![
                 ChecklistStatus.received,
                 ChecklistStatus.awaiting,
               ].contains(ChecklistStatus.label(record)))
                 Text(
-                  '${record['name'] ?? 'Allocation'}: ${ChecklistStatus.label(record)}',
+                  '${record['name'] ?? 'Allocation'}: ${ChecklistStatus.allocationNeedsSuperAdminReview(record) ? 'Not received — awaiting Super Admin review' : ChecklistStatus.label(record)}',
                 ),
-            const Divider(height: 28),
-            LayoutBuilder(
-              builder: (context, constraints) {
-                final reportButton = TextButton.icon(
-                  onPressed: () => _showIssueReports(context, issueReports),
-                  icon: const Icon(Icons.visibility_outlined),
-                  label: const Text('View issue report'),
-                );
-                final itemsButton = IconButton(
-                  tooltip: _expanded.contains(expansionKey)
-                      ? 'Collapse items'
-                      : 'Expand items',
-                  onPressed: () => setState(() {
-                    if (!_expanded.add(expansionKey))
-                      _expanded.remove(expansionKey);
-                  }),
-                  icon: Icon(
-                    _expanded.contains(expansionKey)
-                        ? Icons.expand_less
-                        : Icons.expand_more,
+            if (widget.superAdmin && notReceivedReports.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              for (final report in notReceivedReports)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: FilledButton.icon(
+                    onPressed: () => _restoreNotReceived(report),
+                    icon: const Icon(Icons.inventory_2_outlined, size: 18),
+                    label: const Text('Confirm not received & restore stock'),
                   ),
-                );
-                if (constraints.maxWidth < 420) {
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      if (issueReports.isNotEmpty)
-                        Align(
-                          alignment: Alignment.centerLeft,
-                          child: reportButton,
-                        ),
-                      Align(
-                        alignment: Alignment.centerRight,
-                        child: itemsButton,
-                      ),
-                    ],
-                  );
-                }
-                return Row(
-                  children: [
-                    if (issueReports.isNotEmpty) reportButton,
-                    const Spacer(),
-                    itemsButton,
-                  ],
-                );
-              },
+                ),
+            ],
+            const Divider(height: 28),
+            Align(
+              alignment: Alignment.centerRight,
+              child: IconButton(
+                tooltip: _expanded.contains(expansionKey)
+                    ? 'Collapse items'
+                    : 'Expand items',
+                onPressed: () => setState(() {
+                  if (!_expanded.add(expansionKey)) {
+                    _expanded.remove(expansionKey);
+                  }
+                }),
+                icon: Icon(
+                  _expanded.contains(expansionKey)
+                      ? Icons.expand_less
+                      : Icons.expand_more,
+                ),
+              ),
             ),
             if (_expanded.contains(expansionKey))
               SizedBox(
@@ -620,50 +691,334 @@ class _AllocationHistoryDialogState extends State<AllocationHistoryDialog> {
       ),
     );
   }
-}
 
-Future<void> _showIssueReports(
-  BuildContext context,
-  List<Map<String, dynamic>> reports,
-) => showDialog<void>(
-  context: context,
-  builder: (context) => AlertDialog(
-    title: const Text('Issue report details'),
-    content: SizedBox(
-      width: 420,
-      child: SingleChildScrollView(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
+  Widget _reportedItemsSection(List<Map<String, dynamic>> reports) => Container(
+    width: double.infinity,
+    padding: const EdgeInsets.all(12),
+    decoration: BoxDecoration(
+      color: const Color(0xFFFFF7F8),
+      borderRadius: BorderRadius.circular(16),
+      border: Border.all(color: const Color(0xFFF0CAD3)),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
           children: [
-            for (var index = 0; index < reports.length; index++) ...[
-              if (index > 0) const Divider(height: 24),
-              Text(
-                '${reports[index]['name'] ?? 'Allocation'}',
-                style: const TextStyle(fontWeight: FontWeight.w700),
+            const Icon(
+              Icons.assignment_late_outlined,
+              size: 19,
+              color: Color(0xFF94163A),
+            ),
+            const SizedBox(width: 8),
+            const Expanded(
+              child: Text(
+                'Reported item details',
+                style: TextStyle(
+                  color: AppColors.primaryDeep,
+                  fontWeight: FontWeight.w900,
+                  fontSize: 14,
+                ),
               ),
-              const SizedBox(height: 4),
-              Text(
-                'Reason: ${reports[index]['issueReason'] ?? 'Not recorded'}',
-              ),
-              Text(
-                'Reported by: ${reports[index]['reportedByName'] ?? reports[index]['reportedBy'] ?? 'Not recorded'}',
-              ),
-              if (_reportedDate(reports[index]['reportedAt']) case final date?)
-                Text('Reported: ${_date(context, date, time: true)}'),
-            ],
+            ),
+            _reportedBadge(
+              '${reports.length} report${reports.length == 1 ? '' : 's'}',
+              const Color(0xFFFFE3E8),
+              const Color(0xFF8F1D2C),
+            ),
           ],
         ),
-      ),
+        const SizedBox(height: 10),
+        for (var index = 0; index < reports.length; index++) ...[
+          if (index > 0) const SizedBox(height: 8),
+          _reportedItemCard(reports[index]),
+        ],
+      ],
     ),
-    actions: [
-      TextButton(
-        onPressed: () => Navigator.pop(context),
-        child: const Text('Close'),
+  );
+
+  Widget _reportedItemCard(Map<String, dynamic> report) {
+    final type = '${report['issueType'] ?? 'Issue'}';
+    final quantity = AllocationChecklistService.quantity(report['quantity']);
+    final allocated = AllocationChecklistService.quantity(
+      report['allocatedQuantity'],
+    );
+    final received = AllocationChecklistService.quantity(
+      report['receivedQuantity'],
+    );
+    final normalizedType = type.toLowerCase();
+    final (change, foreground, background) = switch (normalizedType) {
+      'extra' => (
+        '+$quantity Extra',
+        const Color(0xFF176B3A),
+        const Color(0xFFE5F5EA),
       ),
-    ],
-  ),
-);
+      'missing' || 'not received' => (
+        '−$quantity $type',
+        const Color(0xFF9B2525),
+        const Color(0xFFFFE8E8),
+      ),
+      'damaged' || 'incorrect' => (
+        '−$quantity $type',
+        const Color(0xFF9B4A13),
+        const Color(0xFFFFF0DE),
+      ),
+      _ => (
+        '$type · $quantity',
+        const Color(0xFF5B4B79),
+        const Color(0xFFF0EAF8),
+      ),
+    };
+    final comment = '${report['comment'] ?? ''}'.trim();
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(11),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(13),
+        border: Border.all(color: foreground.withValues(alpha: .28)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  '${report['itemName'] ?? 'Reported item'}',
+                  style: const TextStyle(
+                    color: AppColors.text,
+                    fontWeight: FontWeight.w800,
+                    fontSize: 14,
+                  ),
+                ),
+              ),
+              _reportedBadge(
+                'REPORTED',
+                const Color(0xFFFFE8E8),
+                const Color(0xFF9B2525),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(child: _reportedQuantityTile('Allocated', allocated)),
+              const SizedBox(width: 8),
+              Expanded(child: _reportedQuantityTile('Received', received)),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: _reportedBadge(change, background, foreground),
+          ),
+          if (comment.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text(
+              comment,
+              style: const TextStyle(color: AppColors.textMuted, fontSize: 12),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _reportedQuantityTile(String label, int quantity) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 8),
+    decoration: BoxDecoration(
+      color: AppColors.surfaceTint,
+      borderRadius: BorderRadius.circular(10),
+    ),
+    child: Row(
+      children: [
+        Expanded(
+          child: Text(
+            label,
+            style: const TextStyle(fontSize: 11, color: AppColors.textMuted),
+          ),
+        ),
+        Text(
+          '$quantity',
+          style: const TextStyle(
+            color: AppColors.primaryDeep,
+            fontSize: 15,
+            fontWeight: FontWeight.w900,
+          ),
+        ),
+      ],
+    ),
+  );
+
+  Widget _reportedBadge(String label, Color background, Color foreground) =>
+      Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+        decoration: BoxDecoration(
+          color: background,
+          borderRadius: BorderRadius.circular(999),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: foreground,
+            fontSize: 10,
+            fontWeight: FontWeight.w900,
+          ),
+        ),
+      );
+
+  Future<void> _restoreNotReceived(Map<String, dynamic> report) async {
+    final id = '${report['_id'] ?? ''}'.trim();
+    if (id.isEmpty) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Confirm items were not received?'),
+        content: Text(
+          'Restore ${report['issueQuantity'] ?? report['bundleCount'] ?? 0} ${report['issueItemName'] ?? report['name'] ?? 'item(s)'} to Super Admin inventory and complete this review?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Confirm'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    try {
+      final actor = await resolveSessionActor(widget.database, admin: true);
+      final restored = await AllocationChecklistService(
+        widget.database,
+      ).restoreNotReceived(id, actorId: actor.id, actorName: actor.name);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            restored
+                ? 'Not-received stock restored to Super Admin inventory.'
+                : 'This not-received report has already been processed.',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Unable to restore reported stock: $error')),
+      );
+    }
+  }
+}
+
+bool _hasIssueReport(Map<String, dynamic> record) =>
+    ChecklistStatus.label(record) == ChecklistStatus.issue ||
+    AllocationChecklistService.rows(record['issueReports']).isNotEmpty ||
+    record['issueType'] != null ||
+    '${record['issueReason'] ?? ''}'.trim().isNotEmpty ||
+    record['reportedBy'] != null;
+
+List<Map<String, dynamic>> _reportedItemDetails(
+  List<Map<String, dynamic>> records,
+) {
+  final result = <Map<String, dynamic>>[];
+  for (final record in records.where(_hasIssueReport)) {
+    final reports = AllocationChecklistService.rows(record['issueReports']);
+    if (reports.isEmpty) {
+      final issueType =
+          '${record['issueType'] ?? record['issueReason'] ?? 'Issue'}'
+              .split(RegExp(r'[-:]'))
+              .first
+              .trim();
+      final issueQuantity = AllocationChecklistService.quantity(
+        record['issueQuantity'],
+      );
+      final received = AllocationChecklistService.quantity(
+        record['issueReceivedQuantity'],
+      );
+      final allocated = AllocationChecklistService.quantity(
+        record['issueAllocatedQuantity'],
+      );
+      final normalizedType = issueType.toLowerCase();
+      final derivedAllocated = normalizedType == 'extra'
+          ? received - issueQuantity
+          : received + issueQuantity;
+      final derivedReceived = normalizedType == 'extra'
+          ? allocated + issueQuantity
+          : normalizedType == 'others'
+          ? allocated
+          : allocated - issueQuantity;
+      result.add({
+        ...record,
+        'issueType': issueType,
+        'quantity': issueQuantity,
+        'allocatedQuantity': allocated > derivedAllocated
+            ? allocated
+            : derivedAllocated,
+        'receivedQuantity': received > 0 ? received : derivedReceived,
+        'itemName':
+            record['issueItemName'] ?? record['name'] ?? 'Reported item',
+        'comment': record['issueDetails'] ?? '',
+        '_reporterName':
+            record['reportedByName'] ?? record['reportedBy'] ?? 'Not recorded',
+        '_reporterAt': record['reportedAt'],
+      });
+      continue;
+    }
+
+    final sourceItems = AllocationChecklistService.rows(record['items']);
+    for (final report in reports) {
+      final itemId = '${report['itemId'] ?? ''}';
+      final itemName = '${report['itemName'] ?? ''}';
+      final sourceItem = sourceItems.where((item) {
+        if (itemId.isNotEmpty) return '${item['id'] ?? ''}' == itemId;
+        return itemName.isNotEmpty && '${item['name'] ?? ''}' == itemName;
+      }).firstOrNull;
+      final issueType =
+          '${report['issueType'] ?? report['type'] ?? record['issueType'] ?? 'Issue'}';
+      final issueQuantity = AllocationChecklistService.quantity(
+        report['quantity'] ?? report['issueQuantity'],
+      );
+      final received = AllocationChecklistService.quantity(
+        report['receivedQuantity'] ?? sourceItem?['stock'],
+      );
+      final allocated = AllocationChecklistService.quantity(
+        report['allocatedQuantity'],
+      );
+      final normalizedType = issueType.toLowerCase();
+      final derivedReceived = normalizedType == 'extra'
+          ? allocated + issueQuantity
+          : normalizedType == 'others'
+          ? allocated
+          : allocated - issueQuantity;
+      final derivedAllocated = normalizedType == 'extra'
+          ? received - issueQuantity
+          : received + issueQuantity;
+      result.add({
+        ...report,
+        'issueType': issueType,
+        'quantity': issueQuantity,
+        'allocatedQuantity': allocated > 0 ? allocated : derivedAllocated,
+        'receivedQuantity': received > 0 ? received : derivedReceived,
+        'itemName':
+            report['itemName'] ??
+            report['name'] ??
+            sourceItem?['name'] ??
+            record['name'] ??
+            'Reported item',
+        'comment': report['comment'] ?? '',
+        '_reporterName':
+            record['reportedByName'] ?? record['reportedBy'] ?? 'Not recorded',
+        '_reporterAt': record['reportedAt'],
+      });
+    }
+  }
+  return result;
+}
 
 DateTime? _reportedDate(dynamic value) => switch (value) {
   Timestamp timestamp => timestamp.toDate(),
@@ -676,6 +1031,9 @@ String _quantity(Map<String, dynamic> data) {
   final count = data['_quantity'];
   final catalog = data['_catalogCount'] as int;
   if ((data['_items'] as List).isEmpty) return 'Qty: Not recorded';
+  if (AllocationChecklistService.rows(data['_records']).any(_hasIssueReport)) {
+    return 'Qty: ${data['_allocatedQuantity']} allocated units · $count received units${catalog > 0 ? ' • $catalog catalog items' : ''}';
+  }
   return 'Qty: $count allocated units${catalog > 0 ? ' • $catalog catalog items' : ''}';
 }
 

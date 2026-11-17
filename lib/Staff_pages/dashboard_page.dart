@@ -183,6 +183,7 @@ class _DashboardPageState extends State<DashboardPage>
   List inventoryEntries = [];
   String _inventoryView = 'categories';
   List<String> _staffInventoryIds = const [];
+  Set<String> _staffBranchIds = {};
   List<_CachedDoc> _cachedStaffInventoryDocs = const [];
   List<_CachedDoc> _cachedSalesInventoryDocs = const [];
   List<_CachedDoc> _cachedCashDrawerDocs = const [];
@@ -476,6 +477,7 @@ class _DashboardPageState extends State<DashboardPage>
         final changed = _staffInventoryIds.join('|') != scope.targets.join('|');
         setState(() {
           _staffInventoryIds = scope.targets;
+          _staffBranchIds = scope.branchIds.toSet();
           _isResolvingStaffIdentity = false;
           if (changed) _staffInventoryStreamCache = null;
         });
@@ -554,6 +556,7 @@ class _DashboardPageState extends State<DashboardPage>
       builder: (_) => _HistorySheet(
         staffId: staffId,
         staffAliases: _staffIdentityAliases,
+        branchIds: _staffBranchIds,
         receiptStream: _receiptStream(),
         localReceiptStream: LocalDatabaseSyncService()
             .watchLocalCompletedSales(),
@@ -1584,13 +1587,18 @@ class _DashboardPageState extends State<DashboardPage>
             for (final rootDoc in rootDocs) {
               final rootData = rootDoc.data();
               if (rootData['isDeleted'] == true) continue;
-              activeRootById[rootDoc.id] = rootData;
+              final catalogData = {...rootData, '_catalogDocId': rootDoc.id};
+              activeRootById[rootDoc.id] = catalogData;
               final rootName = rootData['name']
                   ?.toString()
                   .trim()
                   .toLowerCase();
               if (rootName != null && rootName.isNotEmpty) {
-                activeRootByName[rootName] = rootData;
+                final current = activeRootByName[rootName];
+                if (current == null ||
+                    inventoryCatalogIsNewer(catalogData, current)) {
+                  activeRootByName[rootName] = catalogData;
+                }
               }
             }
 
@@ -1598,11 +1606,11 @@ class _DashboardPageState extends State<DashboardPage>
               Map<String, dynamic> staffData,
               Map<String, dynamic> rootData,
             ) {
-              final rootItems = ((rootData['items'] as List<dynamic>?) ?? [])
-                  .whereType<Map>()
-                  .map((item) => Map<String, dynamic>.from(item))
-                  .toList();
               final alignedData = alignInventoryDisplayIds(staffData, rootData);
+              final removedRootItems =
+                  (rootData['removedItems'] as List<dynamic>? ?? [])
+                      .whereType<Map>()
+                      .toList();
               return ((alignedData['items'] as List<dynamic>?) ?? [])
                   .whereType<Map>()
                   .map((item) => Map<String, dynamic>.from(item))
@@ -1610,14 +1618,13 @@ class _DashboardPageState extends State<DashboardPage>
                     final expirationDate =
                         item['expirationDate']?.toString() ?? '';
                     return !_isExpiredInventoryItem(expirationDate) &&
-                        (rootItems.isEmpty ||
-                            rootItems.any(
-                              (root) => inventoryCatalogVariantMatches(
-                                root,
-                                item,
-                                rootItems,
-                              ),
-                            ));
+                        !removedRootItems.any(
+                          (removed) => inventoryCatalogVariantMatches(
+                            removed,
+                            item,
+                            removedRootItems,
+                          ),
+                        );
                   })
                   .toList();
             }
@@ -1644,7 +1651,7 @@ class _DashboardPageState extends State<DashboardPage>
                         : (bundleNameRoot?['isBundle'] == true)
                         ? bundleNameRoot
                         : null)
-                  : (rootCandidate ?? activeRootByName[name]);
+                  : (activeRootByName[name] ?? rootCandidate);
               if (rootData == null) continue;
               if (data['isBundle'] == true) {
                 if (rootData['isBundle'] != true) continue;
@@ -1673,8 +1680,13 @@ class _DashboardPageState extends State<DashboardPage>
               inventoryDocs.add({
                 ...data,
                 'publicId': rootData['publicId'] ?? data['publicId'],
+                'categoryId':
+                    rootData['publicId'] ??
+                    rootData['categoryId'] ??
+                    data['categoryId'],
                 'staffDocId': doc.id,
-                'sourceInventoryId': sourceId,
+                'sourceInventoryId':
+                    rootData['_catalogDocId']?.toString() ?? sourceId,
                 'categoryTimestamp': rootData['timestamp'] ?? data['timestamp'],
                 'name': rootData['name'] ?? data['name'],
                 'imageUrl': rootData['imageUrl'] ?? data['imageUrl'],
@@ -1703,7 +1715,7 @@ class _DashboardPageState extends State<DashboardPage>
                   ? 'coffee:$sourceId'
                   : data['isBundle'] == true
                   ? 'bundle:$sourceId'
-                  : 'category:$sourceId';
+                  : 'category:${inventoryCategoryIdentity(data)}';
               final items =
                   (data['items'] as List?)?.cast<Map<String, dynamic>>() ?? [];
 
@@ -1715,9 +1727,22 @@ class _DashboardPageState extends State<DashboardPage>
 
               if (activeVariants.isEmpty && data['isCoffee'] != true) continue;
 
-              // Keep source inventory IDs separate even when categories share a name.
-              if (!uniqueItems.containsKey(uniqueKey)) {
+              final previous = uniqueItems[uniqueKey];
+              if (previous == null) {
                 uniqueItems[uniqueKey] = data;
+              } else if (data['isCoffee'] != true && data['isBundle'] != true) {
+                previous['items'] = aggregateInventoryAllocationItems([
+                  ...((previous['items'] as List?) ?? const [])
+                      .whereType<Map>()
+                      .map((item) => Map<String, dynamic>.from(item)),
+                  ...activeVariants,
+                ]);
+                previous['sourceInventoryId'] =
+                    data['sourceInventoryId'] ?? previous['sourceInventoryId'];
+                if ('${previous['publicId'] ?? ''}'.trim().isEmpty &&
+                    '${data['publicId'] ?? ''}'.trim().isNotEmpty) {
+                  previous['publicId'] = data['publicId'];
+                }
               }
             }
 
@@ -2073,6 +2098,7 @@ class _DashboardPageState extends State<DashboardPage>
               )) {
                 return false;
               }
+              if (!saleBelongsToBranches(data, _staffBranchIds)) return false;
               final dt = staffReceiptDate(data);
               if (dt == null) return false;
               return !dt.isBefore(today) && dt.isBefore(tomorrow);
@@ -4807,9 +4833,11 @@ class _HistorySheet extends StatefulWidget {
   final Stream<List<Map<String, dynamic>>> localReceiptStream;
   final String staffId;
   final Set<String> staffAliases;
+  final Set<String> branchIds;
   const _HistorySheet({
     required this.staffId,
     this.staffAliases = const {},
+    this.branchIds = const {},
     required this.receiptStream,
     required this.localReceiptStream,
   });
@@ -4910,20 +4938,30 @@ class _HistorySheetState extends State<_HistorySheet> {
                     builder: (context, snapshot) {
                       final localReceipts = (localSnapshot.data ?? const [])
                           .where(
-                            (receipt) => saleBelongsToStaff(
-                              receipt,
-                              widget.staffId,
-                              staffAliases: widget.staffAliases,
-                            ),
+                            (receipt) =>
+                                saleBelongsToStaff(
+                                  receipt,
+                                  widget.staffId,
+                                  staffAliases: widget.staffAliases,
+                                ) &&
+                                saleBelongsToBranches(
+                                  receipt,
+                                  widget.branchIds,
+                                ),
                           );
                       final cloudReceipts = (snapshot.data?.docs ?? [])
                           .map((doc) => doc.data())
                           .where(
-                            (receipt) => saleBelongsToStaff(
-                              receipt,
-                              widget.staffId,
-                              staffAliases: widget.staffAliases,
-                            ),
+                            (receipt) =>
+                                saleBelongsToStaff(
+                                  receipt,
+                                  widget.staffId,
+                                  staffAliases: widget.staffAliases,
+                                ) &&
+                                saleBelongsToBranches(
+                                  receipt,
+                                  widget.branchIds,
+                                ),
                           )
                           .toList();
                       final bySalesId = <String, Map<String, dynamic>>{};

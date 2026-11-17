@@ -24,7 +24,8 @@ class StaffExpiryService {
     for (final allocation in allocations) {
       final allocationId = '${allocation['_localDocId'] ?? ''}';
       final branchId = '${allocation['staffId'] ?? ''}';
-      if (allocationId.isEmpty ||
+      if (_isMainBranchExpiryRecord(allocation, branchId) ||
+          allocationId.isEmpty ||
           !scopeIds.contains(branchId) ||
           allocation['isDeleted'] == true ||
           allocation['isCoffee'] == true ||
@@ -79,12 +80,42 @@ class StaffExpiryService {
     ).any((item) => bundleExpired(item, today));
   }
 
+  String _branchNameKey(String? value) => value == null
+      ? ''
+      : value.trim().replaceAll(RegExp(r'[_\s-]+'), ' ').toLowerCase();
+
+  bool _isMainBranchExpiryRecord(Map<String, dynamic> allocation, String branchId) {
+    final labels = [
+      allocation['branchName'],
+      allocation['staffName'],
+      allocation['branchId'],
+      allocation['staffId'],
+      allocation['sourceBranchName'],
+    ]
+        .map((value) => _branchNameKey(value?.toString()))
+        .where((value) => value.isNotEmpty)
+        .toList();
+    final branchKey = _branchNameKey(branchId);
+    final suspect = [...labels, branchKey].join(' ');
+    final lookedLikeMainBranch = suspect.contains('main branch') ||
+        suspect.contains('mainbranch') ||
+        suspect.contains('head office') ||
+        suspect.contains('super admin') ||
+        suspect.contains('superadmin') ||
+        suspect == 'main' ||
+        suspect.contains('main inventory') ||
+        suspect.contains('main inventory branch');
+    if (lookedLikeMainBranch) return true;
+    return labels.isEmpty && branchKey.isEmpty;
+  }
+
   Future<void> _processBundleInstance({
     required String allocationId,
     required String branchId,
     required Map<String, dynamic> allocation,
     required Map<String, dynamic> instance,
   }) async {
+    if (_isMainBranchExpiryRecord(allocation, branchId)) return;
     final bundleName = '${allocation['name'] ?? 'Bundle'}';
     final bundleId = '${instance['id'] ?? ''}'.replaceAll(
       RegExp(r'[^A-Za-z0-9_-]'),

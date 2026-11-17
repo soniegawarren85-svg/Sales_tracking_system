@@ -570,6 +570,7 @@ class _RecentActivityPanelState extends State<RecentActivityPanel> {
       const SizedBox(height: 12),
       ActivityFeed(
         database: widget.database,
+        actorId: 'Spr-001',
         range: range,
         compact: true,
         cardRows: true,

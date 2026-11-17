@@ -197,6 +197,22 @@ class LocalDatabaseSyncService {
   Future<void> mergeCompletedSales(Iterable<Map<String, dynamic>> incoming) =>
       _salesLock.run(() async {
         final cached = await getCachedCollection('completed_sales');
+        final pendingVoids = await getCachedCollection('pending_sales_voids');
+        final savedVoids = await getCachedCollection('voided_sales');
+        final voidedIds = {
+          ...pendingVoids.map(
+            (row) => '${row['salesId'] ?? row['_localDocId'] ?? ''}',
+          ),
+          ...savedVoids.map(
+            (row) => '${row['salesId'] ?? row['_localDocId'] ?? ''}',
+          ),
+        };
+        try {
+          final remoteVoids = await _firestore.collection('voided_sales').get();
+          voidedIds.addAll(remoteVoids.docs.map((doc) => doc.id));
+        } catch (error) {
+          debugPrint('Unable to refresh remote sale voids: $error');
+        }
         final merged = <String, Map<String, dynamic>>{};
         String key(Map<String, dynamic> sale, int fallback) =>
             sale['salesId']?.toString() ??
@@ -204,12 +220,14 @@ class LocalDatabaseSyncService {
             sale['_localDocId']?.toString() ??
             'unknown-$fallback';
         for (var i = 0; i < cached.length; i++) {
+          if (voidedIds.contains(key(cached[i], i))) continue;
           merged[key(cached[i], i)] = cached[i];
         }
         var offset = cached.length;
         for (final sale in incoming) {
           final item = Map<String, dynamic>.from(sale);
           final saleKey = key(item, offset++);
+          if (voidedIds.contains(saleKey)) continue;
           final existing = merged[saleKey];
           merged[saleKey] = {
             ...?existing,
@@ -757,6 +775,13 @@ class LocalDatabaseSyncService {
     required String status,
     String? error,
   }) async {
+    final savedVoids = await getCachedCollection('voided_sales');
+    final pendingVoids = await getCachedCollection('pending_sales_voids');
+    if ([...savedVoids, ...pendingVoids].any(
+      (row) => '${row['salesId'] ?? row['_localDocId'] ?? ''}' == salesId,
+    )) {
+      return;
+    }
     final updatedAt = DateTime.now();
     final localFields = <String, dynamic>{
       'receiptPrintStatus': status,
@@ -774,14 +799,215 @@ class LocalDatabaseSyncService {
       await cacheCollectionDocs('completed_sales', cached);
     });
     try {
-      await _firestore.collection('completed_sales').doc(salesId).set({
-        'receiptPrintStatus': status,
-        'receiptPrintError': error,
-        'receiptPrintUpdatedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+      final receiptRef = _firestore.collection('completed_sales').doc(salesId);
+      final voidRef = _firestore.collection('voided_sales').doc(salesId);
+      await _firestore.runTransaction((transaction) async {
+        final voided = await transaction.get(voidRef);
+        if (voided.exists) return;
+        final receipt = await transaction.get(receiptRef);
+        if (!receipt.exists) return;
+        transaction.set(receiptRef, {
+          'receiptPrintStatus': status,
+          'receiptPrintError': error,
+          'receiptPrintUpdatedAt': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+      });
     } catch (error) {
       debugPrint('Receipt print status remains local for $salesId: $error');
     }
+  }
+
+  Future<void> cancelCompletedSale({
+    required String salesId,
+    required String reason,
+  }) async {
+    final id = salesId.trim();
+    if (id.isEmpty) throw ArgumentError('A receipt ID is required.');
+
+    final savedVoids = await getCachedCollection('voided_sales');
+    if (savedVoids.any((row) => row['salesId'] == id)) return;
+    final cached = await getCachedCollection('completed_sales');
+    final sale = cached.firstWhere(
+      (item) =>
+          item['_localDocId']?.toString() == id ||
+          item['salesId']?.toString() == id,
+      orElse: () => <String, dynamic>{},
+    );
+    Map<String, dynamic> saleData = Map<String, dynamic>.from(sale);
+    if (saleData.isEmpty) {
+      final snapshot = await _firestore
+          .collection('completed_sales')
+          .doc(id)
+          .get();
+      saleData = snapshot.data() ?? <String, dynamic>{};
+    }
+    if (saleData.isEmpty) {
+      throw StateError('Receipt $id could not be found.');
+    }
+    if (saleData['voidedAt'] != null) return;
+
+    final pending = await getCachedCollection('pending_sales_voids');
+    if (!pending.any((entry) => entry['_localDocId'] == id)) {
+      pending.add({
+        '_localDocId': id,
+        'salesId': id,
+        'reason': reason,
+        'sale': saleData,
+        'createdAt': DateTime.now(),
+      });
+      await cacheCollectionDocs('pending_sales_voids', pending);
+    }
+    if (!savedVoids.any((row) => row['_localDocId'] == id)) {
+      savedVoids.add({
+        '_localDocId': id,
+        'salesId': id,
+        'reason': reason,
+        'createdAt': DateTime.now(),
+      });
+      await cacheCollectionDocs('voided_sales', savedVoids);
+    }
+
+    await _salesLock.run(() async {
+      final rows = await getCachedCollection('completed_sales');
+      rows.removeWhere(
+        (item) =>
+            item['_localDocId']?.toString() == id ||
+            item['salesId']?.toString() == id,
+      );
+      await cacheCollectionDocs('completed_sales', rows);
+    });
+
+    final lines = expandSaleStockLines(
+      (saleData['items'] as List? ?? []).whereType<Map>().map(
+        (item) => Map<String, dynamic>.from(item),
+      ),
+    );
+    await _inventoryLock.run(() async {
+      final inventory = await getCachedCollection('staff_inventory');
+      final docIds = lines
+          .map((line) => '${line['staffInventoryDocId'] ?? ''}')
+          .where((docId) => docId.isNotEmpty)
+          .toSet();
+      for (var index = 0; index < inventory.length; index++) {
+        final item = inventory[index];
+        final docId = '${item['_localDocId'] ?? item['id'] ?? ''}';
+        if (!docIds.contains(docId)) continue;
+        inventory[index] = restoreSaleStock(
+          item,
+          id,
+          lines.where((line) => line['staffInventoryDocId'] == docId).toList(),
+        );
+      }
+      await cacheCollectionDocs('staff_inventory', inventory);
+    });
+
+    final paymentMode = '${saleData['paymentMode'] ?? 'Cash'}'.toLowerCase();
+    final cashDelta =
+        num.tryParse('${saleData['cashDrawerDelta'] ?? 0}')?.toDouble() ?? 0;
+    final total = num.tryParse('${saleData['total'] ?? 0}')?.toDouble() ?? 0;
+    await recordCashDrawerChange(
+      drawerId: '${saleData['branchId'] ?? ''}',
+      cashDelta: paymentMode == 'cash' ? -cashDelta : 0,
+      gcashDelta: paymentMode == 'cash' ? 0 : -total,
+      staffId: '${saleData['userId'] ?? ''}',
+      receiptId: 'void-$id',
+      occurredAt: _asDate(saleData['timestamp']),
+    );
+    unawaited(syncPendingSaleVoids());
+  }
+
+  bool _syncingSaleVoids = false;
+
+  Future<void> syncPendingSaleVoids() async {
+    if (_syncingSaleVoids) return;
+    _syncingSaleVoids = true;
+    try {
+      final pending = await getCachedCollection('pending_sales_voids');
+      for (final entry in pending) {
+        final id = '${entry['salesId'] ?? entry['_localDocId'] ?? ''}'.trim();
+        if (id.isEmpty) continue;
+        try {
+          await _applySaleVoid(id, entry);
+          await _salesLock.run(() async {
+            final latest = await getCachedCollection('pending_sales_voids');
+            latest.removeWhere((item) => item['_localDocId'] == id);
+            await cacheCollectionDocs('pending_sales_voids', latest);
+          });
+        } catch (error) {
+          debugPrint('Sale void remains queued for $id: $error');
+        }
+      }
+    } finally {
+      _syncingSaleVoids = false;
+    }
+  }
+
+  Future<void> _applySaleVoid(
+    String salesId,
+    Map<String, dynamic> pending,
+  ) async {
+    final saleRef = _firestore.collection('completed_sales').doc(salesId);
+    final voidRef = _firestore.collection('voided_sales').doc(salesId);
+    final fallbackSale = pending['sale'] is Map
+        ? Map<String, dynamic>.from(pending['sale'] as Map)
+        : <String, dynamic>{};
+
+    await _firestore.runTransaction((transaction) async {
+      final existingVoid = await transaction.get(voidRef);
+      if (existingVoid.exists) return;
+      final receipt = await transaction.get(saleRef);
+      final sale = receipt.data() ?? fallbackSale;
+      final lines = expandSaleStockLines(
+        (sale['items'] as List? ?? []).whereType<Map>().map(
+          (item) => Map<String, dynamic>.from(item),
+        ),
+      );
+      final shouldRestoreStock =
+          sale['stockApplied'] == true || sale['stockSyncRequired'] != true;
+      final docIds = shouldRestoreStock
+          ? lines
+                .map((line) => '${line['staffInventoryDocId'] ?? ''}')
+                .where((docId) => docId.isNotEmpty)
+                .toSet()
+          : <String>{};
+      if (docIds.length > 450) {
+        throw StateError('This sale affects too many inventory records.');
+      }
+      final inventoryDocs = <DocumentSnapshot<Map<String, dynamic>>>[];
+      for (final docId in docIds) {
+        inventoryDocs.add(
+          await transaction.get(
+            _firestore.collection('staff_inventory').doc(docId),
+          ),
+        );
+      }
+      for (final inventory in inventoryDocs) {
+        final data = inventory.data();
+        if (data == null) continue;
+        final linesForDocument = lines
+            .where((line) => line['staffInventoryDocId'] == inventory.id)
+            .toList();
+        final restored = restoreSaleStock(data, salesId, linesForDocument);
+        if (!identical(restored, data)) {
+          transaction.set(inventory.reference, {
+            ...restored,
+            'updatedAt': FieldValue.serverTimestamp(),
+          }, SetOptions(merge: true));
+        }
+      }
+      if (receipt.exists) transaction.delete(saleRef);
+      transaction.set(voidRef, {
+        'salesId': salesId,
+        'branchId': sale['branchId'] ?? '',
+        'branchName': sale['branchName'] ?? '',
+        'staffId': sale['userId'] ?? '',
+        'staffName': sale['staffName'] ?? '',
+        'total': sale['total'] ?? 0,
+        'items': sale['items'] ?? const [],
+        'reason': pending['reason'] ?? 'Receipt cancelled by cashier.',
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+    });
   }
 
   Future<bool> ensureSaleSynced(
@@ -822,6 +1048,10 @@ class LocalDatabaseSyncService {
             .where((id) => id.isNotEmpty)
             .toSet();
         await _firestore.runTransaction((tx) async {
+          final voided = await tx.get(
+            _firestore.collection('voided_sales').doc(docId),
+          );
+          if (voided.exists) return;
           final receipt = await tx.get(ref);
           if (receipt.data()?['stockApplied'] == true) return;
           final stock = <DocumentSnapshot<Map<String, dynamic>>>[];
@@ -898,7 +1128,13 @@ class LocalDatabaseSyncService {
           }, SetOptions(merge: true));
         });
       } else {
-        await ref.set(payload, SetOptions(merge: true));
+        await _firestore.runTransaction((tx) async {
+          final voided = await tx.get(
+            _firestore.collection('voided_sales').doc(docId),
+          );
+          if (voided.exists) return;
+          tx.set(ref, payload, SetOptions(merge: true));
+        });
       }
       await _salesLock.run(() async {
         final cached = await getCachedCollection('completed_sales');
@@ -949,6 +1185,7 @@ class LocalDatabaseSyncService {
   }
 
   Future<void> syncPendingSales() async {
+    await syncPendingSaleVoids();
     final sales = await getCachedCollection('completed_sales');
     for (final sale in sales.where(
       (item) => item['drawerSyncRequired'] == true,

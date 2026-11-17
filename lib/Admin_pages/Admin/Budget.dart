@@ -2297,6 +2297,8 @@ class _BudgetPageState extends State<BudgetPage>
           'staffId': staffId,
           'staffName': staffName,
           'sourceInventoryId': sourceDocId,
+          'categoryId':
+              sourceData['categoryId'] ?? sourceData['publicId'] ?? sourceDocId,
           'items': staffItems,
           'isDeleted': false,
           'isBundle': false,
@@ -5061,9 +5063,9 @@ class _BudgetPageState extends State<BudgetPage>
                               Expanded(child: Text(entry.key)),
                               Text(
                                 [
-                                  'Total sold',
-                                  'Total transactions',
-                                ].contains(entry.key)
+                                      'Total sold',
+                                      'Total transactions',
+                                    ].contains(entry.key)
                                     ? entry.value.toStringAsFixed(0)
                                     : formatMoney(entry.value),
                                 style: const TextStyle(

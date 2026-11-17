@@ -294,4 +294,46 @@ void main() {
     expect(find.text('No expired records found.'), findsNothing);
     await tester.pumpWidget(const SizedBox());
   });
+
+  testWidgets(
+    'expired bundles inherit the bundle expiry when instances lack one',
+    (tester) async {
+      final db = FakeFirebaseFirestore();
+      final today = DateUtils.dateOnly(DateTime.now());
+      final expiry = [
+        today.year.toString().padLeft(4, '0'),
+        today.month.toString().padLeft(2, '0'),
+        today.day.toString().padLeft(2, '0'),
+      ].join('-');
+      await db.collection('sales_inventory').doc('box-of-four').set({
+        'name': 'Box of 4',
+        'isBundle': true,
+        'bundleCount': 3,
+        'expirationDate': expiry,
+        'bundleInstances': [
+          {'id': 'box-1', 'status': 'available'},
+        ],
+        'items': [
+          {'name': 'Cookie', 'expirationDate': expiry},
+        ],
+      });
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: AdminVoidInventory(
+            type: 'Bundle',
+            expired: true,
+            popup: true,
+            firestore: db,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Box of 4'), findsOneWidget);
+      expect(find.text('No expired records found.'), findsNothing);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
 }
